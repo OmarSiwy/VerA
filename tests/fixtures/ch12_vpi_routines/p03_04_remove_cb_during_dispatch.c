@@ -64,7 +64,7 @@ static double rm_same_t = -1.0, victim_last_t = -1.0;
 
 static PLI_INT32 on_abs(p_cb_data cb)
 {
-  int k = (int)(long)cb->user_data;
+  int k = (int)(size_t)cb->user_data;
   double want = 1.0e-3 * (double)(k + 1);
   at_hits[k]++;
   P03_NEAR(vpi_get_analog_time(), want, TOL, "12.31.3 acbAbsTime forced time");
@@ -148,7 +148,7 @@ static void p03_04_startup(void)
     at_cb[k].reason = acbAbsTime;
     at_cb[k].cb_rtn = on_abs;
     at_cb[k].time   = &at_time[k];
-    at_cb[k].user_data = (PLI_BYTE8 *)(long)k;
+    at_cb[k].user_data = (PLI_BYTE8 *)(size_t)k;
     at_h[k] = vpi_register_cb(&at_cb[k]);
     P03_CHECK(at_h[k] != NULL, "acbAbsTime registration %d failed", k);
   }

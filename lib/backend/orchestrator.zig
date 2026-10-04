@@ -555,6 +555,13 @@ pub fn compileRelease(
     };
 }
 
+/// `name` as `publish` names this target's library: `testdev.1` is
+/// `libtestdev.1.so` on Linux and `testdev.1.dll` on Windows.
+fn testLib(comptime name: []const u8) []const u8 {
+    const t = &builtin.target;
+    return comptime t.libPrefix() ++ name ++ t.dynamicLibSuffix();
+}
+
 /// Copies the cache output to a generation-stamped path so the host dlopens a
 /// fresh inode; a hardlink would share the cache entry's inode. Caller owns
 /// the returned path.
@@ -812,7 +819,7 @@ test "compileRelease builds and versions a device" {
         .ok => |a| {
             try std.testing.expectEqual(@as(u32, 1), a.generation);
             try std.testing.expectEqual(layoutHash(o), a.layout_hash);
-            try std.testing.expect(std.mem.endsWith(u8, a.so_path, "libtestdev.1.so"));
+            try std.testing.expect(std.mem.endsWith(u8, a.so_path, testLib("testdev.1")));
             _ = try Io.Dir.cwd().statFile(io, a.so_path, .{});
         },
     }
@@ -831,7 +838,7 @@ test "compileRelease builds and versions a device" {
             return error.UnexpectedBuildFailure;
         },
         .ok => |a| {
-            try std.testing.expect(std.mem.endsWith(u8, a.so_path, "libtestdev.2.so"));
+            try std.testing.expect(std.mem.endsWith(u8, a.so_path, testLib("testdev.2")));
             _ = try Io.Dir.cwd().statFile(io, a.so_path, .{});
         },
     }
@@ -850,7 +857,7 @@ test "compileRelease builds and versions a device" {
             b.renderToStderr(io, .{}, .off) catch {};
             return error.UnexpectedBuildFailure;
         },
-        .ok => |a| try std.testing.expect(std.mem.endsWith(u8, a.so_path, "libtestdev.5.so")),
+        .ok => |a| try std.testing.expect(std.mem.endsWith(u8, a.so_path, testLib("testdev.5"))),
     }
 }
 
@@ -1001,7 +1008,7 @@ test "a split build links one object per part into a library that runs" {
             },
             .ok => |a| a.so_path,
         };
-        var lib = try std.DynLib.open(so);
+        var lib = try @import("dynlib").DynLib.open(so);
         defer lib.close();
         const k = lib.lookup(*const fn () callconv(.c) f64, "arp_k") orelse return error.MissingSymbol;
         const eval = lib.lookup(*const fn (f64) callconv(.c) f64, "arp_eval") orelse return error.MissingSymbol;
@@ -1082,7 +1089,7 @@ test "a split build links one object per part into a library that runs" {
             .ok => |a| a.so_path,
         };
         try tmp.dir.access(io, "shim_setup1.zig", .{});
-        var lib = try std.DynLib.open(so);
+        var lib = try @import("dynlib").DynLib.open(so);
         defer lib.close();
         const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
         const setup = lib.lookup(*const fn (*Model) callconv(.c) void, "arp_setup") orelse return error.MissingSymbol;

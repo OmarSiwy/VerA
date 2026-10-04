@@ -169,7 +169,7 @@ static PLI_INT32 probe_cb(p_cb_data data)
 {
   double t = vpi_get_analog_time();
   if (vout == NULL) vout = p03_quantity("p03_sampnhold_tb.load", vpiPotential);
-  if ((long)data->user_data == 0) {
+  if (data->user_data == NULL) {
     P03_NEAR(t, 2.5e-3, TOL, "hold probe time");
     hold_2p5 = p03_real_of(vout, NULL);
     P03_NEAR(hold_2p5, 2.0, 1e-9, "V(out) held across [2e-3, 3e-3)");

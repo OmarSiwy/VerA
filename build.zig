@@ -12,6 +12,8 @@ const ModuleSpec = struct {
     name: []const u8,
     path: []const u8,
     imports: []const []const u8 = &.{},
+    /// A C file compiled into the module, against the headers in its directory.
+    c: ?[]const u8 = null,
 };
 
 /// The module graph in dependency order: a module may import only ones
@@ -21,13 +23,15 @@ const module_specs = [_]ModuleSpec{
 
     // lib/ — the compiler. `vera` is its facade and what an embedder takes.
     .{ .name = "diag", .path = "lib/diag.zig" },
+    // Opening an `--emit-so` artifact: the one OS-bound file (its header).
+    .{ .name = "dynlib", .path = "lib/dynlib.zig" },
     // `contract`: the compile-time folds and the prover's bounds use the
     // devices' exp/log/pow (`contract.gm`), so a folded constant is the bits
     // the device would compute (§9.14: `$exp` and `exp` are one function).
     .{ .name = "frontend", .path = "lib/frontend/root.zig", .imports = &.{ "diag", "contract" } },
     .{ .name = "kernels", .path = "lib/backend/kernels.zig", .imports = &.{"contract"} },
     .{ .name = "ir", .path = "lib/ir/root.zig", .imports = &.{ "diag", "frontend", "kernels", "contract" } },
-    .{ .name = "backend", .path = "lib/backend/root.zig", .imports = &.{ "diag", "frontend", "ir", "kernels" } },
+    .{ .name = "backend", .path = "lib/backend/root.zig", .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
     .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
@@ -35,14 +39,15 @@ const module_specs = [_]ModuleSpec{
     // §9.4.3 real conversion and §17.2 file I/O match the analog devices
     // (`contract.FileIo`, LRM §9.5.1.2).
     .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "contract", "diag", "frontend", "kernels" } },
-    .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" } },
+    // `c`: the variadic routines, which Zig cannot define on every target.
+    .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
 };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mods = defineModules(b, target);
+    const mods = defineModules(b, target, true);
 
     // `verilog` is an IEEE 1364-2005 tool: default `--std=1364-2005`, and the
     // analog pipeline (lowering, codegen, tb, orchestrator) is never analysed,
@@ -60,6 +65,12 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run the vera CLI").dependOn(&run_cmd.step);
 
     const test_step = b.step("test", "Run every test suite");
+    // The cross-platform gate: every artifact `test` builds, compiled for
+    // `-Dtarget` and run nowhere, since a foreign binary cannot run here. Its
+    // generated devices come from `gen_exe`, a `vera` for the build host.
+    const all_step = b.step("build-all", "Compile every artifact for -Dtarget without running one");
+    all_step.dependOn(&exe.step);
+    const gen_exe = if (target.query.isNative()) exe else cliExe(b, b.graph.host, optimize, defineModules(b, b.graph.host, false), "vera-gen", true);
 
     const fmt = b.addFmt(.{
         .paths = b.pathList(&.{ "lib", "src", "tests", "tools", "build.zig" }),
@@ -86,7 +97,9 @@ pub fn build(b: *std.Build) void {
     // both languages since only main.zig reads the option. A test artifact over
     // main.zig would analyse nothing.
     test_step.dependOn(&exe.step);
-    test_step.dependOn(&cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams).step);
+    const other_exe = cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams);
+    test_step.dependOn(&other_exe.step);
+    all_step.dependOn(&other_exe.step);
     // `tests/test_all.zig` is the one compilation that has every module at once,
     // and it owns the claims that span two of them.
     const all_mod = b.createModule(.{
@@ -97,10 +110,14 @@ pub fn build(b: *std.Build) void {
     });
     // `tests/exhaustive.zig` reads `lib/` and `src/` as source at test time,
     // from whatever cwd `zig build` was typed in, so the path is absolute.
+    // Those reads are invisible to the cache, so the run is never cached: a
+    // new file with an OS call does not change the test binary.
     const repo = b.addOptions();
     repo.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
     all_mod.addOptions("repo_options", repo);
-    test_step.dependOn(testRun(b, "test_all", all_mod, runner));
+    const all_run: *std.Build.Step.Run = @fieldParentPtr("step", testRun(b, "test_all", all_mod, runner));
+    all_run.has_side_effects = true;
+    test_step.dependOn(&all_run.step);
 
     // The suite runner's options are only the absolute paths it cannot compute
     // itself; defaults (the foreign compiler's command line, the fixture
@@ -132,6 +149,7 @@ pub fn build(b: *std.Build) void {
     // fixture instead of stopping at the first. Its own unit tests (assertion
     // lint, verdict tally, emitted-size table) do go on `test`.
     const suite_exe = b.addExecutable(.{ .name = "vera-suite", .root_module = suite_mod });
+    all_step.dependOn(&suite_exe.step);
     test_step.dependOn(testRun(b, "suite", suite_mod, runner));
 
     // The suite step: the runner takes the `vera` path, then whatever follows
@@ -247,9 +265,11 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "vpi", .module = byName(mods, "vpi") },
                 .{ .name = "sim", .module = byName(mods, "sim") },
                 .{ .name = "vpi_host_options", .module = host_opts.createModule() },
+                .{ .name = "dynlib", .module = byName(mods, "dynlib") },
             },
         }),
     });
+    all_step.dependOn(&vpi_host.step);
     const test_vpi = &b.top_level_steps.get("test-vpi").?.step;
     const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/fixtures/ch11_vpi/vpi_app.c", "tests/fixtures/ch11_vpi");
     vpi_app.expectExitCode(0);
@@ -292,7 +312,7 @@ pub fn build(b: *std.Build) void {
     const test_timers = b.step("test-timers", "Run emitted-device timer scheduling tests");
     const test_paramsets = b.step("test-paramsets", "Run emitted-device paramset binding and host shape tests");
     for (host_tests) |h| {
-        const gen = b.addRunArtifact(exe);
+        const gen = b.addRunArtifact(gen_exe);
         gen.addArgs(&.{ "--emit-zig", "-I" });
         gen.addDirectoryArg2(b.path("tests/fixtures"), .{});
         gen.addFileArg(b.path(h.va));
@@ -368,10 +388,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         // `dlopen`: the device keeps thread-local allocator state.
         .link_libc = true,
-        .imports = &.{ .{ .name = "vdev_dyn", .module = vdev_dyn }, .{ .name = "vdev_so_options", .module = so_opts.createModule() } },
+        .imports = &.{ .{ .name = "vdev_dyn", .module = vdev_dyn }, .{ .name = "vdev_so_options", .module = so_opts.createModule() }, .{ .name = "dynlib", .module = byName(mods, "dynlib") } },
     });
     for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide" }) |name| {
-        const gen = b.addRunArtifact(exe);
+        const gen = b.addRunArtifact(gen_exe);
         gen.addArg("--emit-zig");
         gen.addFileArg(b.path(b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name})));
         gen.addArg("-o");
@@ -385,7 +405,7 @@ pub fn build(b: *std.Build) void {
         vdev_host.addImport(name, dev_mod);
         if (std.mem.eql(u8, name, "v_count") or std.mem.eql(u8, name, "v_a2d") or std.mem.eql(u8, name, "v_buf")) {
             vdev_so_host.addImport(name, dev_mod);
-            const so = b.addRunArtifact(exe);
+            const so = b.addRunArtifact(gen_exe);
             so.addArgs(&.{ "--emit-so", "--contract" });
             so.addFileArg(b.path("tools/contract.zig"));
             so.addArg("--dyn");
@@ -393,7 +413,8 @@ pub fn build(b: *std.Build) void {
             so.addArg("--work-dir");
             const wd = so.addOutputDirectoryArg2(name, .{});
             so.addFileArg(b.path(b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name})));
-            so_opts.addOptionPath(name, wd.path(b, b.fmt("lib{s}.1.so", .{name})));
+            const host = &b.graph.host.result; // `gen_exe` names it for the build host
+            so_opts.addOptionPath(name, wd.path(b, b.fmt("{s}{s}.1{s}", .{ host.libPrefix(), name, host.dynamicLibSuffix() })));
         }
     }
     test_step.dependOn(testRun(b, "vdev_host", vdev_host, runner));
@@ -518,11 +539,15 @@ fn cliExe(
 ) *std.Build.Step.Compile {
     const o = b.addOptions();
     o.addOption(bool, "ams", ams);
+    // Every module but `vpi`: the CLI is not a VPI host, and the module's
+    // `varargs.c` would link against exports nothing here analyses.
+    var imports: std.ArrayList(std.Build.Module.Import) = .empty;
+    for (mods) |m| if (!std.mem.eql(u8, m.name, "vpi")) imports.append(b.allocator, m) catch @panic("OOM");
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = mods,
+        .imports = imports.items,
     });
     mod.addOptions("build_options", o);
     mod.addImport("sim_sources", simSources(b));
@@ -583,8 +608,9 @@ fn vpiApp(
     mod.addIncludePath(b.path("src/vpi"));
     mod.addIncludePath(b.path(dir));
     mod.linkLibrary(host);
-    const name = std.fs.path.stem(c);
-    return b.addRunArtifact(b.addExecutable(.{ .name = b.fmt("vpi-{s}", .{name}), .root_module = mod }));
+    const app = b.addExecutable(.{ .name = b.fmt("vpi-{s}", .{std.fs.path.stem(c)}), .root_module = mod });
+    b.top_level_steps.get("build-all").?.step.dependOn(&app.step);
+    return b.addRunArtifact(app);
 }
 
 /// One runnable VPI application: its C file, the design it runs against, and
@@ -989,10 +1015,10 @@ const vpi_run_paths = blk: {
     break :blk paths;
 };
 
-/// Creates every module in `module_specs` with `addModule`, so an embedder can
-/// import it, resolving imports against modules already created. Panics on a
-/// forward reference.
-fn defineModules(b: *std.Build, target: std.Build.ResolvedTarget) []const std.Build.Module.Import {
+/// Creates every module in `module_specs` with `addModule` (`exported`), so an
+/// embedder can import it, else with `createModule`, resolving imports against
+/// modules already created. Panics on a forward reference.
+fn defineModules(b: *std.Build, target: std.Build.ResolvedTarget, exported: bool) []const std.Build.Module.Import {
     var created: std.ArrayList(std.Build.Module.Import) = .empty;
     for (module_specs) |spec| {
         var deps: std.ArrayList(std.Build.Module.Import) = .empty;
@@ -1002,11 +1028,16 @@ fn defineModules(b: *std.Build, target: std.Build.ResolvedTarget) []const std.Bu
             } else @panic("module imported before it was defined: check module_specs order");
             deps.append(b.allocator, found) catch @panic("OOM");
         }
-        const mod = b.addModule(spec.name, .{
+        const opts: std.Build.Module.CreateOptions = .{
             .root_source_file = b.path(spec.path),
             .target = target,
             .imports = deps.items,
-        });
+        };
+        const mod = if (exported) b.addModule(spec.name, opts) else b.createModule(opts);
+        if (spec.c) |c| {
+            mod.addCSourceFile(.{ .file = b.path(c), .flags = &.{ "-std=c99", "-Wall", "-Werror" } });
+            mod.addIncludePath(b.path(std.fs.path.dirname(c).?));
+        }
         created.append(b.allocator, .{ .name = spec.name, .module = mod }) catch @panic("OOM");
     }
     return created.items;
@@ -1025,7 +1056,7 @@ fn byName(mods: []const std.Build.Module.Import, name: []const u8) *std.Build.Mo
     @panic("no such module: check module_specs");
 }
 
-/// One test artifact over `mod`, run. `CLICOLOR_FORCE` is what makes zrunner's
+/// One test artifact over `mod`, run, and compiled under `build-all`. `CLICOLOR_FORCE` is what makes zrunner's
 /// report colored when the build captures its output.
 fn testRun(
     b: *std.Build,
@@ -1033,11 +1064,13 @@ fn testRun(
     mod: *std.Build.Module,
     runner: std.Build.Step.Compile.TestRunner,
 ) *std.Build.Step {
-    const r = b.addRunArtifact(b.addTest(.{
+    const t = b.addTest(.{
         .name = name,
         .root_module = mod,
         .test_runner = runner,
-    }));
+    });
+    b.top_level_steps.get("build-all").?.step.dependOn(&t.step);
+    const r = b.addRunArtifact(t);
     r.setEnvironmentVariable("CLICOLOR_FORCE", "true");
     return &r.step;
 }
