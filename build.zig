@@ -720,7 +720,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p02_01_get_value_formats.c",
         .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 01_get_value_formats checks=48\np02_design: t=20 reached\n",
+        .stdout = "p02: 01_get_value_formats checks=50\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_02_get_value_unknown.c",
