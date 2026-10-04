@@ -285,6 +285,10 @@ ret: ?RetCtx = null,
 /// before `param_index`, because §6.8 makes the function a scope whose local
 /// declaration shadows the module's parameter of the same name.
 func_params: []const Ast.ParamDecl = &.{},
+/// Nonzero while `lowerClog2` lowers its operand as a host card sets it
+/// (docs/Vague_Decisions.md VD-089): each `hostSizedParam` then reads as a
+/// signed integer of this many bits instead of its declaration's width.
+clog2_host: u8 = 0,
 /// §4.7.1 recursion guard — names on the inline stack.
 inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function

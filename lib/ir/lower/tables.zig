@@ -39,7 +39,8 @@ pub const ParamInfo = struct {
     /// inferred integral parameter retains its initializer's bit pattern.
     integer32: bool = true,
     /// Final HDL declaration width, retained for self-determined operands.
-    /// Numeric model bindings change the value, not this source metadata.
+    /// A card value does not change it; `lowerClog2` reads a set card value
+    /// at its own unsized width instead (VD-089).
     source_width: ?u32 = null,
     source_signed: ?bool = null,
     default: Mir.Value,
