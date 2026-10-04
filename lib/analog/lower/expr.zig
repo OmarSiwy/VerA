@@ -743,7 +743,7 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool
             return poison;
         },
         // §4.2.10 xor reduction is a parity, which has no analog equivalent
-        // and no MIR opcode (annex C).
+        // and no MIR opcode.
         .reduce_xor, .reduce_xnor => {
             try self.err(self.file.exprs.mainTok(e), .E0320, "", .{});
             return poison;

@@ -2684,13 +2684,14 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0320 => .{
-            .title = "xor reduction is not in the analog subset",
-            .lrm = "C",
+            .title = "xor reductions cannot be used inside the analog block",
+            .lrm = "4.2.10",
             .explain =
-            \\`^`, `~^` and `^~` as unary reductions are removed from the
-            \\Verilog-A subset along with the rest of the four-state operator
-            \\set. Compute the parity you need arithmetically, or with the
-            \\binary bitwise operators, which are supported on integers.
+            \\`^`, `~^` and `^~` as unary reductions are reduction operators,
+            \\and LRM 4.2.10 says "The reduction operators can not be used
+            \\inside the analog block". Compute the parity you need
+            \\arithmetically, or with the binary bitwise operators, which are
+            \\supported on integers.
             ,
         },
         .E0321 => .{
@@ -2730,11 +2731,12 @@ fn infoOf(c: Code) Info {
             \\(4.2.1). The number is not reused.
         ),
         .E0324 => .{
-            .title = "arithmetic shifts are not in the analog subset",
-            .lrm = "C",
+            .title = "arithmetic shifts cannot be used in an analog block",
+            .lrm = "4.2.11",
             .explain =
-            \\`<<<` and `>>>` are the signed-shift operators of IEEE 1364.
-            \\Use `<<` and `>>`.
+            \\`<<<` and `>>>` are the arithmetic shift operators of IEEE 1364.
+            \\LRM 4.2.11: "The arithmetic shift operators can not be used in an
+            \\analog block." Use `<<` and `>>`.
             ,
         },
         .E0325 => retiredInfo(
@@ -3139,8 +3141,8 @@ fn infoOf(c: Code) Info {
             \\
             \\There is no carve-out and no analog form: `&`, `|`, `~&` and `~|`
             \\are banned exactly as `^`, `~^` and `^~` are (those get E0320,
-            \\which also carries annex C.5's separate removal of the four-state
-            \\operators from Verilog-A).
+            \\under the same clause; annex C.5 removes only `===` and `!==`
+            \\from Verilog-A).
             \\
             \\A reduction folds a BIT VECTOR, and an analog value is a real
             \\number on a continuous net. Write the test you mean: `x != 0`
@@ -4293,7 +4295,7 @@ fn infoOf(c: Code) Info {
         // ------------------------------------------------------------ class 5
         .E0501 => .{
             .title = "unknown access function",
-            .lrm = "3.6.1.4",
+            .lrm = "3.6.1.2",
             .explain =
             \\An access function name comes from the `access` attribute of a
             \\nature (LRM 3.6.1.2), reached through the discipline bound to the
@@ -7615,4 +7617,15 @@ test "every code has info and a well-formed name" {
         try std.testing.expect(!(i.title[0] >= 'A' and i.title[0] <= 'Z'));
         try std.testing.expect(i.explain.len > 0);
     }
+}
+
+test "a refusal cites the clause that states its rule (#62)" {
+    const std = @import("std");
+    // §4.2.11: "The arithmetic shift operators can not be used in an analog
+    // block." §4.2.10: "The reduction operators can not be used inside the
+    // analog block". Annex C.5 removes only `===` and `!==`, so neither is C.
+    try std.testing.expectEqualStrings("4.2.11", info(.E0324).lrm);
+    try std.testing.expectEqualStrings("4.2.10", info(.E0320).lrm);
+    // §3.6.1.2 defines the `access` attribute; the 2023 LRM has no §3.6.1.4.
+    try std.testing.expectEqualStrings("3.6.1.2", info(.E0501).lrm);
 }
