@@ -1137,6 +1137,7 @@ pass	ch04_expressions/modulo_integer_parameter.va
 pass	ch04_expressions/modulo_integer_short_circuit.va
 pass	ch04_expressions/modulo_integer_unused_zero.va
 pass	ch04_expressions/modulo_real_dynamic_zero.va
+pass	ch04_expressions/nodeset_phase_has_no_evaluation.va
 pass	ch04_expressions/noise_table_parameter_part_select.va
 pass	ch04_expressions/noise_table_part_select_out_of_range_rejected.va
 pass	ch04_expressions/parameter_reduction_and_arithmetic_shift.va
@@ -2362,6 +2363,7 @@ pass	ch09_system_tasks/simparam_minr_hicum_l2_default.va
 pass	ch09_system_tasks/simparam_newton_tolerances_host_written.va
 pass	ch09_system_tasks/simparam_spice_option_not_known_rejected.va
 pass	ch09_system_tasks/simparam_str_analysis_name_host_table.va
+pass	ch09_system_tasks/simparam_str_analysis_type_tran_op.va
 pass	ch09_system_tasks/simparam_str_cwd_and_analysis_name.va
 pass	ch09_system_tasks/simparam_str_cwd_host_table.va
 pass	ch09_system_tasks/simparam_str_unknown_name_rejected.va

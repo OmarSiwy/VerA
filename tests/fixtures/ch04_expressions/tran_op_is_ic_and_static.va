@@ -10,7 +10,8 @@
 //     "tran"    1  1
 //
 // ("nodeset" is 1 only during the part of the OP "when nodesets are applied",
-// a phase this testbench does not separate, so it is not asserted.)
+// a phase with no evaluation in VerA, specification/Vague_Decisions.md VD-117;
+// nodeset_phase_has_no_evaluation.va asserts it.)
 // The grid's t = 0 point is the TRAN OP: it is solved with dt = 0, the
 // operating point the transient starts from; 1n and 2n are Tran points. So
 // at t = 0 "static" and "ic" are 1, and at 1n and 2n both are 0: the want is
