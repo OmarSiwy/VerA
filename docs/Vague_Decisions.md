@@ -48,7 +48,7 @@ correction.
 | VD-004 | AGENTS.md §0 rule 1 (house rule) | Re-measure figures that gate an assertion; delete prose-only ones | yes |
 | VD-005 | IEEE 1364-2005 17.10; VAMS 9.12 Table 9-9 | No 17.10-03 row; re-score 17.10-01/-02 on the existing digital fixtures | yes |
 | VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | yes |
-| VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | yes |
+| VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | DONE |
 | VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | yes |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | yes |
@@ -197,6 +197,7 @@ correction.
 - **Decision**: `DECIDED:` (c). 7.8.4 defines a mixed signal by the disciplines of its segments, not by activity. Once the net resolves continuous (7.4.4.1) and a port's lower segment is discrete, the port is mixed. "Shall match one (and only one)" is then violated by zero matches as much as by two. 6.5.7's "provided" makes the connection conditional. The new diagnostic is the zero-match counterpart of E0922.
 - **VerA today**: `lib/ir/elaborate/insert.zig:61-62`: "A mixed port no statement matches is left joined". E0922 covers only `count > 1` (`:94-99`). `ch07_mixed_signal/lrm_7_4_4_1.va` relies on this acceptance. CHANGE NEEDED: a new E09xx error for a mixed port that matches no connect statement, citing 6.5.7/7.8.4. `lrm_7_4_4_1.va` gets a `connectrules` block (or a trivial connect module), so it still tests 7.4.4.1 resolution. Add a reject fixture with that legal neighbour. Minor: source that was accepted is now refused.
 - **Measure impact**: A (one fixture edited, one added), C (7.8.4 and 6.5.7 become two-way).
+- **Status**: DONE. E0927 (`insert.checkUnbridged`, judged after §7.4 resolution); `lrm_7_4_4_1.va` carries a `connectrules` block; `reject_mixed_port_no_connect_statement.va` pins the refusal.
 
 ### VD-008: Detail discipline resolution is testable, and its absence is a gap
 - **Source**: ROADMAP §5.1 item 8; `docs/conformance-mixed-signal.md:193-201` at 8b1514d4; IMPLEMENTATION §1 row "AMS 7.4.4.2".

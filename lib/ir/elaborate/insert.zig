@@ -58,8 +58,13 @@ const Hit = struct {
 /// module. All other ports shall have an instance of the selected connect
 /// module".
 ///
-/// A mixed port no statement matches is left joined, and §7.4's discipline
-/// resolution judges it.
+/// A port no statement matches is left joined and recorded in
+/// `unbridged`: whether it is mixed is known only once §7.4 has resolved
+/// its net, and `checkUnbridged` judges it then (E0927).
+///
+/// An undeclared upper connection takes §7.4.4.1's basic answer at this
+/// level (`levelDiscipline`) so a statement can match it; the resolution
+/// proper still runs as the children are bound.
 ///
 /// ponytail: rules are read only from connect modules with exactly one
 /// continuous and one discrete port (every §7.6 example), and a port is judged
@@ -75,8 +80,6 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         if (!try paramsDeclared(self, ins, r.module, false)) continue;
         try rules.append(self.ctx.arena, r);
     };
-    if (rules.items.len == 0) return module.instances;
-
     const file = self.ctx.file;
     var hits: std.ArrayList(Hit) = .empty;
     for (module.instances, 0..) |inst, ii| {
@@ -86,11 +89,20 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         for (child.ports, 0..) |p, pi| {
             const ci = connIndex(&inst, p, pi) orelse continue;
             const sig = elab_names.netRefName(self, inst.ports[ci].expr) orelse continue;
-            const upper = self.disc_of.get(self.unit.rename.get(sig) orelse sig) orelse continue;
+            const bound = self.unit.rename.get(sig) orelse sig;
             const lower = p.discipline;
-            const up_d = domain(file, upper) orelse continue;
             const lo_d = domain(file, lower) orelse continue;
-            if (up_d == lo_d) continue; // not a mixed port
+            const unbridged: Unbridged = .{ .tok = inst.ports[ci].main_tok, .net = bound, .lower = lower, .port = p.name, .inst = inst.name };
+            const upper = self.disc_of.get(bound) orelse levelDiscipline(self, module, sig) orelse {
+                try self.unbridged.append(self.ctx.arena, unbridged);
+                continue;
+            };
+            const up_d = domain(file, upper) orelse continue;
+            if (up_d == lo_d) {
+                // Not mixed yet: an undeclared net may still resolve continuous.
+                try self.unbridged.append(self.ctx.arena, unbridged);
+                continue;
+            }
             var found: ?usize = null;
             var count: usize = 0;
             for (rules.items, 0..) |r, ri| if (matches(file, r, p.direction, upper, lower)) {
@@ -106,7 +118,10 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
             try hits.append(self.ctx.arena, .{
                 .inst = ii,
                 .conn = ci,
-                .rule = found orelse continue,
+                .rule = found orelse {
+                    try self.unbridged.append(self.ctx.arena, unbridged);
+                    continue;
+                },
                 .sig = sig,
                 .bottom = lower,
                 .port = p.name,
@@ -172,6 +187,55 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         });
     }
     return out.items;
+}
+
+/// A child port `plan` bridged with nothing, as `checkUnbridged` reads it.
+pub const Unbridged = struct {
+    tok: u32,
+    /// The flat net the port joins.
+    net: Ast.StrId,
+    /// The port's own discipline: its lower connection.
+    lower: Ast.StrId,
+    port: Ast.StrId,
+    inst: Ast.StrId,
+};
+
+/// §7.8.4 "the port shall match one (and only one) connect statement", the
+/// zero-match half (E0922 is the other), and §6.5.7 "Ports of both analog
+/// and digital discipline may be connected to a net provided the
+/// appropriate connect statements exist". Run after §7.4 resolution, since
+/// a port is mixed by the disciplines its net resolved to, not by what
+/// crosses it.
+pub fn checkUnbridged(self: *Flatten) Error!void {
+    const file = self.ctx.file;
+    for (self.unbridged.items) |u| {
+        const upper = self.disc_of.get(u.net) orelse continue;
+        const up_d = domain(file, upper) orelse continue;
+        const lo_d = domain(file, u.lower).?;
+        if (up_d == lo_d or up_d == .unspecified or lo_d == .unspecified) continue;
+        try self.err(u.tok, .E0927, "port `{s}` of `{s}` is `{s}` and its net `{s}` is `{s}`, and no connect statement bridges them", .{
+            file.str(u.port), file.str(u.inst), file.str(u.lower), file.str(u.net), file.str(upper),
+        });
+    }
+}
+
+/// §7.4.4.1 basic mode at this level, for an upper connection no
+/// declaration has reached yet: "At each level of the hierarchy where
+/// continuous and discrete meet for an undeclared net that net segment is
+/// declared continuous". The first continuous discipline a child port of
+/// `module` brings to `sig`, else null (the net is not continuous here, so
+/// no port of it is mixed yet).
+fn levelDiscipline(self: *Flatten, module: *const Ast.ModuleDecl, sig: Ast.StrId) ?Ast.StrId {
+    for (module.instances) |inst| {
+        const child = elab_names.findModule(self, inst.module) orelse continue;
+        if (child.is_connect) continue;
+        for (child.ports, 0..) |p, pi| {
+            const ci = connIndex(&inst, p, pi) orelse continue;
+            if (elab_names.netRefName(self, inst.ports[ci].expr) != sig) continue;
+            if (domain(self.ctx.file, p.discipline) == .continuous) return p.discipline;
+        }
+    }
+    return null;
 }
 
 /// The module `inst` elaborates to: the one it names, or (§6.9.3) the module
