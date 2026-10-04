@@ -67,10 +67,11 @@ pub const Map = struct {
     /// declaration order in the library map file", then `work` when no map
     /// declares it. The slice is allocated in `arena`.
     pub fn order(map: Map, arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
-        var out: std.ArrayList([]const u8) = .empty;
-        for (map.libraries) |l| try out.append(arena, l.name);
-        if (map.declares("work") == null) try out.append(arena, "work");
-        return out.items;
+        const work = map.declares("work") == null;
+        const out = try arena.alloc([]const u8, map.libraries.len + @intFromBool(work));
+        for (map.libraries, out[0..map.libraries.len]) |l, *o| o.* = l.name;
+        if (work) out[map.libraries.len] = "work";
+        return out;
     }
 
     /// Returns the index of the library called `name` in `libraries`, or null.
