@@ -592,6 +592,14 @@ pub fn emitDerive(self: *Gen) Error!void {
             self.names.a_names[i], self.names.p_names[al.param], self.names.a_names[i],
         });
     }
+    // §3.4.1 an explicit `integer` parameter is a 32-bit value, but the host
+    // writes the ABI's i64 carrier (4294967297 for 1). Reduce it here, once
+    // per card, so every later read (a dependent default below, `setup`,
+    // `checkShape`, `eval`) sees the low 32 bits and the hot loop pays nothing.
+    for (self.lowered.params.items, 0..) |p, i| {
+        if (p.is_local or !p.integer32 or Analysis.tyOfParam(p.ty) != .int) continue;
+        try self.w("    model.{0s} = @as(i32, @truncate(model.{0s}));\n", .{self.names.p_names[i]});
+    }
     for (self.lowered.params.items, 0..) |p, i| {
         const ty = Analysis.tyOfParam(p.ty);
         // A string parameter has no arithmetic to redo; a string localparam
@@ -720,12 +728,15 @@ fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
 /// `foldConst` over the MIR. Integral defaults prefer the exact AST result.
 pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
     if (want == .int) if (p.folded) |k| {
+        // An explicit `integer` (§3.4.1) is 32 bits: an integral default
+        // keeps its low 32 bits, a real one saturates at the 32-bit bounds
+        // (as the 64-bit carrier saturates for an inferred one).
         const value = switch (k) {
-            .int => |v| v,
-            .real => |v| std.math.lossyCast(i64, @round(v)),
+            .int => |v| if (p.integer32) Lower.wrap32(v) else v,
+            .real => |v| if (p.integer32) std.math.lossyCast(i32, @round(v)) else std.math.lossyCast(i64, @round(v)),
             .str => 0,
         };
-        return self.arena.print("{d}", .{if (p.integer32 and k == .int) Lower.wrap32(value) else value});
+        return self.arena.print("{d}", .{value});
     };
     const c = self.an.foldConst(p.default, true);
     if (c == null) if (p.folded) |k| return switch (want) {
@@ -745,11 +756,12 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
     };
     return switch (want) {
         .real => try fmtF64(self, if (c) |k| k.f else 0.0),
-        // ponytail: `parameter integer big = 1e300;` saturates (`lossyCast`:
-        // clamp to i64, NaN -> 0) instead of panicking the compiler. §4.2.1.1
-        // fixes no overflow rule. The field, the fold (`Analysis.asI64`) and
-        // the runtime `fi_cast` all saturate alike, so they agree. Upgrade
-        // path: a lowering-time diagnostic on the default's span.
+        // ponytail: a default with no AST fold (`p.folded`, which saturates an
+        // explicit integer at 32 bits above) clamps to the i64 carrier
+        // (`lossyCast`: NaN -> 0) instead of panicking the compiler, as the
+        // fold (`Analysis.asI64`) and the runtime `fi_cast` do; `derive` then
+        // keeps an explicit integer's low 32 bits. §4.2.1.1 fixes no overflow
+        // rule. Upgrade path: a lowering-time diagnostic on the default's span.
         .int => try self.arena.print("{d}", .{if (c) |k| std.math.lossyCast(i64, @round(k.f)) else 0}),
         .str => blk: {
             const def = self.mir.valueDef(self.an.rv(p.default));
