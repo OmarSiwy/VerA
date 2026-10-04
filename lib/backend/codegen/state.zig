@@ -535,7 +535,8 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     try self.w("    inst.{s} = m.f{d};\n", .{ n, k })
                 else
                     try self.w("    inst.{s} = std.math.lossyCast(i64, @round(m.f{d}{s}));\n", .{ n, k, val }),
-                .real, .string => if (core_int)
+                .string => try self.w("    inst.{s} = m.f{d};\n", .{ n, k }),
+                .real => if (core_int)
                     try self.w("    inst.{s} = @floatFromInt(m.f{d});\n", .{ n, k })
                 else
                     try self.w("    inst.{s} = m.f{d}{s};\n", .{ n, k, val }),

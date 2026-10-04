@@ -1326,6 +1326,23 @@ fn acAnalysisName(self: *const Lower, e: Ast.ExprId) []const u8 {
     return self.file.str(ex.strOf(args[0]));
 }
 
+/// §4.6.4: remembers that variable `name` now carries the noise sources of
+/// `value`, so a later `I(a,b) <+ n;` still exports their generators. Called
+/// after `value` is lowered, by an assignment and by a declaration
+/// initializer (`real n = white_noise(pwr);`) alike.
+pub fn noteVarNoise(self: *Lower, name: []const u8, value: Ast.ExprId) Oom!void {
+    var srcs: std.ArrayList(NoiseSrc) = .empty;
+    try noiseSrcsOf(self, value, &srcs);
+    if (srcs.items.len == 0) return;
+    const g = try self.var_noise.getOrPut(self.arena, name);
+    if (g.found_existing) {
+        // Union by identity: re-lowering a loop body or a second
+        // assignment through the same call is still one generator.
+        for (g.value_ptr.*) |src| try addNoiseSrc(self.arena, &srcs, src);
+    }
+    g.value_ptr.* = srcs.items;
+}
+
 /// Appends every §4.6.4 small-signal source in `e` to `out`, in first-appearance
 /// order, deduplicated by generator identity (`id`). A full walk, not the first
 /// hit: one expression can declare several generators. Two textually separate

@@ -151,6 +151,8 @@ pub const Design = struct {
     /// §6.4.2 values read while choosing an overloaded paramset. The host must
     /// re-elaborate when these shape parameters change, as for generate schemes.
     selection_params: []const Ast.StrId = &.{},
+    /// §9.18 Table 9-29 domains to check at card time (`SystemCheck`).
+    system_checks: []const SystemCheck = &.{},
 };
 
 /// A defparam is forbidden only in an instantiated paramset hierarchy:
@@ -219,6 +221,13 @@ pub const UnitPath = struct {
 /// written at. The token is what a positional compiler directive is looked up
 /// by, and what a diagnostic points at.
 pub const NameSite = struct { name: []const u8, main_tok: u32 };
+
+/// §9.18 a hierarchical system parameter's specified value that reads the
+/// model card, so Table 9-29's "Allowed values" can only be checked when
+/// the host writes the card (codegen's `checkCard`). `value` is in the flat
+/// namespace; `name` is what the check reports: `path$kind`, or a top-level
+/// alias's own spelling.
+pub const SystemCheck = struct { kind: hier_param.Kind, value: Ast.ExprId, name: []const u8 };
 
 /// Everything elaboration needs from the compilation. `file` is MUTABLE because
 /// flattening appends: new interned names (§6.7 paths), cloned expression rows
@@ -423,6 +432,8 @@ pub const Flatten = struct {
     /// `Design.selection_params`: flat parameters a §6.4.2 overload choice
     /// read. May repeat a name; readers treat it as a set.
     selection_params: std.ArrayList(Ast.StrId) = .empty,
+    /// `Design.system_checks`, as overrides are composed.
+    system_checks: std.ArrayList(SystemCheck) = .empty,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -609,12 +620,20 @@ pub const Flatten = struct {
         // mfactor host field has its own automatic scaling convention.
         for (top.aliasparams) |al| {
             const kind = hier_param.Kind.fromName(self.ctx.file.str(al.target)) orelse continue;
-            if (kind == .mfactor or self.unit.hier.get(kind) != .none) continue;
-            self.unit.hier.set(kind, try self.ctx.file.exprs.add(self.ctx.arena, .{
+            const card = try self.ctx.file.exprs.add(self.ctx.arena, .{
                 .tag = .ident,
                 .main_tok = top.main_tok,
                 .str = al.alias,
-            }));
+            });
+            // The card value is the top's own system parameter: Table 9-29
+            // constrains it as much as an instance override.
+            if (kind.constrained()) try self.system_checks.append(self.ctx.arena, .{
+                .kind = kind,
+                .value = card,
+                .name = self.ctx.file.str(al.alias),
+            });
+            if (kind == .mfactor or self.unit.hier.get(kind) != .none) continue;
+            self.unit.hier.set(kind, card);
         }
         try self.vars.appendSlice(self.ctx.arena, top.vars);
         for (top.ports) |p| try elab_resolve.noteDiscipline(self, p.name, p.discipline);
@@ -688,6 +707,7 @@ pub const Flatten = struct {
             .ps_hidden = self.ps_hidden.items,
             .paramset_defparams = self.paramset_defparams.items,
             .selection_params = self.selection_params.items,
+            .system_checks = self.system_checks.items,
         };
     }
 };

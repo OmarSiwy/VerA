@@ -125,25 +125,25 @@ pub const mode = @tagName(@import("builtin").mode);
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 32621, .defs = 8, .insts = 5 },
-        .{ .device = 32976, .defs = 35, .insts = 26 },
-        .{ .device = 35719, .defs = 258, .insts = 194 },
-        .{ .device = 58122, .defs = 2050, .insts = 1538 },
-        .{ .device = 240702, .defs = 16386, .insts = 12290 },
+        .{ .device = 33174, .defs = 8, .insts = 5 },
+        .{ .device = 33529, .defs = 35, .insts = 26 },
+        .{ .device = 36272, .defs = 258, .insts = 194 },
+        .{ .device = 58675, .defs = 2050, .insts = 1538 },
+        .{ .device = 241255, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 32621, .defs = 8, .insts = 5 },
-        .{ .device = 32803, .defs = 24, .insts = 19 },
-        .{ .device = 34259, .defs = 136, .insts = 131 },
-        .{ .device = 45964, .defs = 1032, .insts = 1027 },
-        .{ .device = 139725, .defs = 8200, .insts = 8195 },
+        .{ .device = 33174, .defs = 8, .insts = 5 },
+        .{ .device = 33356, .defs = 24, .insts = 19 },
+        .{ .device = 34812, .defs = 136, .insts = 131 },
+        .{ .device = 46517, .defs = 1032, .insts = 1027 },
+        .{ .device = 140278, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 32621, .defs = 8, .insts = 5 },
-        .{ .device = 33825, .defs = 50, .insts = 40 },
-        .{ .device = 43673, .defs = 386, .insts = 320 },
-        .{ .device = 124207, .defs = 3074, .insts = 2560 },
-        .{ .device = 781992, .defs = 24578, .insts = 20480 },
+        .{ .device = 33174, .defs = 8, .insts = 5 },
+        .{ .device = 34378, .defs = 50, .insts = 40 },
+        .{ .device = 44226, .defs = 386, .insts = 320 },
+        .{ .device = 124760, .defs = 3074, .insts = 2560 },
+        .{ .device = 782545, .defs = 24578, .insts = 20480 },
     },
 });
 

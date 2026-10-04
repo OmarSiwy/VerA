@@ -236,6 +236,7 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .systf,
         .@"$held_real",
         .@"$held_int",
+        .@"$held_str",
         // VerA's `vera_timepoint`: the per-timepoint cache (`Lower.TpBlock`).
         .@"$tp_hit",
         .@"$tp_int",
@@ -599,6 +600,13 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const f = self.names.held_names[heldIdx(self, args)];
             float_lanes.instLanes(self, c == .@"$held_int");
             return self.b("{s}(S, inst, \"{s}\")", .{ if (c == .@"$held_int") "zInstI" else "zInst", f });
+        },
+        // §5.10/§3.3 a held string: a slice field, read from the one
+        // instance `inst` is, so an eval-side read is not `batch_ok`.
+        .@"$held_str" => {
+            self.uses.inst = true;
+            float_lanes.instPin(self);
+            return self.b("inst.{s}", .{self.names.held_names[heldIdx(self, args)]});
         },
         // VerA's `vera_timepoint` (§2.9): is statement b's cache current, and
         // its slot k (`Lower.TpBlock`, the fields `emitInstance` declares).

@@ -49,6 +49,10 @@ pub const math_txt =
     \\// than inheriting a host min/max primitive's possibly different tie rule.
     \\fn zMin(comptime S: type, a: S, b: S) S { return a.lt(b).sel(a, b); }
     \\fn zMax(comptime S: type, a: S, b: S) S { return b.lt(a).sel(a, b); }
+    \\// The plain-f64 form (`opcode_zig.host_f64`: derive, setup), the same
+    \\// strict comparison: `@min`/`@max` drop a NaN and leave a zero's sign open.
+    \\fn zMinF(a: f64, b: f64) f64 { return if (a < b) a else b; }
+    \\fn zMaxF(a: f64, b: f64) f64 { return if (a > b) a else b; }
     \\
     \\// ---- per-operating-point decisions (`batch_lead`, contract.zig) ----
     \\// A real compared, rounded to an integer or stripped of its lanes is one
@@ -230,9 +234,13 @@ pub const math_txt =
     \\/// so d = da − k·db), carried by zero-valued grafts so the exact value
     \\/// survives; a non-finite k (b = 0, or a/b overflowed) has no slope worth
     \\/// propagating and degrades to da alone.
+    \\/// §4.2.4 "It shall be an error to pass zero (0) as the second argument
+    \\/// to the modulus operator", real operands included: `zModZero` reports
+    \\/// E0601 as the integer `%` does, rather than returning @rem's NaN.
     \\fn zFmod(comptime S: type, a: S, b: S) S {
     \\    const av = a.val();
     \\    const bv = b.val();
+    \\    if (bv == 0.0) zModZero();
     \\    const k = @trunc(av / bv);
     \\    var r = S.con(@rem(av, bv)).add(a.addC(-av));
     \\    if (std.math.isFinite(k)) r = r.sub(b.addC(-bv).scale(k));
@@ -336,9 +344,11 @@ pub const math_txt =
 /// (E0605/E0606/E0607); `math_txt`'s restricted-domain functions call
 /// `zDomain` for the rest. A device has no transcript (it also compiles for
 /// NVPTX), so only the executable reports; one call site keeps both artifacts
-/// agreeing on which values are out of range.
+/// agreeing on which values are out of range. `zModZero` (§4.2.4 real `%`
+/// by zero) traps, as `render.imodFn` does for the integer `%`.
 pub const domain_quiet_txt =
     \\fn zDomain(comptime _: []const u8, comptime _: []const u8, _: f64, _: bool) void {}
+    \\fn zModZero() noreturn { @trap(); }
     \\
     \\
 ;
@@ -354,6 +364,10 @@ pub const domain_report_txt =
     \\        "error: LRM 4.3.2: " ++ name ++ "() input value is outside the valid range " ++ rule ++ ": {d}\n",
     \\        .{x},
     \\    );
+    \\    std.process.exit(1);
+    \\}
+    \\fn zModZero() noreturn {
+    \\    std.debug.print("error[E0601]: LRM 4.2.4: real modulus divisor is zero\n", .{});
     \\    std.process.exit(1);
     \\}
     \\

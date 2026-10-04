@@ -44,21 +44,21 @@ correction.
 |---|---|---|---|
 | VD-001 | AGENTS.md §2, §6 (house rule) | A green fixture with teeth is an ordinary fixture; its header names the wrong implementation it catches | yes |
 | VD-002 | VAMS 9.21, Syntax 9-16, Table 9-32 | `";2"` is legal; a null head defaults every dimension, dependent = N + ignored + selector | no |
-| VD-003 | AGENTS.md §6 (house rule); VAMS 9.17.2 | Delete invented quotes (done); ship the 9.17.2 smallest-bound fixture | yes |
+| VD-003 | AGENTS.md §6 (house rule); VAMS 9.17.2 | Delete invented quotes (done); ship the 9.17.2 smallest-bound fixture | DONE (70c42167) |
 | VD-004 | AGENTS.md §0 rule 1 (house rule) | Re-measure figures that gate an assertion; delete prose-only ones | yes |
 | VD-005 | IEEE 1364-2005 17.10; VAMS 9.12 Table 9-9 | No 17.10-03 row; re-score 17.10-01/-02 on the existing digital fixtures | yes |
 | VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | yes |
 | VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | yes |
 | VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | yes |
-| VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | yes |
+| VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | DONE (ea6b1cb6) |
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | yes |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
 | VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
-| VD-017 | VAMS 7.3.2; IEEE 1364-2005 17.1.1.4 | An x/z analog display operand is an error; fix E0130's explanation, add a fixture | yes |
+| VD-017 | VAMS 7.3.2; IEEE 1364-2005 17.1.1.4 | An x/z analog display operand is an error; fix E0130's explanation, add a fixture | DONE (73d3f9dd) |
 | VD-018 | IEEE 1364-2005 17.2.9 | Excess `$readmem` data: warning, load continues (implemented, W1150) | yes |
 | VD-019 | CLAUSE-AUDIT §2 (house rule) | A parsed AST path is not `partial`; re-score AMS-06 on executing fixtures | yes |
 | VD-020 | AGENTS.md §2 (house rule) | A kernel unit test never carries `verified` alone | yes |
@@ -67,11 +67,11 @@ correction.
 | VD-023 | VAMS 2.9.2 (`op`) | An absent `op` means included; only `"no"` excludes | no |
 | VD-024 | VAMS 2.9 Syntax 2-4, A.9.1, Annex B | Only `units` is exempt as a keyword attribute name; other keywords are refused | yes |
 | VD-025 | VAMS 3.4; IEEE 1364-2005 4.10.1 | "Previously defined" means textual order; a forward reference is E0314 | no |
-| VD-026 | VAMS 4.3.1 Table 4-14 | `min`/`max` use the conditional form for value and derivative, folding included | yes |
+| VD-026 | VAMS 4.3.1 Table 4-14 | `min`/`max` use the conditional form for value and derivative, folding included | DONE (107333b2) |
 | VD-027 | VAMS 8.2 vs 8.4.1 | Nodeset vs `analog initial` order is unobservable; follow 8.2, assert neither | no |
 | VD-028 | VAMS 5.10.3.3, 8.3.3 | An `@()` body's effects are committed once per accepted timepoint | no |
 | VD-029 | VAMS 8.4.4 example; IEEE 1364-2005 9.2.2 | 9.2.2 governs; the "cancel" is the D2A's driver look-ahead | no |
-| VD-030 | VAMS 9.16 | Run-time `$simprobe` names should resolve; until then, refuse by name, never fall back silently | yes |
+| VD-030 | VAMS 9.16 | Run-time `$simprobe` names should resolve; until then, refuse by name, never fall back silently | DONE (b5689fbb) |
 | VD-031 | VAMS 9.21, 9.21.1 | Refuse a duplicate abscissa only when the conflict is proven; otherwise check at capture | no |
 | VD-032 | VAMS 3.7; IEEE 1364-2005 9.7.2, 6.1.2 | A real "change" is IEEE 754 `!=`; the new bits are still stored | yes |
 | VD-033 | VAMS 3.7; IEEE 1364-2005 11.3 | `m04_01`'s time-0 read of a declaration-assigned wreal is a race; sample after `#0` | DONE (4b6c96d8) |
@@ -97,7 +97,7 @@ correction.
 | VD-053 | VAMS 2.7 | Octal escape above \377 is refused with a named error (the LRM permits it) | yes |
 | VD-054 | VAMS 2.8 | No identifier length limit | no |
 | VD-055 | VAMS 4.2.4 | Integer % by zero: E0601 at compile time if provable, runtime report or trap otherwise | no |
-| VD-056 | VAMS 4.2.4 | Real % by a runtime zero reports E0601 like the integer path, not NaN | yes |
+| VD-056 | VAMS 4.2.4 | Real % by a runtime zero reports E0601 like the integer path, not NaN | DONE (86e06853) |
 | VD-057 | VAMS 4.5.4 | idt without ic: c from the feedback loop when the argument reads an unknown, else 0 (row rewording) | yes (doc) |
 | VD-058 | VAMS 4.5.5 | idtmod c = 0 is required by the prose; not implementation-defined | yes (doc) |
 | VD-059 | VAMS 4.5.5 | idtmod integrates inside the device, wrapped each accepted step | no |
@@ -113,14 +113,14 @@ correction.
 | VD-069 | VAMS 9.5.7, IEEE 17.2.7 | $ferror returns fixed C errno values on every host | no |
 | VD-070 | VAMS 9.7.2 | $stop in a batch run prints and exits 0 | no |
 | VD-071 | VAMS 9.13.1 | Omitted seed: deterministic 1 + 7919k per site | no |
-| VD-072 | VAMS 9.15 | gmin and sourceScaleFactor become host-written Model fields | yes |
+| VD-072 | VAMS 9.15 | gmin and sourceScaleFactor become host-written Model fields | DONE (d73ae0cc) |
 | VD-073 | VAMS 9.17.3, E.3.4 | Six $limit built-ins; an unknown name returns the probe with W0853 | no |
 | VD-074 | VAMS 9.17.3 | Extra $limit args: frame sign, then seed; more declines (W0853) | no |
 | VD-075 | VAMS 12.36 | vpiRejectTransientStep = 730 | no |
 | VD-076 | VAMS E.1, E.2 | SPICE flavour; see VD-012 | no |
 | VD-077 | VAMS E.3.3 | No primitive-shadow warning; W0951 for model/subckt (stale ROADMAP row) | yes (doc) |
 | VD-078 | VAMS 9.15 | Temperature per Model row; IMPLEMENTATION cite §9.10 -> §9.15 | yes (doc) |
-| VD-079 | VAMS 9.18, Table 9-29 | Card-time domain check for host-set hierarchical system parameters | yes |
+| VD-079 | VAMS 9.18, Table 9-29 | Card-time domain check for host-set hierarchical system parameters | DONE (76f344c7) |
 | VD-080 | IEEE 1364-2005 8.1.2 | 64 UDP inputs for both kinds, E1017 past it | no |
 | VD-081 | IEEE 1364-2005 11.4.2 | Source-order FIFO active events; resume in suspend order; interpreter = native | no |
 | VD-082 | IEEE 1364-2005 5.1.4, 11.4.2, 11.5, 12.3.10.x (CLAUSE-AUDIT §5.5) | Tagged fixtures assert only the permitted set; VerA's choice pinned untagged | yes |
@@ -154,6 +154,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-003: The quotations and mechanism claims the repair pass invented
+- **Status**: DONE (70c42167)
 - **Source**: ROADMAP §5.1 item 3; MANIFEST §5.1(b) at 8b1514d4; ROADMAP §5.5.
 - **Rule**: not an LRM reading. House rule: AGENTS.md §6 (the header quotes the LRM sentence) and §0 rule 1.
 - **Why vague**: five quotations and two mechanism claims in fixture headers were fabricated. One of them, A10's claim that VerA refuses a second `$bound_step`, was given as the reason no fixture was shipped for VAMS 9.17.2's "smallest currently active" rule.
@@ -217,6 +218,7 @@ correction.
 - **Measure impact**: A (+1 fixture), C (13.2.1.1 evidence in the analog path). B already counts the `.v` fixture.
 
 ### VD-010: A disabled block's contributions already made
+- **Status**: DONE (ea6b1cb6)
 - **Source**: ROADMAP §5.1 item 10; `a03_SPEC.md:170-177` at 8b1514d4.
 - **Rule**: VAMS 5.6.1.3: "When solving an analog block during an iteration, multiple contributions to the same potential branch or same flow branch will be additive." VAMS A.6.5 `disable_statement`. In VerA's analog subset only `@(event) disable blk;` is legal (E0401).
 - **Why vague**: no clause says whether `disable` withdraws contributions that the block already executed in the same iteration.
@@ -280,6 +282,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-017: x/z as an analog display operand (17.1-06's analog half)
+- **Status**: DONE (73d3f9dd)
 - **Source**: CLAUSE-AUDIT §7.5 item 1.
 - **Rule**: VAMS 7.3.2: "Accessing digital net and digital binary constant operands are supported within analog context expressions. It is an error if these operands return x or z bit values when solved." x/z are admitted only through `===`, `!==`, `case`/`casex`/`casez` and x/z digit constants used in those comparisons. IEEE 1364-2005 17.1.1.4 (x/z display formatting) is inherited through VAMS 9.4.
 - **Why vague**: CLAUSE-AUDIT §4.1 read 7.3.2 as making x/z legal analog display operands, which would make E0130 a refusal of legal source. `s01_SPEC.md` read the refusal as correct.
@@ -363,6 +366,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-026: `min`/`max` with NaN or signed zero
+- **Status**: DONE (107333b2)
 - **Source**: ROADMAP §5.6 bullet 5 (`conformance-minmax-ledger-review.md:97-102`).
 - **Rule**: VAMS 4.3.1, Table 4-14: `min(x, y)` has the "Equivalent C function" `fmin(x,y)` and the domain "All x, all y". The same clause says "these functions are defined so: min(x,y) is equivalent to (x < y) ? x : y; max(x,y) is equivalent to (x > y) ? x : y".
 - **Why vague**: C `fmin(NaN, 1)` and `fmin(1, NaN)` both return 1, and C leaves the sign of `fmin(-0, +0)` open. The conditional form returns 1 for `min(NaN, 1)`, NaN for `min(1, NaN)`, and +0 for `min(-0, +0)`. The table and the prose disagree on unordered and signed-zero inputs.
@@ -399,6 +403,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-030: `$simprobe` with a name built at run time
+- **Status**: DONE (b5689fbb)
 - **Source**: ROADMAP §5.6 bullet 9 (`conformance-ch9-review.md:313-316`).
 - **Rule**: VAMS 9.16: "The arguments inst_name and param_name are string values, either a string literal, string parameter, or a string variable." Also: "If either the inst_name or param_name cannot be resolved, and the optional expression is not supplied, then an error shall be generated. If the optional expression is supplied, its value will be returned in lieu of raising an error."
 - **Why vague**: a string variable's value is known only at run time. The clause does not say whether a tool may treat a name it cannot fold at compile time as "cannot be resolved" and return the fallback.
@@ -642,6 +647,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-056: Real modulus by a runtime zero yields NaN
+- **Status**: DONE (86e06853)
 - **Source**: IMPLEMENTATION §1, the prose note under "Host math" ("Modulus with real operands retains its existing NaN behavior")
 - **Rule**: VAMS 4.2.4: "It shall be an error to pass zero (0) as the second argument to the modulus operator." The same clause then gives the real-operand formula `a % b = ((a/b) < 0) ? ... : (a - floor(a/b)*b)`.
 - **Why vague**: the error sentence names no operand type. The real formula divides by b, so IEEE arithmetic gives NaN, and that makes NaN look like an acceptable "defined" result.
@@ -784,6 +790,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-072: Which `$simparam` names exist, and whether `gmin` and `sourceScaleFactor` are constants
+- **Status**: DONE (d73ae0cc)
 - **Source**: IMPLEMENTATION §1 row "AMS 9.15"
 - **Rule**: VAMS 9.15: "There is no fixed list of simulation parameters. However, simulators shall accept the strings in Table 9-27 to access commonly-known simulation parameters, if they support the parameter." Table 9-27 describes `gmin` as "Minimum conductance placed in parallel with nonlinear branches" and `sourceScaleFactor` as the "Multiplicative factor for independent sources for source stepping homotopy".
 - **Why vague**: the list is open, and the supported set and the values are the tool's.
@@ -845,6 +852,7 @@ correction.
 - **Measure impact**: none.
 
 ### VD-079: Host-supplied hierarchical system parameters outside Table 9-29's domains
+- **Status**: DONE (76f344c7)
 - **Source**: IMPLEMENTATION §1 prose note "For AMS §9.18, E0890 ..." (dynamic domains not validated)
 - **Rule**: VAMS 9.18, Table 9-29, column "Allowed values": `$mfactor > 0`, `$hflip`/`$vflip` = +1 or -1, `0 <= $angle < 360`.
 - **Why vague**: the table states allowed values but no "shall be an error" and no point at which a value is checked. A value set on a host card is known only at card time.

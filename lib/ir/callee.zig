@@ -156,6 +156,7 @@ pub const Callee = enum(u8) {
     // VerA-synthetic: lowering's rewrites of one source call into several.
     @"$held_int",
     @"$held_real",
+    @"$held_str",
     // VerA's `vera_timepoint` (§2.9, `Lower.TpBlock`): is the cache of
     // statement b current, and slot k of it.
     @"$tp_hit",
@@ -375,6 +376,7 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     // §5.10 `Lower.holdSlot`'s synthetic seed: the callee is chosen by the
     // variable's declared type, so the name IS the type.
     .@"$held_int" = .{ .ty = .int },
+    .@"$held_str" = .{ .ty = .str },
     .@"$vera_reject_step" = .{ .args = one },
     .@"$tp_hit" = .{ .ty = .int },
     .@"$tp_int" = .{ .ty = .int },
@@ -563,6 +565,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$vera_reject_step",
         .@"$held_int",
         .@"$held_real",
+        .@"$held_str",
         .@"$tp_hit",
         .@"$tp_int",
         .@"$tp_real",

@@ -508,7 +508,42 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
             }
             return true;
         },
-        else => return false, // else: not one of §4.5.11's two vector shapes; the ordinary path lowers or reports it
+        // A.8.2's third shape, for both `analog_filter_function_arg` and
+        // `noise_table_input_arg`: `parameter_identifier [ msb_constant_expression
+        // : lsb_constant_expression ]`, the elements from msb to lsb.
+        .index => {
+            const sel = ex.rhs(a);
+            if (ex.tag(ex.lhs(a)) != .ident or ex.tag(sel) != .range) return false;
+            const name = self.file.str(ex.strOf(ex.lhs(a)));
+            const info = self.arrays.get(name) orelse return false;
+            if (info.dims.len != 1) return false;
+            const d = info.dims[0];
+            // A refused select is still a vector, of no elements, so the
+            // caller's `<count>, elements` slice stays well formed.
+            var ends: [2]i64 = undefined;
+            for ([2]Ast.ExprId{ ex.lhs(sel), ex.rhs(sel) }, &ends) |b, *end| {
+                const c = lower_constfold.shapeEval(self, b) orelse {
+                    try self.err(ex.mainTok(b), .E0308, "in the part select of `{s}`", .{name});
+                    try out.append(self.arena, try self.mir.addIntConst(self.arena, 0));
+                    return true;
+                };
+                end.* = c.asInt();
+                if (end.* < d.lo or end.* > d.hi) {
+                    try self.err(ex.mainTok(b), .E0310, "index {d} is outside `{s}[{d}:{d}]`", .{ end.*, name, d.lo, d.hi });
+                    try out.append(self.arena, try self.mir.addIntConst(self.arena, 0));
+                    return true;
+                }
+            }
+            const n = @abs(ends[1] - ends[0]) + 1;
+            const step: i64 = if (ends[1] >= ends[0]) 1 else -1;
+            try out.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(n)));
+            for (0..n) |k| {
+                const el = (try lower_expr.arrayElemValue(self, name, &.{ends[0] + step * @as(i64, @intCast(k))})) orelse return true;
+                try out.append(self.arena, try self.toReal(el));
+            }
+            return true;
+        },
+        else => return false, // else: not one of A.8.2's vector shapes; the ordinary path lowers or reports it
     }
 }
 

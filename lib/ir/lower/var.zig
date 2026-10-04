@@ -22,6 +22,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_context = @import("context.zig");
+const lower_contrib = @import("contrib.zig");
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
@@ -618,10 +619,8 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         name
     else
         try self.arena.print("{s}{s}", .{ prefix, name });
-    // §5.10. `.string` is deliberately excluded: a string never reaches the
-    // residual (§3.3 strings only feed §9.4 tasks, which re-run every
-    // evaluation anyway), so a persistent slot for one would be storage
-    // nothing can observe.
+    // §5.10. A string is held too: it never reaches the residual, but a §9.4
+    // task in a later evaluation reads what an event body left in it.
     const why = self.var_state.held_names.get(held_key);
     // VerA's `vera_scratch` (§2.9): no slot, so every evaluation starts from
     // the initializer below. Only a value an `analog initial` or `@(...)` body
@@ -636,7 +635,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         try self.err(decl.main_tok, .E0539, "`{s}`", .{name});
         scratch = .zero;
     }
-    const hold = (scope == .module or prefix.len != 0) and ty != .string and why != null and scratch == .off;
+    const hold = (scope == .module or prefix.len != 0) and why != null and scratch == .off;
 
     if (decl.dims.len != 0) {
         const dims = try lower_shape.dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
@@ -708,6 +707,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         try holdSlot(self, held_key, ty, init_val, slot.place, why.?)
     else
         init_val);
+    try lower_contrib.noteVarNoise(self, name, decl.init);
 }
 
 /// VerA's `vera_scratch` (§2.9) on the variable declared at token `tok`: the
@@ -779,7 +779,11 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     // is that diamond's join. Either way it dominates every statement of the
     // module, which is all the seed has to do.
     const idx: i64 = @intCast(self.out.held_vars.items.len);
-    const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
+    const seed = try self.call(switch (ty) {
+        .integer => "$held_int",
+        .real => "$held_real",
+        .string => "$held_str",
+    }, &.{try self.mir.addIntConst(self.arena, idx)});
     try self.out.held_vars.append(self.arena, .{
         .name = try uniqueHeld(self, name, @intCast(idx)),
         .ty = ty,

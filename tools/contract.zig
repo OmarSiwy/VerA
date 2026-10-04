@@ -1608,6 +1608,8 @@ const host_model_fields = [_][]const u8{
     "reltol__", // $simparam("reltol"); 1e-3
     "abstol__", // $simparam("abstol"), amperes; 1e-12
     "vntol__", // $simparam("vntol"), volts; 1e-6
+    "gmin__", // $simparam("gmin"), siemens; 1e-12. Gmin stepping writes it.
+    "source_scale__", // $simparam("sourceScaleFactor"); 1. Source stepping writes it.
 };
 
 /// §4.6.4 one noise generator: position k of `noise_gens` is a generator of
@@ -2947,6 +2949,9 @@ pub fn InstancePtr(comptime D: type) type {
 ///                                (§6.3.4 parameters derived from others)
 ///   checkShape(&model)           after derive; non-null names a §3.4 shape
 ///                                parameter the card moved, so refuse the card
+///   checkCard(&model)            after derive; non-null names a §9.18 system
+///                                parameter the card put outside Table 9-29
+///                                (optional; the host decides what to do)
 ///   setup(S, &model)             after derive, and after every card,
 ///                                `temperature__` or `setup_simparams` write;
 ///                                fills `model.su`, once per Model row
@@ -3284,6 +3289,10 @@ pub fn validate(comptime D: type) void {
     // or the generate structure, so the device holds one value of each.
     if (@hasDecl(D, "checkShape"))
         expectFn(D, "checkShape", fn (*const D.Model) ?[]const u8);
+    // §9.18 Table 9-29's allowed values of a card-dependent system parameter.
+    // Optional, and additive: no `abi_version` change.
+    if (@hasDecl(D, "checkCard"))
+        expectFn(D, "checkCard", fn (*const D.Model) ?[]const u8);
 
     // Hand-written devices' per-instance preparation before a solve.
     if (@hasDecl(D, "precompute"))
@@ -3470,6 +3479,7 @@ const AllowedPubDecl = enum {
     mc_param,
     derive,
     checkShape,
+    checkCard,
     precompute,
     constant,
     nextBreakpoint,
@@ -3992,6 +4002,9 @@ const MockAll = struct {
     pub fn derive(comptime _: type, _: *Model) void {}
     pub fn checkShape(m: *const Model) ?[]const u8 {
         return if (m.g != 1e-3) "g" else null;
+    }
+    pub fn checkCard(m: *const Model) ?[]const u8 {
+        return if (!(m.g > 0.0)) "$mfactor" else null;
     }
     pub fn precompute(_: *Instance, _: *const Model) void {}
     pub fn nextBreakpoint(_: *const Model, _: f64) ?f64 {
