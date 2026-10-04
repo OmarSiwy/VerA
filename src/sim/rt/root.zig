@@ -1846,6 +1846,7 @@ pub const State = struct {
             try self.store(slot + w.index, off + w.index * n, v, x, m);
         }
         if (load.mismatch()) |mm| self.warn("W1150", display.MemLoad.mismatch_text, .{ mm.found, mm.expected });
+        if (load.outside) |o| self.warn("W1156", display.MemLoad.outside_text, .{ o, low, high });
     }
 
     /// §17.9.1 a seedless `$random`.
