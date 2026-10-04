@@ -263,11 +263,9 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
     const inc = (try readInclude(pp, path, name_span)) orelse {
         var b = pp.failWith(name_span, .E0126);
         b.msg("\"{s}\"", .{path});
-        if (pp.opts.include_dirs.len == 0) {
-            b.note("no include directories were configured; only the built-in annex D headers ({s}) are resolvable", .{"constants.vams, disciplines.vams"});
-        } else {
-            b.note("searched: {s}", .{try std.mem.join(pp.scratch, ", ", pp.opts.include_dirs)});
-        }
+        const dirs = if (includerDir(pp)) |d| try std.mem.concat(pp.scratch, []const u8, &.{ &.{d}, pp.opts.include_dirs }) else pp.opts.include_dirs;
+        if (dirs.len != 0) b.note("searched, in order: {s}", .{try std.mem.join(pp.scratch, ", ", dirs)});
+        b.note("then the built-in annex D headers ({s})", .{"constants.vams, disciplines.vams"});
         try b.emit();
         return error.PreprocessFailed;
     };
@@ -287,27 +285,41 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
 pub const Included = struct { text: []const u8, path: []const u8 };
 
 /// Returns the `include file for `path`: an absolute path as written, else
-/// the first hit in the include dirs, else a built-in annex D file by
+/// the first hit in the including file's directory and then the include dirs
+/// (docs/Vague_Decisions.md VD-091), else a built-in annex D file by
 /// basename. Null if nothing matched. The bytes and the path are on
 /// `pp.arena`, since the bag keeps both.
 pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.
-    const bases: []const []const u8 = if (std.fs.path.isAbsolute(path)) &.{""} else pp.opts.include_dirs;
-    if (bases.len != 0) {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        const dir: std.Io.Dir = .cwd();
-        for (bases) |base| {
-            const full = try std.fs.path.join(pp.arena, &.{ base, path });
-            if (dir.readFileAlloc(io, full, pp.arena, .limited(max_include_bytes))) |bytes| {
-                return .{ .text = bytes, .path = full };
-            } else |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.StreamTooLong => return pp.fail(span, .E1013, "\"{s}\" is larger than {d} bytes", .{ full, max_include_bytes }),
-                else => {}, // try the next dir
-            }
-        }
+    if (std.fs.path.isAbsolute(path)) return (try readAt(pp, "", path, span)) orelse builtin(pp, path);
+    if (includerDir(pp)) |dir| if (try readAt(pp, dir, path, span)) |inc| return inc;
+    for (pp.opts.include_dirs) |base| if (try readAt(pp, base, path, span)) |inc| return inc;
+    return builtin(pp, path);
+}
+
+/// The directory of the file the current `include sits in: the path it was
+/// opened by (§10.7), "." for a bare file name, and null for a unit that
+/// names no file (`<source>`, `<digital>`), which has no directory to search.
+fn includerDir(pp: *const Pp) ?[]const u8 {
+    const name = pp.opts.bag.fileName(pp.cur_file_id);
+    if (name.len == 0 or name[0] == '<') return null;
+    return std.fs.path.dirname(name) orelse ".";
+}
+
+fn readAt(pp: *Pp, base: []const u8, path: []const u8, span: diag.Span) Error!?Included {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const full = try std.fs.path.join(pp.arena, &.{ base, path });
+    if (std.Io.Dir.cwd().readFileAlloc(io, full, pp.arena, .limited(max_include_bytes))) |bytes| {
+        return .{ .text = bytes, .path = full };
+    } else |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.StreamTooLong => return pp.fail(span, .E1013, "\"{s}\" is larger than {d} bytes", .{ full, max_include_bytes }),
+        else => return null, // try the next dir
     }
+}
+
+fn builtin(pp: *Pp, path: []const u8) Error!?Included {
     const text = builtin_includes.get(std.fs.path.basename(path)) orelse return null;
     // `path` may slice a macro body on scratch, and the bag keeps the name.
     return .{ .text = text, .path = try pp.arena.dupe(u8, path) };
