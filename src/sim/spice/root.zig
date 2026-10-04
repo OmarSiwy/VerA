@@ -3,7 +3,7 @@
 //! direct Newton (`converger`) and dense LU (`dense_lu`). Copied from
 //! OmarSiwy/ESPice at 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d, CPU paths
 //! only; each file's header names its origin and what was adapted or left
-//! out. The generated testbench calls it for `//! tran` and `//! onoise`
+//! out. The generated testbench calls `deck` for `//! tran` and `//! onoise`
 //! (`lib/backend/tb/runner.zig`); `zig build test-spice` grades the result.
 //! Host-side only: nothing here reaches the device text, which stays
 //! GPU-compilable.
@@ -22,10 +22,13 @@ pub const noise = @import("noise.zig");
 pub const dense_lu = @import("dense_lu.zig");
 /// Companion coefficients and the LTE bound.
 pub const integrator = @import("integrator.zig");
+/// The `//! tran` / `//! onoise` entry points a generated testbench calls.
+pub const deck = @import("deck.zig");
 
 test {
     _ = converger;
     _ = tran;
     _ = dense_lu;
     _ = integrator;
+    _ = deck;
 }
