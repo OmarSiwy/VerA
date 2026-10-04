@@ -3,6 +3,11 @@
 //!
 //! It parses the real source with `std.zig.Ast`, because only the prong labels
 //! say which enum a switch is over.
+//!
+//! The portability guard is its sibling: lib/, src/ and tools/contract.zig ->
+//! a failure for every direct OS API (`os_apis`) outside `os_allowed` whose
+//! line lacks `// os: <reason>`. VerA builds for every target because no
+//! code, compiled or emitted, calls an OS but through `std`.
 
 const std = @import("std");
 const Io = std.Io;
@@ -133,4 +138,76 @@ test "every `else` over a boundary enum is written out or annotated" {
         std.debug.print("exhaustive guard: {d} unannotated `else =>`\n", .{found});
         return error.ExhaustiveGuard;
     }
+}
+
+/// Spellings that reach an OS, or a C ABI's varargs, past `std`'s portable
+/// layer. Matched as text, so a `\\` line of emitted device code counts too.
+const os_apis = [_][]const u8{
+    "std.posix", "std.os.",   "std.c.",  "@cImport", "std.DynLib",
+    "@cVaStart", "@cVaArg",   "@cVaEnd", "@cVaCopy", "std.lang.VaList",
+    ".os.tag",   "extern \"", "\"/tmp",  "\"/dev/",
+};
+
+/// The files that may name one: each says why in its header.
+const os_allowed = [_][]const u8{"lib/dynlib.zig"};
+
+/// Prints every line of `src` naming an `os_apis` entry without `// os:`,
+/// comment lines aside, and returns how many.
+fn scanOs(path: []const u8, src: []const u8) usize {
+    var n: usize = 0;
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    var line_no: usize = 0;
+    while (lines.next()) |line| {
+        line_no += 1;
+        if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "//")) continue;
+        if (std.mem.indexOf(u8, line, "// os:") != null) continue;
+        for (os_apis) |api| if (std.mem.indexOf(u8, line, api) != null) {
+            std.debug.print(
+                "{s}:{d}: `{s}` is an OS API\n    fix: use the portable `std` API, move it to {s}, " ++
+                    "or put `// os: <why every target still builds>` on the line\n",
+                .{ path, line_no, api, os_allowed[0] },
+            );
+            n += 1;
+            break;
+        };
+    }
+    return n;
+}
+
+test "no OS API outside the allowlisted module" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var found: usize = 0;
+    const root = try Io.Dir.cwd().openDir(io, repo_root, .{});
+    for ([_][]const u8{ "lib", "src" }) |sub| {
+        var dir = try root.openDir(io, sub, .{ .iterate = true });
+        defer dir.close(io);
+        var w = try dir.walk(arena);
+        while (try w.next(io)) |e| {
+            if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".zig")) continue;
+            // `/`, whatever the host's separator, so the allowlist matches.
+            const rel = try std.mem.concat(arena, u8, &.{ sub, "/", e.path });
+            std.mem.replaceScalar(u8, rel, '\\', '/');
+            if (for (os_allowed) |a| {
+                if (std.mem.eql(u8, a, rel)) break true;
+            } else false) continue;
+            found += scanOs(rel, try dir.readFileAlloc(io, e.path, arena, .limited(1 << 24)));
+        }
+    }
+    found += scanOs("tools/contract.zig", try root.readFileAlloc(io, "tools/contract.zig", arena, .limited(1 << 24)));
+    if (found != 0) {
+        std.debug.print("portability guard: {d} OS API use(s)\n", .{found});
+        return error.PortabilityGuard;
+    }
+}
+
+test "the portability guard sees what it is for" {
+    try std.testing.expectEqual(@as(usize, 1), scanOs("x.zig", "const p = std.posix.getpid();"));
+    try std.testing.expectEqual(@as(usize, 1), scanOs("x.zig", "    \\\\    var ap = @cVaStart();"));
+    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "/// std.posix in prose"));
+    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "const t = std.os.tag; // os: a reason"));
+    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "const io = std.Io.Threaded;"));
 }
