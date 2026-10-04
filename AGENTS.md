@@ -12,7 +12,7 @@ code that an external simulator links and calls inside a Newton loop.
 ## 0. The three rules that are not negotiable
 
 **1. Never type a conformance number. Measure it.**
-`tools/conformance.sh` is the only thing that may write measures A, B and C.
+`tools/conformance.py` is the only thing that may write measures A, B and C.
 `CHANGELOG.md` is its output. `.github/workflows/publish.yaml` re-measures on
 the runner and refuses any tag whose entry disagrees with the tree. If you find
 yourself about to write a percentage into a document, run the script instead.
@@ -46,7 +46,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | Document | What it is | Use it for |
 |---|---|---|
 | `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, the release ladder, and the open items | which release your work belongs to, and which row it closes |
-| `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.sh`; absent until the next release) | where the project actually stands |
+| `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.py`; absent until the next release) | where the project actually stands |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
@@ -100,10 +100,10 @@ release, and there is no releasing without a measurement.
 ```sh
 # 1. Land your work. Gates green, name lists diffed.
 zig build test                       # must pass. This is the gate.
-zig build benchmark -- --strict      # exit 1 until v1.0.0: read the names
+zig build benchmark -- --strict      # must exit 0 (it has since ae9633f1): read the names
 
 # 2. Write the entry. This RUNS the suites; it does not ask you for numbers.
-tools/conformance.sh --changelog v0.1.0
+tools/conformance.py --changelog v0.1.0
 
 # 3. Fill in D by hand: the one row the script marks `hand-entered`.
 #    Name the document and the date you read. Do not guess.
@@ -113,7 +113,7 @@ git add CHANGELOG.md && git commit -m "release: v0.1.0"
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-`publish.yaml` then re-runs `tools/conformance.sh --check v0.1.0` on a clean
+`publish.yaml` then re-runs `tools/conformance.py --check v0.1.0` on a clean
 runner. **If the tree measures something different from what you committed, the
 release fails.** That is the feature. Re-measure, amend, re-tag.
 
@@ -123,11 +123,16 @@ in `build.zig`'s `module_specs`. A **patch** (`0.N.M`) closes rows without
 changing any of those. Every `ARCHITECTURE.md §6` refactor phase is therefore a
 patch, because it is byte-identical by construction.
 
-`.github/workflows/bench.yaml` runs on every push and PR. It **reports** the
+`.github/workflows/bench.yaml` runs on every push and PR. It writes the
 torture suite, clause coverage, digital transcripts and the footprint/speed
-sweep into the job summary, and uploads the FAIL name list as an artifact. It
-gates on `zig build test` alone. The conformance number is a progress meter
-until v1.0.0, not a pass/fail.
+sweep into the job summary, and uploads the FAIL name list as an artifact.
+At `ae9633f1` (2026-10-04, `tools/conformance.py`) measure A read 2189/2189
+with 0 FAIL, unasserted and XFAIL, and B and C had no one-way or uncited
+clause (every clause cited both ways or classified), so it **gates** on them
+as well as on `zig build test`: the strict suite (`zig build test-ams`),
+both `--coverage` tallies (0 one-way, 0 uncited), `test-1364`,
+`test-devices` and `test-vpi-fixtures`. Only the sweep and the audit-tool
+self-tests report without gating.
 
 ---
 
@@ -165,10 +170,10 @@ boundary enum (Ast/Mir/Callee/token/...) unless the line carries
 **Refactor phases keep goldens byte-identical.**
 
 ```sh
-tools/golden-baseline.sh before     # on the pre-change tree
+zig build golden -- before     # on the pre-change tree
 # ... your phase ...
-tools/golden-baseline.sh after
-diff -r .zig-cache/vera-golden/{before,after} && echo IDENTICAL
+zig build golden -- after
+zig build golden -- diff       # prints IDENTICAL, or exits 1 naming each file that differs
 ```
 
 One phase = one branch = one PR. Never two phases in flight in `lib/`. No

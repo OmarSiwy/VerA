@@ -38,7 +38,8 @@
 //   1.0, 2.0, 3.0, 99.0 and -99.0 are all exact in IEEE 754, so `CHECKX` is
 //   exact equality and no tolerance argument is involved.
 //
-// STATUS: THIS ONE PASSES TODAY, deliberately. `assignRuntimeIndex`
+// STATUS: THIS ONE PASSES (re-run 2026-10-04 at ae9633f1 with AGENTS.md
+// §6's `vera --emit-exe` command), deliberately. `assignRuntimeIndex`
 // (`lib/ir/lower.zig`) lowers a runtime-indexed write to one masked write per
 // cell, `select(index == k, value, old)`, over a flat index that
 // `runtimeArrayIndex` forces to -1 when any subscript is out of its dimension —

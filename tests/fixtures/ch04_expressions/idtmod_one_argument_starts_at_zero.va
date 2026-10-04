@@ -1,9 +1,10 @@
 // LRM 4.5.5, Table 4-19: idtmod(expr) returns the integral of expr from t0
 // plus c, "where c is the initial starting point as determined by the
-// simulator". The starting point is the tool's choice. VerA's
-// (docs/IMPLEMENTATION.md) is c = 0, the same as an explicit ic of 0. This
-// pins that choice; 17_idtmod.va declines to, because another tool may pick
-// the DC value and conform.
+// simulator". The prose below the table fixes it: "If the initial condition is
+// not specified, it defaults to zero (0). Regardless, the initial condition
+// shall force the DC solution to the system." The prose is the more specific
+// sentence and the only one with "shall", so c = 0 is the clause's
+// requirement, not a tool choice (docs/Vague_Decisions.md VD-058).
 //
 // HAND DERIVATION. The integrand is the constant 0.9e9, integrated exactly by
 // any rule, so on 1 ns steps the integral is 0, 0.9, 1.8. With c = 0 and no

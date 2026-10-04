@@ -23,12 +23,12 @@ pub const QueueOp = enum { initialize, add, remove, exam };
 const Job = struct { id: i64, info: i64, arrived: u64 };
 
 /// One §17.6.1 queue: FIFO (type 1) or LIFO (type 2) of at most `max` jobs,
-/// with what §17.6.4's statistics are computed from.
+/// with what §17.6.5's statistics are computed from.
 pub const Queue = struct {
     lifo: bool,
     max: u64,
     jobs: std.ArrayList(Job) = .empty,
-    /// §17.6.4 code 3, "the maximum queue length" reached.
+    /// §17.6.5 code 3, "the maximum queue length" reached.
     peak: u64 = 0,
     last_arrival: ?u64 = null,
     interarrivals: u64 = 0,
@@ -112,7 +112,7 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
             q.wait_min = @min(q.wait_min orelse wait, wait);
             return .{ .status = ok, .out = .{ job.id, job.info } };
         },
-        // §17.6.4 Table 17-15's statistics codes.
+        // §17.6.5 Table 17-15's statistics codes.
         .exam => {
             const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
             const value: u64 = switch (in1 orelse 0) {
@@ -133,7 +133,7 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
     }
 }
 
-/// §17.6.5 `$q_full(q_id, status)`: 1 when the queue holds its maximum.
+/// §17.6.4 `$q_full(q_id, status)`: 1 when the queue holds its maximum.
 pub fn queueFull(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
     const r = queueIsFull(&self.queues, try int(self, a, args[0]));
     try evaluate.assignInt(self, a, args[1], r.status);

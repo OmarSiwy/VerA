@@ -54,7 +54,7 @@ nothing.
   from the base `vera` and the new one.
 - `tests/exhaustive.zig`: a temporary unannotated `else` in src/main.zig
   still fails the guard with the same message (reverted, not committed).
-- Goldens (`tools/golden-baseline.sh`): IDENTICAL.
+- Goldens (`tools/golden-baseline.sh`, since replaced by `zig build golden`): IDENTICAL.
 
 ## Seam proposals
 

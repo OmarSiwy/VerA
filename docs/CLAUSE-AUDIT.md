@@ -336,15 +336,15 @@ outside measure A; see §1.1 b′.
 | 17.1-09 | 17.1.1.7 `%s` ASCII-code output | **verified** — `cg_display.zig:669`; seven `188_numeric_string*.va` files pin byte order, width, leading-zero suppression, interior/trailing NUL, signed carriers | **refused** (`src/sim/digital.zig:1525`) | **missing (digital)** / verified (analog, integer operands) | §9.4.5. Real operands and packed digital expressions still untested; the digital half is now a measured refusal, not an absence |
 | 17.1-10 | 17.1.2 `$strobe` at converged solution | **verified** — `01_display_strobe.va`; `s01_07_strobe_writes_once_per_accepted_solution.va` **now passes**, pinning exactly 2 bytes per accepted solution against a per-iteration counterfactual of ≥4 | **verified** — `src/sim/digital.zig:604`, `:2396` ("the arguments are NOT captured, the call is"); `d09_03_strobe_scheduling.v` pins post-NBA sampling and delivery of both same-time calls, without constraining their order | **verified** | §9.4.1 + inherited §17.1.2. Both contexts have a passing fixture asserting the observable. The former callback-order claim is withdrawn as STROBE-ORDER-001 in `conformance-scheduling.md`; this row is not evidence for that claim. |
 | 17.1-11 | 17.1.2 `$strobeb/o/h` | refused (`lib/ir/lower.zig:7525`), pinned by `152` | implemented (`src/sim/digital.zig:605-607`); **no committed fixture uses them** | **implemented-without-evidence (digital)** / verified (analog prohibition) | was `missing`. Code path named; evidence absent |
-| 17.1-12 | 17.1.3 `$monitor` re-displays only on a changed argument | mechanism **now exists** — `cg_display.zig:207-213` emits `if (zMonitor(site, …))`, kernel at `lib/backend/str_kernels.zig:692`, unit-tested at `cg_display.zig:996-1005`. **No fixture observes it at an accepted step**: `s01_05` and `s01_06` both **FAIL** on the separate `fd == 0`-outside-the-display-unit defect | **partial** — `d09_04_monitor.v` covers unchanged assignments, coalescing and off→on resumption, but new source-derived fixtures fail installation settling, return-to-previous triggering and the $time exception; see `conformance-monitor.md` | **implemented-without-evidence (analog)** / partial (digital) | Follow-up source audit, 2026-09-23: MON-INSTALL-001, MON-RETURN-001 and MON-TIME-001 supersede the former complete digital verification claim. Analog $abstime/$realtime exceptions still require separate evidence; the digital exceptions are those in IEEE 17.1.3. |
+| 17.1-12 | 17.1.3 `$monitor` re-displays only on a changed argument | mechanism in `cg_display.zig` (`zMonitor`, kernel in `lib/backend/kernels/str_kernels.zig`). Re-scored 2026-10-04 (`Vague_Decisions.md` VD-020): `s01_05_monitor_suppresses_an_unchanged_step.va` and `s01_06_monitor_reports_every_change.va` observe it at accepted steps, carry no `//! xfail` and pass in the strict suite at `ae9633f1`; the kernel unit test adds to, and does not carry, the verdict | **partial** — `d09_04_monitor.v` covers unchanged assignments, coalescing and off→on resumption, but new source-derived fixtures fail installation settling, return-to-previous triggering and the $time exception; see `conformance-monitor.md` | **partial (digital)** / verified (analog) | Follow-up source audit, 2026-09-23: MON-INSTALL-001, MON-RETURN-001 and MON-TIME-001 supersede the former complete digital verification claim. Analog $abstime/$realtime exceptions still require separate evidence; the digital exceptions are those in IEEE 17.1.3. |
 | 17.1-13 | 17.1.3 one active `$monitor`; `$monitoron`/`$monitoroff` | mode switches refused (`lib/ir/lower.zig:7528`), pinned by `152`. **One-active-monitor deliberately deviated from**: `zMonitor` latches per call site (`cg_display.zig:1003` "a DISTINCT site is a distinct latch"), so two analog `$monitor`s both print | **partial** — `d09_04_monitor.v` observes replacement and off→on resumption; `audit_monitoron_already_enabled.v` exposes MON-ENABLE-001. Replacement while disabled and pending callbacks remain open | **partial** | Follow-up source audit, 2026-09-23: `conformance-monitor.md` records the passing replacement/off→on subset and failing already-enabled monitoron case. Analog mode-switch prohibition and single-list behavior remain separate obligations. |
 | 17.1-14 | `$debug` displays per solver iteration | **not implemented** — same accepted-point unit as `$strobe`; `s01_SPEC.md` records under "Deliberately NOT covered" that every counting statement is itself an accepted-point statement | correctly absent — Table 9-1 gives `$debug` digital **No**; `src/sim/digital.zig:1407` refuses it | **missing** | §9.4.1 and §9.4.6. Needs a runner-side oracle counting records between two accepted points, not a `.va` fixture |
 | 17.1-15 | §9.4.6 no display output except `$debug` unless the iteration is accepted | the no-output-unless-accepted half is **verified** — `s01_07` passes and its counterfactual is exact | n/a (§9.4.6 is an analog-block clause) | **partial** | was `implemented-without-evidence`. Half the sentence is now pinned; the `$debug` exception is 17.1-14's `missing`, so the mechanism is still right for the wrong reason — nothing prints per iteration at all |
 | 17.1-16 | Null argument (`,,`) produces one space | **not implemented** — `lib/ir/lower.zig:6504` `if (a == .none) continue; // A.6.9 empty argument slot` drops it before codegen. Measured: `$display("[", , "]")` prints `[]` | **verified** — `src/sim/digital.zig:1466-1471` quotes §9.4.1 and writes one space; `d09_01` pins the golden line `[ ]` | **missing (analog)** / verified (digital) | was `implemented-without-evidence`. §9.4.1 states the rule verbatim. **A real, newly-measured analog defect** |
 | 17.1-17 | `$strobe` with no arguments prints a newline | present and measured correct (`cg_display.zig:196-198`), no fixture asserts it | present and measured correct; `d09_01`'s golden ends with the blank line a bare `$display;` produced — the `$strobe` spelling itself is unpinned | **implemented-without-evidence** | §9.4.1. Unchanged verdict; the digital half is one spelling short of verified |
 
-**§4.1 tally, by the governing (weaker) context:** missing 5 · partial 5 ·
-implemented-without-evidence 5 · verified 2 = **17 rows**.
+**§4.1 tally, by the governing (weaker) context:** missing 5 · partial 6 ·
+implemented-without-evidence 4 · verified 2 = **17 rows** (17.1-12 re-scored 2026-10-04).
 Was: missing 11 · partial 2 · implemented-without-evidence 4 · verified 0.
 
 ### 4.2 §17.2 — File I/O
@@ -371,7 +371,7 @@ Was: missing 11 · partial 2 · implemented-without-evidence 4 · verified 0.
 | 17.2-18 | 17.2.6 `$fflush` with no argument flushes all open files | **implemented-without-evidence** | Same kernel; the zero-argument form lowers (`cg_display.zig:441-443` supplies `Mir.Value.zero`) and compiles. No fixture calls it — every `$fflush` in the tree is `$fflush(fd)` |
 | 17.2-19 | **17.2.7** `$ferror` returns an error code and a description | **verified**; the numeric errno **unspecified** | `file_kernels.zig:411` `zFError`, `:419` `zFErrorStr`, values from `:142-152`; `053_ferror.va:45-48` pins both directions. §9.5.7 says only "an error code is returned" and `:141-143` records that no fixture may assert the value — correctly unasserted |
 | 17.2-20 | 17.2.8 `$feof` | **verified** | `file_kernels.zig:399` `zFEof`, flag set in `:348` `zFTake`; `054_feof.va` puts the descriptor in both states, and `s01_08:91,95` adds the discrimination the clause turns on — stopping on a newline is **not** EOF, input ending before a conversion **is** |
-| 17.2-21 | 17.2.9 `$readmemb`/`$readmemh`: comments, addresses, ranges, direction, x/z, malformed and excess data | **partial** | **A digital loader now exists** — `src/sim/digital.zig:615-616` task table, `:1565-1621` `readMemory`, `:1626-1634` `readSideFile`, `:2423` dispatch. Verified halves: `tests/fixtures/ieee1364/17_system_tasks/d09_08_readmemh.v` (comments ignored, load starts at the left declared index, `@<hex>` relocates, untouched addresses keep their X) and `d09_09_readmemb_range.v` (four-argument form, `start > finish` loads **downward**, `x`/`z` digits) both reproduce their `.expected.txt` exactly. **Missing half — excess data**: `:1611-1618` breaks on reaching `last` and never counts the surplus; measured, five words into `reg [7:0] m [0:3]` prints four and **exits 0, silently**. Left-index rule holds only for ascending declarations (`:1587-1590` sorts `arr.low`/`.high`). Analog correctly refused (`lib/ir/lower.zig:7537-7538`, pinned by `153`). Table 9-2 `Yes/No`. **See §7.5 item 3 — its refusal fixture `d09_91` is run by nothing** |
+| 17.2-21 | 17.2.9 `$readmemb`/`$readmemh`: comments, addresses, ranges, direction, x/z, malformed and excess data | **partial** | **A digital loader now exists** — `src/sim/digital.zig:615-616` task table, `:1565-1621` `readMemory`, `:1626-1634` `readSideFile`, `:2423` dispatch. Verified halves: `tests/fixtures/ieee1364/17_system_tasks/d09_08_readmemh.v` (comments ignored, load starts at the left declared index, `@<hex>` relocates, untouched addresses keep their X) and `d09_09_readmemb_range.v` (four-argument form, `start > finish` loads **downward**, `x`/`z` digits) both reproduce their `.expected.txt` exactly. **Excess data (updated 2026-10-04, `Vague_Decisions.md` VD-018)**: §17.2.9 requires a warning and the load continues; VerA now warns W1150 ("memory file data word count does not match load range") and loads up to the finish address. `d09_91_readmem_overflow_rejected.v` (historical name; now a positive fixture) pins W1150 and `11 22 33 44`. Left-index rule holds only for ascending declarations (`:1587-1590` sorts `arr.low`/`.high`). Analog correctly refused (`lib/ir/lower.zig:7537-7538`, pinned by `153`). Table 9-2 `Yes/No`. §7.5 item 3 closed |
 | 17.2-22 | 17.2.10 `$sdf_annotate` | **missing** (scoped out since: §5.7, refused E1102; §7.1's dated tally still counts it here) | `lib/ir/lower.zig:7538`. No implementation in `lib/` or `src/`; not in the digital task table. Blocked on D07/D09 specify blocks |
 | 17.2-23 | §9.5.1.1 reopening a write-mode file across analyses appends | **missing (untestable today)** | The append machinery exists (`file_kernels.zig:132-133`) but the rule's subject is the SECOND analysis, and `lib/backend/tb.zig:98` `analysis: Analysis = .dc` is a single enum — one analysis per process, and a second `//! analysis` line is dropped in silence. Remains UNCITED |
 | 17.2-24 | §9.5.1.2 descriptor sharing between analog and digital contexts | **partial** (was missing) | 2026-09-24: an `initial` block that calls the §9.5 family runs on the digital kernel (`lib/ir/lower/context.zig` `usesFiles`), and a mixed simulation has ONE descriptor table — the mixed runner routes the digital kernel's file tasks through the device's (`contract.FileIo`, `src/sim/digital/system.zig` `table`). `194_file_descriptor_shared_across_contexts.va` PASSES: the analog context writes through the descriptor the digital context opened. Positive evidence only — no invalid-input fixture yet, so **partial** |
@@ -429,8 +429,8 @@ obligations are still open; no whole-row upgrade is inferred.
 | 17.9-12 | Fractional and out-of-range counts | **missing**, explicitly | `lib/backend/rng_kernels.zig:78-81` — the listing's positive signed-32 domain, "**without a substitute count** … those legal inputs are explicitly unsupported". A *good* `missing`: loud, documented, pinned by `189_rng_fractional_count_rejected.va`, `189_rng_count_range_rejected.va` and two `paramset` siblings. Citation moved: `docs/RNG-REFERENCE-LIMITS.md` was deleted in `2cc1c08` |
 | 17.9-13 | Reference Erlang/Student-t overflow to inf/NaN, Poisson precision loss | **unspecified, preserved deliberately** | `lib/backend/rng_kernels.zig:80-81` — "Reference overflow/underflow remains observable". The listed operations are preserved rather than "fixed". No fixture may assert a different value |
 | 17.9-14 | Digital `$random`/`$dist_*`: default streams, call-order behavior | **missing** | No `$random`, `$arandom`, `$dist_*` or `$rdist_*` name appears anywhere in `src/sim/digital.zig` |
-| 17.10-01 | `$test$plusargs` | **missing (digital)** / verified (analog) | `065_test_plusargs.va`, `16_plusargs.va`; `lib/backend/codegen.zig:6005`, `lib/ir/lower.zig:10494`. §9.12 **Table 9-9 reads `Yes Yes`** — the digital column is `Yes` and `src/sim/digital.zig` has no such name. Weaker context sets the row. **See §7.5 item 2** |
-| 17.10-02 | `$value$plusargs` | **missing (digital)** / verified (analog) | `066_value_plusargs.va`; `lib/ir/lower.zig:10495`. Table 9-9 `Yes Yes`; same digital hole |
+| 17.10-01 | `$test$plusargs` | **verified** (both contexts) | Analog: `065_test_plusargs.va`, `16_plusargs.va`. Digital (re-scored 2026-10-04, `Vague_Decisions.md` VD-005): `ieee1364/17_system_tasks/b_17_10_1_plusargs_variable_query.v` and `audit_test_plusargs_absent.v` pin the result; `b_17_10_1_test_plusargs_real_rejected.v` and `b_17_10_1_test_plusargs_arguments_rejected.v` pin the refusals. Table 9-9 puts both contexts in one row, so no `17.10-03` row is added (§7.5 item 2, closed) |
+| 17.10-02 | `$value$plusargs` | **verified** (both contexts) | Analog: `066_value_plusargs.va`. Digital (re-scored 2026-10-04, VD-005): `b_17_10_1_plusargs_variable_query.v` and `audit_value_plusargs_absent.v` pin the result; `b_17_10_2_value_plusargs_format_rejected.v` and `b_17_10_2_value_plusargs_arguments_rejected.v` pin the refusals |
 | 17.11-01 | `$clog2` | **partial (2026-09-23 source review)** | Small values are insufficient for the full requirement. Digital unsigned and arbitrary65/129-bit transcripts now pass after the all-limb repair; focused tests also cover257-bit boundaries. A constant-expression declaration is still rejected. Analog negative-input behavior is separately under review. The former both-contexts verified claim remains withdrawn; see `conformance-ieee-math-review.md`, IMATH-CONST/UNSIGNED/WIDE and the superseding `conformance-ieee-clog2-fix.md`. |
 | 17.11-02…23 | Real math: `$ln $log10 $exp $sqrt $pow $floor $ceil $abs $min $max $sin $cos $tan $asin $acos $atan $atan2 $hypot $sinh $cosh $tanh $asinh $acosh $atanh` | **verified (analog)** | `lib/backend/codegen.zig:6120-6131` `mathOpByName` aliases each to the bare operator per §9.14; fixtures `067`–`093` and `17`–`20`. Counted as **one row group** — see §7.1. Digital half is 17.11-24 |
 | 17.11-24 | Digital typing and argument conversion for the math functions | **partial** | `$clog2` **does** dispatch digitally and `d09_10_clog2.v` pins its digital typing and assignment width. The other 22 do not: `src/sim/digital.zig:439-462`'s `sys_fns` is exactly three names, and `:537-540` states the engine has no real variables at all. **Boundary: integral `$clog2` yes, every real-valued math function no** |
@@ -443,11 +443,11 @@ group**):
 | verdict | rows | arithmetic |
 |---|---|---|
 | missing | **27** | 17.5-01…16 (16) + 17.5-17 + 17.6-01…05 (5) + 17.6-06 + 17.7-04 + 17.8-01 + 17.9-12 + 17.9-14 |
-| partial | **13** | 17.3-01, 17.4-01, 17.4-02, 17.4-03, 17.7-02, 17.7-03, 17.8-02, 17.8-03, 17.9-02, 17.9-10, 17.10-01, 17.10-02, 17.11-24 |
+| partial | **11** | 17.3-01, 17.4-01, 17.4-02, 17.4-03, 17.7-02, 17.7-03, 17.8-02, 17.8-03, 17.9-02, 17.9-10, 17.11-24 |
 | implemented-without-evidence | **1** | 17.11-25 |
-| verified | **12** | 17.7-01 + 17.9-01 + 17.9-03…09 (7) + 17.9-11 + 17.11-01 + 17.11-02…23 (1) |
+| verified | **14** | 17.7-01 + 17.9-01 + 17.9-03…09 (7) + 17.9-11 + 17.10-01 + 17.10-02 + 17.11-01 + 17.11-02…23 (1) |
 | unspecified (orthogonal) | **1** | 17.9-13 |
-| **total** | **54** | 27 + 13 + 1 + 12 + 1 |
+| **total** | **54** | 27 + 11 + 1 + 14 + 1 |
 
 Movement from 2026-09-16 on the same 54 denominator: missing 33 → 27, partial
 5 → 13, implemented-without-evidence 1 → 1, verified 14 → 12, unspecified 1 → 1.
@@ -577,13 +577,13 @@ their own audit". Recorded here so they are not lost.
 | AMS-03 | §9.22.1/§9.22.3/§9.22.4 driver access (`$driver_count`, `$driver_state`, `$driver_strength`) | **missing** | The `pickTop` claim **re-checked and it holds**: `lib/ir/elaborate.zig:240` `if (m.is_connect) continue;`, under the §7.6 comment "picking one as the device would elaborate a bridge as if the user had asked for it". Refusal at `lib/ir/lower.zig:9237-9243` (E0818, "can only be called from a connect module") over `isConnectModuleOnlySysFunc` at `:7602-7612`. Correct for the *wrong half* of §9.22 ¶3; the right half needs §7.8 insertion. **New evidence**: XFAIL `196_connectmodule_driver_access_example.va` carries §9.22.7's `c2e` example line for line and is refused twice over — `assign d=out;` is E0205 and behind it `out = 1'bx;` is E0130 — and its header adds that a connect module "is never inserted (§7.8) and never lowered, so nothing in the example can RUN even once it parses" |
 | AMS-04 | §9.23.1–§9.23.4 (`$driver_delay`, `$driver_next_state`, `$driver_next_strength`, `$driver_type`) | **missing** | Same list, same site (`lib/ir/lower.zig:7608-7609`, refused at `:9237`). Table 9-20 fences these one step tighter than §9.22 — "supported in the digital context of connectmodules", analog No. Rejection atomics `111`–`114` pin only the prohibition |
 | AMS-05 | §9.22.2 `$receiver_count` | **missing** | **The "Non-normative" reading is withdrawn.** That string does not occur anywhere in `docs/ch9-system.html` at HEAD: `:1621-1625` is a normative subclause with its own syntax box (Syntax 9-18), and Table 9-19 at `:278` gives it `Yes`/`Yes` — **the only member of the five supported in the analog context of a connect module**. The fixture that argued otherwise, `annex_g_change_history/08_new_receiver_count.va`, was deleted in `2cc1c08`; `ch09_system_tasks/COVERAGE.md:103` records why ("authored from an HTML transcription contaminated with Verilog-AMS 2.4 text"). `lib/ir/lower.zig:7597-7600` **still repeats the withdrawn claim and still cites the deleted fixture**, and its blanket E0818 is now wrong in kind for the one row Table 9-19 marks analog-Yes. `ch07_mixed_signal/m04_16_receiver_count_reports_ordinary_receivers.va` is a hard **FAIL** |
-| AMS-06 | §9.22.5 `driver_update` operator | **missing** | A.6.5's `driver_update expression` parses and survives elaboration's cloner (`lib/ir/elaborate.zig:2283-2287`, "Unreachable in practice — it only occurs in a connect module, which is never instantiated"); in value position it is E0701 (`lib/ir/lower.zig:7736-7740`). `38_driver_update_connectmodule.va` is green on **acceptance only**. Zero of the clause's obligation — "causes the `statement` to execute any time a driver of the signal is updated … whether or not there is a change in the resolved value" — exists: the event is accepted and can never fire. **New**: XFAIL `195_receiver_net_resolution_assign.va` pins §9.22.6, whose only spelling for the receiver value is `assign d = out;`, and `assign` is E0205 everywhere in VerA, connect module or not. **See §7.5 item 4** |
+| AMS-06 | §9.22.5 `driver_update` operator | **verified** | Re-scored 2026-10-04 (`Vague_Decisions.md` VD-019): the statement now executes (`src/sim/digital/driver.zig`). `ch07_mixed_signal/m04_12_driver_update_without_resolved_change.va` asserts that it fires on a driver update with no change in the resolved value, and `ch09_system_tasks/213_driver_update_in_analog_event_rejected.va` pins the refusal. §9.22.6's receiver value is a separate row. Under the `partial` rule VD-019 settles (an obligation executed with a recorded result, not a parsed AST path), this row is two-way (§7.5 item 4, closed) |
 | AMS-07 | §4.6.4.3 `noise_table` / §4.6.4.4 `noise_table_log` PSD export | **verified** | **The gap named on 2026-09-16 is closed.** `contract.NoiseGen.kind` is now `enum { thermal, shot, flicker, table }` with a `table: ?u16` back-reference (`tools/contract.zig:681,687`), and `contract.NoiseTable` (`:724-740`) carries `interp: enum { linear, log }` plus ascending knots. `lib/ir/lower.zig:5875-5878` classifies both calls into `.table`/`.table_log` instead of dropping them; `lib/backend/codegen.zig:7285-7320` emits `noise_tables`. Executable: `lib/backend/tb.zig:212` parses `//! noise table(<row>,<col>)#<src> … interp=linear\|log points=…` and the generated testbench asserts the topology byte-exact — `181_noise_table_topology.va`, `182_noise_table_log_topology.va` and two `a06_ntab` fixtures, none in the FAIL/XFAIL list. **The zero residual remains correct and untouched** (`lib/backend/codegen.zig:5754-5762`); §4.6.4 sources contribute in small-signal noise analysis only — **do not re-report it as the gap.** The residual gap is now *downstream of VerA*: `a06_noisetables_SPEC.md` documents that the host never reads `noise_tables`, so `onoise_spectrum == 0.0` on all four `.sp` decks — which are outside measure A (§1.1 b′) |
 | AMS-08 | §4.6.4.4 `noise_table_log` | **verified** | No longer UNCITED. `182_noise_table_log_topology.va` and `a06_ntab_log.va` both pass; `lib/backend/tb.zig:502-503` rejects any `interp` but `linear`/`log`, so the log spelling is pinned and not merely present. `a06_ntab_log_interior.expected.json` states the discrimination: applying §4.6.4.3's linear rule to the same knots is "a factor of 2 off, so this fixture separates the two clauses rather than merely exercising a lookup" |
 | AMS-09 | §9.21 `$table_model` quadratic/cubic spline modes and fatal extrapolation | **verified** | **The "missing, loudly" citation no longer exists.** `lib/backend/table_kernels.zig` is 476 lines (was 192) and `:23-26` now reads "interpolation (Table 9-30 `D`, `1`, `2` or `3` … then the low and the high extrapolation character (Table 9-31 `C`, `L` or `E`)". `zTabSpline1` (`:158`) implements §9.21.4's cubic (Thomas sweep on the moments) and quadratic splines with `L`→natural and `C`→zero end derivative; `zTabSplineDim` (`:294`) recovers the gradient so the Jacobian gets the spline slope, not a secant. `ztExtrapError` (`:40-43`) is Table 9-31 `E` as a **runtime fatal**, `ztDuplicateError` (`:57`) is §9.21's conflicting-duplicate rule. `lib/ir/lower.zig:9841` accepts `D123` and `:9850` accepts `CLE`; the dependent column is Table 9-32's sub-string arithmetic (`col + sel - 1`, `:9876`) — the recorded `nd + sel - 1` defect is gone. Thirteen fixtures `a05_01`…`a05_13` plus `a05_two_dependents.tbl`, **none in the FAIL/XFAIL list**. **`ch09_system_tasks/COVERAGE.md:96-98` is stale** — it still says `D`/`2`/`3`/`I`/`E` are refused at E0815 |
 
-**§4.5 tally:** missing 5 · partial 0 · implemented-without-evidence 1 ·
-verified 3 = **9 rows**.
+**§4.5 tally:** missing 4 · partial 0 · implemented-without-evidence 1 ·
+verified 4 = **9 rows** (AMS-06 re-scored 2026-10-04).
 Was: missing 6 · partial 1 · implemented-without-evidence 1 · non-normative 1 ·
 verified 0.
 
@@ -854,14 +854,14 @@ the split is noted in the row.
 
 | Section | Rows | missing | partial | impl-without-evidence | verified | resource-limit only | unspecified only |
 |---|---|---|---|---|---|---|---|
-| §4.1 §17.1 display | 17 | 5 | 5 | 5 | 2 | — | — |
+| §4.1 §17.1 display | 17 | 5 | 6 | 4 | 2 | — | — |
 | §4.2 §17.2 file I/O | 25 | 6 | 2 | 3 | 10 | 4 | — |
-| §4.3 §17.3–§17.11 | 54 | 27 | 13 | 1 | 12 | — | 1 |
+| §4.3 §17.3–§17.11 | 54 | 27 | 11 | 1 | 14 | — | 1 |
 | §4.4 §18 VCD | 22 | 22 | — | — | — | — | — |
-| §4.5 AMS additions | 9 | 5 | — | 1 | 3 | — | — |
-| **Total** | **127** | **65** | **20** | **10** | **27** | **4** | **1** |
+| §4.5 AMS additions | 9 | 4 | — | 1 | 4 | — | — |
+| **Total** | **127** | **64** | **19** | **9** | **30** | **4** | **1** |
 
-65 + 20 + 10 + 27 + 4 + 1 = **127**. Row counts expand the ranges:
+64 + 19 + 9 + 30 + 4 + 1 = **127** (re-scored 2026-10-04: 17.1-12, 17.10-01/-02, AMS-06). Row counts expand the ranges:
 `17.5-01…16` = 16, `17.6-01…05` = 5, `17.9-03…09` = 7, and **`17.11-02…23`, the
 22 real math functions, counts as one row group** — the convention the 2026-09-16
 text set, preserved so the two are comparable.
@@ -873,8 +873,8 @@ unasserted. Everything else is open.
 
 | | Rows | Which |
 |---|---|---|
-| **closed** | **30** | 27 `verified` + 2 tested resource limits (17.2-14, 17.2-15) + 1 `unspecified` (17.9-13) |
-| **open** | **97** | 65 `missing` + 20 `partial` + 10 `implemented-without-evidence` + 2 untested resource limits (17.2-04, 17.2-05) |
+| **closed** | **33** | 30 `verified` + 2 tested resource limits (17.2-14, 17.2-15) + 1 `unspecified` (17.9-13) |
+| **open** | **94** | 64 `missing` + 19 `partial` + 9 `implemented-without-evidence` + 2 untested resource limits (17.2-04, 17.2-05) |
 
 > ### Measure B at v0.0.2 — **30 / 127 closed, 97 open**
 > Hand-read against this section, 2026-09-21, at `a99a37f`.
@@ -982,8 +982,8 @@ re-derivation.
   Twelve `.v` joined measure A (1558 → 1570); the 26 `.c` and 7 `.sp` got their
   own steps. **No §4 verdict below was re-read against the widened suite**, and
   two rows are known to be affected: §4.4's three VCD fixtures now FAIL visibly
-  on their own directive headers, and 17.2-21's `d09_91` is still scored by
-  nothing (§7.5 item 3). Neither changes a verdict — a fixture that fails on its
+  on their own directive headers, and 17.2-21's `d09_91` was then scored by
+  nothing (§7.5 item 3; since closed: it is a positive W1150 fixture). Neither changes a verdict — a fixture that fails on its
   header asserts nothing — but a re-read is owed.
 - **ARPice host numbers were not re-measured.** They are not measurable from this
   worktree, and `docs/CONFORMANCE-GAPS.md` — which held them — is deleted. Its
@@ -1006,14 +1006,19 @@ Recorded rather than guessed. Each would change a §7.1 row.
    because Table 9-1 does not make four-state values an analog-context concept
    (`verified on the prohibition`). Under §2's own rule those are different rows.
    Settling it needs §7.3.2 read in `docs/ch7-mixed.html`.
-2. **17.10-01/17.10-02 are a convention consequence, not a regression.** Nothing
+2. **Closed 2026-10-04 (`Vague_Decisions.md` VD-005): one row per function, both
+   contexts scored in it; 17.10-01/-02 are `verified` on the digital `.v`
+   fixtures. No `17.10-03` row.** Original question:
+   **17.10-01/17.10-02 are a convention consequence, not a regression.** Nothing
    about `$test$plusargs`/`$value$plusargs` got worse; the "weaker context sets
    the verdict" rule was applied to Table 9-9's `Yes Yes` digital column, which
    the 2026-09-16 pass did not do. If §17.10 is meant to be analog-scoped the way
    §17.9 and §17.11 are — each of which has an explicit separate digital row
    (17.9-14, 17.11-24) — then §17.10 needs a `17.10-03 digital` row, those two go
    back to `verified`, and the total becomes 128.
-3. **`tests/fixtures/ieee1364/17_system_tasks/d09_91_readmem_overflow_rejected.v` is now scored,
+3. **Closed 2026-10-04 (VD-018): §17.2.9 requires a warning for excess data;
+   W1150 fires and `d09_91` is a positive fixture.** Original question:
+   **`tests/fixtures/ieee1364/17_system_tasks/d09_91_readmem_overflow_rejected.v` is now scored,
    and fails for a reason that is not §17.2.9.** v0.0.3's widened `collect`
    takes it — it carries `//! reject` and has no `.expected.txt` — and it FAILs
    on `UnknownDirective`, not on excess data. Its data file also still sits in
@@ -1023,18 +1028,26 @@ Recorded rather than guessed. Each would change a §7.1 row.
    `test-devices`, and on excess data being silently dropped, which no fixture
    pins either way. Whether §17.2.9 *requires* an error on excess data still
    cannot be settled without IEEE 1364-2005 (item 8).
-4. **AMS-06 `driver_update`: `missing` vs `partial` is a judgement, not a
+4. **Closed 2026-10-04 (VD-019): a parsed AST path is not `partial`; AMS-06 is
+   `verified` on `m04_12` and `213`, now that the statement executes.** Original question:
+   **AMS-06 `driver_update`: `missing` vs `partial` is a judgement, not a
    measurement.** It parses, survives elaboration's cloner, and is E0701 only in
    value position. `missing` was chosen because §9.22.5's whole obligation is that
    the statement *executes* on a driver update and none of that exists; parsing
    is not "some of the clause". If the house rule counts a surviving AST path as
    partial, the row flips.
-5. **Whether a kernel unit test can support `verified`.** `zMonitor` (17.1-12)
+5. **Closed 2026-10-04 (VD-020): a kernel unit test never carries `verified`
+   alone (AGENTS.md §2). 17.1-12's analog half rests on `s01_05`/`s01_06`;
+   17.1-04's on `171_display_c_format_flags.va` and `s01_01`-`s01_04`.** Original question:
+   **Whether a kernel unit test can support `verified`.** `zMonitor` (17.1-12)
    and `zCReal` (17.1-04) have runtime unit tests at the exact boundary the
    emitted device calls. They were treated as sufficient where the observable is
    rendered text and insufficient where it is per-accepted-step. §2 does not say
    which side of that line a kernel test falls on.
-6. **Whether `.v` transcript evidence may support `verified` at all.** Four
+6. **Closed 2026-10-04 (VD-006): yes, while its step is green. `zig build
+   test-devices` passes every case at `ae9633f1` (`tools/conformance.py`), so the
+   "47/66" below is stale.** Original question:
+   **Whether `.v` transcript evidence may support `verified` at all.** Four
    upgrades (17.3-01, 17.7-01, 17.11-01's digital half, 17.11-24) rest on
    `zig build test-devices`, which is outside measure A and **currently FAILs at
    47/66** — though no `d09_*` case is among its failures and each was re-diffed
