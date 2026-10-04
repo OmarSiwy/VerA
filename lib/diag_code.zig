@@ -421,6 +421,7 @@ pub const Code = enum(u16) {
     W1050,
     W0950,
     W0951,
+    E0952,
     E0820,
     E0821,
     E0822,
@@ -6160,6 +6161,27 @@ fn infoOf(c: Code) Info {
             .title = "multiple discipline resolution rules match",
             .lrm = "7.7.2.1",
             .explain = "The first matching rule is used. Exact matches take precedence over subset matches. Remove the ambiguity to silence this warning.",
+        },
+        .E0952 => .{
+            .title = "a SPICE model names a primitive VerA does not support",
+            .lrm = "E.1.2",
+            .explain =
+            \\E.1.2: "Not all SPICE simulators support the same set of component
+            \\primitives. Thus, a particular SPICE netlist can reference a
+            \\primitive which is unsupported. Verilog-AMS HDL offers no
+            \\alternative in this case other than the possibility that if the
+            \\model equations are known, the primitive can be rewritten as a
+            \\module."
+            \\
+            \\A `.MODEL name type` card declares `name` as a model of the SPICE
+            \\primitive `type`. VerA reads the types Table E.1 names (r, c, l,
+            \\d, npn, pnp, nmos, pmos, njf, pjf, nmf, pmf); any other (`sw`,
+            \\`csw`, `ltra`, `urc`, ...) declares no module, and an instance of
+            \\the model is this error, at the instance.
+            \\
+            \\As the clause says, write the primitive's equations as a
+            \\Verilog-AMS module of the same name: E.3.3 then selects the module.
+            ,
         },
         .W0951 => .{
             .title = "a Verilog-AMS definition shadows a SPICE model or subcircuit",

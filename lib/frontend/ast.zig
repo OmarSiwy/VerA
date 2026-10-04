@@ -250,6 +250,10 @@ pub const SourceFile = struct {
     /// rows; and E.3.2's access-function substitution is for "analog
     /// primitives", which a netlist wrapper is not.
     netlist_modules: u32 = 0,
+    /// E.1.2 bullet 2: the netlist's `.MODEL` cards whose type names a
+    /// primitive VerA does not support, as lower-case `name type`. They
+    /// declare no module; elaboration refuses an instance of one (E0952).
+    netlist_unsupported: []const []const u8 = &.{},
 
     /// VerA's vendor attributes, `vera_lte`, `vera_interp`, `vera_nodiff` and
     /// `vera_timepoint` (§2.9 `attribute_instance`), where one decorates an analog statement
