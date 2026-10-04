@@ -236,21 +236,27 @@ These need a call, not another agent pass.
    17.7-01, the digital half of 17.11-01, 17.11-24) rest on
    `zig build test-devices`. (`CLAUSE-AUDIT.md` §7.5 item 6.)
 7. **§6.5.7 / §7.8.4: discrete and electrical ports on one undeclared net with no
-   connect statement.** Decided and implemented: E0927 (Vague_Decisions VD-007).
-8. **§7.4.4 detail discipline resolution.** Decided: testable once selected
-   (Vague_Decisions VD-008). The selector exists; the mode itself is a §5.3 gap.
-9. **IEEE §13.2.1.1 vs §4.11: two modules with one name.** Decided and
-   implemented: the last wins with W1152 in both engines (Vague_Decisions VD-009).
+   connect statement** are accepted. Error, or legal when nothing crosses
+   domains? `lrm_7_4_4_1.va` relies on acceptance.
+   (`conformance-mixed-signal.md:211-215`.)
+8. **§7.4.4 detail discipline resolution.** VerA has basic mode only. Is detail
+   mode testable with a mode-selecting runner, or not at all (as
+   `lrm_7_4_5.va:6-7` says)? (`conformance-mixed-signal.md:193-201`.)
+9. **IEEE §13.2.1.1 vs §4.11: two modules with one name** are accepted and the
+   first wins. §13.2.1.1 says the last wins with a warning; §4.11 forbids reuse.
+   (`conformance-ieee-config-review.md:32`.)
 10. **§5.6.1.3 / A.6.5: a disabled block's contributions already made.** VerA
     keeps them. Nothing decides or pins it. (`a03_SPEC.md:170-177`.)
-11. **§3.4.5 vs §6.3.3: `#(.locked())` on a localparam.** Decided: E0907
-    (Vague_Decisions VD-011), pinned by
-    `ch03_data_types/reject_localparam_empty_named_override.va`.
-12. **§E.1.2: which SPICE flavour VerA claims.** Decided and implemented: SPICE3
-    `.MODEL` and flat numeric `.SUBCKT` bodies, everything else inside a
-    definition is E0928 (Vague_Decisions VD-012, IMPLEMENTATION §1).
-13. **§F.2.2 "shall be controlled by a simulator option".** Implemented:
-    `--discipline-resolution=basic|detail` (Vague_Decisions VD-013).
+11. **§3.4.5 vs §6.3.3: is `#(.locked())` on a localparam an error?** VerA gives
+    E0907. The only record is
+    `tools/parameter-audit-controls/empty_localparam_unresolved.va` at `be878e6e`.
+    (`conformance-empty-parameter-fix.md:184-191`.)
+12. **§E.1.2: which SPICE flavour VerA claims** (`PARAMS:`, `{expr}`, nested
+    `.SUBCKT`). Only parse limits are recorded, in `lib/frontend/spice_cards.zig`.
+    (`h04_SPEC.md:116-119`.)
+13. **§F.2.2 "shall be controlled by a simulator option"**: no such option
+    exists, and step 5's top-down re-pass is folded into one pass.
+    (`annex_f_resolution/COVERAGE.md:16-21`.)
 14. **§A.8.8: UTF-8 bytes above 0x7F** are accepted in string literals.
     (`annex_a_syntax/COVERAGE.md:332-335`.)
 15. **§9.17.3, Syntax 9-12: `$limit(typ*V(a,k), ...)`**, whose first argument is
@@ -305,15 +311,18 @@ native compilation backlog separately from passing interpreter behavior.
 | Clause | Item | Source |
 |---|---|---|
 | AMS 4.2.4 | Integer `%` with a probe-dependent divisor is refused (E0601). | `conformance-expressions.md:77-79` |
-| AMS 7.3.1 | A legal 31-bit select that reaches above bit 31 of a wider `reg` is refused (E0329): the analog context holds a `reg` as a 32-bit integer. Selects within bits 0-31 run (`discrete_bus_part_select_31.va`). | `conformance-mixed-signal.md:206-210` |
-| AMS 7.4.4.2, F.2.2 | Detail discipline resolution: `--discipline-resolution=detail` is accepted, but F.2.2 step 5's top-down pass is not implemented, so a signal joining continuous and discrete segments through undeclared interconnect is refused (E0930). Figure 7-4 is the case. | `discipline_resolution_detail_figure_7_4_refused.va`; Vague_Decisions VD-008 |
+| AMS 7.3.1 | E0222 checks the declared bus width, so a legal 31-bit part-select of a wider `reg` is refused. | `conformance-mixed-signal.md:206-210` |
+| AMS 3.6.3.2 | A hierarchical nodeset (`electrical top.foo.w = 2.75;`) is ignored without a diagnostic. | `a08_nodeset_SPEC.md:264-269`; found 2026-09-27 |
 | AMS 4.6.4.3, A.8.2 | `noise_table` on a parameter slice (`tbl[0:3]`) is refused (E0329). | `a06_SPEC.md:250-252` |
 | AMS 4.6.4 | `real w = white_noise(...)` as a declaration initializer exports no noise generator. The assignment form does. | `ch04_expressions/COVERAGE.md:108` |
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |
+| AMS 5.6.8.2, 6.7.1 | Two instances between the same two nodes share one branch: `I(r1.branch(p,n))` reads the parallel sum. | `h04_SPEC.md:284-292`; found 2026-09-27 |
 | AMS 5.10, 3.3 | A string written inside an event body is not held. `lib/ir/lower/param.zig` says nothing can observe it; `$strobe` does. | `a03_SPEC.md:186-189` |
+| AMS 6.6.3 | Same-named instances in two generate blocks collide (E0362). | `ch06_hierarchy/COVERAGE.md:191-193` |
 | AMS 6.9.2 | A paramset override that reads a generate block's localparam is refused (E0914). | `ch06_hierarchy/COVERAGE.md:195-197` |
 | AMS 7.3.2 | The LRM's `a2d` example with an undriven `dnet` is refused (E0315, E0369). | `ch07_mixed_signal/COVERAGE.md:155-159` |
 | AMS 9.15 | `$simparam$str("cwd")` and `("analysis_name")` return `""`. | `a10_SPEC.md:71-73,210-215` |
+| AMS E.1.2 | `.MODEL X SW` is skipped and the instance line gets E0904. | `h04_SPEC.md:125-128` |
 | IEEE 12.2.1, 12.8.2 | A `defparam` path that starts at a module name is refused (E0907) by the analog path. The digital upward/indexed resolution is fixed by `b700311a`. | `conformance-ieee-scope-review.md:47-76` |
 | IEEE 17.5.4 | A PLA personality bit `x` is treated as "ignore"; the standard says "worst case". | `conformance-ieee-pla-review.md:58` |
 | IEEE 9.7.5 | `@*` over a statement that reads nothing is refused with an E1100 that cites §9.7.5, which has no such rule. | `conformance-ieee-scheduling-review.md:95-98` |

@@ -5,8 +5,8 @@
 // hierarchical net declarations win. If there are multiple hierarchical
 // declarations, then the declaration on the highest level wins."
 //
-// ROADMAP §5.3 (AMS 3.6.3.2): VerA read the discipline of such a declaration
-// (F.2.1 step 3) and dropped its initializer without a diagnostic.
+// VerA used to read the discipline of such a declaration
+// (F.2.1 step 3) and drop its initializer without a diagnostic.
 //
 // THE PROBE is a031's cubic, f(V) = (V-1)(V-2)(V-3), roots 1, 2, 3, solved by
 // the testbench's Newton from the node's nodeset (a08_nodeset_01 derives the

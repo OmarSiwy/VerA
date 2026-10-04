@@ -1,7 +1,7 @@
 // §7.3.1 Table 7-1, the `bit` row: "Access of discrete bit groupings with
 // greater than 31 bits is illegal." The limit is on the grouping ACCESSED,
 // not on the declaration, so a 31-bit part-select of a wider `reg` is legal
-// (ROADMAP §5.3, AMS 7.3.1: VerA used to refuse the declaration itself).
+// (VerA used to refuse the declaration itself).
 // Each select maps by the same rule as a whole grouping: bit 0 of the
 // selection is bit 0 of the integer, and bit 31 of the integer is zero.
 //

@@ -5,7 +5,7 @@
 // nets therefore hold two branches in parallel, and each one's flow is its
 // own (§6.7.1 hierarchical access, §5.5.5).
 //
-// ROADMAP §5.3 (AMS 5.6.8.2, 6.7.1): flattening merged both instances' (p,n)
+// VerA's flattening used to merge both instances' (p,n)
 // branches onto the one node pair, so every read returned the parallel sum.
 //
 // THE CIRCUIT. r1 (1 kohm) and r2 (2 kohm), each `I(p,n) <+ V(p,n)/r`, across
