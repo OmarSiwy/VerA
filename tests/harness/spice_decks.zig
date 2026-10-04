@@ -145,7 +145,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
     try w.print(
         \\spice: {d}/{d} decks are paired with an oracle and name models that compile
         \\spice: NOT executed — a deck needs a circuit simulator to link the device and
-        \\spice:   turn the Newton loop. That is ARPice (ROADMAP.md §6), which is not in
+        \\spice:   turn the Newton loop. That is ARPice (github.com/OmarSiwy/ESPice), not in
         \\spice:   this repository, so no release here can run one.
         \\
     , .{ ran - failed, ran });

@@ -22,7 +22,7 @@ jobs:
           version: 0.17.0
 
       # Fails the release if CHANGELOG.md's entry for this tag disagrees with
-      # what the tree measures. This is the whole gate: ROADMAP.md §1 defines
+      # what the tree measures. This is the whole gate: AGENTS.md §2 defines
       # v1.0.0 as four measures, and a release that misreports one of them is
       # worse than no release.
       - name: Verify CHANGELOG matches the tree
