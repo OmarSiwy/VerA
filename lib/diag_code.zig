@@ -2164,9 +2164,11 @@ fn infoOf(c: Code) Info {
             \\  --allow=W0251   silence it, for a cell whose specify section only
             \\                  matters to the digital half a host simulator runs
             \\
-            \\A `specparam` written as a MODULE item (A.2.1.1, and Syntax 6-1's
-            \\`non_port_module_item`) is not this warning: it is a constant
-            \\declaration with a default, and it elaborates as one.
+            \\A `specparam` is not this warning, written as a MODULE item (A.2.1.1,
+            \\Syntax 6-1's `non_port_module_item`) or inside the block: it is a
+            \\constant declaration with a default, and it elaborates as one
+            \\(IEEE 1364-2005 4.10.3 lets the module body read a specparam the
+            \\block declares).
             ,
         },
 
