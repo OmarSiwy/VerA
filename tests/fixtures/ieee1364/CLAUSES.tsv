@@ -511,7 +511,7 @@
 26.2.1	no-prohibition	VPI callbacks	"VPI callbacks shall be registered by the application with the functions vpi_register_cb() and vpi_register_systf()." The four reason categories and the two registering routines; what a reason forbids is 27.33's, cited both ways. Positive: ieee_pli/b_27_33_callbacks.c.
 26.2.2	-	VPI access to Verilog HDL objects and simulation objects
 26.2.3	no-prohibition	Error handling	"The vpi_chk_error() routine shall return a nonzero value if an error occurred in the previously called VPI routine." The mechanism a refusal is read through; no input is invalid. Positive: ieee_pli/b_27_objects.c; every inherited-reject check of ieee_pli/b_*.c reads it.
-26.2.4	unspecified	Function availability	"Only two routines can be called at this time: — vpi_register_systf() — vpi_register_cb()" and, while sizetf routines run, "no additional access is permitted." The clause says what an application may rely on in those phases; unlike 26.6.20's "It shall be illegal", it calls no other call an error and names no failure value, so none is asserted (ROADMAP 5.6 records the open reading). Positive: ieee_pli/b_26_1_systf.c (startup calls only the two routines, for cbEndOfCompile and cbEndOfSimulation, two of the six reasons).
+26.2.4	-	Function availability
 26.2.5	-	Traversing expressions
 26.3	-	VPI object classifications
 26.3.1	-	Accessing object relationships and properties

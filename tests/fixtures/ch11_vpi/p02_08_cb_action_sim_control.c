@@ -172,12 +172,21 @@ static int on_end_of_simulation(p_cb_data cb_data)
   return 0;
 }
 
+static void register_at12(void)
+{
+  static s_cb_data at12 = { 0 };
+  static s_vpi_time t12 = { vpiSimTime, 0, 12, 0.0 };
+  at12.reason = cbAtStartOfSimTime; at12.cb_rtn = ask_to_finish;
+  at12.obj = NULL; at12.time = &t12; at12.value = NULL;
+  at12.index = 0; at12.user_data = NULL;
+  CHECK(vpi_register_cb(&at12) != NULL, "the t=12 finish request failed to register");
+}
+
 static void setup(void)
 {
   /* 12.31.4: reason, cb_rtn and user_data are the only fields that need to be
    * set up for an action callback. time and value stay NULL on purpose. */
-  static s_cb_data compile_cb = { 0 }, start_cb = { 0 }, end_cb = { 0 }, at12 = { 0 };
-  static s_vpi_time t12 = { vpiSimTime, 0, 12, 0.0 };
+  static s_cb_data compile_cb = { 0 }, start_cb = { 0 }, end_cb = { 0 };
 
   compile_cb.reason = cbEndOfCompile;      compile_cb.cb_rtn = on_end_of_compile;
   start_cb.reason   = cbStartOfSimulation; start_cb.cb_rtn   = on_start_of_simulation;
@@ -187,10 +196,8 @@ static void setup(void)
   CHECK(vpi_register_cb(&start_cb)   != NULL, "cbStartOfSimulation registration failed");
   CHECK(vpi_register_cb(&end_cb)     != NULL, "cbEndOfSimulation registration failed");
 
-  at12.reason = cbAtStartOfSimTime; at12.cb_rtn = ask_to_finish;
-  at12.obj = NULL; at12.time = &t12; at12.value = NULL;
-  at12.index = 0; at12.user_data = NULL;
-  CHECK(vpi_register_cb(&at12) != NULL, "the t=12 finish request failed to register");
+  /* IEEE 1364-2005 26.2.4: cbAtStartOfSimTime is not a startup reason. */
+  p02_defer(register_at12);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

@@ -90,26 +90,17 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
-static void p03_11_startup(void)
+/* IEEE 1364-2005 26.2.4: the startup routine registers; the read-backs and
+ * the analog callback wait for cbEndOfCompile. */
+static vpiHandle sh;
+
+static void p03_11_after_compile(void)
 {
-  static s_vpi_analog_systf_data systf, dup;
   static s_cb_data probe_cb, fin_cb;
   static s_vpi_time probe_time;
   s_vpi_analog_systf_data back;
   s_cb_data cb_back;
-  vpiHandle sh, ch;
-
-  systf.type        = vpiAnalogSysFunc;
-  systf.sysfunctype = vpiRealFunc;
-  systf.tfname      = (PLI_BYTE8 *)"$p03_probe";
-  systf.calltf      = probe_calltf;
-  systf.compiletf   = probe_compiletf;
-  systf.sizetf      = probe_sizetf;
-  systf.derivtf     = probe_derivtf;
-  systf.user_data   = (PLI_BYTE8 *)probe_ctx;
-  sh = vpi_register_analog_systf(&systf);
-  P03_CHECK(sh != NULL, "12.32: registering $p03_probe failed");
-  p03_no_error("vpi_register_analog_systf");
+  vpiHandle ch;
 
   memset(&back, 0, sizeof back);
   vpi_get_analog_systf_info(sh, &back);
@@ -125,13 +116,6 @@ static void p03_11_startup(void)
   P03_CHECK(back.derivtf   == probe_derivtf,   "12.13: derivtf was not preserved");
   P03_CHECK(back.user_data == (PLI_BYTE8 *)probe_ctx, "12.13: user_data was not preserved");
   systf_roundtrip = 1;
-
-  /* 12.32: "The task or function name shall be unique in the domain in which it
-   * is registered." */
-  dup = systf;
-  dup_rejected = (vpi_register_analog_systf(&dup) == NULL);
-  P03_CHECK(dup_rejected, "12.32: `$p03_probe` was registered twice in the analog domain");
-  (void)p03_saw_error("the duplicate vpi_register_analog_systf");
 
   probe_time.type = vpiScaledRealTime;
   probe_time.real = T_PROBE;
@@ -156,6 +140,32 @@ static void p03_11_startup(void)
 
   fin_cb.reason = acbFinalStep; fin_cb.cb_rtn = on_final;
   P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
+static void p03_11_startup(void)
+{
+  static s_vpi_analog_systf_data systf, dup;
+
+  systf.type        = vpiAnalogSysFunc;
+  systf.sysfunctype = vpiRealFunc;
+  systf.tfname      = (PLI_BYTE8 *)"$p03_probe";
+  systf.calltf      = probe_calltf;
+  systf.compiletf   = probe_compiletf;
+  systf.sizetf      = probe_sizetf;
+  systf.derivtf     = probe_derivtf;
+  systf.user_data   = (PLI_BYTE8 *)probe_ctx;
+  sh = vpi_register_analog_systf(&systf);
+  P03_CHECK(sh != NULL, "12.32: registering $p03_probe failed");
+  p03_no_error("vpi_register_analog_systf");
+
+  /* 12.32: "The task or function name shall be unique in the domain in which it
+   * is registered." */
+  dup = systf;
+  dup_rejected = (vpi_register_analog_systf(&dup) == NULL);
+  P03_CHECK(dup_rejected, "12.32: `$p03_probe` was registered twice in the analog domain");
+  (void)p03_saw_error("the duplicate vpi_register_analog_systf");
+
+  p03_defer(p03_11_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_11_startup, 0 };

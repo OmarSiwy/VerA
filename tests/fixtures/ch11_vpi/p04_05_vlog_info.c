@@ -23,9 +23,11 @@
  * nothing to fill, so vpi_get_vlog_info(NULL) is the routine's failure —
  * FALSE, with the error 12.2 reports.
  *
- * Called twice, from the startup routine and again from the end-of-compile
- * callback, to show the answer is a property of the product's execution and
- * not of the moment it is asked.
+ * Called twice, from the end-of-compile callback and again at the start of
+ * simulation, to show the answer is a property of the product's execution and
+ * not of the moment it is asked. Not from the startup routine: IEEE 1364-2005
+ * 26.2.4 allows only vpi_register_systf() and vpi_register_cb() there
+ * (ieee_pli/b_26_2_4_startup_phase.c pins the refusal).
  */
 
 //! lrm 12.17
@@ -62,17 +64,26 @@ static PLI_INT32 end_of_compile(p_cb_data cb_data)
 {
   (void)cb_data;
   check_info("cbEndOfCompile");
+  return 0;
+}
+
+static PLI_INT32 start_of_simulation(p_cb_data cb_data)
+{
+  (void)cb_data;
+  check_info("cbStartOfSimulation");
   p02_done("p04_05_vlog_info");
   return 0;
 }
 
 static void setup(void)
 {
-  static s_cb_data cb;
-  check_info("startup");
+  static s_cb_data cb, sos;
   cb.reason = cbEndOfCompile;
   cb.cb_rtn = end_of_compile;
   CHECK(vpi_register_cb(&cb) != NULL, "cbEndOfCompile registration failed");
+  sos.reason = cbStartOfSimulation;
+  sos.cb_rtn = start_of_simulation;
+  CHECK(vpi_register_cb(&sos) != NULL, "cbStartOfSimulation registration failed");
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

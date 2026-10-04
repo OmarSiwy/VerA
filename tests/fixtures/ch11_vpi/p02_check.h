@@ -100,6 +100,36 @@ static P02_UNUSED vpiHandle p02_by_name(const char *name)
   return h;
 }
 
+/* IEEE 1364-2005 26.2.4: while vlog_startup_routines run, "Only two routines
+ * can be called at this time": vpi_register_systf() and vpi_register_cb(),
+ * the latter only for cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation,
+ * cbUnresolvedSystf, cbError and cbPLIError. When cbEndOfCompile runs, "all
+ * functionality is available". So a startup routine hands the rest of its
+ * work to p02_defer(fn), which runs fn at cbEndOfCompile (docs/
+ * Vague_Decisions.md VD-044). Not a CHECK: the census counts are the
+ * application's own assertions. One deferral per application. */
+static P02_UNUSED void (*p02_deferred)(void);
+
+static P02_UNUSED PLI_INT32 p02_run_deferred(p_cb_data d)
+{
+  (void)d;
+  p02_deferred();
+  return 0;
+}
+
+static P02_UNUSED void p02_defer(void (*fn)(void))
+{
+  static s_cb_data cb;
+  p02_deferred = fn;
+  cb.reason = cbEndOfCompile;
+  cb.cb_rtn = p02_run_deferred;
+  if (vpi_register_cb(&cb) == NULL) {
+    fprintf(stderr, "p02: the cbEndOfCompile deferral failed to register\n");
+    p02_report_error();
+    exit(1);
+  }
+}
+
 static P02_UNUSED void p02_done(const char *app)
 {
   printf("p02: %s checks=%d\n", app, p02_checks);

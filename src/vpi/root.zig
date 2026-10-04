@@ -702,9 +702,18 @@ pub fn runStartupRoutines() void {
 /// no-op: an application that registers nothing at startup is legal.
 pub fn runStartupTable(table: ?[*]const ?StartupFn) void {
     const entries = table orelse return;
+    starting = true;
+    defer starting = false;
     var i: usize = 0;
     while (entries[i]) |f| : (i += 1) f();
 }
+
+/// True while the startup routines run. IEEE 1364-2005 §26.2.4: "Only two
+/// routines can be called at this time: vpi_register_systf() [and]
+/// vpi_register_cb()", the latter for six reasons (`callback.startupReason`).
+/// VAMS's vpi_register_analog_systf is the first one's analog twin.
+/// `refused` turns every other routine away (VD-044).
+pub var starting = false;
 
 /// One `vlog_startup_routines` entry.
 pub const StartupFn = *const fn () callconv(.c) void;
@@ -814,12 +823,23 @@ pub fn describe(h: vpiHandle) []const u8 {
     return if (h == null) "NULL" else "that handle";
 }
 
-/// Every routine but `vpi_chk_error` starts here: §12.2 "the error status
-/// shall be reset by any VPI routine call", and no routine has an answer
-/// without an open design. Null means the error is recorded; the caller
+/// Every routine but `vpi_chk_error` and the three registrations starts
+/// here or at `enter`: §12.2 "the error status shall be reset by any VPI
+/// routine call", and IEEE 1364-2005 §26.2.4 allows none of them while the
+/// startup routines run. True means the error is recorded; the caller
 /// returns its own documented failure value.
-pub inline fn enter(comptime who: []const u8) ?*Design {
+pub fn refused(comptime who: []const u8) bool {
     clearError();
+    if (!starting) return false;
+    fail("STARTUP", who ++ ": IEEE 1364-2005 §26.2.4 allows only vpi_register_systf() and vpi_register_cb() in vlog_startup_routines; call it from a cbEndOfCompile callback", .{});
+    return true;
+}
+
+/// `refused`, and then: no routine has an answer without an open design.
+/// Null means the error is recorded; the caller returns its own documented
+/// failure value.
+pub inline fn enter(comptime who: []const u8) ?*Design {
+    if (refused(who)) return null;
     if (design) |*d| return d;
     fail("NODESIGN", who ++ ": no design is open", .{});
     return null;
@@ -874,7 +894,7 @@ pub export fn vpi_chk_error(error_info_p: ?*ErrorInfo) c_int {
 /// Two invalid handles are not "the same object": that is FALSE plus an
 /// error, not TRUE.
 pub export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
-    clearError();
+    if (refused("vpi_compare_objects")) return 0;
     const a = issued(obj1) orelse {
         fail("BADHANDLE", "vpi_compare_objects: {s} is not a handle VerA issued", .{describe(obj1)});
         return 0;
@@ -907,7 +927,7 @@ pub fn issued(h: vpiHandle) ?*anyopaque {
 /// is a no-op returning TRUE: objects live as long as the design, and an
 /// application is entitled to call this on one.
 pub export fn vpi_free_object(obj: vpiHandle) c_int {
-    clearError();
+    if (refused("vpi_free_object")) return 0;
     if (asIter(obj)) |it| {
         iterate.destroyIter(&design.?, it);
         return 1;
@@ -979,7 +999,7 @@ var version_str = "0.9.0".*;
 /// TRUE on success and FALSE on failure." The one failure an application can
 /// cause is having no structure to fill.
 pub export fn vpi_get_vlog_info(vlog_info_p: ?*VlogInfo) c_int {
-    clearError();
+    if (refused("vpi_get_vlog_info")) return 0;
     const out = vlog_info_p orelse {
         fail("BADINFO", "vpi_get_vlog_info: vlog_info_p is NULL", .{});
         return 0;

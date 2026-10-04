@@ -75,7 +75,7 @@ static PLI_INT32 on_end(p_cb_data cb)
   return 0;
 }
 
-static void p03_91_startup(void)
+static void p03_91_after_compile(void)
 {
   static s_cb_data vic_cb, end_cb;
   s_cb_data info;
@@ -110,6 +110,13 @@ static void p03_91_startup(void)
   end_cb.reason = cbEndOfSimulation;
   end_cb.cb_rtn = on_end;
   P03_CHECK(vpi_register_cb(&end_cb) != NULL, "cbEndOfSimulation registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p03_defer). */
+static void p03_91_startup(void)
+{
+  p03_defer(p03_91_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_91_startup, 0 };

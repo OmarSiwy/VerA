@@ -448,9 +448,6 @@ Settle each before a fixture asserts one side.
 - IEEE 18.4.3.2: strength 5 is "large" in the prose and "pull" in the list.
   (`conformance-vcd-review.md:137`.)
 - IEEE 19.6, 19.11: does `` `resetall `` reset `` `begin_keywords ``? (`d10_SPEC.md:192-194`.)
-- IEEE 26.2.4 vs AMS 12.33.2: `tests/fixtures/ch11_vpi/vpi_app.c` walks the design inside
-  `vlog_startup_routines`; IEEE allows only registration there.
-  (`conformance-ieee-vpi-interface-review.md:24-31`.)
 - AMS 11.6.25, 12.27: `p02` conventions set by fiat. The time-33
   callback-only entry in `vpiTimeQueue` and `vpi_mcd_printf`'s return for a
   multi-channel write. (`p02_SPEC.md:341-343,382-395`.)

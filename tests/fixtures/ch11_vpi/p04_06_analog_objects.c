@@ -280,11 +280,18 @@ static void nodes_and_branches(void)
   }
 }
 
-static void startup(void)
+static void after_compile(void)
 {
   natures_and_disciplines();
   nodes_and_branches();
   p02_done("p04_06_analog_objects");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p02_defer). */
+static void startup(void)
+{
+  p02_defer(after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { startup, 0 };
