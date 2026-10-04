@@ -145,6 +145,11 @@ fn argvHead(arena: Allocator, opts: BuildOptions, verb: []const u8, bin: []const
         try arena.print("-O{t}", .{opts.optimize}),
         "--cache-dir",
         ".zig-cache",
+        // The binary is loaded at run time (`dynlib.zig`), never linked
+        // against, and Zig 0.17's COFF linker writes the import library to
+        // the output's directory joined to itself (FileNotFound, or
+        // BadPathName on an absolute path).
+        "-fno-emit-implib",
     });
     try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
