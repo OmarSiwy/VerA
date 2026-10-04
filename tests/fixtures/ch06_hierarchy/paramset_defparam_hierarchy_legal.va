@@ -34,7 +34,7 @@ module ps_dp_legal_top(p);
     `CHECKX("the valid paramset assignment arrives", valid.gain, 3.0);
     `CHECKX("ordinary defparam behavior executes", I(ordinary.child.br), 2.5);
     `CHECKX("outer defparam behavior executes", I(overridden.br), 3.5);
-    `CHECKX("the selected legal arm executes", I(valid.good.br), 1.5);
+    `CHECKX("the selected legal arm executes", I(valid.present_child.good.br), 1.5);
     `CHECKX("only the three selected branches contribute", I(p, sum_node), 7.5);
   end
 endmodule

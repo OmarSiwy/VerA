@@ -33,21 +33,45 @@ fn isUdp(file: *const Ast.SourceFile, name: Ast.StrId) bool {
 }
 
 /// §6.6 every module instance in a generate block under `id`, schemes aside.
-pub fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, out: *std.ArrayList(Ast.Instance)) Error!void {
+pub fn genInstanceList(file: *Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, out: *std.ArrayList(Ast.Instance)) Error!void {
+    try genInstanceListIn(file, id, arena, "", out);
+}
+
+fn genInstanceListIn(file: *Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, prefix: []const u8, out: *std.ArrayList(Ast.Instance)) Error!void {
     if (id == .none) return;
     switch (file.stmt(id)) {
         .block => |b| {
-            try out.appendSlice(arena, b.instances);
-            for (b.body) |s| try genInstanceList(file, s, arena, out);
+            const inner = try blockPrefix(file, arena, prefix, b);
+            for (b.instances) |inst| try out.append(arena, try scoped(file, arena, inner, inst));
+            for (b.body) |s| try genInstanceListIn(file, s, arena, inner, out);
         },
         .if_stmt => |s| {
-            try genInstanceList(file, s.then_s, arena, out);
-            try genInstanceList(file, s.else_s, arena, out);
+            try genInstanceListIn(file, s.then_s, arena, prefix, out);
+            try genInstanceListIn(file, s.else_s, arena, prefix, out);
         },
-        .for_stmt => |s| try genInstanceList(file, s.body, arena, out),
-        .case_stmt => |s| for (s.arms) |a| try genInstanceList(file, a.body, arena, out),
+        .for_stmt => |s| try genInstanceListIn(file, s.body, arena, prefix, out),
+        .case_stmt => |s| for (s.arms) |a| try genInstanceListIn(file, a.body, arena, prefix, out),
         else => {}, // else: no other statement holds a generate block
     }
+}
+
+/// §6.6.3 / IEEE 1364-2005 §12.4.3: a generate block is a scope, so an
+/// instance in `g1` is `g1.u`, and one in an unnamed block is
+/// `genblk<n>.u` for external interfaces (`Ast.SeqBlock.gen_name`). Two
+/// blocks may each hold a `u`. The prefix of the blocks enclosing `b`, plus
+/// `b`'s own name when it is a generate scope.
+fn blockPrefix(file: *Ast.SourceFile, arena: std.mem.Allocator, prefix: []const u8, b: Ast.SeqBlock) Error![]const u8 {
+    if (b.gen_name == .none) return prefix;
+    return arena.print("{s}{s}{c}", .{ prefix, file.str(b.gen_name), sep });
+}
+
+/// `inst` named inside the generate scope `prefix` (see `blockPrefix`). The
+/// flat path joins on `sep`, so `g1.u` is the instance's hierarchical name.
+fn scoped(file: *Ast.SourceFile, arena: std.mem.Allocator, prefix: []const u8, inst: Ast.Instance) Error!Ast.Instance {
+    if (prefix.len == 0) return inst;
+    var out = inst;
+    out.name = try file.intern(arena, try arena.print("{s}{s}", .{ prefix, file.str(inst.name) }));
+    return out;
 }
 
 /// §6.6 appends a generate block's module instances to `out` and, in
@@ -61,18 +85,19 @@ pub fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.m
 /// ponytail: if-generate only. A loop or case generate's instance is
 /// E0235 (`refuseGen`): the loop needs one renamed instance per
 /// iteration, the case an equality chain per arm.
-fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
+fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, prefix: []const u8, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
     if (id == .none) return;
     switch (self.ctx.file.stmt(id)) {
         .block => |b| {
-            try out.appendSlice(self.ctx.arena, b.instances);
+            const inner = try blockPrefix(self.ctx.file, self.ctx.arena, prefix, b);
+            for (b.instances) |inst| try out.append(self.ctx.arena, try scoped(self.ctx.file, self.ctx.arena, inner, inst));
             try gates.appendNTimes(self.ctx.arena, gate, b.instances.len);
-            for (b.body) |s| try genInstances(self, s, gate, out, gates);
+            for (b.body) |s| try genInstances(self, s, gate, inner, out, gates);
         },
         .if_stmt => |s| if (s.is_generate) {
             const c = try elab_clone.cloneExpr(self, s.cond);
-            try genInstances(self, s.then_s, try conj(self, gate, c, false), out, gates);
-            try genInstances(self, s.else_s, try conj(self, gate, c, true), out, gates);
+            try genInstances(self, s.then_s, try conj(self, gate, c, false), prefix, out, gates);
+            try genInstances(self, s.else_s, try conj(self, gate, c, true), prefix, out, gates);
         },
         .for_stmt => |s| try refuseGen(self, s.body),
         .case_stmt => |s| for (s.arms) |a| try refuseGen(self, a.body),
@@ -180,7 +205,7 @@ pub fn walkInstances(
     var all: std.ArrayList(Ast.Instance) = .empty;
     try all.appendSlice(self.ctx.arena, insts);
     var gates: std.ArrayList(Ast.ExprId) = .empty;
-    for (module.analog) |blk| try genInstances(self, blk.body, .none, &all, &gates);
+    for (module.analog) |blk| try genInstances(self, blk.body, .none, "", &all, &gates);
     std.debug.assert(all.items.len == insts.len + gates.items.len);
     for (all.items, 0..) |inst, idx| {
         const auto = idx >= module.instances.len and idx < insts.len;
