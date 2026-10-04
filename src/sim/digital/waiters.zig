@@ -133,13 +133,16 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     const before = dest.bit(0);
     // A real changes when its value does: -0.0 and +0.0 compare equal
     // (VAMS §3.7, IEEE 754 `==`), and a NaN never equals itself.
+    const differ = !std.mem.eql(u64, dest.planes, planes);
     const changed = if (self.reals.contains(target))
         @as(f64, @bitCast(dest.planes[0])) != @as(f64, @bitCast(planes[0]))
     else
-        !std.mem.eql(u64, dest.planes, planes);
-    // Not copied when unchanged, which also covers `planes` aliasing
-    // `dest.planes` (`a = a`), a copy @memcpy forbids.
-    if (changed) @memcpy(dest.planes, planes);
+        differ;
+    // "No change" governs only the event: -0.0 over +0.0 still stores its
+    // bits, so `1.0/r` reads -inf (docs/Vague_Decisions.md VD-032). Not
+    // copied when equal, which also covers `planes` aliasing `dest.planes`
+    // (`a = a`), a copy @memcpy forbids.
+    if (differ) @memcpy(dest.planes, planes);
     // A §10.4.5 constant function running during elaboration: nothing
     // watches a slot yet.
     if (self.growing != null or self.folding_constant) return;

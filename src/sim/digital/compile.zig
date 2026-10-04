@@ -1227,6 +1227,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         const written = i == 3 or (op == .remove and i != 0) or (op == .exam and i == 2);
                         if (written) try checkTarget(self, a) else try checkExpr(self, a);
                     }
+                    // §17.6.5 Table 17-15 defines codes 1 to 6; a constant
+                    // outside them asks for nothing (VD-050). A run-time one
+                    // gets status 2 (`queueStep`).
+                    if (op == .exam and constantExpression(self, s.args[1])) if ((try self.constant(s.args[1], tok)).asInt()) |c|
+                        if (c < 1 or c > 6) return self.exprFail(s.args[1], "§17.6.5: a $q_exam q_stat_code is one of Table 17-15's codes 1 to 6");
                 },
                 // §17.5 `(memory, inputs, outputs)`. An asynchronous array is
                 // its own process from here on: the loop is compiled out of

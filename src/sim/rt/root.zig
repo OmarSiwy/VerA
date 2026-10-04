@@ -958,11 +958,15 @@ pub const State = struct {
     }
 
     /// `put` of a real (§4.8, `waiters.store`): it changes when its value
-    /// does, so -0.0 over 0.0 is no change and a NaN always is one.
+    /// does, so -0.0 over 0.0 is no change and a NaN always is one. No
+    /// change still stores the bits (VD-032): only the event is suppressed.
     pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
         _ = m;
         if (self.held(slot)) return;
-        if (logic.real(self.get(off)) == logic.real(a)) return;
+        if (logic.real(self.get(off)) == logic.real(a)) {
+            self.v[off] = a.v;
+            return;
+        }
         const before = logic.low(self.get(off));
         self.v[off] = a.v;
         if (!two) self.x[off] = 0;
@@ -1843,6 +1847,7 @@ pub const State = struct {
             try self.store(slot + w.index, off + w.index * n, v, x, m);
         }
         if (load.mismatch()) |mm| self.warn("W1150", display.MemLoad.mismatch_text, .{ mm.found, mm.expected });
+        if (load.outside) |o| self.warn("W1156", display.MemLoad.outside_text, .{ o, low, high });
     }
 
     /// §17.9.1 a seedless `$random`.

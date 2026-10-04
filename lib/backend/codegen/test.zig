@@ -2834,6 +2834,23 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
     try std.testing.expectEqual(@as(i64, -1), k.zFGetc(g));
     try std.testing.expect(k.zFEof(g) != 0);
     _ = k.zFClose(g);
+
+    // VD-084: `$fscanf`'s window and `$fgets` read the pushback first, and
+    // the file resumes after the byte it covers.
+    const hw = k.zFOpen(path, "w", false);
+    _ = k.zFPut(hw, "ab\n");
+    _ = k.zFClose(hw);
+    const h = k.zFOpen(path, "r", false);
+    try std.testing.expectEqual(@as(i64, 'a'), k.zFGetc(h));
+    try std.testing.expectEqual(@as(i64, 0), k.zFUngetc('Z', h));
+    try std.testing.expectEqualStrings("Zb\n", k.zFWindow(h));
+    try std.testing.expectEqual(@as(i64, 1), k.zFTake(h, 1, 1));
+    try std.testing.expectEqualStrings("b\n", k.zFWindow(h));
+    try std.testing.expectEqual(@as(i64, 0), k.zFUngetc('Y', h));
+    try std.testing.expectEqual(@as(i64, 3), k.zFGets(h));
+    try std.testing.expectEqualStrings("Yb\n", k.zFLine(3, h));
+    try std.testing.expectEqual(@as(i64, 3), k.zFTell(h));
+    _ = k.zFClose(h);
 }
 
 test "codegen: §9.21 the emitted table interpolator is the one the fixtures assert" {
