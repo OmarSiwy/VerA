@@ -32,9 +32,9 @@
 //
 // Both are identities between two VerA expressions with no digits of their own,
 // so both are CHECKEQ. The one-argument idtmod(expr) is written into the
-// contribution but NOT asserted: Table 4-19 makes its constant "the initial
-// starting point as determined by the simulator", which is implementation
-// defined, and pinning it would over-specify.
+// contribution but not asserted here. §4.5.5's prose requires its constant
+// to default to zero, and idtmod_one_argument_starts_at_zero.va asserts that
+// (docs/Vague_Decisions.md VD-058).
 //
 //! lrm 4.5.5
 //! analysis tran

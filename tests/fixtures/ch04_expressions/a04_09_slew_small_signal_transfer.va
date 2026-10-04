@@ -44,8 +44,8 @@
 // a known operating point: min(1, 0.3*t/1ns) is §4.5.9's rate limit with the
 // numbers above substituted by hand.
 //
-// STATUS AND WHAT THIS FILE IS FOR. Both checks PASS at HEAD, at all six
-// points. That is deliberate and disclosed: §4.5.9's small-signal sentence has
+// STATUS AND WHAT THIS FILE IS FOR. Both checks PASS at all six points
+// (re-run 2026-10-04 at ae9633f1 with AGENTS.md §6's `vera --emit-exe` command). That is deliberate and disclosed: §4.5.9's small-signal sentence has
 // no fixture anywhere under tests/fixtures/ — 21_slew.va and
 // 129_slew_rate_sign_rejected.va cover the rate limit, the two default-rate
 // spellings and the rate-sign refusal, and none of them touches the transfer
@@ -53,7 +53,9 @@
 // right and currently unpinned, not a claim that HEAD is broken. It is not
 // vacuous: a kernel that lowered slew() as a first-order lag, or one whose
 // ddx() did not see through the limiter, reads an intermediate slope here and
-// fails the second check at 1e-15.
+// fails the second check at 1e-15. A ddx() that treats slew() as the
+// identity reads 1 where the table wants 0, at t = 1, 2 and 3 ns, and
+// prints ok=0 there.
 //
 // WHAT WAS REMOVED, AND WHERE IT WENT. An earlier third check asserted
 //
