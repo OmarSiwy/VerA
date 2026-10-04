@@ -7,7 +7,9 @@
 // a[1]=2.5 at t=4 changes no value. At t=6 selecting a[0]=9.5 increments
 // the array count; the delayed a[1]=4.5 update at t=7 is unselected.
 // Selecting a[1] at t=8 gives the third array change. r becomes zero at
-// t=9; its pending -0 update at t=10 adds none (final counts 2,3).
+// t=9; its pending -0 update at t=10 adds none (final counts 2,3), but it
+// is still performed: r holds -0.0 and %.2f prints "-0.00", as C's printf
+// does (VD-032; this line read 0.00 while VerA dropped the store).
 // The delayed rows remain pending across tick boundaries, also exercising
 // snapshot restoration. The legal unqualified event has the isolated
 // forbidden-edge neighbor native_real_edge_rejected.v (§4.8.1).
