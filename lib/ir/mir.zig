@@ -275,6 +275,16 @@ pub const InstData = union(OpClass) {
 /// One phi operand: the value flowing in from predecessor `block`.
 pub const PhiPair = struct { block: Block, value: Value };
 
+// Row budgets, in bytes per row of each SoA table (psp103: 27,760
+// instructions, 23,859 values, 4,234 blocks). A new column has to move one of
+// these on purpose; docs/seams/s1-ircore.md has the narrower shapes proposed.
+comptime {
+    assert(std.MultiArrayList(InstRow).capacityInBytes(1) == 29);
+    assert(std.MultiArrayList(ValueRow).capacityInBytes(1) == 9);
+    assert(std.MultiArrayList(BlockRow).capacityInBytes(1) == 8);
+    assert(@sizeOf(PhiPair) == 8); // two `extra` words
+}
+
 /// The lowered module's name.
 name: []const u8 = "",
 /// IEEE 1364 §19.1 (via §10.1): the module was declared inside a
@@ -320,6 +330,19 @@ pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
     self.iconst_map.deinit(gpa);
     self.alias.deinit(gpa);
     self.* = .{ .name = self.name };
+}
+
+/// Gives the instruction, value and extra tables room for at least `insts`,
+/// `values` and `extra` rows, so a builder that knows its size up front
+/// grows each table once. A count below the current capacity does nothing.
+/// Why it pays: `insts` and `defs` are MultiArrayLists, and each regrowth
+/// copies every column into a fresh block while the old one is still
+/// mapped. Invalidates pointers into the tables (`instData` slices).
+pub fn reserve(self: *Mir, gpa: std.mem.Allocator, insts: u32, values: u32, extra: u32) !void {
+    if (insts > self.insts.capacity) try self.insts.setCapacity(gpa, insts);
+    if (values > self.defs.capacity) try self.defs.setCapacity(gpa, values);
+    try self.alias.ensureTotalCapacityPrecise(gpa, values);
+    try self.extra.ensureTotalCapacityPrecise(gpa, extra);
 }
 
 // ---------------------------------------------------------------- values ----
