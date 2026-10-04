@@ -348,8 +348,16 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     }
     var body: std.ArrayList(Ast.StmtId) = .empty;
     var stmt_at: u32 = undefined;
-    while (!(self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) and self.peek() != .eof) : (std.debug.assert(self.pos > stmt_at)) {
+    while (!subroutineCloser(self, end_word, self.pos)) : (std.debug.assert(self.pos > stmt_at)) {
         stmt_at = self.pos;
+        // §2.9: a prefix followed by the closer prefixes nothing (#66), as
+        // the declaration loop above reports for one read there (#50).
+        const past = self.pastAttributes();
+        if (past != stmt_at and subroutineCloser(self, end_word, past)) {
+            try self.skipAttributes();
+            try self.attributesEnd(stmt_at);
+            break;
+        }
         try body.append(self.arena, try parse_stmt.parseStmt(self));
     }
     if (self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) {
@@ -371,6 +379,12 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         .body = body_id,
         .main_tok = main_tok,
     });
+}
+
+/// Whether token `i` closes a digital function or task body: `endfunction`,
+/// `end_word`, or end of file.
+fn subroutineCloser(self: *const Parser, end_word: []const u8, i: u32) bool {
+    return self.tags[i] == .eof or self.tags[i] == .kw_endfunction or self.reservedIs(i, end_word);
 }
 
 /// One A.2.8 `block_item_declaration` of variables (`reg`, `integer`,

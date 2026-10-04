@@ -498,6 +498,21 @@ pub const Parser = struct {
         if (self.pos != from) try self.report(from, .E0207, "found {s}: an attribute instance prefixes nothing", .{self.found(self.pos)});
     }
 
+    /// The token past the attribute instances at the cursor, found by
+    /// scanning to each `*)` without parsing, so nothing is read, bound or
+    /// reported. A statement loop asks it whether a prefix runs into the
+    /// loop's closer, which `parseStmt` would otherwise take for the start of
+    /// a statement (#66). Cost: the instances' tokens.
+    pub fn pastAttributes(self: *const Parser) u32 {
+        var i = self.pos;
+        while (self.tags[i] == .attr_open) {
+            while (self.tags[i] != .attr_close and self.tags[i] != .eof) i += 1;
+            if (self.tags[i] == .eof) break;
+            i += 1;
+        }
+        return i;
+    }
+
     /// The one writer of `file.attributes`' rows, keeping `attr_at` beside it.
     /// Asserts a declaration owner is not past the cursor, which is what lets
     /// `bindingsFrom` skip every row appended before the cursor reached it.

@@ -1355,10 +1355,11 @@ test "Annex A text the parser used to take is refused by its production; the nei
     try std.testing.expectEqual(diag.Code.E0289, call.code(0));
 }
 
-test "an attribute instance before an item list's closer prefixes nothing: E0207 in every list (#49, #50)" {
+test "an attribute instance before an item list's closer prefixes nothing: E0207 in every list (#49, #50, #66)" {
     // §2.9: an attribute_instance is "a prefix attached to a declaration, a
     // module item, a statement, or a port connection". Each bad source puts
-    // one where its list closes; the good one has it prefix the item before.
+    // one where its list closes, so it is refused once, by E0207 and not as
+    // the start of a statement (E0209); the good one has it prefix an item.
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1374,12 +1375,23 @@ test "an attribute instance before an item list's closer prefixes nothing: E0207
         // The good source's attribute prefixes the body's first statement.
         .{ .bad = "module m; function integer f(input x); (* a *) endfunction endmodule", .good = "module m; function integer f(input x); (* a *) f = x; endfunction endmodule", .digital = true },
         .{ .bad = "module m; task t; input x; (* a *) endtask endmodule", .good = "module m; task t; input x; (* a *) $display(x); endtask endmodule", .digital = true },
+        // #66: statement blocks. Before the closer of an analog or digital
+        // `begin`, a `fork`, or a subroutine body after its statement.
+        .{ .bad = head ++ "analog begin (* a *) end endmodule", .good = head ++ "analog begin (* a *) I(p) <+ V(p); end endmodule" },
+        .{ .bad = head ++ "analog begin I(p) <+ V(p); (* a *) end endmodule", .good = head ++ "analog begin I(p) <+ V(p); (* a *) I(p) <+ V(p); end endmodule" },
+        .{ .bad = "module m; reg r; initial begin r = 0; (* a *) end endmodule", .good = "module m; reg r; initial begin (* a *) r = 0; end endmodule", .digital = true },
+        .{ .bad = "module m; reg r; initial fork r = 0; (* a *) join endmodule", .good = "module m; reg r; initial fork (* a *) r = 0; join endmodule", .digital = true },
+        .{ .bad = "module m; function integer f(input x); f = x; (* a *) endfunction endmodule", .good = "module m; function integer f(input x); (* a *) f = x; endfunction endmodule", .digital = true },
+        .{ .bad = "module m; task t; input x; $display(x); (* a *) endtask endmodule", .good = "module m; task t; input x; (* a *) $display(x); endtask endmodule", .digital = true },
     };
     for (cases) |c| {
         const bad = if (c.digital) try parseDigitalForTest(arena, c.bad) else try parseForTest(arena, c.bad);
-        var e0207 = false;
-        for (0..bad.count()) |i| e0207 = e0207 or bad.code(i) == .E0207;
-        try std.testing.expect(e0207);
+        var e0207: u32 = 0;
+        for (0..bad.count()) |i| {
+            if (bad.code(i) == .E0207) e0207 += 1;
+            try std.testing.expect(bad.code(i) != .E0209);
+        }
+        try std.testing.expectEqual(@as(u32, 1), e0207);
         const good = if (c.digital) try parseDigitalForTest(arena, c.good) else try parseForTest(arena, c.good);
         for (0..good.count()) |i| try std.testing.expect(good.bag.at(i).severity != .err);
     }

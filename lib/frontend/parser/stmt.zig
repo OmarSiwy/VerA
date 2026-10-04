@@ -296,8 +296,16 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     defer self.scratch_stmts.shrinkRetainingCapacity(mark);
     var before: u32 = undefined;
     // A statement, or `recoverStatement`'s one token at least.
-    while (!(if (parallel) self.reservedIs(self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) : (std.debug.assert(self.pos > before)) {
+    while (!blockCloser(self, parallel, self.pos)) : (std.debug.assert(self.pos > before)) {
         before = self.pos;
+        // §2.9: an attribute instance is "a prefix attached to" a statement;
+        // one followed by the closer prefixes nothing (#66).
+        const past = self.pastAttributes();
+        if (past != before and blockCloser(self, parallel, past)) {
+            try self.skipAttributes();
+            try self.attributesEnd(before);
+            break;
+        }
         // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
         // has no null alternative, so a stray `;` here is E0219. An
         // `analog_event_seq_block`'s `analog_event_statement` has one (A.6.4).
@@ -319,6 +327,12 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     blk.events = events.items;
     blk.body = try self.arena.dupe(Ast.StmtId, self.scratch_stmts.items[mark..]);
     return self.file.addStmt(self.arena, .{ .block = blk }, tok);
+}
+
+/// Whether token `i` closes a `parseSeqBlock` body: `join` for a `fork`,
+/// `end` otherwise, or end of file.
+fn blockCloser(self: *const Parser, parallel: bool, i: u32) bool {
+    return self.tags[i] == .eof or (if (parallel) self.reservedIs(i, "join") else self.tags[i] == .kw_end);
 }
 
 /// Parses a §5.8.3 / A.6.7 case statement of `kind`, or, when `gen` is
