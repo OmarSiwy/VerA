@@ -491,6 +491,8 @@ pub const Kernel = enum {
     host_reltol,
     host_abstol,
     host_vntol,
+    host_gmin,
+    host_source_scale,
     /// §9.17.1 `$discontinuity(-1)`: `reject_iteration` is a live root and the
     /// device carries the rejection flag.
     reject_iteration,

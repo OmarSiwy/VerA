@@ -2443,7 +2443,7 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
         \\  electrical p, n;
         \\  parameter real base = 3.0;
         \\  parameter real warm = 2.0 * base;
-        \\  parameter real hot  = $simparam("gmin", 1e-12);
+        \\  parameter real hot  = $simparam("shrink", 1e-12);
         \\  analog I(p, n) <+ V(p, n) * (warm + hot);
         \\endmodule
     , &h);

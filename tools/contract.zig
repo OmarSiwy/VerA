@@ -1608,6 +1608,8 @@ const host_model_fields = [_][]const u8{
     "reltol__", // $simparam("reltol"); 1e-3
     "abstol__", // $simparam("abstol"), amperes; 1e-12
     "vntol__", // $simparam("vntol"), volts; 1e-6
+    "gmin__", // $simparam("gmin"), siemens; 1e-12. Gmin stepping writes it.
+    "source_scale__", // $simparam("sourceScaleFactor"); 1. Source stepping writes it.
 };
 
 /// §4.6.4 one noise generator: position k of `noise_gens` is a generator of
