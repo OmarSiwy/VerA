@@ -7,7 +7,6 @@
 // port joins are still a wand and a wor, so the warning is owed, merged or
 // not. y has one driver, a, so w[0] = a = 1 either way.
 // digital-runner: warning net type
-//! xfail no Table 12-1 warning when the external net is reached through a bit-select
 //! inherited IEEE 1364-2005 12.3.10
 `timescale 1ns/1ns
 module b_12_3_10_sel_m(a, y);
