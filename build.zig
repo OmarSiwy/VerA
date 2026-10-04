@@ -125,9 +125,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "vera", .module = byName(mods, "vera") },
-            // Vendored under deps/; no `module_specs` row uses it, so an
-            // embedder of the compiler does not take it.
-            .{ .name = "stdpp", .module = b.dependency("stdpp", .{}).module("stdpp") },
         },
     });
     suite_mod.addOptions("suite_options", o);
