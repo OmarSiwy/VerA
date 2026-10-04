@@ -74,16 +74,16 @@ correction.
 | VD-030 | VAMS 9.16 | Run-time `$simprobe` names should resolve; until then, refuse by name, never fall back silently | yes |
 | VD-031 | VAMS 9.21, 9.21.1 | Refuse a duplicate abscissa only when the conflict is proven; otherwise check at capture | no |
 | VD-032 | VAMS 3.7; IEEE 1364-2005 9.7.2, 6.1.2 | A real "change" is IEEE 754 `!=`; the new bits are still stored | yes |
-| VD-033 | VAMS 3.7; IEEE 1364-2005 11.3 | `m04_01`'s time-0 read of a declaration-assigned wreal is a race; sample after `#0` | yes |
+| VD-033 | VAMS 3.7; IEEE 1364-2005 11.3 | `m04_01`'s time-0 read of a declaration-assigned wreal is a race; sample after `#0` | DONE (4b6c96d8) |
 | VD-034 | VAMS 5.10 Syntax 5-13, 5.10.5, 7.3.6.2 | `posedge`/`negedge` on a continuous operand is E0704; use `cross` | no |
 | VD-035 | VAMS 3.3 vs A.2.1.3/A.2.8 | A module-level `string` variable is legal (3.3 governs) | no |
 | VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | yes |
-| VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | yes |
-| VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | yes |
+| VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | DONE (4b6c96d8) |
+| VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | DONE (4b6c96d8) |
 | VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | yes |
 | VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | yes |
 | VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | yes |
-| VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | yes |
+| VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | DONE (4b6c96d8) |
 | VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | yes |
 | VD-044 | IEEE 1364-2005 26.2.4 vs 27.34.2 / VAMS 12.33.2 | Startup routines may only register; VerA refuses other routines then; fixtures walk at cbEndOfCompile | yes |
 | VD-045 | IEEE 1364-2005 26.3.5 vs Annex G | `vpiIsProtected` = `vpiProtected` (10), FALSE on every object | yes |
@@ -432,6 +432,7 @@ correction.
 - **Options**: (a) keep the fixture's time-0 `2.5` expectation; (b) sample after `#0` (inactive region), when every active continuous-assignment update has been applied.
 - **Decision**: `DECIDED:` (b). The fixture as written fails a conforming tool that runs the `initial` first and prints `0`. The undriven-wreal and plain-wire lines have no race and stay at time 0.
 - **VerA today**: `tests/fixtures/digital/m04_01_wreal_undriven_zero.v` prints `decl_assigned_wreal_at_time_zero 2.5` from the first statement of the `initial`, with no delay, and VerA happens to order it after the assignment. CHANGE NEEDED (fixture only): put `#0;` before the `seeded` time-0 display (the two race-free lines may stay before it), and record the race in the header. Semver: patch (test only).
+- **Status**: DONE (4b6c96d8). `#0;` precedes the `seeded` display in `tests/fixtures/digital/m04_01_wreal_undriven_zero.v`; header records the race. Transcript unchanged.
 - **Measure impact**: none (a `test-devices` transcript; the expected output text is unchanged).
 
 ### VD-034: `posedge V(p)` in an analog event control
@@ -470,6 +471,7 @@ correction.
 - **Options**: (a) all x for every non-logical operator, bitwise and conditional included; (b) arithmetic, relational and resizing operations get all x, while bitwise, reduction and conditional operators keep their per-bit tables.
 - **Decision**: `DECIDED:` (b). The specific clauses (5.1.10's tables, 5.1.13's Table 5-21) govern their operators. 5.5.4 sits in 5.5 "Signed expressions", whose subject is evaluating arithmetic in a signed type. Its first two sentences cover resizing, so its third sentence covers arithmetic on that resized value. A bitwise operator works on bits, and signedness does not change those bits. Under (a), `0 & x` would give a different answer depending only on whether the operand was declared signed, and nothing else in Clause 5 depends on signedness that way. Icarus/VCS behaviour: not established.
 - **VerA today**: Bitwise operators use the bit tables with no signedness check (`src/sim/digital/evaluate.zig:584`). An x/z condition combines both arms through Table 5-21 (`evaluate.zig:602`). Arithmetic gives all x (`ieee1364/05_expressions/b_5_5_4_signed_unknown_bits.v`, `audit_expr_unknown_extension.v`). No fixture pins a signed bitwise or conditional case. `CHANGE NEEDED:` add a positive `.v` fixture, for example `4'sb10x1 & 4'sb0000` -> `0000`, `4'sb10x1 | 4'sb0000` -> `10x1`, and `1'bx ? 4'sb10x1 : 4'sb10x1` -> `10x1`. Fixture only, so a patch.
+- **Status**: DONE (4b6c96d8). `tests/fixtures/ieee1364/05_expressions/b_5_5_4_signed_unknown_bitwise.v` pins `&`, `|`, `^`, `~` and an x-condition `?:` on `4'sb10x1`. VerA agrees with the decision.
 - **Measure impact**: B: adds positive evidence to 5.5.4 (already `no-prohibition`), so no verdict change. A: +1 fixture.
 
 ### VD-038: Delay rule for a singleton `[0:0]` vector continuous assignment
@@ -479,6 +481,7 @@ correction.
 - **Options**: (a) the declaration decides: any range makes it a vector; (b) the width decides: 1 bit takes the scalar (gate) rule.
 - **Decision**: `DECIDED:` (b), width. 4.3 defines a vector by being "Multibit", and declaring a range is only how multibit nets are written. IEEE 26.6.5 (Ports, detail c) uses the same test: "vpiScalar and vpiVector shall indicate if the port is 1 bit or more than 1 bit". A 1-bit net has exactly one bit to which gate rise/fall/x/z semantics apply, so the vector rule's coarse "all other cases rising" approximation is not needed.
 - **VerA today**: The driver metadata records width only, and width 1 keeps the scalar rule. This is already the decision (`conformance-vector-delay-fix.md` at 8b1514d4: "width1 keeps the scalar rule"). It is uncredited because no fixture covers `[0:0]`. `CHANGE NEEDED:` add a positive fixture with `wire [0:0] w; assign #(7,5,2) w = r;` where 0 -> x waits min = 2, next to a `wire [1:0]` neighbour where the same transition waits 7. Fixture only, so a patch.
+- **Status**: DONE (4b6c96d8). `tests/fixtures/ieee1364/06_assignments/b_6_1_3_one_bit_range_delay.v`: `[0:0]` goes to x after min = 2, the `[1:0]` neighbour after rising = 7. VerA agrees.
 - **Measure impact**: B: 6.1.3 gains a pinned case. A: +1 fixture.
 
 ### VD-039: A `config` declaration inside a lib.map file
@@ -515,6 +518,7 @@ correction.
 - **Options**: (a) the numbers rule: 5..7 (pull, strong, supply) is the strong range and 1..4 weak; (b) the name rules: large (4) joins the strong range.
 - **Decision**: `DECIDED:` (a). The boundary is given numerically twice ("7 to 5", "4 to 1"), and the label is a slip. 18.4.3.2 also limits drivers to "primitives, continuous assignments, and procedural continuous assignments", which drive only the 7.9 driving strengths (supply, strong, pull, weak). large is a trireg charge strength (Table 7-7) and can never appear as a driver's strength, so the name reading has nothing to apply to.
 - **VerA today**: `src/sim/digital/evcd.zig:392-393` uses `>= 5`, the decision. The unit test `evcd.zig:426` covers only strong (6) against weak (3), and no case sits on the 5/4 boundary. `CHANGE NEEDED:` add a pull-vs-weak case to that test (`portState(.inout, pull0, weak0)` -> `d`) or to `ieee1364/18_vcd/b_18_4_3_port_value_changes.v`. Test only, so a patch.
+- **Status**: DONE (4b6c96d8). `tests/fixtures/ieee1364/18_vcd/b_18_4_3_port_value_changes.v` gains a #6 step: weak 0 in, pull 0 out -> `pl 5 0`. VerA agrees.
 - **Measure impact**: B: 18.4.3.2 boundary pinned. Otherwise none.
 
 ### VD-043: Does `` `resetall `` reset `` `begin_keywords ``?

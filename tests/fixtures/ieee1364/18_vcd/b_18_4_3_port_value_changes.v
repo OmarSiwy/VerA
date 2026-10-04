@@ -47,6 +47,11 @@
 //   #4 u releases io; the fixture's weak 0 alone: an input low of weak
 //      strength -> pD 3 0 <3.
 //   #5 the fixture releases io too: both three-stated -> pf 0 0 <3.
+//   #6 u drives io (pull0, pull1) to 0, the fixture weak 0 again. Pull is
+//      5, inside "7 to 5" by number though the parenthesis says "(large)"
+//      (docs/Vague_Decisions.md VD-042: the numbers rule): input weak,
+//      output strong range -> pl 5 0 <3. Were pull in the weak range, both
+//      sides weak would give p0 5 0 <3.
 //! inherited IEEE 1364-2005 18.4.3 18.4.3.1 18.4.3.2 18.4.4
 // native-required
 `timescale 1ns/1ns
@@ -54,9 +59,10 @@ module b_18_4_3_dev(a, b, y, io);
   input a, b;
   output y;
   inout io;
-  reg den, dval;
+  reg den, dval, pen;
   assign y = a | b;
   assign io = den ? dval : 1'bz;
+  assign (pull0, pull1) io = pen ? dval : 1'bz;
 endmodule
 
 module b_18_4_3_port_value_changes;
@@ -119,6 +125,7 @@ module b_18_4_3_port_value_changes;
     wen = 1'b0;
     u.dval = 1'b1;
     u.den = 1'b1;
+    u.pen = 1'b0;
     $dumpports(b_18_4_3_port_value_changes.u, "b_18_4_3_values.evcd");
     #1 a = 1'bx;
     #1 b = 1'b0;
@@ -128,6 +135,8 @@ module b_18_4_3_port_value_changes;
        u.dval = 1'b0;
     #1 u.den = 1'b0;
     #1 wen = 1'b0;
+    #1 wen = 1'b1;
+       u.pen = 1'b1;
     #1 $dumpportsflush("b_18_4_3_values.evcd");
     fd = $fopen("b_18_4_3_values.evcd", "r");
     started = 0;
