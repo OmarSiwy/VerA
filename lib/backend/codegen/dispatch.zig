@@ -260,11 +260,17 @@ fn emitPattern(self: *Gen, any_q: bool) Error!void {
 /// `dpat` is folded, so a reached row lists every column.
 fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
     const n = self.names.n_u;
-    var slots: std.ArrayList(u32) = .empty;
+    // Counted first: one slot per set column bit, or a whole row when folded.
+    var n_slots: usize = 0;
+    for (self.jac.dpat) |m| n_slots += if (n > 64)
+        (if (m != 0) n else 0)
+    else if (n == 64) @popCount(m) else @popCount(m & ((@as(u64, 1) << @intCast(n)) - 1));
+    var slots: std.ArrayList(u32) = try .initCapacity(self.arena, n_slots);
     for (self.jac.dpat, 0..) |m, r| for (0..n) |c| {
         const hit = if (n > 64) m != 0 else (m >> @intCast(c)) & 1 != 0;
-        if (hit) try slots.append(self.arena, @intCast(r * n + c));
+        if (hit) slots.appendAssumeCapacity(@intCast(r * n + c));
     };
+    std.debug.assert(slots.items.len == n_slots);
     if (slots.items.len == 0) return;
     try self.w(
         \\/// §4.5.7/§4.5.11/§4.5.12 the slots `row * n_u + col` whose small-signal

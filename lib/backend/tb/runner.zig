@@ -37,12 +37,20 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
 
 /// The `U` indices of the §4.5.2 operator unknowns (`Directives.op_states`).
 pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
-    var out: std.ArrayList(u16) = .empty;
-    for (lowered.nodes.items(.kind), 0..) |k, i| switch (k) {
-        .op_state => try out.append(arena, @intCast(i)),
+    const kinds = lowered.nodes.items(.kind);
+    var n: usize = 0;
+    for (kinds) |k| n += @intFromBool(k == .op_state);
+    const out = try arena.alloc(u16, n);
+    n = 0;
+    for (kinds, 0..) |k, i| switch (k) {
+        .op_state => {
+            out[n] = @intCast(i);
+            n += 1;
+        },
         .net, .branch_flow, .port_flow => {},
     };
-    return out.items;
+    std.debug.assert(n == out.len);
+    return out;
 }
 
 /// Returns the mixed-signal plan of a compile, or null for a module with no
