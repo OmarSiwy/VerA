@@ -26,7 +26,7 @@ jobs:
       # v1.0.0 as four measures, and a release that misreports one of them is
       # worse than no release.
       - name: Verify CHANGELOG matches the tree
-        run: tools/conformance.sh --check "${GITHUB_REF_NAME}"
+        run: python3 tools/conformance.py --check "${GITHUB_REF_NAME}"
 
       # Zig cross-compiles, so this is a loop on one runner and not a job matrix
       # — five runners would re-run `--check` five times to produce one release.

@@ -85,7 +85,7 @@ Not for the large models, and the measurement says why:
 
 ARPice `16781d6e` models (same SHA-256 as BUILD-SPEED.md for the first five):
 resistor, diode, mos1, bsim4va, psp103, `native/coupled_ltra.va`,
-`native/txl.va`; VerA `tests/vdev/v_inv.v`, `v_count.v`. Device trees were
+`native/txl.va`; VerA `tests/vdev/v_inv.v`, `v_count.v` (now in `tests/fixtures/ch07_mixed_signal/`). Device trees were
 emitted once by `vera --emit-so` (ReleaseFast VerA) and then rebuilt by hand so
 each lever touches only the Zig side. Emitted Zig: psp103 1.44 MB (units:
 `core` 279 KB, `core__noise` 205 KB, `core__state` 42 KB, `device.zig` 917 KB
@@ -374,7 +374,8 @@ build fails keeps the `.va`-attributed message.
   time once setup is in its own object (setup LLVM 1.6-1.8 s); the 2026-09-23
   "chunking 2.8x slower" note was about `eval`.
 * Native `.v` executable, 128-bit gate ripple adder (`tools/bench-v/
-  ripple_adder.sh 128 200 gates`, 640 KB `.tb.zig`, already `-fstrip`):
+  ripple_adder.sh 128 200 gates`, now `ripple_adder(128, 200, gates=True)`
+  in `tools/conformance.py`, 640 KB `.tb.zig`, already `-fstrip`):
   sema 4.3 s (the 900 `settleN` functions, ~70-130 ms each), LLVM 32 s (85%;
   ISel 4.2, InstCombine 3.3, SROA 2.6 s). `--state=auto` 61.4 Gi, `--state=4`
   52.0 Gi, `--state=2` 45.5 Gi: the second phase adds 18%, not 2x as

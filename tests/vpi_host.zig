@@ -1,6 +1,6 @@
 //! The simulator half of `zig build test-vpi`: a design plus a C application
 //! (its `vlog_startup_routines`, LRM §12.33.2) -> the application's exit code.
-//! No argument elaborates tests/vpi_design.va; `<design.va> <app>` runs the
+//! No argument elaborates tests/fixtures/ch11_vpi/vpi_design.va; `<design.va> <app>` runs the
 //! analog analyses the app's banner asks for; `<design.v>` runs the digital
 //! engine with time and value-change callbacks. Applications are real C against
 //! src/vpi/vpi_user.h, so the ABI itself is under test.
@@ -32,7 +32,7 @@ fn host(design: ?[]const u8, app: ?[]const u8) !u8 {
     // The design is compiled at `.lint`: P01 models DECLARATIONS, so nothing
     // below stage 5 is needed and no `zig` child has to be spawned to run the
     // acceptance test.
-    var res = vera.compileSource(std.heap.page_allocator, @embedFile("vpi_design.va"), .lint) catch |err| {
+    var res = vera.compileSource(std.heap.page_allocator, @embedFile("fixtures/ch11_vpi/vpi_design.va"), .lint) catch |err| {
         std.debug.print("vpi_host: the design did not compile: {s}\n", .{@errorName(err)});
         return 1;
     };

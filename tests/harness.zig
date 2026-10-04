@@ -413,7 +413,7 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
     };
     defer dir.close(io);
 
-    // `fixtureExt` reads each golden-less `.v` whole to look for a directive.
+    // `fixtureExt` reads each `.va` and golden-less `.v` whole to look for a directive.
     // Those reads are dead once it answers, so they go to a scratch arena
     // reset per file instead of living in `arena` for the whole run.
     var scratch: std.heap.ArenaAllocator = .init(arena);
@@ -442,8 +442,11 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
 /// Is this path a fixture for the accept/reject walk, and if so what extension
 /// does its stem end at? `null` means "not this walk's business".
 ///
-/// `.va` is unconditional. `.v` is the awkward one, because three different
-/// things share that extension in `tests/fixtures/{ieee1364,digital}/`:
+/// `.va` is a fixture when it carries a directive: a `.va` with none is a
+/// design a host test loads (`build.zig`'s `host_tests`, the VPI walk's
+/// `vpi_design.va`), the same rule as item 3 below. `.v` is the awkward one,
+/// because three different things share that extension in
+/// `tests/fixtures/{ieee1364,digital}/`:
 ///
 ///   1. Files with a `<stem>.expected.txt` beside them belong to `zig build
 ///      test-devices` (`harness/devices.zig`'s `digitalCases`), not here.
@@ -459,7 +462,10 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
 ///
 /// The whole file is scanned with `tb.parse`'s line rule (see `hasDirective`).
 fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[]const u8 {
-    if (std.mem.endsWith(u8, rel, ".va")) return ".va";
+    if (std.mem.endsWith(u8, rel, ".va")) {
+        const source = dir.readFileAlloc(io, rel, arena, .limited(1 << 20)) catch return null;
+        return if (hasDirective(source)) ".va" else null;
+    }
     if (!std.mem.endsWith(u8, rel, ".v")) return null;
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -705,10 +711,13 @@ test "digital opt-in is excluded from analog fixture collection" {
     try tmp.dir.writeFile(io, .{ .sub_path = "analog.va", .data = marked });
     try tmp.dir.writeFile(io, .{ .sub_path = "positive.v", .data = "//! lrm 9.10\n" });
     try tmp.dir.writeFile(io, .{ .sub_path = "positive.expected.txt", .data = "ok\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "host_design.va", .data = "module m; endmodule\n" });
     try std.testing.expect(fixtureExt(arena.allocator(), io, tmp.dir, "negative.v") == null);
     try std.testing.expectEqualStrings(".v", fixtureExt(arena.allocator(), io, tmp.dir, "legacy.v").?);
     try std.testing.expectEqualStrings(".va", fixtureExt(arena.allocator(), io, tmp.dir, "analog.va").?);
     try std.testing.expect(fixtureExt(arena.allocator(), io, tmp.dir, "positive.v") == null);
+    // A `.va` a host test loads carries no directive and is not collected.
+    try std.testing.expect(fixtureExt(arena.allocator(), io, tmp.dir, "host_design.va") == null);
 }
 
 // The sub-files hold their own tests; Zig collects them only through a reference.

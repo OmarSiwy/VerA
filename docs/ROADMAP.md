@@ -116,7 +116,7 @@ its derivation in its header and is reviewed by someone who opened the clause.
 
 Every version is a published tag, made with the ritual in `AGENTS.md` §3.
 `publish.yaml` re-measures on a clean runner and refuses a tag whose
-`CHANGELOG.md` entry disagrees with the tree. `tools/conformance.sh` writes each
+`CHANGELOG.md` entry disagrees with the tree. `tools/conformance.py` writes each
 entry's numbers; this table never carries them.
 
 Semver, applied literally. A **minor** (`0.N.0`) changes something a consumer can
@@ -133,9 +133,9 @@ change ships as a patch of the minor before it.
 
 | Version | Content | Closes | Gate |
 |---|---|---|---|
-| **v0.9.0** | The current tree (§3.2) | the old ladder, except what §5 lists | `tools/conformance.sh --changelog v0.9.0`; every `build.zig` step green |
+| **v0.9.0** | The current tree (§3.2) | the old ladder, except what §5 lists | `tools/conformance.py --changelog v0.9.0`; every `build.zig` step green |
 | v0.9.1 | Hygiene: the §5.5 fixture headers, `CLAUSE-AUDIT.md` refreshed (§5.8), the passing fixtures on branch `audit-wip/ch5`, the rollback host wired or deleted, CI builds amdgcn beside nvptx | §5.4 harness rows, §5.5, §5.8 | `--strict` name list unchanged except added fixtures; goldens byte-identical |
-| v0.10.0 | Native `.v`: the second static-schedule fork fix, then build time | §5.3 native rows | `test-1364 -- --native` in every mode; `tools/vs-verilator.sh` |
+| v0.10.0 | Native `.v`: the second static-schedule fork fix, then build time | §5.3 native rows | `test-1364 -- --native` in every mode; `tools/conformance.py verilator` |
 | v0.11.0 | Measure B scoped: the out-of-scope 1364 chapters classified and refused with named diagnostics (§1 B) | the classification half of §1 B | `test-1364 -- --coverage`: no unclassified clause outside the §1 B scope |
 | v0.12.0 | Measure A to zero: the AMS and digital XFAILs implemented, and the AMS rows of §5.2 and §5.3 | §1 A; §5.2, §5.3 AMS rows | `--strict` exits 0 |
 | v0.13.0 | IEEE 1364 language gaps: net arrays, upward hierarchical references, continuous assignment in a generate block, then §5.2 and §5.3's IEEE rows | §5.2, §5.3 IEEE rows | `test-1364`, `--strict` |
@@ -249,7 +249,7 @@ These need a call, not another agent pass.
     keeps them. Nothing decides or pins it. (`a03_SPEC.md:170-177`.)
 11. **§3.4.5 vs §6.3.3: is `#(.locked())` on a localparam an error?** VerA gives
     E0907. The only record is
-    `tools/parameter-audit-controls/empty_localparam_unresolved.va`.
+    `tools/parameter-audit-controls/empty_localparam_unresolved.va` at `be878e6e`.
     (`conformance-empty-parameter-fix.md:184-191`.)
 12. **§E.1.2: which SPICE flavour VerA claims** (`PARAMS:`, `{expr}`, nested
     `.SUBCKT`). Only parse limits are recorded, in `lib/frontend/spice_cards.zig`.
@@ -448,7 +448,7 @@ Settle each before a fixture asserts one side.
 - IEEE 18.4.3.2: strength 5 is "large" in the prose and "pull" in the list.
   (`conformance-vcd-review.md:137`.)
 - IEEE 19.6, 19.11: does `` `resetall `` reset `` `begin_keywords ``? (`d10_SPEC.md:192-194`.)
-- IEEE 26.2.4 vs AMS 12.33.2: `tests/vpi_app.c` walks the design inside
+- IEEE 26.2.4 vs AMS 12.33.2: `tests/fixtures/ch11_vpi/vpi_app.c` walks the design inside
   `vlog_startup_routines`; IEEE allows only registration there.
   (`conformance-ieee-vpi-interface-review.md:24-31`.)
 - IEEE 26.3.5 vs Annex G: `vpiIsProtected` or `vpiProtected`. Neither is
