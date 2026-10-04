@@ -351,6 +351,15 @@ pub fn parseCase(self: *Parser, kind: Ast.CaseKind, gen: ?*parse_module.Body) Er
     var arm_at: u32 = undefined;
     while (self.peek() != .kw_endcase and self.peek() != .eof) : (std.debug.assert(self.pos > arm_at)) {
         arm_at = self.pos;
+        // A.6.7 gives a case item no attribute prefix (its statement_or_null
+        // carries one); an instance before an item is still read and dropped,
+        // but one that runs into `endcase` prefixes nothing: §2.9, E0207 (#69).
+        const past = self.pastAttributes();
+        if (past != arm_at and (self.tags[past] == .kw_endcase or self.tags[past] == .eof)) {
+            try self.skipAttributes();
+            try self.attributesEnd(arm_at);
+            break;
+        }
         try self.skipAttributes();
         const mark = self.scratch_exprs.items.len;
         defer self.scratch_exprs.shrinkRetainingCapacity(mark);

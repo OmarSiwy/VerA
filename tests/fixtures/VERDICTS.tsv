@@ -524,6 +524,8 @@ pass	ch02_lexical/73_vertical_tab_is_not_white_space.va
 pass	ch02_lexical/74_standard_attributes_on_declarations.va
 pass	ch02_lexical/75_attributes_on_module_items.va
 pass	ch02_lexical/analog_block_attribute_before_end_rejected.va
+pass	ch02_lexical/analog_case_attribute_before_endcase_rejected.va
+pass	ch02_lexical/analog_case_item_statement_attribute.va
 pass	ch02_lexical/attribute_keyword_name_escaped.va
 pass	ch02_lexical/attribute_keyword_name_rejected.va
 pass	ch02_lexical/audit_comment_nonnest_legal_neighbor.va

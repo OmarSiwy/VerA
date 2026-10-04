@@ -1355,7 +1355,7 @@ test "Annex A text the parser used to take is refused by its production; the nei
     try std.testing.expectEqual(diag.Code.E0289, call.code(0));
 }
 
-test "an attribute instance before an item list's closer prefixes nothing: E0207 in every list (#49, #50, #66)" {
+test "an attribute instance before an item list's closer prefixes nothing: E0207 in every list (#49, #50, #66, #69)" {
     // §2.9: an attribute_instance is "a prefix attached to a declaration, a
     // module item, a statement, or a port connection". Each bad source puts
     // one where its list closes, so it is refused once, by E0207 and not as
@@ -1383,6 +1383,13 @@ test "an attribute instance before an item list's closer prefixes nothing: E0207
         .{ .bad = "module m; reg r; initial fork r = 0; (* a *) join endmodule", .good = "module m; reg r; initial fork (* a *) r = 0; join endmodule", .digital = true },
         .{ .bad = "module m; function integer f(input x); f = x; (* a *) endfunction endmodule", .good = "module m; function integer f(input x); (* a *) f = x; endfunction endmodule", .digital = true },
         .{ .bad = "module m; task t; input x; $display(x); (* a *) endtask endmodule", .good = "module m; task t; input x; (* a *) $display(x); endtask endmodule", .digital = true },
+        // #69: a case statement's arm list, analog and digital, all three
+        // kinds. The good source's attribute prefixes the arm's statement
+        // (A.6.7 `statement_or_null`).
+        .{ .bad = head ++ "analog case (1) 1: I(p) <+ V(p); (* a *) endcase endmodule", .good = head ++ "analog case (1) 1: (* a *) I(p) <+ V(p); endcase endmodule" },
+        .{ .bad = head ++ "analog begin casex (1) default: I(p) <+ V(p); (* a *) endcase end endmodule", .good = head ++ "analog begin casex (1) default: (* a *) I(p) <+ V(p); endcase end endmodule" },
+        .{ .bad = "module m; reg r; initial case (r) 1: r = 0; (* a *) endcase endmodule", .good = "module m; reg r; initial case (r) 1: (* a *) r = 0; endcase endmodule", .digital = true },
+        .{ .bad = "module m; reg r; initial casez (r) 1'b?: r = 0; (* a *) endcase endmodule", .good = "module m; reg r; initial casez (r) 1'b?: (* a *) r = 0; endcase endmodule", .digital = true },
     };
     for (cases) |c| {
         const bad = if (c.digital) try parseDigitalForTest(arena, c.bad) else try parseForTest(arena, c.bad);
