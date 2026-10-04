@@ -7,7 +7,9 @@
 //! 1-3 of `solveLadder` (ngspice cktop.c's `dynamic_gmin` for rung 2), with
 //! `newtonRun`'s budgets: itl1 iterations for a full solve, itl2 for one
 //! stepping solve, INITFIX on a solve from the cold start. Adapted: one
-//! device (`circuit.Circuit`), no `.nodeset`/`.ic` holds. Rung 2's gmin sits
+//! device (`circuit.Circuit`), no `.ic` holds, and a §3.6.3.2 nodeset
+//! (`u_nodeset`) is part of the cold start, never a clamp (VD-117). Rung
+//! 2's gmin sits
 //! on every voltage row's diagonal (`converger.Options.gmin`) rather than on
 //! `gminStamps`' Sparse preorder twins; the solve that ends the rung carries
 //! no gmin, so the placement moves no answer. Rung 3 scales the sources
@@ -22,7 +24,8 @@
 //!
 //! In: a `Circuit` and its kind of static analysis; out: the operating point
 //! in `x`, committed. LRM: §4.6.1 (the analysis kind), §5.10.2
-//! (`initial_step`), §9.15 (the homotopy knobs), §9.17.3 (cold-start seeds).
+//! (`initial_step`), §9.15 (the homotopy knobs), §9.17.3 (cold-start seeds),
+//! §3.6.3.2 (nodesets).
 const std = @import("std");
 const contract = @import("contract");
 const converger = @import("converger.zig");
@@ -39,15 +42,25 @@ const gmin_target: f64 = 1e-12;
 /// The gmin rung starts at this over its factor (dynamic_gmin's OldGmin).
 const gmin_start: f64 = 1e-2;
 
-/// Zeroes `x`, then applies the device's §9.17.3 cold-start seeds (SPICE
-/// MODEINITJCT) so the first iteration linearizes there instead of at 0.
-/// Asserts that `x` holds exactly n_u values when the device has `seed`.
+/// Zeroes `x`, applies the device's §9.17.3 cold-start seeds (SPICE
+/// MODEINITJCT) so the first iteration linearizes there instead of at 0,
+/// then its §3.6.3.2 nodesets (`u_nodeset`), which win where both name an
+/// unknown: a nodeset is the user's guess, a seed the model's default, and
+/// ngspice holds nodeset nodes over INITJCT's junction values. A nodeset is
+/// only where Newton starts, as in the testbench host
+/// (`lib/backend/tb/runner.zig` `pointUnknowns`); no rung clamps it
+/// (VD-117). Asserts that `x` holds exactly n_u values.
 fn coldStart(ckt: anytype, x: []f64) void {
     @memset(x, 0);
     const D = @TypeOf(ckt.*).Device;
-    if (!@hasDecl(D, "seed")) return;
     const C = @TypeOf(ckt.*);
-    for (D.seed(C.Val, ckt.model, ckt.inst, ckt.sim), x) |s, *xi| if (s) |v| {
+    if (@hasDecl(D, "seed")) for (D.seed(C.Val, ckt.model, ckt.inst, ckt.sim), x) |s, *xi| if (s) |v| {
+        xi.* = v;
+    };
+    // ponytail: mirrors the testbench's loop instead of sharing it: that one
+    // is Zig text emitted into each testbench, and src/sim cannot import
+    // lib/backend; a shared contract helper would be new ABI surface.
+    if (@hasDecl(D, "u_nodeset")) for (D.u_nodeset, x) |ns, *xi| if (ns) |v| {
         xi.* = v;
     };
 }
@@ -302,6 +315,73 @@ test solve {
     try std.testing.expectEqual(contract.AnalysisKind.static, ckt.sim.kind);
     try std.testing.expect(!ckt.sim.initial_step);
     try std.testing.expect(!ckt.sim.analog_initial);
+}
+
+/// f(v) = v³ - v on one free node, roots -1, 0 and 1, starting from nodeset
+/// `ns`. From the cold start 0 Newton is already at the root 0 (f(0) = 0,
+/// f'(0) = -1). From 2: f = 6, f' = 11, so 2 → 1.4545 → 1.1510 → 1.0253 →
+/// 1.0009 → 1, staying right of 1/√3 where f' = 0 (f is convex and
+/// increasing there), so it lands on 1; from -2, by f's odd symmetry, on -1.
+fn MockBistable(comptime ns: ?f64) type {
+    return struct {
+        pub const U = enum(u8) { a };
+        pub const num_ports: usize = 1;
+        pub const contract_abi = contract.abi_version;
+        pub const Model = struct {};
+        pub const Instance = struct {};
+        pub const u_nodeset = [1]?f64{ns};
+
+        pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+            const p = contract.probes(@This(), S, x);
+            return contract.rows(@This(), S, .{p[0].mul(p[0]).mul(p[0]).sub(p[0])});
+        }
+    };
+}
+
+fn solveBistable(comptime ns: ?f64) !f64 {
+    const D = MockBistable(ns);
+    var model: D.Model = .{};
+    var inst: D.Instance = .{};
+    var ckt: Circuit(D) = .init(&model, &inst);
+    var ws: converger.Workspace(1) = .{};
+    var x: [1]f64 = undefined;
+    try std.testing.expectEqual(Rung.plain, try solve(&ckt, &ws, &x, .dc));
+    return x[0];
+}
+
+test "a nodeset picks which root the operating point's Newton finds, and is never held" {
+    try std.testing.expectEqual(@as(f64, 0), try solveBistable(null));
+    // Within SPICE's reltol (1e-3) of the root; a clamped nodeset gives ±2.
+    try std.testing.expectApproxEqAbs(@as(f64, 1), try solveBistable(2.0), 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f64, -1), try solveBistable(-2.0), 1e-3);
+}
+
+/// One free node whose `seed` says 0.7 and whose nodeset says 1.5.
+const MockSeededNodeset = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+    pub const u_nodeset = [1]?f64{1.5};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].scale(1e-3)});
+    }
+
+    pub fn seed(comptime _: type, _: *const Model, _: *const Instance, _: contract.SimState) [1]?f64 {
+        return .{0.7};
+    }
+};
+
+test "coldStart: a nodeset overrides the seed on its unknown" {
+    var model: MockSeededNodeset.Model = .{};
+    var inst: MockSeededNodeset.Instance = .{};
+    var ckt: Circuit(MockSeededNodeset) = .init(&model, &inst);
+    var x = [_]f64{5};
+    coldStart(&ckt, &x);
+    try std.testing.expectEqual([1]f64{1.5}, x);
 }
 
 /// x^2 + 1 = 0 on one node: no real root, and none with any gmin the

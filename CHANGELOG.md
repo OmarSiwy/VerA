@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: `zig build test-spice` decks start the operating point's Newton from a device's §3.6.3.2 nodesets (`u_nodeset`), as the testbench and VPI hosts do, over its `$limit` seeds and never clamped (VD-117), so a nodeset picks the root of a multi-root circuit in every host (#70).
 - Fix: documented, with fixtures, what every host already does: a §3.6.3.2 nodeset is Newton's starting point, so no evaluation is in a nodeset phase and `analysis("nodeset")`/`initial_step("nodeset")` read 0 (VD-117), and `$simparam$str("analysis_type")` reads "ic" at a transient's t = 0 point and "tran" after (VD-118) (#67).
 - Fix: a transient's t = 0 operating point is its "ic" analysis in the `--emit-exe`/`--run`/`--check` testbench, the mixed runner and the VPI analog host, as `src/sim/spice` already did (§4.6.1 Table 4-22, TRAN OP): `analysis("static")` and `analysis("ic")` are 1 there, `@(initial_step("static"))` and `("ic")` fire, and `$simparam$str("analysis_type")` reads "ic" at that point (#53).
 - Fix: E0324 (`<<<`, `>>>` in an analog block) cites §4.2.11 and is titled "arithmetic shifts cannot be used in an analog block"; E0320 (xor reductions) cites §4.2.10; both cited annex C, whose C.5 removes only `===` and `!==`. E0501 cites §3.6.1.2, where it cited a §3.6.1.4 the LRM does not have (#62).

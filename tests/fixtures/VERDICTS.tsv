@@ -777,6 +777,7 @@ pass	ch03_data_types/reject_vera_scratch_uninit_initializer.va
 pass	ch03_data_types/reject_vera_scratch_unknown_string.va
 pass	ch03_data_types/replication_nonconstant_real_multiplier_rejected.va
 pass	ch03_data_types/retained_builtin_constant_display.va
+pass	ch03_data_types/spice_nodeset_cubic.va
 pass	ch03_data_types/string_arithmetic_rejected.va
 pass	ch03_data_types/string_comparison_in_a_constant_expression.va
 pass	ch03_data_types/string_concatenation_runtime_operand.va
