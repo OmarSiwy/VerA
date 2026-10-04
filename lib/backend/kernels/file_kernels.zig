@@ -70,10 +70,10 @@ const ZFSlot = struct {
     /// row.
     line: [4096]u8 = undefined,
     line_len: usize = 0,
-    /// IEEE 1364-2005 §17.2.4.2 the characters `$ungetc` pushed back, read by
-    /// `zFGetc` before the file, the last pushed first.
-    // ponytail: a fixed stack; C promises one pushback and this holds 16. Only
-    // `zFGetc` reads it — `$fgets`/`$fscanf` after an `$ungetc` read the file.
+    /// IEEE 1364-2005 §17.2.4.1 the characters `$ungetc` pushed back, the
+    /// last pushed first. Every read (`zFGetc`, `zFGets`, `zFWindow`) takes
+    /// them before the file, which then resumes at `pos + nback` (VD-084).
+    // ponytail: a fixed stack; C promises one pushback and this holds 16.
     back: [16]u8 = undefined,
     nback: u8 = 0,
 
@@ -342,16 +342,23 @@ pub fn zFGets(d: i64) i64 {
     var n: usize = 0;
     var b: [1]u8 = undefined;
     while (n < s.line.len) {
-        const got = s.f.readPositionalAll(io, &b, s.pos + n) catch |e| {
-            s.err = zfErrno(e);
-            zf_last_err = s.err;
-            s.line_len = n;
-            s.pos += n;
-            return 0;
-        };
-        if (got == 0) {
-            s.eof = true;
-            break;
+        // §17.2.4.1's pushback first; the file is read only once it is
+        // empty, so `pos + n` is then the file's position.
+        if (s.nback != 0) {
+            s.nback -= 1;
+            b[0] = s.back[s.nback];
+        } else {
+            const got = s.f.readPositionalAll(io, &b, s.pos + n) catch |e| {
+                s.err = zfErrno(e);
+                zf_last_err = s.err;
+                s.line_len = n;
+                s.pos += n;
+                return 0;
+            };
+            if (got == 0) {
+                s.eof = true;
+                break;
+            }
         }
         s.line[n] = b[0];
         n += 1;
@@ -359,7 +366,7 @@ pub fn zFGets(d: i64) i64 {
     }
     // A full buffer with no newline: the line goes on unless the file ends.
     if (n == s.line.len and s.line[n - 1] != '\n') {
-        const more = s.f.readPositionalAll(io, &b, s.pos + n) catch 0;
+        const more = if (s.nback != 0) 1 else s.f.readPositionalAll(io, &b, s.pos + n) catch 0;
         if (more != 0) zfOver();
         s.eof = true;
     }
@@ -417,12 +424,15 @@ pub fn zFWindow(d: i64) []const u8 {
         zf_last_err = 9;
         return "";
     }
-    s.line_len = s.f.readPositionalAll(zfIo(), &s.line, s.pos) catch |e| {
+    // §17.2.4.1's pushback leads the window, the last pushed first.
+    const m: usize = s.nback;
+    for (0..m) |i| s.line[i] = s.back[m - 1 - i];
+    s.line_len = m + (s.f.readPositionalAll(zfIo(), s.line[m..], s.pos + m) catch |e| {
         s.err = zfErrno(e);
         zf_last_err = s.err;
         s.line_len = 0;
         return "";
-    };
+    });
     s.err = 0;
     zf_last_err = 0;
     return s.line[0..s.line_len];
@@ -444,7 +454,10 @@ pub fn zFTake(d: i64, n: i64, used: i64) i64 {
     // A scan that ran to the end of a FULL window may have needed the bytes
     // after it; its answer is not the file's.
     if (s.line_len == s.line.len and used >= s.line_len) zfOver();
-    if (used > 0) s.pos += @intCast(used);
+    if (used > 0) {
+        s.pos += @intCast(used);
+        s.nback -= @intCast(@min(s.nback, used));
+    }
     if (n < 0) s.eof = true;
     return n;
 }
@@ -511,7 +524,7 @@ pub fn zFGetc(d: i64) i64 {
     return b[0];
 }
 
-/// IEEE 1364-2005 §17.2.4.2 `code = $ungetc( c, fd )`: "inserts the character
+/// IEEE 1364-2005 §17.2.4.1 `code = $ungetc( c, fd )`: "inserts the character
 /// specified by c into the buffer specified by file descriptor fd", so the
 /// next `$fgetc` returns it, without changing the file; 0, or EOF when it
 /// cannot. It moves the position back one, as C's does, and so needs one.

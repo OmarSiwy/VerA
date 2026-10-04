@@ -397,7 +397,9 @@ fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const As
 /// §17.2.4.3's input snapshot and original descriptor position. The native
 /// executable and interpreter use the same scanner and restore only the
 /// consumed prefix, so a failed conversion leaves the offending byte unread.
-pub const FileScan = struct { scan: Scan, descriptor: ?i64 = null, start: i64 = 0, input_len: usize = 0 };
+/// `pushed`: how many of the input's first bytes are §17.2.4.1 pushback
+/// that differs from the file under it, which a reposition would lose.
+pub const FileScan = struct { scan: Scan, descriptor: ?i64 = null, start: i64 = 0, input_len: usize = 0, pushed: usize = 0 };
 
 /// Starts a `$fscanf` on descriptor `descriptor_`: the rest of the file is
 /// read into `a` and the descriptor left at its end until `finishFileScan`
@@ -415,7 +417,15 @@ pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, for
         if (c < 0) break;
         try rest.append(a, @intCast(c));
     }
-    return .{ .scan = .init(rest.items, format, outs), .descriptor = d, .start = start, .input_len = rest.items.len };
+    // `$ungetc`'s characters came first (VD-084). The file's own bytes under
+    // them (at most 16, `file_kernels.ZFSlot.back`) tell which ones
+    // `finishFileScan` must push back after it repositions.
+    _ = t.seek(d, start, 0);
+    var pushed: usize = 0;
+    for (rest.items[0..@min(rest.items.len, 16)], 0..) |c, i| {
+        if (t.getc(d) != c) pushed = i + 1;
+    }
+    return .{ .scan = .init(rest.items, format, outs), .descriptor = d, .start = start, .input_len = rest.items.len, .pushed = pushed };
 }
 
 /// Ends a `fileScan`: the descriptor is repositioned just past what `scan`
@@ -423,6 +433,16 @@ pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, for
 /// every `fileScan` whose descriptor was readable.
 pub fn finishFileScan(t: contract.FileIo, file: FileScan, scan: Scan) i64 {
     const d = file.descriptor orelse return scan.result;
+    if (scan.at < file.pushed) {
+        // The pushback the scan left unread stays the next input.
+        _ = t.seek(d, file.start + @as(i64, @intCast(file.pushed)), 0);
+        var k = file.pushed;
+        while (k > scan.at) {
+            k -= 1;
+            _ = t.ungetc(scan.input[k], d);
+        }
+        return scan.result;
+    }
     _ = t.seek(d, file.start + @as(i64, @intCast(scan.at)), 0);
     // A scan that ran to the end of the input met EOF (§17.2.8), which the
     // repositioning cleared.
