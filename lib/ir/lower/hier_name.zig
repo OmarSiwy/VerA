@@ -165,8 +165,26 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     }
     // The analog_net_reference's own unknown, for the alias below.
     var local: u16 = ground;
+    // "either a scalar or vector continuous node": a whole vector is its
+    // elements, each checked and aliased like a scalar (`aliasVector`).
+    var vector: ?Lower.VecRange = null;
     switch (ex.tag(ref)) {
-        .ident => {
+        .ident => if (self.out.vectors.get(self.file.str(ex.strOf(ref)))) |r| {
+            const rname = self.file.str(ex.strOf(ref));
+            for (0..r.size()) |k| {
+                const elem = try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ rname, r.at(@intCast(k)) });
+                const idx = self.hier_name_state.alias_home.get(elem) orelse self.node_voltages.get(elem) orelse ground;
+                if (idx == ground) {
+                    try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
+                    return .refused;
+                }
+                if (idx < self.out.num_ports) {
+                    try self.err(self.file.exprs.mainTok(e), .E0812, "§9.20 does not allow the analog_net_reference to be a port: `{s}`", .{rname});
+                    return .refused;
+                }
+            }
+            vector = r;
+        } else {
             const rname = self.file.str(ex.strOf(ref));
             // The net's declared unknown: `rname` may already be an alias, and
             // every rule below is about the declaration.
@@ -226,10 +244,27 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
             return .refused;
         }
     }
+    if (vector) |r| return aliasVector(self, name, ref_name, r, target);
     // First call for this net records its declared unknown; a later one must
     // not overwrite it with the alias the earlier call installed.
     if (!self.hier_name_state.alias_home.contains(ref_name)) try self.hier_name_state.alias_home.put(self.arena, ref_name, local);
     return bindAlias(self, name, ref_name, local, target);
+}
+
+/// §9.20 a whole-vector analog_net_reference. The validity rules make the
+/// target "a scalar continuous node or a scalar element of a continuous
+/// vector node", and an aliased reference "shall refer to the same circuit
+/// matrix position", so every element is aliased to that one node. The
+/// elements share a declaration, so the target is valid for all or none:
+/// the first element's answer is the call's.
+fn aliasVector(self: *Lower, fname: []const u8, ref_name: []const u8, r: Lower.VecRange, target: []const u8) Oom!lower_limit.AliasResult {
+    for (0..r.size()) |k| {
+        const elem = try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ ref_name, r.at(@intCast(k)) });
+        const home = self.hier_name_state.alias_home.get(elem) orelse self.node_voltages.get(elem).?;
+        if (!self.hier_name_state.alias_home.contains(elem)) try self.hier_name_state.alias_home.put(self.arena, elem, home);
+        if (try bindAlias(self, fname, elem, home, target) != .bound) return .unresolved;
+    }
+    return .bound;
 }
 
 /// §9.20's topology edit, and the validity list that decides whether it happens.
