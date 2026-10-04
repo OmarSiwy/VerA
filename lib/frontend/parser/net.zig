@@ -261,7 +261,7 @@ pub fn parseDriveStrength(self: *Parser, s0: *Ast.Strength, s1: *Ast.Strength) E
 }
 
 /// Parses A.2.1.3's `charge_strength ::= ( small ) | ( medium ) | ( large )`,
-/// which only `trireg` takes. Reports E0207 for a charge strength on any other
+/// which only `trireg` takes. Reports E0257 for a charge strength on any other
 /// net type, so `wire (small) w;` is refused. Cursor on the `(`.
 pub fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength {
     _ = try self.expect(.lparen);
@@ -270,7 +270,7 @@ pub fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength 
     self.pos += 1;
     _ = try self.expect(.rparen);
     if (kind != .trireg or w.side != 2)
-        return self.failAt(tok, .E0207, "a charge strength is only legal on a trireg", .{});
+        return self.failAt(tok, .E0257, "a charge strength is only legal on a trireg", .{});
     return w.level;
 }
 

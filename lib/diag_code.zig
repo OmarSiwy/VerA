@@ -146,6 +146,7 @@ pub const Code = enum(u16) {
     E0254,
     E0255,
     E0256,
+    E0257,
     E0296,
     W0250,
     W0251,
@@ -976,7 +977,7 @@ fn infoOf(c: Code) Info {
             .lrm = "10.1",
             .explain =
             \\LRM 10.1 carries `unconnected_drive over from IEEE Std 1364
-            \\unchanged, and 1364 19.10 makes the operand a two-way
+            \\unchanged, and 1364 19.9 makes the operand a two-way
             \\alternation with no bracket round it:
             \\
             \\    `unconnected_drive pull1 | pull0
@@ -1853,6 +1854,19 @@ fn infoOf(c: Code) Info {
             \\The analog block already runs at every solution point (5.2), so
             \\write its body without the loop. In an `initial` or `always`
             \\block `forever` is legal (IEEE 1364-2005 9.6).
+            ,
+        },
+        .E0257 => .{
+            .title = "a charge strength on a net that is not a trireg",
+            .lrm = "A.2.1.3",
+            .explain =
+            \\A.2.1.3 gives `charge_strength ::= ( small ) | ( medium ) | ( large )`
+            \\to the `trireg` alternatives of `net_declaration` only (IEEE
+            \\1364-2005 4.4.1: a charge strength is the size of a trireg's
+            \\capacitance). Any other net type has no stored charge for the
+            \\strength to describe, so `wire (small) w;` derives from nothing.
+            \\
+            \\Declare the net `trireg`, or drop the strength.
             ,
         },
         .E0245 => .{
