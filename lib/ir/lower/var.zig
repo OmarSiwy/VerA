@@ -22,6 +22,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_context = @import("context.zig");
+const lower_contrib = @import("contrib.zig");
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
@@ -708,6 +709,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         try holdSlot(self, held_key, ty, init_val, slot.place, why.?)
     else
         init_val);
+    try lower_contrib.noteVarNoise(self, name, decl.init);
 }
 
 /// VerA's `vera_scratch` (§2.9) on the variable declared at token `tok`: the
