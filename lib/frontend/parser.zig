@@ -576,11 +576,19 @@ pub const Parser = struct {
             defer self.attr_depth -= 1;
             while (true) {
                 const tok = self.pos;
-                // `attr_name ::= identifier`, but §2.9.2's own `units` is an
-                // annex B keyword (`kw_units`). No keyword means anything else
-                // here, so every keyword is taken as a name.
-                if (!self.identLike(tok) and !token.isKeyword(self.peek()))
-                    return self.failAt(tok, .E0208, "found {s}", .{self.found(tok)});
+                // `attr_name ::= identifier` (A.9.1), but §2.9.2's own `units`
+                // is an annex B keyword (`kw_units`) it prints unescaped. No
+                // clause grants any other keyword that exception (VD-024).
+                if (!self.identLike(tok) and self.peek() != .kw_units) {
+                    if (!token.isKeyword(self.peek()))
+                        return self.failAt(tok, .E0208, "found {s}", .{self.found(tok)});
+                    var d = self.failWith(tok, .E0208);
+                    d.msg("found keyword `{s}`: an attribute name is an identifier", .{self.tokenText(tok)});
+                    d.note("§2.9 / A.9.1: `attr_name ::= identifier`; only §2.9.2's `units` is exempt", .{});
+                    d.help("escape it: `\\{s} `", .{self.tokenText(tok)});
+                    try d.emit();
+                    return error.ParseError;
+                }
                 const name = try self.internTok(tok);
                 self.pos += 1;
                 // §2.9: "If the value is not specified, then ... the default
