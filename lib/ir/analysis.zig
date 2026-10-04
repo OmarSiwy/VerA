@@ -753,7 +753,7 @@ const DepCol = enum { deriv, value, ac_dyn, point };
 /// Whether `inst` reads a per-instance value (`pdeps`' seeds).
 fn readsInstance(self: *const Analysis, inst: Mir.Inst) bool {
     return switch (self.mir.instData(inst)) {
-        .call => |c| c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$mfactor",
+        .call => |c| c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$held_str" or c.callee == .@"$mfactor",
         .unary => |u| u.op == .path_prev or u.op == .path_acc,
         else => false, // else: only a call or a latch reads the instance as a value
     };

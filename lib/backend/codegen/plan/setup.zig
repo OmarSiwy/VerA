@@ -273,8 +273,8 @@ const Scan = struct {
         if (def != .inst_result or in.mir.instOp(def.inst_result) != .call) return false;
         const d = in.mir.instData(def.inst_result).call;
         switch (d.callee) {
-            .@"$held_real", .@"$held_int" => {},
-            else => return false, // else: only the two §5.10 held reads name a held variable
+            .@"$held_real", .@"$held_int", .@"$held_str" => {},
+            else => return false, // else: only the §5.10 held reads name a held variable
         }
         const held = in.lowered.held_vars.items;
         if (held.len == 0) return false;
@@ -547,7 +547,7 @@ fn callTimepoint(in: Input, d: anytype) bool {
         .@"$abstime", .@"$realtime", .analysis, .analog_initial, .initial_step, .final_step => true,
         // §9.15 `dt` moves with the timepoint, never within one; `iteration` does.
         .@"$simparam" => std.mem.eql(u8, plan_args.strArg(in, d.args, 0) orelse return false, "dt"),
-        .@"$held_real", .@"$held_int", .@"$tp_hit", .@"$tp_int", .@"$tp_real" => true,
+        .@"$held_real", .@"$held_int", .@"$held_str", .@"$tp_hit", .@"$tp_int", .@"$tp_real" => true,
         .@"$idx", .@"$idx$int", .@"$idx$str", .limexp, .@"$str$cat", .@"$str$repeat" => true,
         else => false, // else: an ALLOWLIST — every other callee may read the iterate or state an iteration moves
     };
