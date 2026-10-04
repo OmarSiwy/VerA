@@ -347,10 +347,8 @@ fn callerParentPath(self: *const Lower) []const u8 {
 /// Lowers `$simprobe(inst_name, param_name [, expression])` (LRM §9.16) to the
 /// sibling instance's parameter or variable, resolved at compile time by flat name.
 /// When the name does not resolve, returns `expression`, or reports an error when
-/// there is none.
-///
-/// ponytail: only literal names resolve; a computed name takes the fallback, as an
-/// unresolvable probe does. A host with a runtime instance table would resolve more.
+/// there is none. A name that does not fold is refused (E0823): §9.16 resolves a
+/// string variable at run time, and VerA has no run-time instance table.
 pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -360,7 +358,15 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     const inst = lower_sysfunc.constStrArg(self, args[0]);
     const param = lower_sysfunc.constStrArg(self, args[1]);
-    if (inst != null and param != null) {
+    for ([2]?[]const u8{ inst, param }, args[0..2]) |name, arg| if (name == null) {
+        var b = self.errWith(ex.mainTok(arg), .E0823);
+        b.msg("this name has no value until the analog block runs", .{});
+        b.note("§9.16 resolves a string variable when the probe runs; VerA resolves names at compile time", .{});
+        b.help("spell the name as a string literal or a string parameter", .{});
+        try b.emit();
+        return poison;
+    };
+    {
         // §9.16: "the simulator will look for an instance called inst_name in
         // the parent of the current instance i.e. a sibling of the instance
         // containing the $simprobe() expression." The name is relative, so the

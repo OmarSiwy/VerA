@@ -420,8 +420,6 @@ Settle each before a fixture asserts one side.
   (`a03_SPEC.md:284-291`.)
 - AMS 8 example vs IEEE 9.2.2: the example's cancellation of a queued assignment
   against driver look-ahead and transition filtering (`ch8-scheduling.html` note).
-- AMS 9.16: a `$simprobe` name built at run time never resolves. The fallback is
-  not "the LRM's own cover" if the name is valid. (`conformance-ch9-review.md:313-316`.)
 - AMS 9.21: may a tool refuse at elaboration a duplicate abscissa whose dependents
   it cannot prove equal? `a05_13` argues it out. (`MANIFEST.md:529-532`.)
 - AMS 3.7: `m04_03` says 0.0 to -0.0 fires no event (IEEE-754 `==`); the inherited
