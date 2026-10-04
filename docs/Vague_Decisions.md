@@ -94,7 +94,7 @@ correction.
 | VD-050 | IEEE 1364-2005 17.6.5, 17.6.6 | Unknown `q_stat_code`: constant refused; run time gives status 2, value unchanged | yes |
 | VD-051 | IEEE 1364-2005 17.6.5 | Code 3 is the observed peak length | yes |
 | VD-052 | IEEE 1364-2005 17.6.5, 3.5.3 | Means are rounded to nearest (real-to-integer rule), not truncated | yes |
-| VD-053 | VAMS 2.7 | Octal escape above \377 is refused with a named error (the LRM permits it) | yes |
+| VD-053 | VAMS 2.7 | Octal escape above \377 is refused with a named error (the LRM permits it) | DONE |
 | VD-054 | VAMS 2.8 | No identifier length limit | no |
 | VD-055 | VAMS 4.2.4 | Integer % by zero: E0601 at compile time if provable, runtime report or trap otherwise | no |
 | VD-056 | VAMS 4.2.4 | Real % by a runtime zero reports E0601 like the integer path, not NaN | yes |
@@ -618,6 +618,7 @@ correction.
 - **VerA today**: `lib/frontend/lexer.zig:542-549` accumulates into a u16 and `@truncate`s with no diagnostic (the IMPLEMENTATION row cites 532-539, which is stale). `ch02_lexical/octal_escape_above_377_keeps_low_byte.va` pins the acceptance.
   `CHANGE NEEDED:` a new E01xx "octal escape above \377" diagnostic. Turn the fixture into `//! reject <code>` and add a `\377` legal neighbour. Update the IMPLEMENTATION row. **Minor**, because source that VerA accepted is now refused.
 - **Measure impact**: A (the fixture flips to a rejection and a neighbour is added). C: §2.7 gains a pinned invalid form.
+- **Status**: DONE: E0148, `ch02_lexical/octal_escape_above_377_rejected.va` and its neighbour `octal_escape_377_largest_byte.va`.
 
 ### VD-054: Identifier length limit
 - **Source**: IMPLEMENTATION §1 row "AMS 2.8"

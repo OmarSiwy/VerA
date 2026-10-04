@@ -91,6 +91,8 @@ pub const Code = enum(u16) {
     // Out of scope (IEEE 1364-2005 §28) — preprocessor.zig.
     E0146,
     E0147,
+    // Lexical (LRM 2.7) — parser.zig's string-literal scan.
+    E0148,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -1079,6 +1081,21 @@ fn infoOf(c: Code) Info {
             \\directive." A `pragma with nothing after it on its line names no
             \\pragma, so it is not the unrecognized pragma 19.10 lets a tool
             \\ignore. Write the pragma's name, or delete the directive.
+            ,
+        },
+        .E0148 => .{
+            .title = "octal escape is above \\377",
+            .lrm = "2.7",
+            .explain =
+            \\LRM 2.7 Table 2-2 (and IEEE 1364-2005 3.6.3) lets \ddd name "A
+            \\character specified in 1-3 octal digits", and adds:
+            \\"Implementations may issue an error if the character represented
+            \\is greater than \377." VerA does. A string holds 8-bit bytes, and
+            \\\400 through \777 name none, so any byte VerA picked would be its
+            \\own invention, and another tool may refuse the escape outright.
+            \\
+            \\Write the byte you mean: \377 is the largest, and "\477" was
+            \\probably "\47" followed by the character 7.
             ,
         },
 
