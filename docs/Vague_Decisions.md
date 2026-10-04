@@ -55,7 +55,7 @@ correction.
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
-| VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | yes |
+| VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | DONE |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
 | VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
 | VD-017 | VAMS 7.3.2; IEEE 1364-2005 17.1.1.4 | An x/z analog display operand is an error; fix E0130's explanation, add a fixture | yes |
@@ -260,6 +260,7 @@ correction.
 - **Decision**: `DECIDED:` (b). 1364 3.6 defines a string's value as its bytes, 8 bits each, so a byte above 0x7F has a well-defined value and length. Refusing would break real models that write unit strings like `"°C"` for no semantic gain. Decoding would contradict "one 8-bit ... value representing one character". `"°C"` is three characters to `len()`/`$strlen`-style operations. This is an implementation-defined choice and belongs in IMPLEMENTATION §1.
 - **VerA today**: accepted without a diagnostic (COVERAGE note). I found no fixture that asserts the value or length of a non-ASCII string. CHANGE NEEDED: an IMPLEMENTATION §1 row, and a fixture that asserts the byte count of `"°C"` is 3. Patch.
 - **Measure impact**: A (+1). C none, since it is implementation-defined.
+- **Status**: DONE: `ch02_lexical/string_bytes_above_7f.va` pins `"°C"` as three bytes (0xC2B043); IMPLEMENTATION §1 row added.
 
 ### VD-015: `$limit(typ*V(a,k), ...)`
 - **Source**: ROADMAP §5.1 item 15 (found 2026-09-27).
