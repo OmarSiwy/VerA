@@ -40,12 +40,17 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     self.pos += 1; // `endspecify`
     // A timing check is the one item whose loss a design notices by name (a
     // violation it expected to be told about), so each is listed.
-    var names: std.ArrayList(u8) = .empty;
-    for (b.timing_checks.items[first..], 0..) |t, i| {
-        if (i != 0) try names.appendSlice(self.arena, ", ");
-        try names.appendSlice(self.arena, self.tokenText(t.main_tok));
+    const checks = b.timing_checks.items[first..];
+    const tail = " never evaluated";
+    var n: usize = if (checks.len == 0) 0 else tail.len + 2 * (checks.len - 1);
+    for (checks) |t| n += self.tokenText(t.main_tok).len;
+    var names: std.ArrayList(u8) = try .initCapacity(self.arena, n);
+    for (checks, 0..) |t, i| {
+        if (i != 0) names.appendSliceAssumeCapacity(", ");
+        names.appendSliceAssumeCapacity(self.tokenText(t.main_tok));
     }
-    if (names.items.len != 0) try names.appendSlice(self.arena, " never evaluated");
+    if (checks.len != 0) names.appendSliceAssumeCapacity(tail);
+    std.debug.assert(names.items.len == n);
     try self.bag.add(
         .parse,
         .W0251,
@@ -204,20 +209,24 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     const saved_delay = self.in_digital_delay;
     self.in_digital_delay = true;
     defer self.in_digital_delay = saved_delay;
-    var delays: std.ArrayList(Ast.ExprId) = .empty;
+    // A.7.4 `list_of_path_delay_expressions` has five arms: one value,
+    // rise/fall, rise/fall/z, the six transition delays and the twelve. A
+    // longer list is refused below, so the delays past 12 are only counted.
+    var delays: [12]Ast.ExprId = undefined;
+    var n_delays: usize = 0;
     while (true) {
-        try delays.append(self.arena, try parse_expr.parseMinTypMax(self));
+        const d = try parse_expr.parseMinTypMax(self);
+        if (n_delays < delays.len) delays[n_delays] = d;
+        n_delays += 1;
         if (!self.eat(.comma)) break;
     }
-    // A.7.4 `list_of_path_delay_expressions` has five arms: one value,
-    // rise/fall, rise/fall/z, the six transition delays and the twelve.
-    switch (delays.items.len) {
+    switch (n_delays) {
         1, 2, 3, 6, 12 => {},
         else => return self.failAt(
             delay_tok,
             .E0207,
             "a path delay lists 1, 2, 3, 6 or 12 values (A.7.4 list_of_path_delay_expressions), not {d}",
-            .{delays.items.len},
+            .{n_delays},
         ),
     }
     if (bracketed) _ = try self.expect(.rparen);
@@ -232,7 +241,7 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
         .outs = outputs,
         .data = data,
         .data_polarity = data_polarity,
-        .delays = delays.items,
+        .delays = try self.arena.dupe(Ast.ExprId, delays[0..n_delays]),
         .main_tok = main_tok,
     });
 }
@@ -395,6 +404,13 @@ pub const timing_checks = std.StaticStringMap(struct { u8, u8 }).initComptime(.{
     .{ "$nochange", .{ 4, 5 } },
 });
 
+/// The widest `timing_checks` arity.
+const max_timing_args = blk: {
+    var m: u8 = 0;
+    for (timing_checks.values()) |a| m = @max(m, a[1]);
+    break :blk m;
+};
+
 /// The two commands whose first argument is a `controlled_reference_event`.
 const controlled_first = std.StaticStringMap(void).initComptime(.{ .{"$period"}, .{"$width"} });
 
@@ -403,8 +419,10 @@ const controlled_first = std.StaticStringMap(void).initComptime(.{ .{"$period"},
 /// `timing_checks` is E0207, as is a wrong argument count.
 fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     const tok = self.pos;
-    var args: std.ArrayList(Ast.ExprId) = .empty;
-    var edges: std.ArrayList(Ast.SpecEdge) = .empty;
+    // Past the widest arity the count is refused below, so those slots are
+    // only counted.
+    var args: [max_timing_args]Ast.ExprId = undefined;
+    var edges: [max_timing_args]Ast.SpecEdge = undefined;
     const arity = timing_checks.get(self.tokenText(tok)) orelse return self.failAt(
         tok,
         .E0207,
@@ -423,8 +441,10 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         var slot: Ast.ExprId = .none;
         var ev: Ast.SpecEdge = .none;
         const controlled = self.peek() != .comma and self.peek() != .rparen and try parseTimingCheckArg(self, &slot, &ev);
-        try args.append(self.arena, slot);
-        try edges.append(self.arena, ev);
+        if (n <= max_timing_args) {
+            args[n - 1] = slot;
+            edges[n - 1] = ev;
+        }
         // A.7.5.1: `$period` and `$width` open with a
         // `controlled_reference_event`, and A.7.5.3's
         // `controlled_timing_check_event` makes its event control
@@ -455,8 +475,8 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     );
     try b.timing_checks.append(self.arena, .{
         .name = try self.internTok(tok),
-        .args = args.items,
-        .edges = edges.items,
+        .args = try self.arena.dupe(Ast.ExprId, args[0..n]),
+        .edges = try self.arena.dupe(Ast.SpecEdge, edges[0..n]),
         .main_tok = tok,
     });
 }
