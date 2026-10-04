@@ -1121,9 +1121,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 try compileStmt(self, s.body, depth + 1);
                 var watched: std.ArrayList(u32) = .empty;
                 try readSlots(self, s.body, &watched, depth);
-                // §9.7.5's list is what the statement reads; one that reads
-                // nothing would suspend forever.
-                if (watched.items.len == 0) return self.fail(tok, "§9.7.5: `@*` needs the statement to read at least one net or variable", .{});
+                // §9.7.5's list is what the statement reads. One that reads
+                // nothing is an empty list, which nothing can trigger: the
+                // process suspends forever, as `@` on a never-changing net
+                // would. §9.7.5 states no restriction against it.
                 self.code.items[at].wait_slots = watched.items;
                 return;
             }
