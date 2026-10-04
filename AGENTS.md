@@ -125,14 +125,14 @@ patch, because it is byte-identical by construction.
 
 `.github/workflows/bench.yaml` runs on every push and PR. It writes the
 torture suite, clause coverage, digital transcripts and the footprint/speed
-sweep into the job summary, and uploads the FAIL name list as an artifact.
-At `ae9633f1` (2026-10-04, `tools/conformance.py`) measure A read 2189/2189
-with 0 FAIL, unasserted and XFAIL, and B and C had no one-way or uncited
-clause (every clause cited both ways or classified), so it **gates** on them
-as well as on `zig build test`: the strict suite (`zig build test-ams`),
-both `--coverage` tallies (0 one-way, 0 uncited), `test-1364`,
-`test-devices` and `test-vpi-fixtures`. Only the sweep and the audit-tool
-self-tests report without gating.
+sweep into the job summary, and uploads the known-gap name list as an
+artifact. It **gates** on `zig build test`, `test-1364`, `test-devices`,
+`test-vpi-fixtures`, `test-spice`, the cross builds, and the fixture suite
+with 0 FAIL and 0 unasserted. The known gaps are gated by **name**:
+`tools/known_gaps.sh` lists every XFAIL fixture and every one-way or uncited
+clause, and the job fails if that list differs from `docs/known-gaps.txt`. A
+new gap fails, and so does a fixed one until you delete its line. Only the
+sweep and the audit-tool self-tests report without gating.
 
 ---
 
