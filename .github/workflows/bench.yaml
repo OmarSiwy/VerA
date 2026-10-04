@@ -149,6 +149,52 @@ jobs:
             /tmp/sweep.txt
             /tmp/source-audit.txt
 
+  # The conformance and speed report (tools/report.py): one self-contained
+  # page with the measures, the clause-by-clause rule map, the gaps, and the
+  # timing charts, re-measured from scratch in ReleaseFast (the suites job
+  # above builds its suite Debug, whose timings are not the shipping number).
+  # Main only: it is a published record, not a gate.
+  report:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: OmarSiwy/ESPice
+          path: arpice
+          sparse-checkout: models
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Generate report/
+        run: |
+          python3 tools/report.py --selftest
+          python3 tools/report.py --models arpice/models
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: report/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: report/
+
+  # Publishes the report to GitHub Pages. Needs Settings > Pages > Source set
+  # to "GitHub Actions" once; until then this job fails and nothing else does.
+  pages:
+    needs: report
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
   # The consumer check ARPice asked for (2026-10-04): the device models it
   # ships compile to a host-loadable .so through this tree's vera, and the
   # contract ABI handshake (`contract.abi_version`, checked on every
