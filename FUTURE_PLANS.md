@@ -16,7 +16,7 @@ does not close the unmarked implementation gaps in that list.
 | F | All five targets cross-compile; the VPI runtime does not build on Windows (Zig 0.16 `@cVaStart`). |
 | G | Written at release time. |
 
-Release: `tools/conformance.sh --changelog v1.0.0`, fill D by hand, commit,
+Release: `python3 tools/conformance.py --changelog v1.0.0`, fill D by hand, commit,
 tag, push (AGENTS.md §3). ABI 5 is unchanged since v0.9.0 apart from additive
 optional decls, and `.v` devices, new VPI routines and new diagnostics make it
 a minor over v0.9.0 in any case.
