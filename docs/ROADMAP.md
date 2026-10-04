@@ -21,8 +21,9 @@ All of these hold at one commit, and a reader can reproduce each one.
 **A. The fixture suite passes over every fixture in the tree.**
 `zig build benchmark -- --strict` reports 0 FAIL, 0 unasserted and 0 XFAIL.
 `zig build test`, `test-devices`, `test-1364`, `test-vpi-fixtures` and
-`test-spice` exit 0. `test-spice` only proves that each deck pairs with its
-oracle and compiles. Running a deck needs ARPice (§4).
+`test-spice` exit 0. `test-spice` runs each deck on the testbench solver and
+grades it against its oracle; a deck needing a card or analysis that solver
+lacks is reported NOT RUN, naming what is missing.
 
 Zero XFAIL means every marker's gap is implemented. If a marker's fixture is one
 that a conforming implementation would also fail, fix the fixture and write the

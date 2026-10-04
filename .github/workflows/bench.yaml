@@ -88,6 +88,14 @@ jobs:
         if: always()
         run: zig build test-vpi-fixtures
 
+      # Every .sp deck runs on the testbench solver and is graded against its
+      # .expected.json oracle; any FAIL exits 1. NOT RUN is not a FAIL.
+      - name: SPICE decks run against their oracles
+        if: always()
+        run: |
+          zig build test-spice 2>&1 | tee /tmp/spice.txt
+          exit "${PIPESTATUS[0]}"
+
       # --sweep is the footprint and speed scaling table: generated-device byte
       # counts and MIR footprint against fixture size. It compiles nothing from
       # tests/fixtures, so it is fast and it is the size-regression signal.
@@ -125,6 +133,8 @@ jobs:
             echo '```'; tail -3 /tmp/coverage1364.txt; echo '```'
             echo '## IEEE 1364-2005 suite'
             echo '```'; tail -20 /tmp/ieee1364.txt; echo '```'
+            echo '## SPICE decks'
+            echo '```'; cat /tmp/spice.txt; echo '```'
             echo '## Digital transcripts'
             echo '```'; tail -20 /tmp/devices.txt; echo '```'
             echo '## Footprint and speed sweep'
@@ -146,6 +156,7 @@ jobs:
             /tmp/coverage1364.txt
             /tmp/ieee1364.txt
             /tmp/devices.txt
+            /tmp/spice.txt
             /tmp/sweep.txt
             /tmp/source-audit.txt
 

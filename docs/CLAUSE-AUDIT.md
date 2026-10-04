@@ -218,7 +218,7 @@ On 2026-09-21 `collect` walked `*.va` **only**, so the 81 `.v` digital fixtures,
 | `.va` | 1558, measure A | 1558 |
 | `.v` | 81, none in measure A | **12 joined measure A** (denominator **1570**); 66 remain `test-devices`'; 3 are VPI support material |
 | `.c` | 26, read by nothing | **`zig build test-vpi-fixtures`** — 13/26 compile |
-| `.sp` | 7, read by nothing | **`zig build test-spice`** — 7/7 paired and compiling |
+| `.sp` | 7, read by nothing | **`zig build test-spice`** — 7/7 executed and matching their oracles (2026-10-04) |
 
 A `.v` joins measure A when it carries a directive and has no `.expected.txt`;
 it stays `test-devices`' when it has one (`tests/bench.zig`'s `digitalCases`).

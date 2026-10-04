@@ -93,7 +93,7 @@ numbers, run the suites yourself:
 | IEEE 1364-2005 clause coverage | `zig build test-1364 -- --coverage` |
 | digital transcripts | `zig build test-devices` |
 | VPI `.c` fixtures | `zig build test-vpi-fixtures` |
-| SPICE decks (pair and compile only) | `zig build test-spice` |
+| SPICE decks, run on the testbench solver against their oracles | `zig build test-spice` |
 
 Each release's `CHANGELOG.md` entry records the measured numbers.
 
