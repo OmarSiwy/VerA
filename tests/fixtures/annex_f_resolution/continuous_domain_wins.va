@@ -24,7 +24,6 @@
 // the same top writes w from an `assign`, which 4.a's first sentence makes
 // digital whatever its children are.
 //
-//! xfail an undeclared net with a continuous and a discrete child compiles as analog, but no connect module bridges the discrete port (V(w) reads 0; declared `electrical w` reads 1.0)
 //! lrm F.2.1
 //! lrm F.2
 //! lrm 7.4

@@ -71,8 +71,8 @@ module ch6_pgl_top(p, n);
     ch6_pgl_sel #(.w(w)) u4(p, n);
   end
   analog begin
-    `CHECKX("g1's localparam w1 = 10 selects the member that sets gain 2", u1.gain, 2.0);
-    `CHECKX("g2's localparam w = w4 = 1 selects the member that sets gain 3", u4.gain, 3.0);
+    `CHECKX("g1's localparam w1 = 10 selects the member that sets gain 2", g1.u1.gain, 2.0);
+    `CHECKX("g2's localparam w = w4 = 1 selects the member that sets gain 3", g2.u4.gain, 3.0);
     I(p, n) <+ 0.0;
   end
 endmodule
