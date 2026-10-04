@@ -217,23 +217,26 @@ fn compare(arena: Allocator, io: Io, a: []const u8, b: []const u8, w: *Io.Writer
     return 1;
 }
 
-/// `text` with each absolute path's root cut back to `tests/fixtures/`. A
+/// `text` with each absolute path's root cut back to `tests/fixtures`. A
 /// path starts after a space, quote, backtick or parenthesis, or at a line
-/// start, and must start with `/`.
+/// start, and must start with `/`. It may name the fixture root itself, as
+/// the include-search note does (`searched: <root>/tests/fixtures, ...`).
 fn unrooted(arena: Allocator, text: []const u8) ![]const u8 {
-    const key = "/tests/fixtures/";
+    const key = "/tests/fixtures";
     var out: std.ArrayList(u8) = .empty;
     var rest = text;
     while (std.mem.indexOf(u8, rest, key)) |at| {
+        const end = at + key.len;
+        const whole = end == rest.len or std.mem.indexOfScalar(u8, "/ \t\n,;:'\"`)", rest[end]) != null;
         var start = at;
         while (start > 0 and std.mem.indexOfScalar(u8, " \t\n'\"`(", rest[start - 1]) == null) start -= 1;
-        if (rest[start] == '/') {
+        if (whole and rest[start] == '/') {
             try out.appendSlice(arena, rest[0..start]);
             try out.appendSlice(arena, key[1..]);
         } else {
-            try out.appendSlice(arena, rest[0 .. at + key.len]);
+            try out.appendSlice(arena, rest[0..end]);
         }
-        rest = rest[at + key.len ..];
+        rest = rest[end..];
     }
     try out.appendSlice(arena, rest);
     return out.items;
@@ -247,6 +250,13 @@ test "unrooted: two checkouts' diagnostics compare equal" {
     const b = "  --> /tmp/wt/b/tests/fixtures/ch02/x.va:3:5\n`/tmp/wt/b/tests/fixtures/y.vh`\n";
     try std.testing.expectEqualStrings(try unrooted(arena, a), try unrooted(arena, b));
     try std.testing.expectEqualStrings("  --> tests/fixtures/ch02/x.va:3:5\n", try unrooted(arena, "  --> /r/tests/fixtures/ch02/x.va:3:5\n"));
+    // The include-search note names the root itself, with no slash after it.
+    try std.testing.expectEqualStrings(
+        "searched: tests/fixtures, tests/fixtures/ch10\n",
+        try unrooted(arena, "searched: /a/b/tests/fixtures, /a/b/tests/fixtures/ch10\n"),
+    );
+    // A longer name is not the fixture root.
+    try std.testing.expectEqualStrings("/r/tests/fixtures2/x", try unrooted(arena, "/r/tests/fixtures2/x"));
     // A relative mention is not a root and stays as written.
     try std.testing.expectEqualStrings("see tests/fixtures/a.va", try unrooted(arena, "see tests/fixtures/a.va"));
 }
