@@ -322,7 +322,7 @@ fn compileAnalog(
             .name = result.mir.name,
             .out_path = cli.out_path,
             .zig_exe = cli.zig_exe,
-            .mixed = dm.mixed != null,
+            .mixed = dm.mixed != null or dm.tran != null or dm.onoise != null,
             .optimize = opt,
             .backend = backend,
             .debug_info = cli.debug_info,
