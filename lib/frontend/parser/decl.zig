@@ -187,10 +187,11 @@ pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
     const tok = self.pos;
     self.pos += 1;
     const signed = self.digital and self.eat(.kw_signed);
+    // §7.3.1's 31-bit limit is on an ACCESS ("Access of discrete bit
+    // groupings with greater than 31 bits is illegal"), not on a declaration:
+    // `lower_var.analogRead` judges each grouping the analog context reads,
+    // so a 31-bit part-select of a wider `reg` stays legal.
     const range: ?Ast.Dim = try optDim(self);
-    if (!self.digital) if (range) |d| if (literalWidth(self, d)) |w| {
-        if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
-    };
     while (true) {
         const name_tok = self.pos;
         const name = try self.expectIdent();

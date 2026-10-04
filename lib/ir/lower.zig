@@ -105,6 +105,10 @@ pub const VarSlot = struct {
     /// analog code reads it. A register used only by digital code may be wider.
     reg_width: ?u32 = null,
 };
+/// A `reg`'s packed range: its right-hand bound (the LSB in either
+/// direction) and whether it ascends (`[0:39]`), where a bit- or part-select
+/// lands (`lower_expr.lowerRegSelect`).
+pub const RegRange = struct { right: i64, asc: bool };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
@@ -235,6 +239,8 @@ had_error: bool = false,
 access_kind: std.StringHashMapUnmanaged(Access) = .empty,
 /// Visible variables (§3.2) — locals, function args, scalarized array elements.
 vars: std.StringHashMapUnmanaged(VarSlot) = .empty,
+/// Every scalar `reg` with a constant packed range, by the name in `vars`.
+reg_ranges: std.StringHashMapUnmanaged(RegRange) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
 scope_log: std.ArrayList(lower_var.ScopeEntry) = .empty,
 /// §3.4 parameters and §3.5 genvars visible to constant evaluation.
