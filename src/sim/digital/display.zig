@@ -323,7 +323,10 @@ pub const Task = union(enum) {
     /// §9.5 Table 9-2 / IEEE 1364 §17.2.9. The radix is the whole difference
     /// between `$readmemb` and `$readmemh`.
     readmem: Radix,
-    finish,
+    /// §17.4.1 `$finish` (false) and §17.4.2 `$stop` (true). A batch run has
+    /// nothing to suspend into, so `$stop` ends it too (VD-070), its report
+    /// on stderr so stdout holds only what the design printed.
+    finish: bool,
     /// §17.6 the four queue tasks.
     queue: system.QueueOp,
     /// §17.5 the sixteen PLA tasks.
@@ -378,7 +381,8 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$timeformat", .timeformat },
     .{ "$readmemb", Task{ .readmem = .binary } },
     .{ "$readmemh", Task{ .readmem = .hex } },
-    .{ "$finish", .finish },
+    .{ "$finish", Task{ .finish = false } },
+    .{ "$stop", Task{ .finish = true } },
     .{ "$q_initialize", Task{ .queue = .initialize } },
     .{ "$q_add", Task{ .queue = .add } },
     .{ "$q_remove", Task{ .queue = .remove } },
