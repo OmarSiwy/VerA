@@ -1,0 +1,63 @@
+// §7.4.4: "There are two modes for this method of resolution, basic (the
+// default) and detail ... The selection of these discipline resolution modes
+// shall be vendor-specific." Annex F.2.2: "The selection of this algorithm
+// instead of the default shall be controlled by a simulator option." VerA's
+// option is `--discipline-resolution=basic|detail`, here the fixture
+// directive of the same name (Vague_Decisions VD-008, VD-013).
+//
+// §7.4.4.2 on Figure 7-4, this design: "Continuous up: NetC resolves to
+// electrical ... NetD resolves to electrical ... Continuous down: NetA
+// resolves to electrical ... NetB resolves to electrical", where basic mode
+// (Figure 7-3) leaves NetA cmos1 and NetB cmos3 by the two resolveto
+// statements. VerA does not implement F.2.2 step 5's top-down pass, so a
+// signal the two modes decide differently is refused by name (E0930), not
+// given basic mode's answer under detail mode's name. 7.4.4.2 stays
+// `missing` until the pass lands (ROADMAP §5.3), so this file cites no
+// clause: the refusal is VerA's limit, not something 7.4.4.2 rules out.
+//
+// The flattened signal NetD/NetA/NetB joins cmos1..cmos4 and electrical
+// through undeclared interconnect (digital_blk.out, twoblks.out, mix.out):
+// the case the two modes disagree on.
+//
+// (The figure prints the resolveto lists without commas; A.1.8 separates
+// them with commas.)
+//
+// Legal neighbour: discipline_resolution_detail_one_level.va, a signal the
+// modes agree on, compiled and run under detail mode.
+//
+//! discipline-resolution detail
+//! reject E0930
+//! reject detail mode's top-down pass
+discipline cmos1; domain discrete; enddiscipline
+discipline cmos2; domain discrete; enddiscipline
+discipline cmos3; domain discrete; enddiscipline
+discipline cmos4; domain discrete; enddiscipline
+connectrules f74_rules;
+  connect cmos3, cmos4 resolveto cmos3;
+  connect cmos1, cmos2, cmos3 resolveto cmos1;
+endconnectrules
+module blk1(out); output out; cmos1 out; endmodule
+module blk2(out); output out; cmos2 out; endmodule
+module blk3(out); output out; cmos3 out; endmodule
+module blk4(out); output out; cmos4 out; endmodule
+module ablk(out); output out; electrical out; analog V(out) <+ 0.0; endmodule
+module twoblks(out);
+  output out;
+  blk3 b3(out);
+  blk4 b4(out);
+endmodule
+module digital_blk(out);
+  output out;
+  blk1 b1(out);
+  blk2 b2(out);
+  twoblks t(out);
+endmodule
+module mix(out);
+  output out;
+  blk2 b(out);
+  ablk a(out);
+endmodule
+module top;
+  digital_blk d(netd);
+  mix m(netd);
+endmodule

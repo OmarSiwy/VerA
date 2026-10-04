@@ -3,13 +3,15 @@
 // resolution algorithms listed in Annex F. Both algorithms will give the same
 // result as there are no discrete disciplines to propagate upwards."
 //
-// THE SECOND SENTENCE IS WHY THIS CLAUSE HAS A FIXTURE AND §7.4.4.2 DOES NOT.
-// §7.4.4.2 describes a resolution MODE, and §7.4.4 says the mode is
-// "vendor-specific" — so a fixture that pinned one mode's answer would fail a
-// conforming compiler that chose the other. §7.4.5 is the case where the modes
-// cannot disagree, because there is nothing discrete in the design for them to
-// propagate differently. Every net below is continuous, so both algorithms must
-// land on the same discipline and the answer is worth writing down.
+// §7.4.4 makes basic "the default" and leaves only the SELECTION of a mode
+// vendor-specific, so a fixture that pins basic mode with no selection tests
+// the normative default (lrm_7_4_4_1.va), and detail mode is testable once
+// selected (Vague_Decisions VD-008; VerA's selector is
+// `--discipline-resolution=detail`, whose distinguishing top-down pass is not
+// implemented: discipline_resolution_detail_figure_7_4_refused.va). §7.4.5 is
+// the case where the modes cannot disagree, because there is nothing discrete
+// in the design for them to propagate differently. Every net below is
+// continuous, so both algorithms must land on the same discipline.
 //
 // THE NUMBER IS THE NET'S OWN NATURE ATTRIBUTE, read through §5.5.3 Syntax 5-4
 // — `net_identifier . potential_or_flow . nature_attribute_identifier`, the one

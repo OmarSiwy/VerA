@@ -49,12 +49,12 @@ correction.
 | VD-005 | IEEE 1364-2005 17.10; VAMS 9.12 Table 9-9 | No 17.10-03 row; re-score 17.10-01/-02 on the existing digital fixtures | yes |
 | VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | yes |
 | VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | DONE |
-| VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
+| VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | PARTIAL |
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | DONE |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | yes |
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | DONE |
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | DONE |
-| VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
+| VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | DONE |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | yes |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
 | VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
@@ -207,6 +207,7 @@ correction.
 - **Decision**: `DECIDED:` (b). The clause defines two modes and makes basic the default. Only how a user selects a mode is left to the vendor. So a fixture that pins basic mode without any selection is not vendor-specific. It tests the normative default. Detail mode is testable once a selector exists, by a fixture that selects it and asserts the Figure 7-4 result. Until then, 7.4.4.2 is `missing`, not implementation-defined. See VD-013 for the selector.
 - **VerA today**: basic only (`lib/ir/elaborate/resolve.zig`; IMPLEMENTATION §1 row "AMS 7.4.4.2 ... basic only"). `lrm_7_4_4_1.va` pins basic. CHANGE NEEDED: (1) correct the `lrm_7_4_5.va:6-12` header so it says basic is the testable default and detail is not implemented; (2) re-file IMPLEMENTATION's 7.4.4.2 row as a gap under ROADMAP §5.3 rather than a choice; (3) when VD-013 lands, add a detail-mode fixture. Patch for (1) and (2). Minor for (3), because it adds a CLI option and new resolution results.
 - **Measure impact**: C (7.4.4.2 stays one-way until detail mode lands; no change from the documentation fix).
+- **Status**: PARTIAL. (1) `lrm_7_4_5.va` header corrected; (2) IMPLEMENTATION's row removed, the gap is a ROADMAP §5.3 row and `ch07_mixed_signal/CLAUSES.tsv` no longer classifies 7.4.4.2; (3) in the parse-in-full-then-refuse form: detail mode is selectable (VD-013) and compiles a signal both modes decide alike (`discipline_resolution_detail_one_level.va`), and the Figure 7-4 design, where they differ, is E0930 (`discipline_resolution_detail_figure_7_4_refused.va`). F.2.2 step 5 is not implemented.
 
 ### VD-009: Two modules with one name
 - **Source**: ROADMAP §5.1 item 9; `docs/conformance-ieee-config-review.md:32` (CFG-005) at 8b1514d4.
@@ -255,6 +256,7 @@ correction.
 - **Decision**: `DECIDED:` (b). The option is `--discipline-resolution=basic|detail` (default `basic`), recorded in the device's metadata. The obligation does not depend on how VerA is packaged. Folding the passes is acceptable under F.1 as long as the results equal the two-pass algorithm. That is an evidence obligation, a distinguishing hierarchical fixture, not a defect. Until the option exists, F.2.2 and 7.4.4.2 are `missing` (VD-008).
 - **VerA today**: no such option. Basic mode only (`lib/ir/elaborate/resolve.zig`). CHANGE NEEDED: add the option and detail mode, plus a mode-selecting fixture directive and a Figure 7-4 fixture. Minor. Until then, record F.2.2 as `missing` in CLAUSE-AUDIT.
 - **Measure impact**: C (F.2.2 and 7.4.4.2 stay one-way until the option lands).
+- **Status**: DONE. `vera --discipline-resolution=basic|detail` and the fixture directive `//! discipline-resolution`; no device metadata row, since a detail-mode compile that differs from basic is refused (VD-008). E0929 also names the §7.8.4 insertion limit the Figure 7-3 shape exposes.
 
 ### VD-014: UTF-8 bytes above 0x7F in string literals
 - **Source**: ROADMAP §5.1 item 14; `annex_a_syntax/COVERAGE.md:332-335` at 8b1514d4.

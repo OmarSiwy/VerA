@@ -92,7 +92,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
             const bound = self.unit.rename.get(sig) orelse sig;
             const lower = p.discipline;
             const lo_d = domain(file, lower) orelse continue;
-            const unbridged: Unbridged = .{ .tok = inst.ports[ci].main_tok, .net = bound, .lower = lower, .port = p.name, .inst = inst.name };
+            const unbridged: Unbridged = .{ .tok = inst.ports[ci].main_tok, .net = bound, .lower = lower, .port = p.name, .inst = inst.name, .dir = p.direction };
             const upper = self.disc_of.get(bound) orelse levelDiscipline(self, module, sig) orelse {
                 try self.unbridged.append(self.ctx.arena, unbridged);
                 continue;
@@ -198,6 +198,7 @@ pub const Unbridged = struct {
     lower: Ast.StrId,
     port: Ast.StrId,
     inst: Ast.StrId,
+    dir: Ast.Direction,
 };
 
 /// §7.8.4 "the port shall match one (and only one) connect statement", the
@@ -213,6 +214,21 @@ pub fn checkUnbridged(self: *Flatten) Error!void {
         const up_d = domain(file, upper) orelse continue;
         const lo_d = domain(file, u.lower).?;
         if (up_d == lo_d or up_d == .unspecified or lo_d == .unspecified) continue;
+        // A statement that matches, which `plan` could not apply: the net
+        // resolved continuous above the level that elaborated this port.
+        const rule = find: {
+            for (file.connectrules) |cr| for (cr.insertions) |*ins| {
+                const r = try ruleOf(self, ins, false) orelse continue;
+                if (matches(file, r, u.dir, upper, u.lower)) break :find r;
+            };
+            break :find null;
+        };
+        if (rule) |r| {
+            try self.err(u.tok, .E0929, "`{s}` matches port `{s}` of `{s}` (`{s}`), but its net `{s}` resolved `{s}` above the level that elaborated the port", .{
+                file.str(r.module.name), file.str(u.port), file.str(u.inst), file.str(u.lower), file.str(u.net), file.str(upper),
+            });
+            continue;
+        }
         try self.err(u.tok, .E0927, "port `{s}` of `{s}` is `{s}` and its net `{s}` is `{s}`, and no connect statement bridges them", .{
             file.str(u.port), file.str(u.inst), file.str(u.lower), file.str(u.net), file.str(upper),
         });

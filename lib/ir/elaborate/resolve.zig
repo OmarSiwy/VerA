@@ -97,6 +97,40 @@ pub fn collectOoc(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u
     }
 }
 
+/// §7.4.4.2 detail mode: "continuous disciplines propagate up and then back
+/// down to meet discrete disciplines. Discrete disciplines do not propagate
+/// up the hierarchy" (F.2.2 steps 4 and 5). It decides differently from
+/// basic mode only on a signal whose segments include both domains and an
+/// undeclared segment for the continuous one to propagate down into; on any
+/// other signal F.2.2 step 5 has nothing to re-decide, so the two modes
+/// agree and basic's answer stands. VerA does not implement step 5's
+/// top-down pass, so such a signal is refused by name (E0930) rather than
+/// given basic's answer under detail's name. Returns whether it reported.
+pub fn refuseDetail(self: *Flatten) Error!bool {
+    const file = self.ctx.file;
+    var reported = false;
+    var it = self.segs.iterator();
+    while (it.next()) |entry| {
+        const net = entry.key_ptr.*;
+        var cont: ?Ast.StrId = null;
+        var disc: ?Ast.StrId = null;
+        var undeclared = self.port_resolved.contains(net);
+        for (entry.value_ptr.discs.items) |d| {
+            if (d == .none) {
+                undeclared = true;
+                continue;
+            }
+            if (discipline.isContinuous(file, d)) cont = cont orelse d else disc = disc orelse d;
+        }
+        if (cont == null or disc == null or !undeclared) continue;
+        try self.err(entry.value_ptr.tok, .E0930, "`{s}` joins `{s}` and `{s}` through undeclared interconnect, where detail mode's top-down pass decides differently from basic mode", .{
+            file.str(net), file.str(cont.?), file.str(disc.?),
+        });
+        reported = true;
+    }
+    return reported;
+}
+
 /// An out-of-context declaration's initializer: the segment it names
 /// (`collectOoc`'s key), how deep its declaring module sits (its path's
 /// length), and the initializer in flat names.

@@ -231,7 +231,16 @@ pub const Ctx = struct {
     tok_starts: []const u32,
     bag: *diag.Bag,
     param_overrides: []const ParamOverride = &.{},
+    discipline_resolution: DisciplineResolution = .basic,
 };
+
+/// §7.4.4 "There are two modes for this method of resolution, basic (the
+/// default) and detail"; F.2.2: "The selection of this algorithm instead of
+/// the default shall be controlled by a simulator option" (VerA's is
+/// `--discipline-resolution=`). Detail mode is parsed and selected, then
+/// refused where it would decide something basic mode decides differently
+/// (`resolve.refuseDetail`, E0930).
+pub const DisciplineResolution = enum { basic, detail };
 
 /// §3.4 compile-time overrides, shared with Lower.Options. Elaboration needs
 /// their final values when a §6.4.2 overload choice depends on a top parameter.
@@ -673,7 +682,10 @@ pub const Flatten = struct {
         // candidate set of a signal against §7.7.2's resolution statements.
         try elab_resolve.resolveMultiCandidates(self);
         try elab_resolve.applyOocInits(self); // §3.6.3.2 hierarchical nodesets
-        try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
+        // §7.4.4.2 / F.2.2 detail mode, refused where it differs from basic.
+        // Its refusal makes basic's insertion verdicts moot, so they wait.
+        if (self.ctx.discipline_resolution != .detail or !try elab_resolve.refuseDetail(self))
+            try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
 
         // §5.2 analog blocks are concurrent, but §5.4.2.2's flow read is
         // ordered: `I(b)` after a flow contribution to `b` reads the retained

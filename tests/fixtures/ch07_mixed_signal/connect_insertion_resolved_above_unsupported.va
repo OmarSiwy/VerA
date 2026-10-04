@@ -1,0 +1,48 @@
+// §7.8.4: "the port shall match one (and only one) connect statement", and
+// "The connect module for a port shall be instantiated in the context of the
+// ports upper connection." Here it does: `ciu_bridge` matches leaf's discrete
+// port, whose upper connection is mid's undeclared port `p`. The flattened
+// signal resolves electrical one level higher, where `top` meets the
+// electrical child (§7.4.4.1), so the design is legal.
+//
+// VerA judges a port while elaborating its upper connection's level, and at
+// mid's level `p` has no discipline yet: VerA cannot place the bridge, and
+// says so by name (E0929) rather than joining the two domains with no
+// connect module or blaming the connect statements (E0927). The upgrade is
+// insertion after the whole signal is resolved (§7.4: "Once all net segments
+// of every mixed signal has been resolved, insertion of connect modules shall
+// be performed").
+//
+// The refusal is VerA's limit, not something 7.8.4 rules out, so this file cites
+// no clause.
+//
+// Legal neighbour: lrm_7_4_4_1.va, the same bridge where the discrete port
+// and the electrical one meet on one level.
+//
+//! reject E0929
+//! reject `ciu_bridge` matches port `port` of `leaf`
+discipline ciu_discrete;
+  domain discrete;
+enddiscipline
+connectmodule ciu_bridge(a, d);
+  inout a; electrical a;
+  inout d; ciu_discrete d;
+endmodule
+connectrules ciu_rules;
+  connect ciu_bridge;
+endconnectrules
+module ciu_leaf(port);
+  inout port; ciu_discrete port;
+endmodule
+module ciu_mid(p);
+  inout p;
+  ciu_leaf leaf(p);
+endmodule
+module ciu_echild(port);
+  inout port; electrical port;
+endmodule
+module ciu_top;
+  ciu_mid m(shared);
+  ciu_echild e(shared);
+  analog I(shared) <+ V(shared);
+endmodule

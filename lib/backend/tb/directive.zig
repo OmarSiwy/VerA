@@ -50,6 +50,7 @@ const Keyword = enum {
     inherited,
     xfail,
     print,
+    @"discipline-resolution",
 };
 
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
@@ -216,6 +217,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 if (rest.len == 0) return error.BadSyntax;
                 d.xfail = try arena.dupe(u8, rest);
             },
+            // §7.4.4's mode, as `vera --discipline-resolution=` selects it.
+            .@"discipline-resolution" => d.discipline_resolution = std.meta.stringToEnum(@TypeOf(d.discipline_resolution), rest) orelse return error.BadSyntax,
             .print => {
                 if (std.mem.eql(u8, rest, "none")) {
                     d.print_residual = false;

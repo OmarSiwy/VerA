@@ -213,6 +213,7 @@ fn compileAnalog(
         .diags = &bag,
         .lint = cli.levels,
         .proof = .{ .unknown_bound = cli.unknown_bound },
+        .discipline_resolution = cli.discipline_resolution,
         .display = cli.display,
         .jac_f32 = cli.jac_f32,
         .jac_f32_host = cli.jac_f32_host,
