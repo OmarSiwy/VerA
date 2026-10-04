@@ -45,6 +45,13 @@
 //   seeded   : `wreal seeded = 2.5;` — one continuous-assignment driver whose
 //              right-hand side is the constant 2.5, so the net reads 2.5 at
 //              time 0 and at every later time. %g of 2.5 is "2.5".
+//              RACE (docs/Vague_Decisions.md VD-033): the assignment's first
+//              evaluation and this `initial` are both active events at time 0,
+//              which IEEE 1364-2005 11.3 lets run in any order, so a
+//              conforming tool may print 0 for an undelayed read. The `#0`
+//              moves the read to the inactive region, after every active
+//              continuous-assignment update. The two lines before it read
+//              nets with no driver and have no race.
 //   The second sampling at t=10 asserts the value is STABLE, which is the
 //   "shall not store its value" sentence read the only way it is observable
 //   from source: the net is a window onto its driver, so with no driver and no
@@ -59,6 +66,7 @@ module m04_wreal_undriven_zero;
   initial begin
     $display("undriven_wreal_at_time_zero %g", floating);
     $display("undriven_wire_at_time_zero %b", plain);
+    #0;
     $display("decl_assigned_wreal_at_time_zero %g", seeded);
     #10;
     $display("undriven_wreal_stays_zero %g", floating);
