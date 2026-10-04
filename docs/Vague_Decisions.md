@@ -85,12 +85,12 @@ correction.
 | VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | yes |
 | VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | yes |
 | VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | yes |
-| VD-044 | IEEE 1364-2005 26.2.4 vs 27.34.2 / VAMS 12.33.2 | Startup routines may only register; VerA refuses other routines then; fixtures walk at cbEndOfCompile | yes |
-| VD-045 | IEEE 1364-2005 26.3.5 vs Annex G | `vpiIsProtected` = `vpiProtected` (10), FALSE on every object | yes |
-| VD-046 | IEEE 1364-2005 26.6.40(c) vs VAMS 11.6.25 note 5 | Current queue listed iff a pending event precedes read-only sync | yes |
+| VD-044 | IEEE 1364-2005 26.2.4 vs 27.34.2 / VAMS 12.33.2 | Startup routines may only register; VerA refuses other routines then; fixtures walk at cbEndOfCompile | DONE (9425251f) |
+| VD-045 | IEEE 1364-2005 26.3.5 vs Annex G | `vpiIsProtected` = `vpiProtected` (10), FALSE on every object | DONE (2b569378) |
+| VD-046 | IEEE 1364-2005 26.6.40(c) vs VAMS 11.6.25 note 5 | Current queue listed iff a pending event precedes read-only sync | DONE (65687d0f) |
 | VD-047 | VAMS 11.6.25, 12.31.2 | A callback-only time is a vpiTimeQueue entry | no |
 | VD-048 | VAMS 12.27 / IEEE 27.26 | `vpi_mcd_printf` returns one expansion's length, regardless of channel count | no |
-| VD-049 | VAMS 12.16 / IEEE 27.14 | `vpiIntVal` of a wide object is its low 32 bits | yes |
+| VD-049 | VAMS 12.16 / IEEE 27.14 | `vpiIntVal` of a wide object is its low 32 bits | DONE (94512505) |
 | VD-050 | IEEE 1364-2005 17.6.5, 17.6.6 | Unknown `q_stat_code`: constant refused; run time gives status 2, value unchanged | yes |
 | VD-051 | IEEE 1364-2005 17.6.5 | Code 3 is the observed peak length | yes |
 | VD-052 | IEEE 1364-2005 17.6.5, 3.5.3 | Means are rounded to nearest (real-to-integer rule), not truncated | yes |
@@ -533,6 +533,7 @@ correction.
 - **Options**: (a) allow every routine at startup (VerA today); (b) require phase-correct applications (register at startup, walk at `cbEndOfCompile`/`cbStartOfSimulation`), and have VerA refuse other routines during startup with an error status.
 - **Decision**: `DECIDED:` (b). 26.2.4 is the specific rule for the phase. "Any other desired task" is satisfied by registering a callback that runs the task later, which is exactly what VAMS's own example does (`setup_report_cpu` registers a callback). A fixture that walks at startup passes only on tools that build the model early, so it is not portable. VerA should make the misuse visible: in the startup phase, any routine other than `vpi_register_systf`/`vpi_register_cb` (and `vpi_chk_error`) fails with a named `vpi_chk_error` message citing 26.2.4, and `vpi_register_cb` accepts only the four reasons listed there.
 - **VerA today**: `src/vpi/root.zig:697` (`runStartupRoutines`) runs the array after the model is built, and every routine works. `tests/fixtures/ch11_vpi/vpi_app.c:501` does its whole walk in `vlog_startup_routines`. Of 77 `.c` fixtures, 42 mention `cbEndOfCompile`/`cbStartOfSimulation`, and the rest work at startup (not each re-read). `CHANGE NEEDED:` (1) move every `.c` fixture's work into a `cbEndOfCompile`/`cbStartOfSimulation` callback; (2) add a startup-phase gate in `src/vpi/root.zig` with an `lrm-reject`/`inherited-reject IEEE 1364-2005 26.2.4` fixture whose legal neighbour is `ieee_pli/b_26_1_systf.c`; (3) reclassify the 26.2.4 row in `ieee1364/CLAUSES.tsv` from `unspecified`. By AGENTS.md §3's list this is a patch (no source, device text or module_specs change), but it makes previously working applications fail, so release it as a minor.
+- **Status**: DONE (9425251f). `src/vpi/root.zig` `refused` turns every routine but `vpi_register_systf`, `vpi_register_analog_systf`, `vpi_register_cb` and `vpi_chk_error` away during the startup routines (code `STARTUP`, citing 26.2.4); `vpi_register_cb` takes only cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError and cbPLIError there. Every `.c` fixture defers its work to cbEndOfCompile; `ieee_pli/b_26_2_4_startup_phase.c` pins both sides; 26.2.4 is `-` in `CLAUSES.tsv`. The entry's "four reasons" are six in the clause (cbError and cbPLIError follow a page break).
 - **Measure impact**: B: 26.2.4 gains two-way evidence. C: AMS 12.33.2 fixtures become portable. A: every `vpi_runs` fixture touched.
 
 ### VD-045: `vpiIsProtected` (prose) vs `vpiProtected` (Annex G)
@@ -542,6 +543,7 @@ correction.
 - **Options**: (a) leave it undefined and answer only on modules; (b) invent a new constant; (c) treat `vpiIsProtected` as `vpiProtected` (10) and answer it on every object.
 - **Decision**: `DECIDED:` (c). Annex G is the ABI, and a made-up number (b) would make applications non-portable. A module "in a decryption envelope" is exactly a "source protected module", so the two coincide where both apply, and (c) makes 26.3.5's "all objects" true. VerA refuses `pragma protect` (E0146), so every object answers FALSE.
 - **VerA today**: `src/vpi/vpi_user.h:381` defines `vpiProtected 10` (ROADMAP's "Neither is declared" is stale). `src/vpi/property.zig:158-161` answers 0 for modules and `propFail`s every other kind. `CHANGE NEEDED:` add `#define vpiIsProtected vpiProtected` (with a comment citing 26.3.5/Annex G) to `vpi_user.h`. Make `property.zig` answer 0 for every object kind. Add a `.c` fixture asserting `vpi_get(vpiIsProtected, h) == 0` on a net, a reg, a port and a module, and move the 26.3.5 `CLAUSES.tsv` row off `not-supported` for its FALSE half. Patch by AGENTS.md §3 (VPI result, not source or device text).
+- **Status**: DONE (2b569378). `vpi_user.h` defines `vpiIsProtected` as `vpiProtected`; `vpi_get` answers 0 for every live handle and refuses a non-object. `ieee_pli/b_26_3_5_protected.c`; 26.3.5 is `-` in `CLAUSES.tsv`.
 - **Measure impact**: B: 26.3.5 `not-supported` -> partial/verified for the FALSE half.
 
 ### VD-046: Is the current time queue in a `vpiTimeQueue` iteration?
@@ -551,6 +553,7 @@ correction.
 - **Options**: (a) IEEE: return the queue iff some pending current-time event precedes read-only sync; (b) VAMS literal: omit the queue iff any read-only-sync-or-later item is pending.
 - **Decision**: `DECIDED:` (a). It is the positive form of the source rule that VAMS paraphrases. Both agree that a current queue holding only read-only-sync work is omitted, and (a) answers the mixed case the useful way: the simulator still has work to do at this time. Read NOTE 5 as "if only events after read only sync remain".
 - **VerA today**: `src/vpi/run.zig:313-343` (`timeQueues`) keeps `t == clock` whenever any scheduler event or time callback is pending at the current time. `src/vpi/callback.zig:187` counts `cbReadOnlySynch` (and `cbReadWriteSynch`) as time callbacks, so a lone pending `cbReadOnlySynch` puts the current queue in the iteration, which is wrong under both readings. `ch11_vpi/p02_05_cb_time_regions.c` asserts only times strictly greater than now. `CHANGE NEEDED:` at `t == clock`, count only scheduler events and pre-read-only callbacks (`cbReadWriteSynch`), not `cbReadOnlySynch`. Add a `.c` case for each side: only RO-sync pending, so the current queue is absent; an active event pending, so it is present. Patch.
+- **Status**: DONE (65687d0f). `callback.pendingTimes` skips a cbReadOnlySynch due at the current time. `ch11_vpi/p02_05_cb_time_regions.c` walks at t=7 both ways (mixed case: t=7 returned; only RO sync left: first queue t=10).
 - **Measure impact**: B: 26.6.40 (`-`) gains evidence. C: VAMS 11.6.25 NOTE 5 pinned.
 
 ### VD-047: A callback wake-up at an eventless time is a `vpiTimeQueue` entry
@@ -578,6 +581,7 @@ correction.
 - **Options**: (a) the low 32 bits, two's complement; (b) an error (`vpiBadFormat`); (c) saturate.
 - **Decision**: `DECIDED:` (a). This is the language's own rule for putting a wide value in a 32-bit integer: IEEE 5.6, where truncation of the high bits happens without a diagnostic. It is also how the integer-valued C fields are documented, and `vpiVectorVal`/`vpiTimeVal` remain for the full value. (b) would refuse reads of every `time` variable.
 - **VerA today**: `src/vpi/value.zig:321` does `@truncate(b.low64())` to u32 and bitcasts it, which matches the decision. No fixture asserts it. `CHANGE NEEDED:` add a `.c` assertion: `reg [63:0] r = 64'h1_8000_0001` reads `vpiIntVal == (PLI_INT32)0x80000001`. Patch.
+- **Status**: DONE (94512505). `ch11_vpi/p02_01_get_value_formats.c` reads `reg [63:0]` 64'h00000001FFFFFFFF as vpiIntVal: -1. VerA already agreed.
 - **Measure impact**: B/C: 27.14 / 12.16 gain a pinned edge.
 
 ### VD-050: `$q_exam` with a `q_stat_code` outside Table 17-15
