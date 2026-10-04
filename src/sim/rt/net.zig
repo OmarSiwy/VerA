@@ -739,6 +739,13 @@ test "the all-strong plane fold is Signal's fold" {
                 cur[at[j] + 1] = @backingInt(b) >> 1;
             }
             const net: Net = .{ .kind = kind, .slot = 0, .off = 0, .width = 1, .drivers = &.{ 0, 1, 2 }, .strong = true };
+            // Real variables, not `@constCast` of a literal: `fold` writes
+            // `sig0`, and a constant literal may sit in read-only memory (a
+            // bus error on aarch64-macos).
+            var or_z = [_]bool{ false, false, false };
+            var s0 = [_]Ast.Strength{ .strong, .strong, .strong };
+            var s1 = [_]Ast.Strength{ .strong, .strong, .strong };
+            var sig0 = [_]Signal{.{}};
             const t: Nets = .{
                 .nets = &.{net},
                 .drivers = &.{},
@@ -746,10 +753,10 @@ test "the all-strong plane fold is Signal's fold" {
                 .at = @constCast(&at),
                 .cur = &cur,
                 .tgt = &.{},
-                .or_z = @constCast(&[_]bool{ false, false, false }),
+                .or_z = &or_z,
                 .tgt_or_z = &.{},
-                .s0 = @constCast(&[_]Ast.Strength{ .strong, .strong, .strong }),
-                .s1 = @constCast(&[_]Ast.Strength{ .strong, .strong, .strong }),
+                .s0 = &s0,
+                .s1 = &s1,
                 .flight = &.{},
                 .started = &.{},
                 .nat = &.{},
@@ -758,7 +765,7 @@ test "the all-strong plane fold is Signal's fold" {
                 .nflight = &.{},
                 .capacitive = &.{},
                 .decay_ev = &.{},
-                .sig0 = @constCast(&[_]Signal{.{}}),
+                .sig0 = &sig0,
                 .pat = &.{},
                 .prev = &.{},
                 .state = &.{},
