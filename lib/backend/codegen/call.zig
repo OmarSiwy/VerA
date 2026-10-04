@@ -1057,7 +1057,11 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             try acOpen(self, kS, try self.arena.print("zAcZi({s}, {d}, {d}, {s}, {s}__sec(model), {s})", .{
                 kS, p.ns, p.deg, in, n, p.period orelse "0.0",
             }));
-            try self.b(
+            if (p.tau) |tau| try self.b(
+                "zZiEvalRamp({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), sim.dt, inst.{3s}__out, " ++
+                    "inst.{3s}__from, inst.{3s}__ts, sim.t, inst.{3s}__nk, {4s}, {6s}, {7s}, &inst.{3s}__u, &inst.{3s}__y)",
+                .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS, p.t0.?, tau },
+            ) else try self.b(
                 "zZiEval({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), sim.dt, inst.{3s}__out, " ++
                     "sim.t, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
                 .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS },
