@@ -160,7 +160,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: [diode, mos1, bsim4va, psp103, vbic13_4t]
+        model: [diode, mos1, bsim4va, psp103, psp103_nqs, vbic13_4t]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -177,5 +177,5 @@ jobs:
       - name: Compile ${{ matrix.model }}.va to a .so
         run: |
           printf 'pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n' > dyn.zig
-          ./zig-out/bin/vera --emit-so --contract tools/contract.zig --dyn dyn.zig \
+          ./zig-out/bin/vera --emit-so --contract tools/contract.zig --dyn dyn.zig -I arpice/models \
             --work-dir out arpice/models/${{ matrix.model }}.va
