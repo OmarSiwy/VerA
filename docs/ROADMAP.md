@@ -427,7 +427,8 @@ Settle each before a fixture asserts one side.
 - AMS 9.21: may a tool refuse at elaboration a duplicate abscissa whose dependents
   it cannot prove equal? `a05_13` argues it out. (`MANIFEST.md:529-532`.)
 - AMS 3.7: `m04_03` says 0.0 to -0.0 fires no event (IEEE-754 `==`); the inherited
-  definition of a real "change" is unchecked. `m04_01` samples a wreal at time 0
+  definition is pinned by `ieee1364/09_behavioral_modeling/b_9_7_2_real_negative_zero.v`
+  (VD-032: no event, the -0.0 bits are stored). `m04_01` samples a wreal at time 0
   from an `initial` block, a possible race. (`conformance-wreal.md:15,29-34`.)
 - AMS Syntax 5-13: `posedge V(p)` is refused (E0704) although the grammar
   derives it. (`annex_c_analog_subset/COVERAGE.md:192-196`.)
