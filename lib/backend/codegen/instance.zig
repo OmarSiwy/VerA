@@ -98,6 +98,17 @@ pub fn emitInstance(self: *Gen) Error!void {
             "    plusargs: []const [:0]const u8 = &.{{}},\n",
         .{},
     );
+    // §9.15 Table 9-28: only a model that asks has somewhere for the host to
+    // write its working directory and its name for the analysis.
+    if (self.lowered.uses.contains(.host_strings)) try self.w(
+        "    /// §9.15 `$simparam$str(\"cwd\")`: the directory the simulator was\n" ++
+            "    /// started in, written by the host.\n" ++
+            "    cwd: []const u8 = \"\",\n" ++
+            "    /// §9.15 `$simparam$str(\"analysis_name\")`: the host's name for the\n" ++
+            "    /// current analysis (\"tran1\", \"mydc\"), written before it runs.\n" ++
+            "    analysis_name: []const u8 = \"\",\n",
+        .{},
+    );
     for (self.lowered.table_samples.items, 0..) |count, site| {
         try self.w("    table_{d}: [{d}]f64 = @splat(0.0),\n", .{ site, count });
     }

@@ -362,6 +362,18 @@ test "`//! acdyn` names a slot, a frequency and the complex term" {
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! acdyn (out,in) f=1 re=1 im=0 phase=0\n"));
 }
 
+test "analysis takes an optional §9.15 analysis_name after the kind" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const named = try tb_directive.parse(arena, "//! analysis dc mydc\n");
+    try testing.expectEqual(.dc, named.analysis);
+    try testing.expectEqualStrings("mydc", named.analysis_name);
+    try testing.expectEqualStrings("", (try tb_directive.parse(arena, "//! analysis tran\n")).analysis_name);
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! analysis dc two words\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! analysis nosuch\n"));
+}
+
 test "plusargs preserves tokens, duplicate arguments and repeated-line order" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

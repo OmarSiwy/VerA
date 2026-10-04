@@ -506,6 +506,10 @@ pub const Kernel = enum {
     /// §9.12 `$test$plusargs`/`$value$plusargs`: the `Instance.plusargs`
     /// field the host writes and the `zPlusarg` search over it.
     plusargs,
+    /// §9.15 Table 9-28 `$simparam$str("cwd")` / `("analysis_name")`, or a
+    /// name not known until the solve: the host-written `Instance.cwd` and
+    /// `Instance.analysis_name`.
+    host_strings,
 };
 // ---- row types: the discrete half -------------------------------------------
 

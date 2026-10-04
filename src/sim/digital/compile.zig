@@ -1121,9 +1121,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 try compileStmt(self, s.body, depth + 1);
                 var watched: std.ArrayList(u32) = .empty;
                 try readSlots(self, s.body, &watched, depth);
-                // §9.7.5's list is what the statement reads; one that reads
-                // nothing would suspend forever.
-                if (watched.items.len == 0) return self.fail(tok, "§9.7.5: `@*` needs the statement to read at least one net or variable", .{});
+                // §9.7.5's list is what the statement reads. One that reads
+                // nothing is an empty list, which nothing can trigger: the
+                // process suspends forever, as `@` on a never-changing net
+                // would. §9.7.5 states no restriction against it.
                 self.code.items[at].wait_slots = watched.items;
                 return;
             }
@@ -1203,15 +1204,17 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     if (s.args.len < 2 or s.args.len > 4)
                         return self.fail(tok, "$readmemb/$readmemh take (file, memory [, start [, finish]])", .{});
                     if (s.args[0] == .none or ex.tag(s.args[0]) != .str_literal)
-                        return self.exprFail(s.args[0], "the memory file name must be a string literal");
+                        return self.exprFail(s.args[0], "§17.2.9 Syntax 17-7: the memory file name is a string literal");
                     // ponytail: one dimension; §17.2.9's order over several
                     // is the row-major walk, when a source loads one.
                     const arr = if (s.args[1] == .none or ex.tag(s.args[1]) != .ident) null else self.arrays.get(try self.slot(s.args[1]));
                     if (arr == null or arr.?.rest.len != 0)
                         return self.exprFail(s.args[1], "$readmemb/$readmemh load a one-dimensional unpacked array");
+                    // Syntax 17-7 prints `" file_name "`, a string literal;
+                    // `start_addr`/`finish_addr` are expressions, read when
+                    // the task runs ("executed at any time during simulation").
                     for (s.args[2..]) |a| {
-                        if (a == .none or !constantExpression(self, a))
-                            return self.exprFail(a, "the $readmem address bounds must be constant");
+                        if (a == .none) return self.fail(tok, "$readmemb/$readmemh take (file, memory [, start [, finish]])", .{});
                         try checkExpr(self, a);
                     }
                 },

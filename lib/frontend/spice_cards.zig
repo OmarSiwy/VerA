@@ -1,7 +1,9 @@
 //! SPICE `.MODEL` and `.SUBCKT` cards in, Verilog-AMS module source text out
 //! (LRM annex E.2, E.3). Reads the two interface cards and, inside a
 //! `.SUBCKT`, the device cards that form its body; every other card is skipped
-//! without a diagnostic. The text is prepended to the source like
+//! without a diagnostic, except a `.MODEL` of a type VerA has no primitive
+//! for, which is recorded so an instance of it is refused by name (E0952,
+//! E.1.2). The text is prepended to the source like
 //! `Preprocessor.spice_primitives`, so §6 instantiation, overrides and their
 //! diagnostics apply unchanged. Input is lower-cased at ingest (E.2.1).
 
@@ -14,6 +16,10 @@ const token = @import("token.zig");
 pub const Synthesized = struct {
     text: []const u8 = "",
     modules: u32 = 0,
+    /// `.MODEL` cards whose type is a primitive VerA does not support (E.1.2
+    /// bullet 2), as `name type`, lower-cased: an instance naming one is
+    /// refused with E0952 rather than as an unknown module.
+    unsupported: []const []const u8 = &.{},
 };
 
 /// E.2.2.1: ".MODEL statements can be accessed in Verilog-AMS HDL ... The ports
@@ -72,6 +78,7 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     // The first card wins; E.1.2 leaves the choice to "the authors of the
     // simulator".
     var seen: std.ArrayList([]const u8) = .empty;
+    var unsupported: std.ArrayList([]const u8) = .empty;
 
     // `+` continuations make a card longer than a line, so the cards are
     // assembled first and read second.
@@ -103,12 +110,14 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     var i: usize = 0;
     while (i < cards.items.len) {
         const body = subcktBody(cards.items[i..]);
-        if (try emitCard(scratch, &out, cards.items[i], body, &seen)) count += 1;
+        if (try emitCard(scratch, &out, cards.items[i], body, &seen, &unsupported)) count += 1;
         i += 1 + body.len;
     }
 
-    if (count == 0) return .{};
-    return .{ .text = try arena.dupe(u8, out.items), .modules = count };
+    const kept = try arena.alloc([]const u8, unsupported.items.len);
+    for (unsupported.items, kept) |u, *k| k.* = try arena.dupe(u8, u);
+    if (count == 0) return .{ .unsupported = kept };
+    return .{ .text = try arena.dupe(u8, out.items), .modules = count, .unsupported = kept };
 }
 
 /// One physical line with its comments removed: `*` is a full-line comment, `;`
@@ -143,6 +152,7 @@ fn emitCard(
     card: []const u8,
     body: []const []const u8,
     seen: *std.ArrayList([]const u8),
+    unsupported: *std.ArrayList([]const u8),
 ) Allocator.Error!bool {
     // `(` `)` and `,` are noise in a SPICE port list: E.2.2.2's own example
     // writes `.SUBCKT ECPOSC (OUT GND)` with parentheses that carry no meaning.
@@ -162,7 +172,13 @@ fn emitCard(
         const type_ = it.next() orelse return false;
         const row = for (model_types) |r| {
             if (std.mem.eql(u8, r.type_, type_)) break r;
-        } else return false;
+        } else {
+            // E.1.2: "a particular SPICE netlist can reference a primitive
+            // which is unsupported". Kept, so its use is named as that.
+            try seen.append(arena, name);
+            try unsupported.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ name, type_ }));
+            return false;
+        };
         // E.2.2.1: the interface is the primitive's. The body instantiates the
         // primitive, so the model behaves as Table E.1's Behavior column gives
         // that row; an empty column (bjt, mosfet, diode) gives nothing, which
@@ -697,7 +713,11 @@ test "an unrecognised model type, a repeat and an empty netlist all contribute n
     const arena = arena_state.allocator();
 
     try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "")).modules);
-    try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, ".MODEL SW1 SW RON=1\n")).modules);
+    const sw = try synthesize(arena, ".MODEL SW1 SW RON=1\n");
+    try std.testing.expectEqual(@as(u32, 0), sw.modules);
+    // E.1.2: kept by name and type, so its instance is refused as such.
+    try std.testing.expectEqual(@as(usize, 1), sw.unsupported.len);
+    try std.testing.expectEqualStrings("sw1 sw", sw.unsupported[0]);
     try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "R1 a b 1k\n.TRAN 1n 1u\n")).modules);
     const dup = try synthesize(arena, ".MODEL M1 NPN\n.MODEL M1 PNP\n");
     try std.testing.expectEqual(@as(u32, 1), dup.modules);

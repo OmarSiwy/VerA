@@ -106,6 +106,21 @@ pub fn flat(self: *Flatten, local: Ast.StrId) Ast.StrId {
     return self.unit.rename.get(local) orelse local;
 }
 
+/// Reports an instance whose module name declares nothing: E0904, or E0952
+/// when the SPICE netlist has a `.MODEL` of that name whose type is a
+/// primitive VerA does not support (E.1.2: "a particular SPICE netlist can
+/// reference a primitive which is unsupported"). The name matches the card
+/// as E.2.1 matches netlist names, regardless of case.
+pub fn unknownModule(self: *Flatten, inst: *const Ast.Instance) Error!void {
+    const want = self.ctx.file.str(inst.module);
+    for (self.ctx.file.netlist_unsupported) |card| {
+        const space = std.mem.indexOfScalar(u8, card, ' ').?; // `name type`
+        if (!std.ascii.eqlIgnoreCase(card[0..space], want)) continue;
+        return self.err(inst.main_tok, .E0952, "`{s}` is a SPICE `.MODEL` of type `{s}`, a primitive Table E.1 and VerA do not provide", .{ want, card[space + 1 ..] });
+    }
+    try self.err(inst.main_tok, .E0904, "`{s}`", .{want});
+}
+
 /// Returns the net a port connection names, or null when it is not a plain
 /// identifier. §6.2.2 allows an expression; VerA takes a scalar net
 /// reference, which a topology join can express without a new node.

@@ -230,6 +230,26 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             }
         };
     }
+    // §9.15 Table 9-28 "cwd" and "analysis_name" describe the host's run, which
+    // writes them into the instance; a name read at run time may be either.
+    if (std.mem.eql(u8, name, "$simparam$str")) {
+        const a = ex.args(e);
+        const nm = if (a.len >= 1) constStrArg(self, a[0]) else null;
+        if (nm == null or std.mem.eql(u8, nm.?, "cwd") or std.mem.eql(u8, nm.?, "analysis_name"))
+            self.out.uses.insert(.host_strings);
+        // "$simparam$str is similar to $simparam", and an unknown name with
+        // no fallback is an error there; $simparam$str has no fallback, and
+        // Table 9-28 is the set it supports.
+        if (nm) |s| if (for (simparam_str_names) |known| {
+            if (std.mem.eql(u8, s, known)) break false;
+        } else true) {
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0811);
+            b.msg("`\"{s}\"` is not a Table 9-28 string parameter", .{s});
+            b.note("$simparam$str supports \"analysis_name\", \"analysis_type\", \"cwd\", \"module\", \"instance\" and \"path\"", .{});
+            try b.emit();
+            return poison;
+        };
+    }
     if (std.mem.eql(u8, name, "$simparam")) {
         const args = ex.args(e);
         if (args.len == 1) {
@@ -730,3 +750,7 @@ pub fn isConnectModuleOnlySysFunc(name: []const u8) bool {
     for (cm_only) |d| if (std.mem.eql(u8, name, d)) return true;
     return false;
 }
+
+/// §9.15 Table 9-28: the string parameter names `$simparam$str` "shall"
+/// support, and the only ones VerA knows.
+const simparam_str_names = [_][]const u8{ "analysis_name", "analysis_type", "cwd", "module", "instance", "path" };

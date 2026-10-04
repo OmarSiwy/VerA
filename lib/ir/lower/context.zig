@@ -74,7 +74,45 @@ fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     // §8.5.3.5 a switch on a discrete net is processed in the discrete cycle.
     for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(file, module, t) != null) return true;
     for (module.discrete) |blk| if (blk.is_always or blk.generated or suspends(file, blk.body) or writesFourState(file, blk.body) or usesFiles(file, blk.body)) return true;
+    // §7.3.2's `a2d` reads `input dnet; wire dnet;` with nothing in the
+    // module driving it: a discrete net's value, driven or not (§3.7: an
+    // undriven wire is z), is the kernel's.
+    // Without a list the walk allocates nothing.
+    for (module.analog) |blk| if (analogDiscreteNets(file, module, blk.body, null) catch unreachable) return true;
     return false;
+}
+
+/// Whether the analog statement `id` reads a discrete net by name (§7.3: a
+/// net of a discrete discipline, or one with none). With `out`, every such
+/// read is appended to it and the walk does not stop at the first. An access
+/// function's operands are nodes, not values, and are not reads.
+fn analogDiscreteNets(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, id: Ast.StmtId, out: ?struct { a: std.mem.Allocator, list: *std.ArrayList(Ast.ExprId) }) Oom!bool {
+    const Walk = struct {
+        file: *const Ast.SourceFile,
+        module: *const Ast.ModuleDecl,
+        out: @TypeOf(out),
+        hit: *bool,
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
+            if (e == .none or (w.hit.* and w.out == null)) return;
+            const ex = &w.file.exprs;
+            switch (ex.tag(e)) {
+                .branch_access, .port_access => return,
+                else => {}, // else: every other expression is walked for reads
+            }
+            if (discreteNet(w.file, w.module, e) orelse discretePort(w.file, w.module, e)) |n| {
+                w.hit.* = true;
+                if (w.out) |o| try o.list.append(o.a, n);
+            }
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            if (s != .none) try w.file.stmtEdges(s, w);
+        }
+    };
+    var hit = false;
+    try (Walk{ .file = file, .module = module, .out = out, .hit = &hit }).stmt(id);
+    return hit;
 }
 
 /// VAMS §9.5.1.2 a descriptor either context opens is usable in the other,
@@ -224,6 +262,10 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     // discrete net on a switch terminal takes its value from the switch-level
     // resolution of its whole network (§8.5.3.5), which the kernel computes.
     for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(self.file, module, t)) |id| try owned.append(self.arena, id);
+    // §7.3.1 "Read operations of nets ... are allowed from both contexts": a
+    // discrete net the analog block reads holds the kernel's value, z when
+    // nothing drives it.
+    for (module.analog) |blk| _ = try analogDiscreteNets(self.file, module, blk.body, .{ .a = self.arena, .list = &owned });
     var owned_names: std.ArrayList(struct { name: Ast.StrId, tok: u32 }) = .empty;
     for (owned.items) |t| try owned_names.append(self.arena, .{ .name = ex.strOf(t), .tok = ex.mainTok(t) });
     // §3.7 "If no driver is connected to a wreal net, its value shall be zero
@@ -290,7 +332,9 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         if (!reads.guarded.contains(name) and !reads.names.contains(name)) continue;
         const ty: Ast.Type = for (module.vars) |v| {
             if (v.name == t.name) break v.ty;
-        } else if (netOf(module, t.name)) |n| (if (n.kind == .wreal) .real else .integer) else continue; // an undeclared name is §6.8's, reported elsewhere
+        } else if (netOf(module, t.name)) |n| (if (n.kind == .wreal) .real else .integer) else for (module.ports) |p| {
+            if (p.name == t.name) break if (p.kind == .wreal) .real else .integer;
+        } else continue; // an undeclared name is §6.8's, reported elsewhere
         // VAMS Table 7-1: a bit grouping, a net and an `integer` read as an
         // integer, a `real` "with no conversion".
         const real = switch (ty) {
@@ -504,6 +548,17 @@ fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: As
     if (e == .none or file.exprs.tag(e) != .ident) return null;
     const n = netOf(module, file.exprs.strOf(e)) orelse return null;
     return if (discipline_rules.isContinuous(file, n.discipline)) null else e;
+}
+
+/// `e` if it names a port of `module` that is a net of no continuous
+/// discipline (`input dnet; wire dnet;` declares the port, not a `NetDecl`).
+fn discretePort(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none or file.exprs.tag(e) != .ident) return null;
+    const name = file.exprs.strOf(e);
+    for (module.vars) |v| if (v.name == name) return null;
+    for (module.ports) |p| if (p.name == name)
+        return if (p.kind != .wreal and !discipline_rules.isContinuous(file, p.discipline)) e else null;
+    return null;
 }
 
 /// Is `name` a net of `module`: a declared net, or a port no variable

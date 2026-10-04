@@ -116,7 +116,15 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 if (rest.len != 0) return error.BadSyntax;
                 d.solve_free = true;
             },
-            .analysis => analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax,
+            // `//! analysis <kind> [<name>]`: the name is §9.15's
+            // `analysis_name`, the kind's own spelling when omitted.
+            .analysis => {
+                const kind_end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
+                analysis = std.meta.stringToEnum(Analysis, rest[0..kind_end]) orelse return error.BadSyntax;
+                const name = std.mem.trim(u8, rest[kind_end..], " \t");
+                if (std.mem.indexOfAny(u8, name, " \t\"\\") != null) return error.BadSyntax;
+                if (name.len != 0) d.analysis_name = try arena.dupe(u8, name);
+            },
             .exit => d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber,
             .checks => {
                 if (d.expected_checks != null) return error.BadSyntax;
