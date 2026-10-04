@@ -195,36 +195,39 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v4
 
-  # The consumer check ARPice asked for (2026-10-04): the device models it
-  # ships compile to a host-loadable .so through this tree's vera, and the
-  # contract ABI handshake (`contract.abi_version`, checked on every
-  # --emit-so, plus the opted-in contract checks) passes. ARPice pins a VerA sha; this job catches a break
-  # before ARPice re-pins onto it.
-  arpice-models:
+  # The consumer check: build ARPice (OmarSiwy/ESPice) against THIS VerA
+  # commit, the way ARPice ships it (2026-10-04, agreed with ARPice).
+  # Its build.zig compiles every models/*.va through VerA into host objects
+  # built from its own src/device/eval.zig dyn, so a contract, validateHost or
+  # ABI failure is a compile error, and the link resolves each device's
+  # arp_device_<stem>. `zig build test` then runs ARPice's unit suites and
+  # its numeric deck corpus. CPU only (-Dgpu=false).
+  # VerA goes where ESPice's build.zig.zon expects it: `../vera-pin1` while
+  # ESPice pins a path; `--fork` once it pins a git URL (an unmatched --fork
+  # is a Zig error, so the two are exclusive).
+  arpice-consumer:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        model: [diode, mos1, bsim4va, psp103, psp103_nqs, vbic13_4t]
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: vera-pin1
       - uses: actions/checkout@v4
         with:
           repository: OmarSiwy/ESPice
-          path: arpice
-          sparse-checkout: models
+          path: espice
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - name: Build vera
-        run: zig build -Doptimize=ReleaseFast install
-      # tests/arpice_dyn.zig exports a real evalQ, so Zig compiles the whole
-      # device, and opts into the contract's checks. A no-op dyn would make a
-      # ~1 KB stub that proves nothing (measured 2026-10-04).
-      - name: Compile ${{ matrix.model }}.va to a .so
+      - name: Build ARPice against this VerA (compiles the model corpus)
+        working-directory: espice
         run: |
-          so=$(./zig-out/bin/vera --emit-so --contract tools/contract.zig --dyn tests/arpice_dyn.zig \
-            -I arpice/models --work-dir out arpice/models/${{ matrix.model }}.va)
-          ls -l "$so"
-          nm -D "$so" | grep -q bench_evalq
+          fork=()
+          grep -q 'vera-pin1' build.zig.zon || fork=("--fork=$GITHUB_WORKSPACE/vera-pin1")
+          zig build -Dgpu=false "${fork[@]}"
+      - name: ARPice unit suites and deck corpus
+        working-directory: espice
+        run: |
+          fork=()
+          grep -q 'vera-pin1' build.zig.zon || fork=("--fork=$GITHUB_WORKSPACE/vera-pin1")
+          zig build test -Dgpu=false "${fork[@]}"
