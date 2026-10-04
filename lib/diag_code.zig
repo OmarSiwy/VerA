@@ -433,6 +433,7 @@ pub const Code = enum(u16) {
     E0925,
     E0926,
     E0927,
+    E0928,
     E0960,
     E0982,
     E0482,
@@ -5972,6 +5973,28 @@ fn infoOf(c: Code) Info {
             \\(E0922). Add a `connectrules` block with a `connect` statement whose
             \\connect module bridges the two disciplines (7.7.1), or give both
             \\connections disciplines of one domain.
+            ,
+        },
+        .E0928 => .{
+            .title = "a SPICE card inside a definition is outside VerA's SPICE subset",
+            .lrm = "E.1.2",
+            .explain =
+            \\LRM E.1.2: "whether a particular Verilog-AMS simulator is SPICE
+            \\compatible, and with which particular variant of SPICE it is
+            \\compatible, is solely determined by the authors of the simulator."
+            \\
+            \\VerA claims SPICE3 card syntax for `.MODEL` (types npn, pnp, d, nmos,
+            \\pmos, njf, pjf, nmf, pmf, r, c, l) and for flat `.SUBCKT` bodies made
+            \\of numeric-valued R, C, L, V, I, E, F, G and H cards. Inside a
+            \\definition, `PARAMS:` and `k=v` on a `.SUBCKT` header, a `{expr}`
+            \\value, a nested `.SUBCKT`, a model-referenced or other device card
+            \\(`R1 A B RMOD`, `Q1 ...`, `X1 ...`), a trailing field and an unknown
+            \\model type are not read. Skipping such a card would change the
+            \\circuit (a dropped R is an open), so the netlist is refused.
+            \\
+            \\Cards outside any definition (`.TRAN`, top-level devices) are not
+            \\module definitions and are still skipped. Rewrite the card with a
+            \\numeric value, or write the subcircuit as a Verilog-AMS module.
             ,
         },
         .E0923 => .{

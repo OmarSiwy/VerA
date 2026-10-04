@@ -53,7 +53,7 @@ correction.
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | DONE |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | yes |
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | DONE |
-| VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
+| VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | DONE |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | yes |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
@@ -245,6 +245,7 @@ correction.
 - **Decision**: `DECIDED:` (b). VerA claims SPICE3 card syntax for `.MODEL` and for flat `.SUBCKT` bodies made of numeric-valued R/C/L/V/I/E/F/G/H cards. `PARAMS:`, `{expr}` values, nested `.SUBCKT`, `.INCLUDE`/`.LIB` and model-referenced body devices (`R1 A B RMOD`) are not claimed. Cards outside a definition (`.tran`, top-level devices) are not module definitions and may still be skipped. A card that cannot be read inside a `.SUBCKT` body is refused with a named E.1.2 diagnostic. Skipping it changes the circuit, for example a dropped R becomes an open, and that is the silent wrong answer AGENTS.md §4 forbids.
 - **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in IMPLEMENTATION §1; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame (ROADMAP §5.3) is fixed by the same diagnostic.
 - **Measure impact**: A (new fixtures), C (E.1.2 refusal evidence).
+- **Status**: DONE. E0928 (`spice_cards.Refusal`, reported by `Preprocessor.process` at the card's line in the netlist); an unknown `.MODEL` type is refused too, which closes the `.MODEL X SW` E0904 row. Six `annex_e_spice/reject_spice_*.va` fixtures.
 
 ### VD-013: "Shall be controlled by a simulator option" (F.2.2)
 - **Source**: ROADMAP §5.1 item 13; `annex_f_resolution/COVERAGE.md:16-21` at 8b1514d4.

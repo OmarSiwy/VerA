@@ -247,9 +247,9 @@ These need a call, not another agent pass.
 11. **§3.4.5 vs §6.3.3: `#(.locked())` on a localparam.** Decided: E0907
     (Vague_Decisions VD-011), pinned by
     `ch03_data_types/reject_localparam_empty_named_override.va`.
-12. **§E.1.2: which SPICE flavour VerA claims** (`PARAMS:`, `{expr}`, nested
-    `.SUBCKT`). Only parse limits are recorded, in `lib/frontend/spice_cards.zig`.
-    (`h04_SPEC.md:116-119`.)
+12. **§E.1.2: which SPICE flavour VerA claims.** Decided and implemented: SPICE3
+    `.MODEL` and flat numeric `.SUBCKT` bodies, everything else inside a
+    definition is E0928 (Vague_Decisions VD-012, IMPLEMENTATION §1).
 13. **§F.2.2 "shall be controlled by a simulator option"**: no such option
     exists, and step 5's top-down re-pass is folded into one pass.
     (`annex_f_resolution/COVERAGE.md:16-21`.)
@@ -318,7 +318,6 @@ native compilation backlog separately from passing interpreter behavior.
 | AMS 6.9.2 | A paramset override that reads a generate block's localparam is refused (E0914). | `ch06_hierarchy/COVERAGE.md:195-197` |
 | AMS 7.3.2 | The LRM's `a2d` example with an undriven `dnet` is refused (E0315, E0369). | `ch07_mixed_signal/COVERAGE.md:155-159` |
 | AMS 9.15 | `$simparam$str("cwd")` and `("analysis_name")` return `""`. | `a10_SPEC.md:71-73,210-215` |
-| AMS E.1.2 | `.MODEL X SW` is skipped and the instance line gets E0904. | `h04_SPEC.md:125-128` |
 | IEEE 12.2.1, 12.8.2 | A `defparam` path that starts at a module name is refused (E0907) by the analog path. The digital upward/indexed resolution is fixed by `b700311a`. | `conformance-ieee-scope-review.md:47-76` |
 | IEEE 17.5.4 | A PLA personality bit `x` is treated as "ignore"; the standard says "worst case". | `conformance-ieee-pla-review.md:58` |
 | IEEE 9.7.5 | `@*` over a statement that reads nothing is refused with an E1100 that cites §9.7.5, which has no such rule. | `conformance-ieee-scheduling-review.md:95-98` |
