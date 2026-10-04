@@ -252,10 +252,10 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
     if (r.i < r.s.len)
         return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0144, "`{s}`", .{std.mem.trim(u8, r.s[r.i..], " \t\r\n")});
 
-    if (pp.includes.items.len >= max_include_depth) {
+    if (pp.n_includes >= max_include_depth) {
         var b = pp.failWith(name_span, .E0125);
         b.msg("limit is {d}", .{max_include_depth});
-        b.note("include chain: {s}", .{try pp.joinChain(pp.includes.items, path)});
+        b.note("include chain: {s}", .{try pp.joinChain(pp.includes[0..pp.n_includes], path)});
         try b.emit();
         return error.PreprocessFailed;
     }
@@ -272,8 +272,9 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
         return error.PreprocessFailed;
     };
 
-    try pp.includes.append(pp.scratch, path);
-    defer _ = pp.includes.pop();
+    pp.includes[pp.n_includes] = path;
+    pp.n_includes += 1;
+    defer pp.n_includes -= 1;
     // Registered under the opened path, so `__FILE__` and every diagnostic
     // inside the file name the file that was read (§10.7).
     try pp.runFile(inc.text, inc.path, null);
