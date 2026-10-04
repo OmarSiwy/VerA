@@ -740,7 +740,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p02_05_cb_time_regions.c",
         .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 05_cb_time_regions checks=76\np02_design: t=20 reached\n",
+        .stdout = "p02: 05_cb_time_regions checks=82\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_07_cb_remove_and_info.c",

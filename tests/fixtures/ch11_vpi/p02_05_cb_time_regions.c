@@ -112,9 +112,28 @@
  * it, which is the only way this file can observe that the sentence was obeyed
  * rather than merely producing a callback that happened to land at t=1.
  *
- * Whether the CURRENT queue (t=2) is itself returned is left open on purpose:
- * 11.6.25 NOTE 5 qualifies it and the qualification does not have a single
- * reading. Only times strictly greater than the current one are asserted.
+ * THE CURRENT QUEUE. IEEE 1364-2005 26.6.40(c): "The current time queue shall
+ * only be returned as part of the iteration if there are events that precede
+ * read only sync." 11.6.25 NOTE 5: "If any events after read only sync remain
+ * in the current queue, then it shall not be returned as part of the
+ * iteration." The two differ when an event AND a read-only-sync callback are
+ * both pending now; docs/Vague_Decisions.md VD-046 takes 26.6.40's reading
+ * (NOTE 5 as "if only events after read only sync remain"). Two walks at t=7,
+ * where this file has cbReadOnlySynch(7) pending throughout:
+ *
+ *   cbAtStartOfSimTime(7)  the s block's #7 event is still to run, and it
+ *                          precedes read-only sync -> the first queue is t=7
+ *   cbReadWriteSynch(7)    "after execution of events for a specified time":
+ *                          the s event has run and nothing else is due at 7
+ *                          (the n block finished at 4, g waits for 10). Only
+ *                          cbReadOnlySynch(7) is left -> t=7 is absent, and
+ *                          the first queue is the g block's t=10
+ *
+ * The first walk is the mixed case, so it separates 26.6.40 from NOTE 5 read
+ * literally; the second is the case both readings omit. Neither has an
+ * invalid form: what the iteration contains is not something a caller can
+ * get wrong (the refusals of vpi_iterate(vpiTimeQueue, ...) are p04_04's and
+ * ieee_pli/b_26_6_behaviour.c's).
  */
 
 //! lrm 11.2.1
@@ -131,6 +150,7 @@
 //! lrm 12.31.4
 //! lrm 12.33.2
 //! lrm 12.35
+//! inherited IEEE 1364-2005 26.6.40
 
 #include "p02_check.h"
 
@@ -159,6 +179,21 @@ static void check_time_is(PLI_UINT32 ticks, const char *what)
         what, (unsigned)ticks, (unsigned)t.high, (unsigned)t.low);
 }
 
+/* The time of the first vpiTimeQueue entry, or 0 for an empty iteration. */
+static PLI_UINT32 first_queue_time(void)
+{
+  s_vpi_time t;
+  vpiHandle  itr = vpi_iterate(vpiTimeQueue, NULL), q;
+  expect_no_error("vpi_iterate(vpiTimeQueue, NULL)");
+  if (itr == NULL) return 0;
+  q = vpi_scan(itr);
+  CHECK(q != NULL, "a non-NULL iterator holds a queue");
+  t.type = vpiSimTime;
+  vpi_get_time(q, &t);
+  vpi_free_object(itr);
+  return t.low;
+}
+
 static int on_start_of_sim_time(p_cb_data cb_data)
 {
   n_start++;
@@ -173,6 +208,9 @@ static int on_start_of_sim_time(p_cb_data cb_data)
         cb_data->time->real);
   check_time_is(7, "cbAtStartOfSimTime(7)");
   CHECK(byte_of(s) == 0x01, "before the t=7 queue, s must still be 0x01");
+  CHECK(first_queue_time() == 7,
+        "26.6.40(c): the s event precedes read-only sync, so the current t=7 "
+        "queue is returned although cbReadOnlySynch(7) is pending too");
   return 0;
 }
 
@@ -195,6 +233,9 @@ static int on_read_write(p_cb_data cb_data)
   (void)cb_data;
   check_time_is(7, "cbReadWriteSynch(7)");
   CHECK(byte_of(s) == 0x42, "after the t=7 queue, s must be 0x42");
+  CHECK(first_queue_time() == 10,
+        "26.6.40(c): only cbReadOnlySynch(7) is left at t=7, so the current "
+        "queue is not returned and the first is t=10");
   return 0;
 }
 
