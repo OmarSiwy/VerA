@@ -80,7 +80,7 @@ correction.
 | VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | yes |
 | VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | yes |
 | VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | yes |
-| VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | yes |
+| VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | DONE |
 | VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | yes |
 | VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | yes |
 | VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | yes |
@@ -492,6 +492,7 @@ correction.
 - **Decision**: `DECIDED:` (b). The prose is the specific normative statement about lib.map files. The grammar box is a superset that also serves `library_text` in general. 13.3 places configs in source text, where they are design elements (19.11 lists "module, primitive, or configuration" as design elements). Refusing loses nothing portable, since the config can move to a source file, while accepting it would create map files other tools may reject. Other tools: not established.
 - **VerA today**: `lib/frontend/libmap.zig:161` refuses any keyword other than `library`/`include` with E0244 ("a library map holds `library` and `include` statements only (IEEE 1364-2005 §13.2.2)"). Pinned for a `module` by `ieee1364/13_configuration/b_13_2_2_source_text_in_map_rejected.v`, with legal neighbour `b_13_2_2_include_map.v`. No fixture puts a `config` in a map. `CHANGE NEEDED:` add a rejection fixture whose map holds `config cfg; design work.top; endconfig`, `//! reject E0244` and `found \`config\``. Fixture only, so a patch.
 - **Measure impact**: B: 13.2.2 rejection evidence for the contested construct. A: +1 fixture.
+- **Status**: DONE. `ieee1364/13_configuration/b_13_2_2_config_in_map_rejected.v` over `libmap/bad/config_in_map.map`.
 
 ### VD-040: A `$readmem` file address outside the memory when the task gives no bounds
 - **Source**: ROADMAP §5.6, "IEEE 17.2.9" bullet, first question (`conformance-readmem-validation-edges.md:66-70` at 8b1514d4).
