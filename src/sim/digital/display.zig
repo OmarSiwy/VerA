@@ -192,7 +192,10 @@ pub const MemLoad = struct {
         while (self.it.next()) |token| {
             if (token[0] == '@') {
                 self.addressed = true;
-                self.at = std.fmt.parseInt(i64, token[1..], 16) catch return error.BadAddress;
+                // §3.5.1: `_` is legal anywhere but first, so also last,
+                // which `parseInt` refuses (VD-041). x, z and ? name no
+                // word and stay malformed.
+                self.at = std.fmt.parseInt(i64, std.mem.trimEnd(u8, token[1..], "_"), 16) catch return error.BadAddress;
                 if (self.bounded and (self.at < self.range_low or self.at > self.range_high)) return error.AddressOutOfRange;
                 // No bounds: the clause's error does not apply, so its
                 // words are skipped with a warning (VD-040).

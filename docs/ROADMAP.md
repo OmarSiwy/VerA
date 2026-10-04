@@ -445,7 +445,9 @@ Settle each before a fixture asserts one side.
   library_description. VerA refuses a config in a map (E0244).
 - IEEE 17.2.9: `$readmem` address policy. `@8` into `[0:3]` with no task bounds
   warns W1156 and skips its words (VD-040,
-  `b_17_2_9_readmem_address_outside_memory.v`); x/z/underscore in addresses is undecided.
+  `b_17_2_9_readmem_address_outside_memory.v`). An address takes `_` after its
+  first digit, trailing included, and refuses x/z/? (VD-041,
+  `b_17_2_9_readmem_address_underscore.v`, `b_17_2_9_readmem_address_x_rejected.v`).
   (`conformance-readmem-validation-edges.md:66-70`.)
 - IEEE 18.4.3.2: strength 5 is "large" in the prose and "pull" in the list.
   (`conformance-vcd-review.md:137`.)
