@@ -29,6 +29,7 @@ const diag = @import("diag");
 const Oom = Lower.Oom;
 const ground = Lower.ground;
 const TypedValue = Lower.TypedValue;
+const VarSlot = Lower.VarSlot;
 const Accum = Lower.Accum;
 const poison = Lower.poison;
 const unify = Lower.unify;
@@ -221,6 +222,8 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     };
     const name = self.file.str(chain.name);
     const info = self.arrays.get(name) orelse {
+        if (chain.subs.len == 1) if (self.vars.get(name)) |slot| if (self.reg_ranges.get(name)) |rr|
+            return lowerRegSelect(self, name, slot, rr, chain.subs[0]);
         try self.err(self.file.exprs.mainTok(e), .E0309, "`{s}`", .{name});
         return poison;
     };
@@ -274,6 +277,65 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         .string => "$idx$str",
     };
     return .{ .v = try self.call(callee, vals.items), .ty = ty };
+}
+
+/// §7.3.1 a constant bit- or part-select of a `reg` read from the analog
+/// context: the selected grouping, shifted to bit 0 and zero-extended by
+/// `analogRead`, which judges the GROUPING's width against Table 7-1's
+/// "Access of discrete bit groupings with greater than 31 bits is illegal".
+/// So `r[30:0]` of a `reg [39:0] r` is legal and `r` itself is E0222.
+/// The right-hand bound of a packed range is its LSB in either direction
+/// (IEEE 1364-2005 §4.2.1), so bit k sits |k - right| places above bit 0.
+fn lowerRegSelect(self: *Lower, name: []const u8, slot: VarSlot, rr: Lower.RegRange, sub: Ast.ExprId) Oom!TypedValue {
+    const ex = &self.file.exprs;
+    const ranged = ex.tag(sub) == .range;
+    const hi_e, const lo_e = if (ranged) .{ ex.lhs(sub), ex.rhs(sub) } else .{ sub, sub };
+    const bound = struct {
+        fn f(l: *Lower, s: Ast.ExprId) ?i64 {
+            const c = lower_constfold.foldExpr(l, s, false) orelse return null;
+            return c.asIntExact();
+        }
+    }.f;
+    if (ex.tag(sub) == .indexed_range) {
+        try self.err(ex.mainTok(sub), .E0329, "an indexed part-select of `{s}` read from the analog context", .{name});
+        return poison;
+    }
+    const a = bound(self, hi_e) orelse {
+        try self.err(ex.mainTok(sub), .E0329, "a select of `{s}` read from the analog context needs constant bounds", .{name});
+        return poison;
+    };
+    const b = bound(self, lo_e) orelse {
+        try self.err(ex.mainTok(sub), .E0329, "a select of `{s}` read from the analog context needs constant bounds", .{name});
+        return poison;
+    };
+    const w = slot.reg_width.?;
+    const pos = struct {
+        fn f(r: Lower.RegRange, width: u32, k: i64) ?u32 {
+            const d = if (r.asc) r.right - k else k - r.right;
+            if (d < 0 or d >= width) return null;
+            return @intCast(d);
+        }
+    };
+    const pa = pos.f(rr, w, a) orelse return outside(self, sub, name, a, w);
+    const pb = pos.f(rr, w, b) orelse return outside(self, sub, name, b, w);
+    const raw = try self.builder.readVariable(slot.place, self.cur);
+    const lo = @min(pa, pb);
+    const width = @max(pa, pb) - lo + 1;
+    // ponytail: the analog context holds a `reg` as its 32-bit §3.2 integer,
+    // so bits 32 and up never reach it. A grouping wider than 31 bits is
+    // still Table 7-1's E0222 first; a legal one above bit 31 is refused by
+    // name until the carrier is widened.
+    if (width <= 31 and @max(pa, pb) >= 32) {
+        try self.err(ex.mainTok(sub), .E0329, "`{s}[{d}:{d}]` reaches above bit 31 of the `reg`, and the analog context holds a `reg` as a 32-bit integer", .{ name, a, b });
+        return poison;
+    }
+    const shifted = if (lo == 0) raw else try self.emit(.shr, &.{ raw, try self.mir.addIntConst(self.arena, lo) });
+    return .{ .v = try lower_var.analogRead(self, shifted, width), .ty = .integer };
+}
+
+fn outside(self: *Lower, sub: Ast.ExprId, name: []const u8, k: i64, w: u32) Oom!TypedValue {
+    try self.err(self.file.exprs.mainTok(sub), .E0310, "bit {d} lies outside `{s}`'s {d}-bit range", .{ k, name, w });
+    return poison;
 }
 
 /// `{a, b, ...}` in a value position. The INTEGER form (§4.2.13) needs each
@@ -1025,9 +1087,15 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// — see `potentialSourceHere` for the case where this unit's OWN source is the
 /// branch being read.
 fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
-    for (self.out.contributions.items, self.accum.items) |c, acc| {
-        if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
+    for (self.out.contributions.items, self.accum.items, 0..) |c, acc, i| {
+        if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br) {
+            // §5.6.8.2/§6.7.1 an instance's own unnamed branch, when several
+            // share the row. An instance that contributed nothing to the pair
+            // reads the row, as a parent reading its child's flow always has.
+            if (c.shared and t.br == Lower.unnamed_branch)
+                if (self.unit_accum.get(.{ .row = @intCast(i), .unit = t.unit })) |pa| return pa;
             return acc;
+        }
     }
     return null;
 }

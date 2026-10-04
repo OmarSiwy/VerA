@@ -105,6 +105,10 @@ pub const VarSlot = struct {
     /// analog code reads it. A register used only by digital code may be wider.
     reg_width: ?u32 = null,
 };
+/// A `reg`'s packed range: its right-hand bound (the LSB in either
+/// direction) and whether it ascends (`[0:39]`), where a bit- or part-select
+/// lands (`lower_expr.lowerRegSelect`).
+pub const RegRange = struct { right: i64, asc: bool };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
@@ -235,6 +239,11 @@ had_error: bool = false,
 access_kind: std.StringHashMapUnmanaged(Access) = .empty,
 /// Visible variables (§3.2) — locals, function args, scalarized array elements.
 vars: std.StringHashMapUnmanaged(VarSlot) = .empty,
+/// §5.4.1 each instance's share of an unnamed-branch contribution row
+/// (`lower_contrib.unitAccum`), keyed by the row and the owning unit.
+unit_accum: std.AutoHashMapUnmanaged(struct { row: u32, unit: u32 }, Accum) = .empty,
+/// Every scalar `reg` with a constant packed range, by the name in `vars`.
+reg_ranges: std.StringHashMapUnmanaged(RegRange) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
 scope_log: std.ArrayList(lower_var.ScopeEntry) = .empty,
 /// §3.4 parameters and §3.5 genvars visible to constant evaluation.
@@ -320,6 +329,8 @@ in_analog_initial: bool = false,
 /// `Options`; the default, false, counts those reads. Only `lower_var.Exposed`
 /// asks: a §3.2 hold that only a print could observe is no hold.
 displays_dropped: bool = false,
+/// §7.4.4's resolution mode (`Options.discipline_resolution`).
+discipline_resolution: Elaborate.DisciplineResolution = .basic,
 /// `Ast.AnalogBlock.unit` of the block being lowered: the module instance that
 /// wrote it. Read by `discardOpposite` only; see `newContrib`.
 cur_unit: u32 = 0,
@@ -463,6 +474,7 @@ pub const Options = struct {
     include_dirs: []const []const u8 = &.{},
     param_overrides: []const ParamOverride = &.{},
     displays_dropped: bool = false,
+    discipline_resolution: Elaborate.DisciplineResolution = .basic,
 };
 
 /// Lowers `file` into the empty `mir`. Retains nothing: the SSA builder's map
@@ -482,6 +494,7 @@ pub fn lower(
     self.include_dirs = opts.include_dirs;
     self.param_overrides = opts.param_overrides;
     self.displays_dropped = opts.displays_dropped;
+    self.discipline_resolution = opts.discipline_resolution;
     defer {
         self.deinit();
         assert(self.builder.dir.len == 0);
@@ -517,6 +530,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         .tok_starts = self.tok_starts,
         .bag = self.bag,
         .param_overrides = self.param_overrides,
+        .discipline_resolution = self.discipline_resolution,
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope

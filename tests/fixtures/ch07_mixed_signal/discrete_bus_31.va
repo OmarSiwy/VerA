@@ -16,9 +16,9 @@
 // permits it — `r` is assigned in the discrete context only, and the continuous
 // context merely READS it.
 //
-// The §7.3.1 WIDTH half is judged separately and by the parser, which is the
-// only stage that sees a declared range: E0222 stays silent at 31 and fires at
-// 32 (discrete_bus_over31_rejected.va). What is left for this file is the
+// The §7.3.1 WIDTH half is judged separately, at each analog access of a
+// grouping: E0222 stays silent at 31 and fires at 32
+// (discrete_bus_over31_rejected.va, discrete_bus_part_select_32_rejected.va). What is left for this file is the
 // MAPPING, and it is the same one discrete_bus_narrow.va pins one octave down —
 // see that file for how a constant `initial` block reaches the continuous
 // context with no digital kernel under it.

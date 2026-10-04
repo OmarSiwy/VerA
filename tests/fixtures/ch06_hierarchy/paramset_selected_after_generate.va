@@ -27,11 +27,8 @@
 // evaluated (a localparam declared inside the generate block), is
 // paramset_selected_by_generate_localparam.va.
 //
-// (The four instances have distinct names because VerA flattens an instance in
-// a generate block under its own name rather than under `g1.`/`g2.`; two
-// same-named instances in different generate blocks currently collide. That is
-// §6.7's naming, not this clause's selection order, and it is kept out of this
-// file's way.)
+// The surviving instances are reached through their generate block's name
+// (§6.6.3: a generate block is a scope), `g1.u1` and `g2.u4`.
 //
 //! lrm 6.9.2
 //! lrm 6.4.2
@@ -71,8 +68,8 @@ module ch6_psg_top(p, n);
     ch6_psg_sel #(.w(1.0)) u4(p, n);
   end
   analog begin
-    `CHECKX("g1 took its then-arm: w = 10 selects the member that sets gain 2", u1.gain, 2.0);
-    `CHECKX("g2 took its else-arm: w = 1 selects the member that sets gain 3", u4.gain, 3.0);
+    `CHECKX("g1 took its then-arm: w = 10 selects the member that sets gain 2", g1.u1.gain, 2.0);
+    `CHECKX("g2 took its else-arm: w = 1 selects the member that sets gain 3", g2.u4.gain, 3.0);
     I(p, n) <+ 0.0;
   end
 endmodule

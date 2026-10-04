@@ -49,13 +49,13 @@ summary and has a **Status** line naming what landed.
 | VD-004 | AGENTS.md §0 rule 1 (house rule) | Re-measure figures that gate an assertion; delete prose-only ones | DONE (4ef087d6) |
 | VD-005 | IEEE 1364-2005 17.10; VAMS 9.12 Table 9-9 | No 17.10-03 row; re-score 17.10-01/-02 on the existing digital fixtures | DONE (4ef087d6) |
 | VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | DONE (4ef087d6) |
-| VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | yes |
-| VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
-| VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | yes |
+| VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | DONE (8a719d2a) |
+| VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | PARTIAL (4735daab) |
+| VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | DONE (5258ed3f) |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | DONE (ea6b1cb6) |
-| VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
-| VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes (`.MODEL` half DONE e7900531) |
-| VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
+| VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | DONE (2df23aa8) |
+| VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | DONE (e7900531, aeb2b5cc) |
+| VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | DONE (4735daab) |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | DONE (9d434792) |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | DONE (4ef087d6) |
 | VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
@@ -81,7 +81,7 @@ summary and has a **Status** line naming what landed.
 | VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | DONE (dac6eb2b) |
 | VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | DONE (4b6c96d8) |
 | VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | DONE (4b6c96d8) |
-| VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | yes |
+| VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | DONE (14cd4397) |
 | VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | DONE (418338cf) |
 | VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | DONE (22fb2c50) |
 | VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | DONE (4b6c96d8) |
@@ -125,7 +125,7 @@ summary and has a **Status** line naming what landed.
 | VD-080 | IEEE 1364-2005 8.1.2 | 64 UDP inputs for both kinds, E1017 past it | no |
 | VD-081 | IEEE 1364-2005 11.4.2 | Source-order FIFO active events; resume in suspend order; interpreter = native | no |
 | VD-082 | IEEE 1364-2005 5.1.4, 11.4.2, 11.5, 12.3.10.x (CLAUSE-AUDIT §5.5) | Tagged fixtures assert only the permitted set; VerA's choice pinned untagged | DONE (4ef087d6) |
-| VD-083 | IEEE 1364-2005 13.4.4, 13.3.2 | The config no `use` clause names sets the top; zero or several is E0243 | yes |
+| VD-083 | IEEE 1364-2005 13.4.4, 13.3.2 | The config no `use` clause names sets the top; zero or several is E0243 | DONE (02af6a29) |
 | VD-084 | IEEE 1364-2005 17.2.4.1 | 16-deep pushback, EOF past it; every read routine sees it | DONE (78df5df4) |
 | VD-085 | IEEE 1364-2005 17.2.1, 27.25; VAMS 12.24, 12.27 | Lowest free mcd bit from 1; from channel 4 under VPI, one shared table | no |
 | VD-086 | IEEE 1364-2005 17.9.1 | One hidden per-run seed from 0 for seedless digital `$random` | no |
@@ -204,6 +204,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (c). 7.8.4 defines a mixed signal by the disciplines of its segments, not by activity. Once the net resolves continuous (7.4.4.1) and a port's lower segment is discrete, the port is mixed. "Shall match one (and only one)" is then violated by zero matches as much as by two. 6.5.7's "provided" makes the connection conditional. The new diagnostic is the zero-match counterpart of E0922.
 - **VerA today**: `lib/ir/elaborate/insert.zig:61-62`: "A mixed port no statement matches is left joined". E0922 covers only `count > 1` (`:94-99`). `ch07_mixed_signal/lrm_7_4_4_1.va` relies on this acceptance. CHANGE NEEDED: a new E09xx error for a mixed port that matches no connect statement, citing 6.5.7/7.8.4. `lrm_7_4_4_1.va` gets a `connectrules` block (or a trivial connect module), so it still tests 7.4.4.1 resolution. Add a reject fixture with that legal neighbour. Minor: source that was accepted is now refused.
 - **Measure impact**: A (one fixture edited, one added), C (7.8.4 and 6.5.7 become two-way).
+- **Status**: DONE (8a719d2a). E0927 (`insert.checkUnbridged`, judged after §7.4 resolution); `lrm_7_4_4_1.va` carries a `connectrules` block; `reject_mixed_port_no_connect_statement.va` pins the refusal.
 
 ### VD-008: Detail discipline resolution is testable, and its absence is a gap
 - **Source**: ROADMAP §5.1 item 8; `docs/conformance-mixed-signal.md:193-201` at 8b1514d4; IMPLEMENTATION §1 row "AMS 7.4.4.2".
@@ -213,6 +214,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). The clause defines two modes and makes basic the default. Only how a user selects a mode is left to the vendor. So a fixture that pins basic mode without any selection is not vendor-specific. It tests the normative default. Detail mode is testable once a selector exists, by a fixture that selects it and asserts the Figure 7-4 result. Until then, 7.4.4.2 is `missing`, not implementation-defined. See VD-013 for the selector.
 - **VerA today**: basic only (`lib/ir/elaborate/resolve.zig`; IMPLEMENTATION §1 row "AMS 7.4.4.2 ... basic only"). `lrm_7_4_4_1.va` pins basic. CHANGE NEEDED: (1) correct the `lrm_7_4_5.va:6-12` header so it says basic is the testable default and detail is not implemented; (2) re-file IMPLEMENTATION's 7.4.4.2 row as a gap under ROADMAP §5.3 rather than a choice; (3) when VD-013 lands, add a detail-mode fixture. Patch for (1) and (2). Minor for (3), because it adds a CLI option and new resolution results.
 - **Measure impact**: C (7.4.4.2 stays one-way until detail mode lands; no change from the documentation fix).
+- **Status**: PARTIAL (4735daab). (1) `lrm_7_4_5.va` header corrected; (2) IMPLEMENTATION's row removed (it is a gap, not a choice) and `ch07_mixed_signal/CLAUSES.tsv` no longer classifies 7.4.4.2; (3) in the parse-in-full-then-refuse form: detail mode is selectable (VD-013) and compiles a signal both modes decide alike (`discipline_resolution_detail_one_level.va`), and the Figure 7-4 design, where they differ, is E0930 (`discipline_resolution_detail_figure_7_4_refused.va`). F.2.2 step 5 is not implemented.
 
 ### VD-009: Two modules with one name
 - **Source**: ROADMAP §5.1 item 9; `docs/conformance-ieee-config-review.md:32` (CFG-005) at 8b1514d4.
@@ -222,6 +224,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b) in both languages. 13.2.1.1 is the specific rule: it names the case and gives a reason (the separate-compile model). 4.11 predates libraries. Option (c) satisfies neither clause. The `.va` path must agree with the `.v` path, so that one design does not elaborate differently depending on which engine reads it.
 - **VerA today**: the digital path already conforms. `src/sim/digital/bind.zig:28-51` emits W1152 and binds the later cell, and `ieee1364/13_configuration/b_13_2_1_1_same_name_cell_last_wins.v` pins it. The analog elaborator does not conform: `lib/ir/elaborate/names.zig:131-132` `findModule` returns the first match and does not warn. CHANGE NEEDED: make `findModule` (and the module list it scans) take the last same-named user module, emit W1152, and add a `.va` fixture with two `module leaf` declarations whose behaviour differs. Minor: device text changes for source that is already accepted.
 - **Measure impact**: A (+1 fixture), C (13.2.1.1 evidence in the analog path). B already counts the `.v` fixture.
+- **Status**: DONE (5258ed3f). `findModule` and `pickTop` take the last definition, `warnRedefinedModules` emits W1152, `wreal.check` binds the same module; `ch06_hierarchy/same_named_module_last_wins.va`.
 
 ### VD-010: A disabled block's contributions already made
 - **Status**: DONE (ea6b1cb6)
@@ -241,6 +244,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b), E0907. Both standards keep localparams out of the parameter value assignment lists entirely (1364 12.2.2.1 says they "are not considered part of the ordered list"). The name list in 6.3.3 names the instantiated module's overridable parameters. Rejecting the name keeps a later edit to `.locked(3)` from becoming the first moment the error appears, and the rejection is also the portable choice.
 - **VerA today**: matches. `lib/ir/elaborate/override.zig:176-178` refuses a localparam by name before the empty-value check (`:259-263`, "Validate the name/localparam above even when no value is given"). No fixture pins the empty form: `ch03_data_types/audit_localparam_override_rejected.va` gives a value. CHANGE NEEDED: add `reject_localparam_empty_named_override.va` (`//! reject E0907`) next to a legal `#(.p())` on a plain parameter. Patch.
 - **Measure impact**: A (+1), C (3.4.5 refusal paired with its legal neighbour).
+- **Status**: DONE (2df23aa8). `ch03_data_types/reject_localparam_empty_named_override.va`.
 
 ### VD-012: Which SPICE flavour VerA claims
 - **Source**: ROADMAP §5.1 item 12; `h04_SPEC.md:116-119` at 8b1514d4; IMPLEMENTATION §1 row "AMS E.1, E.2".
@@ -250,7 +254,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). VerA claims SPICE3 card syntax for `.MODEL` and for flat `.SUBCKT` bodies made of numeric-valued R/C/L/V/I/E/F/G/H cards. `PARAMS:`, `{expr}` values, nested `.SUBCKT`, `.INCLUDE`/`.LIB` and model-referenced body devices (`R1 A B RMOD`) are not claimed. Cards outside a definition (`.tran`, top-level devices) are not module definitions and may still be skipped. A card that cannot be read inside a `.SUBCKT` body is refused with a named E.1.2 diagnostic. Skipping it changes the circuit, for example a dropped R becomes an open, and that is the silent wrong answer AGENTS.md §4 forbids.
 - **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in IMPLEMENTATION §1; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame (ROADMAP §5.3) is fixed by the same diagnostic.
 - **Measure impact**: A (new fixtures), C (E.1.2 refusal evidence).
-- **PARTIAL** (branch w-bugs1): the `.MODEL X SW` mis-blame is DONE (e7900531): a `.MODEL` of a type with no Table E.1 row is recorded and its instance is E0952, `annex_e_spice/spice_unsupported_model_type_rejected.va` beside `spice_supported_model_type_neighbour.va`. The `.SUBCKT` body half (unreadable cards, `PARAMS:`, `{}`, nesting) and the IMPLEMENTATION claim remain.
+- **Status**: DONE. The `.MODEL` half (e7900531): a `.MODEL` of a type with no Table E.1 row is recorded and its instance is E0952. The `.SUBCKT` half (aeb2b5cc): unreadable body cards, `PARAMS:`, `{}` and nesting are E0928, reported at the card's line in the netlist.
 
 ### VD-013: "Shall be controlled by a simulator option" (F.2.2)
 - **Source**: ROADMAP §5.1 item 13; `annex_f_resolution/COVERAGE.md:16-21` at 8b1514d4.
@@ -260,6 +264,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). The option is `--discipline-resolution=basic|detail` (default `basic`), recorded in the device's metadata. The obligation does not depend on how VerA is packaged. Folding the passes is acceptable under F.1 as long as the results equal the two-pass algorithm. That is an evidence obligation, a distinguishing hierarchical fixture, not a defect. Until the option exists, F.2.2 and 7.4.4.2 are `missing` (VD-008).
 - **VerA today**: no such option. Basic mode only (`lib/ir/elaborate/resolve.zig`). CHANGE NEEDED: add the option and detail mode, plus a mode-selecting fixture directive and a Figure 7-4 fixture. Minor. Until then, record F.2.2 as `missing` in CLAUSE-AUDIT.
 - **Measure impact**: C (F.2.2 and 7.4.4.2 stay one-way until the option lands).
+- **Status**: DONE (4735daab). `vera --discipline-resolution=basic|detail` and the fixture directive `//! discipline-resolution`; no device metadata row, since a detail-mode compile that differs from basic is refused (VD-008). E0929 also names the §7.8.4 insertion limit the Figure 7-3 shape exposes.
 
 ### VD-014: UTF-8 bytes above 0x7F in string literals
 - **Source**: ROADMAP §5.1 item 14; `annex_a_syntax/COVERAGE.md:332-335` at 8b1514d4.
@@ -512,6 +517,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). The prose is the specific normative statement about lib.map files. The grammar box is a superset that also serves `library_text` in general. 13.3 places configs in source text, where they are design elements (19.11 lists "module, primitive, or configuration" as design elements). Refusing loses nothing portable, since the config can move to a source file, while accepting it would create map files other tools may reject. Other tools: not established.
 - **VerA today**: `lib/frontend/libmap.zig:161` refuses any keyword other than `library`/`include` with E0244 ("a library map holds `library` and `include` statements only (IEEE 1364-2005 §13.2.2)"). Pinned for a `module` by `ieee1364/13_configuration/b_13_2_2_source_text_in_map_rejected.v`, with legal neighbour `b_13_2_2_include_map.v`. No fixture puts a `config` in a map. `CHANGE NEEDED:` add a rejection fixture whose map holds `config cfg; design work.top; endconfig`, `//! reject E0244` and `found \`config\``. Fixture only, so a patch.
 - **Measure impact**: B: 13.2.2 rejection evidence for the contested construct. A: +1 fixture.
+- **Status**: DONE (14cd4397). `ieee1364/13_configuration/b_13_2_2_config_in_map_rejected.v` over `libmap/bad/config_in_map.map`.
 
 ### VD-040: A `$readmem` file address outside the memory when the task gives no bounds
 - **Source**: ROADMAP §5.6, "IEEE 17.2.9" bullet, first question (`conformance-readmem-validation-edges.md:66-70` at 8b1514d4).
@@ -931,6 +937,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (c). It is the configuration analogue of 12.1.1's "uninstantiated module is a top", it needs no flag VerA does not have, and it never silently picks between two candidates: two unreferenced configs, or none, is E0243 naming 13.4.4. (d) is what commercial tools do through their command line, but VerA's CLI table (ARCHITECTURE §4.7) was declined; (a)/(b) make the design depend on file order without a diagnostic.
 - **VerA today**: implemented: `src/sim/digital/bind.zig:107-117` `top` (E0243, "configurations `a` and `b` are both unreferenced", "every configuration is named by another's `use` clause"). `ieee1364/13_configuration/b_13_3_2_hierarchical_config.v` passes and is no longer an xfail. `CHANGE NEEDED:` (1) IMPLEMENTATION §1's row still says "not implemented ... (xfail)": correct it; (2) no fixture pins either E0243 refusal (grep finds neither phrase under `tests/fixtures`): add `b_13_4_4_two_unreferenced_configs_rejected.v` and `b_13_4_4_every_config_referenced_rejected.v`, each with `//! reject` on its distinctive phrase, legal neighbour `b_13_3_2_hierarchical_config.v`. Fixtures and docs only: patch.
 - **Measure impact**: A (+2 fixtures); B: gives 13.4.4 its rejection half if the row is not already two-way.
+- **Status**: DONE (02af6a29). `b_13_4_4_two_unreferenced_configs_rejected.v`, `b_13_4_4_every_config_referenced_rejected.v`; IMPLEMENTATION §1's row corrected.
 
 ### VD-084: `$ungetc` pushback depth, and which reads see it
 - **Source**: IMPLEMENTATION §1 row "1364 17.2.4.1".

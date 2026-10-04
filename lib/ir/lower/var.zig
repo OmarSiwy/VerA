@@ -699,6 +699,10 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
 
     const slot = try declareVar(self, name, ty);
     self.vars.getPtr(name).?.reg_width = reg_width;
+    if (decl.storage == .reg) if (decl.packed_range) |range| if (lower_constfold.constEval(self, range.msb)) |m| if (lower_constfold.constEval(self, range.lsb)) |l| {
+        const right = l.asIntExact() orelse 0;
+        try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right });
+    };
     const init_val: Mir.Value = if (decl.init == .none)
         zeroOf(ty)
     else

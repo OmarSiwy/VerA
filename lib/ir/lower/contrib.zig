@@ -15,6 +15,7 @@ const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
+const Elaborate = @import("../elaborate.zig");
 const Const = Lower.Const;
 const Mir = @import("../mir.zig");
 const diag = @import("diag");
@@ -119,6 +120,11 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     if (split.resist) |v| try checkFiniteContribution(self, lhs, v); // §7.3.2.1
     if (split.react) |v| try checkFiniteContribution(self, lhs, v);
     const acc = self.accum.items[idx];
+    // The owning instance's share of an unnamed branch row (`unit_accum`).
+    const part: ?Accum = if (target.br == unnamed_branch and self.out.contributions.items[idx].shared)
+        try unitAccum(self, idx, target.unit)
+    else
+        null;
     // §5.6.1.3 value retention, the half that is a REPLACEMENT and not a sum.
     // Before this statement's own value is added, anything retained for the
     // OTHER quantity of the same branch is thrown away.
@@ -131,11 +137,13 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         const v = if (target.neg) try self.emit(.fneg, &.{v0}) else v0;
         const old = try self.builder.readVariable(acc.resist, self.cur);
         try self.builder.writeVariable(acc.resist, self.cur, try self.emit(.fadd, &.{ old, v }));
+        if (part) |pa| try self.builder.writeVariable(pa.resist, self.cur, try self.emit(.fadd, &.{ try self.builder.readVariable(pa.resist, self.cur), v }));
     }
     if (split.react) |v0| {
         const v = if (target.neg) try self.emit(.fneg, &.{v0}) else v0;
         const old = try self.builder.readVariable(acc.react, self.cur);
         try self.builder.writeVariable(acc.react, self.cur, try self.emit(.fadd, &.{ old, v }));
+        if (part) |pa| try self.builder.writeVariable(pa.react, self.cur, try self.emit(.fadd, &.{ try self.builder.readVariable(pa.react, self.cur), v }));
     }
     // §5.6.1.2 each reactive term is also a charge SITE of its own, so the
     // host can tape it apart from the others on the same row.
@@ -671,6 +679,13 @@ pub const Target = struct {
     /// the pair rather than instead of it: the pair is what codegen stamps and
     /// what §5.6.7.2's "or any of its parallel branches" is stated over.
     br: u32 = unnamed_branch,
+    /// §5.4.1/§5.6.8.1: an unnamed branch belongs to the module instance it
+    /// is written in ("a new unnamed branch is created in the module
+    /// containing the direct contribution statements"), so two instances
+    /// across one flattened node pair hold two branches. The instance
+    /// (`Ast.AnalogBlock.unit`) whose branch this is; for a named branch,
+    /// whose `br` is already per instance, the writer.
+    unit: u32 = 0,
 };
 
 /// The key a branch reference has in `branches`: `br` for a scalar branch,
@@ -712,11 +727,31 @@ pub fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
     return self.port_branches.get(key);
 }
 
-fn canonical(access: Access, hi: u16, lo: u16, br: u32) Target {
+fn canonical(access: Access, hi: u16, lo: u16, br: u32, unit: u32) Target {
     return if (hi <= lo)
-        .{ .access = access, .hi = hi, .lo = lo, .br = br }
+        .{ .access = access, .hi = hi, .lo = lo, .br = br, .unit = unit }
     else
-        .{ .access = access, .hi = lo, .lo = hi, .neg = true, .br = br };
+        .{ .access = access, .hi = lo, .lo = hi, .neg = true, .br = br, .unit = unit };
+}
+
+/// The instance whose unnamed branch an access names. §5.6.8.2's
+/// `drv.branch(x, y)` names `drv`'s own branch: the unit whose path is the
+/// reference's instance prefix. Anything else is the writer's (`cur_unit`),
+/// including §5.6.8.1's hierarchical NET spelling `I(drv.x, drv.y)`, which
+/// names a branch of the writer between those nets and so reads the pair's
+/// whole row (`annex_e_spice/primitive_segment_discipline.va`).
+fn ownerUnit(self: *Lower, e: Ast.ExprId) Oom!u32 {
+    const ex = &self.file.exprs;
+    if (ex.extraOf(e) != Ast.branch_ref_hier_unnamed) return self.cur_unit;
+    for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |t| {
+        if (t == .none or ex.tag(t) != .hier_ident) continue;
+        const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, t);
+        const cut = std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse continue;
+        for (self.out.unit_paths, 0..) |u, i| {
+            if (std.mem.eql(u8, u.path, path[0 .. cut + 1])) return @intCast(i);
+        }
+    }
+    return self.cur_unit;
 }
 
 /// Resolves `V(a)`, `V(a,b)`, `I(br)` to (access, node pair), or null after
@@ -766,7 +801,7 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         if (try branchKey(self, &key_buf, first)) |key| {
             if (self.branches.get(key)) |b| {
                 try checkAccessMatch(self, e, name, access, b.hi);
-                return canonical(access, b.hi, b.lo, b.id);
+                return canonical(access, b.hi, b.lo, b.id, self.cur_unit);
             }
         }
     }
@@ -795,7 +830,7 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         try b.emit();
         return null;
     }
-    return canonical(access, hi, lo, unnamed_branch);
+    return canonical(access, hi, lo, unnamed_branch, try ownerUnit(self, e));
 }
 
 /// §5.5.1 Syntax 5-3's generic potential access name. The generic pair is the
@@ -885,6 +920,42 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
     return newContrib(self, .direct, t, tok);
 }
 
+/// §5.4.1/§5.6.8.1 one instance's share of an unnamed-branch row. Flattening
+/// stamps every instance's unnamed branch over one node pair as one row (the
+/// node equations only see the sum), but each instance's branch is its own,
+/// so its flow read (`lower_expr.flowAccum`) is what THAT instance's branch
+/// carries: its own `<+` plus §5.6.8.2's hierarchical contributions aimed at
+/// it. Seeded in the entry block like `accum`.
+///
+/// Kept only once a row is shared (`Contribution.shared`): until then the row
+/// IS its one writer's branch. On first use the row's own writer gets a share
+/// holding everything the row accumulated so far, which was all its.
+pub fn unitAccum(self: *Lower, row: u32, unit: u32) Oom!Accum {
+    const first = self.out.contributions.items[row].unit;
+    if (!self.unit_accum.contains(.{ .row = row, .unit = first })) {
+        const full = self.accum.items[row];
+        const own = try unitAccumSeeded(self, row, first);
+        try self.builder.writeVariable(own.resist, self.cur, try self.builder.readVariable(full.resist, self.cur));
+        try self.builder.writeVariable(own.react, self.cur, try self.builder.readVariable(full.react, self.cur));
+    }
+    return unitAccumSeeded(self, row, unit);
+}
+
+fn unitAccumSeeded(self: *Lower, row: u32, unit: u32) Oom!Accum {
+    const gop = try self.unit_accum.getOrPut(self.arena, .{ .row = row, .unit = unit });
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{
+            .resist = self.builder.newPlace(),
+            .react = self.builder.newPlace(),
+            .wrote = self.builder.newPlace(),
+        };
+        try self.builder.writeVariable(gop.value_ptr.resist, .entry, .f_zero);
+        try self.builder.writeVariable(gop.value_ptr.react, .entry, .f_zero);
+        try self.builder.writeVariable(gop.value_ptr.wrote, .entry, .f_zero);
+    }
+    return gop.value_ptr.*;
+}
+
 /// Appends a contribution and its accumulator; the two lists stay parallel, so
 /// a contribution's index is its accumulator's index.
 fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
@@ -943,6 +1014,10 @@ fn discardOpposite(self: *Lower, t: Target) Oom!void {
         try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
         try self.builder.writeVariable(acc.react, self.cur, .f_zero);
         try self.builder.writeVariable(acc.wrote, self.cur, .f_zero);
+        if (self.unit_accum.get(.{ .row = @intCast(ci), .unit = self.cur_unit })) |pa| {
+            try self.builder.writeVariable(pa.resist, self.cur, .f_zero);
+            try self.builder.writeVariable(pa.react, self.cur, .f_zero);
+        }
         // The discarded charge goes with its sites.
         for (self.out.charge_sites.items, self.site_places.items) |s, p| {
             if (s.contrib == ci) try self.builder.writeVariable(p, self.cur, .f_zero);

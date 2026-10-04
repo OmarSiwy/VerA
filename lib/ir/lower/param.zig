@@ -13,6 +13,7 @@
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
 const Lower = @import("../lower.zig");
+const Elaborate = @import("../elaborate.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
@@ -191,7 +192,16 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         .str => unreachable, // a card value is a real
     } else try parameterDefault(self, decl.default, decl.ty);
 
-    try addParam(self, name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+    // §6.6 / §5.3.2: a generate (or named) block is a scope, so two blocks
+    // may each declare `ww` (an if-generate's two arms). The second one's
+    // card field is the scoped name, `off.ww`, and the bare name reads the
+    // block being lowered.
+    const card_name = if (self.scope_path.len != 0 and self.param_index.contains(name))
+        try self.arena.print("{s}{c}{s}", .{ self.scope_path, Elaborate.sep, name })
+    else
+        name;
+    try addParam(self, card_name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+    if (card_name.ptr != name.ptr) try self.param_index.put(self.arena, name, @intCast(self.out.params.items.len - 1));
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
     self.out.params.items[self.out.params.items.len - 1].source_width = if (decl.packed_range) |range|
         lower_shape.packedShapeWidth(self, range)
