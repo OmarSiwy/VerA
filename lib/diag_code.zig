@@ -145,6 +145,12 @@ pub const Code = enum(u16) {
     E0246,
     E0247,
     E0248,
+    E0249,
+    E0254,
+    E0255,
+    E0256,
+    E0257,
+    E0258,
     E0296,
     W0250,
     W0251,
@@ -268,6 +274,7 @@ pub const Code = enum(u16) {
     E0437,
     E0438,
     E0439,
+    E0440,
     E0477,
 
     // ---------------------------------------------------------------- class 5
@@ -990,7 +997,7 @@ fn infoOf(c: Code) Info {
             .lrm = "10.1",
             .explain =
             \\LRM 10.1 carries `unconnected_drive over from IEEE Std 1364
-            \\unchanged, and 1364 19.10 makes the operand a two-way
+            \\unchanged, and 1364 19.9 makes the operand a two-way
             \\alternation with no bracket round it:
             \\
             \\    `unconnected_drive pull1 | pull0
@@ -1850,6 +1857,89 @@ fn infoOf(c: Code) Info {
             \\dominate.
             ,
         },
+        .E0258 => .{
+            .title = "a procedural continuous assignment in an analog block",
+            .lrm = "A.6.2",
+            .explain =
+            \\A.6.2 `procedural_continuous_assignments` (`assign`, `deassign`,
+            \\`force`, `release`; IEEE 1364-2005 9.3) is an alternative of the
+            \\digital A.6.4 `statement` only. None of the eleven alternatives of
+            \\`analog_statement` derives it: an analog variable has no driver for
+            \\a continuous assignment to override.
+            \\
+            \\Use an ordinary procedural assignment (`x = 1.0;`), or move the
+            \\statement into an `initial` or `always` block, where it is legal.
+            ,
+        },
+        .E0249 => .{
+            .title = "a fork-join block in an analog block",
+            .lrm = "A.6.3",
+            .explain =
+            \\A.6.3 `par_block ::= fork ... join` is an alternative of the
+            \\digital A.6.4 `statement`. `analog_statement` offers only
+            \\`analog_seq_block` (begin/end) in that slot: the analog block is
+            \\one ordered evaluation (5.2), with no concurrent processes for a
+            \\fork to start.
+            \\
+            \\Use `begin ... end`, or move the block into an `initial` or
+            \\`always` block.
+            ,
+        },
+        .E0254 => .{
+            .title = "a delay control in an analog block",
+            .lrm = "A.6.5",
+            .explain =
+            \\A.6.5 `delay_control ::= # delay_value | # ( mintypmax_expression )`
+            \\reaches A.6.4 only through the digital `statement`'s
+            \\`procedural_timing_control_statement`. `analog_statement` derives
+            \\no `#`: analog time advances by the solver's step control (5.2),
+            \\not by a delay in the statement stream.
+            \\
+            \\Schedule the change with `@(timer(t))` (5.10.3.3), shape it with
+            \\`transition` or `absdelay`, or move the statement into an
+            \\`initial` or `always` block.
+            ,
+        },
+        .E0255 => .{
+            .title = "a wait statement in an analog block",
+            .lrm = "A.6.5",
+            .explain =
+            \\A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`
+            \\is a `procedural_timing_control_statement`, which A.6.4 lists under
+            \\the digital `statement` only. The analog block is evaluated at every
+            \\solution point (5.2) and has no thread to suspend on a level.
+            \\
+            \\Detect the condition with `@(cross(...))` or `@(above(...))`
+            \\(5.10.3), or move the statement into an `always` block.
+            ,
+        },
+        .E0256 => .{
+            .title = "a forever loop in an analog block",
+            .lrm = "A.6.8",
+            .explain =
+            \\A.6.8's `analog_loop_statement` is `repeat | while | for`; only the
+            \\digital `loop_statement` has `forever`, and A.6.4's
+            \\`analog_statement` never reaches it. Annex G.2.1 records the
+            \\retirement: "This statement is no longer supported."
+            \\
+            \\The analog block already runs at every solution point (5.2), so
+            \\write its body without the loop. In an `initial` or `always`
+            \\block `forever` is legal (IEEE 1364-2005 9.6).
+            ,
+        },
+        .E0257 => .{
+            .title = "a charge strength on a net that is not a trireg",
+            .lrm = "A.2.1.3",
+            .explain =
+            \\A.2.1.3 gives `charge_strength ::= ( small ) | ( medium ) | ( large )`
+            \\to the `trireg` alternatives of `net_declaration` only (IEEE
+            \\1364-2005 4.4.1: a charge strength is the size of a trireg's
+            \\capacitance). Any other net type has no stored charge for the
+            \\strength to describe, so `wire (small) w;` derives from nothing.
+            \\
+            \\Declare the net `trireg`, or drop the strength.
+            ,
+        },
         .E0245 => .{
             .title = "a specify block breaks a clause 14 rule",
             .lrm = "IEEE 1364-2005 14.2",
@@ -1980,7 +2070,7 @@ fn infoOf(c: Code) Info {
             \\
             \\    initial forever #5 clk = ~clk;
             \\
-            \\The analog `forever` is a different error (E0209): annex G.2.1
+            \\The analog `forever` is a different error (E0256): annex G.2.1
             \\retired it, and A.6.8's `analog_loop_statement` has no forever arm.
             ,
         },
@@ -2159,9 +2249,11 @@ fn infoOf(c: Code) Info {
             \\  --allow=W0251   silence it, for a cell whose specify section only
             \\                  matters to the digital half a host simulator runs
             \\
-            \\A `specparam` written as a MODULE item (A.2.1.1, and Syntax 6-1's
-            \\`non_port_module_item`) is not this warning: it is a constant
-            \\declaration with a default, and it elaborates as one.
+            \\A `specparam` is not this warning, written as a MODULE item (A.2.1.1,
+            \\Syntax 6-1's `non_port_module_item`) or inside the block: it is a
+            \\constant declaration with a default, and it elaborates as one
+            \\(IEEE 1364-2005 4.10.3 lets the module body read a specparam the
+            \\block declares).
             ,
         },
 
@@ -3831,6 +3923,20 @@ fn infoOf(c: Code) Info {
             \\the two analog blocks, so which kind wins is not defined, and the
             \\clause forbids it. Contribute the same access function the owning
             \\module does, or move the decision into that module.
+            ,
+        },
+        .E0440 => .{
+            .title = "`break` or `continue` inside an analog for loop",
+            .lrm = "5.11",
+            .explain =
+            \\LRM 5.11: "The continue and break statements cannot be used inside
+            \\an analog for loop. Refer 5.9.3." An analog_for's genvar control is
+            \\unrolled at elaboration, so there is no runtime iteration for the
+            \\jump to leave or skip.
+            \\
+            \\Nest a procedural `for` (5.9.2) on an integer variable inside the
+            \\analog_for and jump out of that, or move the condition into an
+            \\`if` around the rest of the body.
             ,
         },
         .E0477 => .{

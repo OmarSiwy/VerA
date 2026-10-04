@@ -1,4 +1,4 @@
-// IEEE Std 1364 §19.10's subject is an unconnected INPUT port. §10.1 Table 10-1
+// IEEE Std 1364 §19.9's subject is an unconnected INPUT port. §10.1 Table 10-1
 // carries the directive over unchanged, and nothing in §10.1 or §6.2.2 widens
 // it: §6.2.2's "a blank port connection shall represent the situation where the
 // port is not to be connected" describes what a blank IS, not which directions
@@ -16,7 +16,7 @@
 //
 // THE ORACLE, node by node, under `unconnected_drive pull1:
 //
-//   a — §19.10's subject. The pull is a source holding it at 1 of the potential
+//   a — §19.9's subject. The pull is a source holding it at 1 of the potential
 //       nature's units (see 58's header for why one volt is the number and why
 //       the DRIVENNESS, not the digit, is the load-bearing half). V(u.a) = 1
 //       exactly.
@@ -59,7 +59,7 @@ module d10_unconnected_drive_spares_an_unconnected_inout(p);
 
     analog begin
         `CHECKX("the unconnected `input` is pulled, as 58 already pins", V(u.a), 1.0);
-        `CHECKX("the unconnected `inout` is not: §19.10 names input ports", V(u.c), 0.5);
+        `CHECKX("the unconnected `inout` is not: §19.9 names input ports", V(u.c), 0.5);
         `CHECKX("so no current flows in the inout's branch", I(u.c, u.b), 0.0);
         I(p) <+ 0.0;
     end

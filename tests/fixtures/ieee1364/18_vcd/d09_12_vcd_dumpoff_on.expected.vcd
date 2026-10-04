@@ -1,3 +1,5 @@
+$date $end
+$version $end
 $timescale 1ns $end
 $scope module d09_vcd_off $end
 $var reg 1 ! a $end

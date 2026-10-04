@@ -743,7 +743,7 @@ test "A.6.2/A.6.5: discrete statement forms are grammar in a discrete body of an
     const nba = try parseForTest(arena, "module m(p); inout p; electrical p; integer s; analog begin s <= 1; I(p) <+ V(p); end endmodule");
     try std.testing.expectEqual(diag.Code.E0214, nba.code(0));
     const delay = try parseForTest(arena, "module m(p); inout p; electrical p; analog begin #1 I(p) <+ V(p); end endmodule");
-    try std.testing.expectEqual(diag.Code.E0209, delay.code(0));
+    try std.testing.expectEqual(diag.Code.E0254, delay.code(0));
 }
 
 test "A.6.8: `forever` is a digital loop_statement and not an analog_loop_statement (G.2.1)" {
@@ -764,9 +764,10 @@ test "A.6.8: `forever` is a digital loop_statement and not an analog_loop_statem
     const loop = ok.file.stmt(body).while_stmt;
     try std.testing.expectEqual(Ast.ExprTag.int_literal, ok.file.exprs.tag(loop.cond));
     try std.testing.expectEqual(@as(i64, 1), ok.file.exprs.intLiteral(loop.cond).value);
-    // G.2.1 retired the analog forever: "expected an expression".
+    // G.2.1 retired the analog forever: parsed, then refused by A.6.8.
     const ana = try parseForTest(arena, "module m(p); inout p; electrical p; analog forever I(p) <+ V(p); endmodule");
-    try std.testing.expectEqual(diag.Code.E0209, ana.code(0));
+    try std.testing.expectEqual(diag.Code.E0256, ana.code(0));
+    try std.testing.expectEqual(@as(usize, 1), ana.count());
     // `statement`, not `statement_or_null`: a null body is E0296.
     const null_body = try parseForTest(arena, "module m(p); inout p; electrical p; initial forever ; analog I(p) <+ V(p); endmodule");
     try std.testing.expectEqual(diag.Code.E0296, null_body.code(0));

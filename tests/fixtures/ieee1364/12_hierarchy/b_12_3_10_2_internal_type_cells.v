@@ -14,8 +14,9 @@
 //       Unmerged: the wand resolves to 0 and the inout's transistor
 //       connection (§12.3.9.2) carries it to v. b = 0 and v = 0 either way.
 // Taking the external type instead gives u1 z and u2 x (two strong drivers
-// on a wire, Table 4-2).
-//! xfail a port merge takes the external net type in Table 12-1's int cells (tri0 or wand inside, wire outside)
+// on a wire, Table 4-2). The ext cells' neighbour is
+// b_12_3_10_2_external_type_cells.v. No invalid form exists: every pair of
+// net types has a cell.
 //! inherited IEEE 1364-2005 12.3.10.1 12.3.10.2
 `timescale 1ns/1ns
 module b_12_3_10_2_tri0_in(a, y);

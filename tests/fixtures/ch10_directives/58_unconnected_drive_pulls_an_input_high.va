@@ -1,5 +1,5 @@
 // §10.1 Table 10-1 carries `unconnected_drive over from IEEE Std 1364
-// unchanged, and 1364 §19.10 gives it its one effect: an UNCONNECTED INPUT PORT
+// unchanged, and 1364 §19.9 gives it its one effect: an UNCONNECTED INPUT PORT
 // of a module declared between `unconnected_drive and `nounconnected_drive is
 // pulled — to 1 for `pull1, to 0 for `pull0 — instead of being left undriven.
 //
@@ -7,7 +7,7 @@
 // represent the situation where the port is not to be connected". `u( , p)`
 // below is that blank, so `a` is the clause's subject.
 //
-// WHAT A PULL IS IN THE ANALOG KERNEL, since §19.10 describes a logic level and
+// WHAT A PULL IS IN THE ANALOG KERNEL, since §19.9 describes a logic level and
 // a drive STRENGTH, and this engine has neither. It has exactly one way of
 // saying "held at a level": a potential source between the node and the
 // reference. So `pull1` holds the unconnected input at 1 of the potential
@@ -28,6 +28,7 @@
 // supplies.
 //
 //! lrm 10.1
+//! inherited IEEE 1364-2005 19.9
 //! lrm 6.2.2
 //! bias V(p) = 0.5
 //! solve

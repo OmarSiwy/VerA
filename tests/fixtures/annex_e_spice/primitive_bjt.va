@@ -2,9 +2,9 @@
 // a bipolar junction transistor of the given area.
 //
 // E.2.2.1 also says of this row: "This bjt primitive has 3 mandatory ports (c, b,
-// and e) and one optional port (s)", and prints an instance that leaves s off. The
-// optional-port rule is NOT pinned here — VerA's prelude declares four ports and
-// omitting one is a separate gap — so both instances below give all four.
+// and e) and one optional port (s)", and prints an instance that leaves s off.
+// That form is primitive_bjt_substrate_omitted.va; both instances below give
+// all four ports.
 //
 // WHAT IS PINNED. E.3: "Table E.1 shows the REQUIRED names for primitives,
 // parameters, and ports which are otherwise unnamed in SPICE. For connection by

@@ -1,4 +1,4 @@
-// §9.5 / Table 9-2. The file family is mostly analog-context "Yes" — $fopen,
+// §9.2 Table 9-2 (the §9.5 tasks). The file family is mostly analog-context "Yes" — $fopen,
 // $fclose, $fdisplay, $fwrite, $fstrobe, $fmonitor, $fgets, $fscanf, $swrite,
 // $sformat, $sscanf, $rewind, $fseek, $ftell, $fflush, $ferror and $feof all
 // carry over, and this directory has a fixture for each. So does $fdebug, which

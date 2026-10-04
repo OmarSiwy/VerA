@@ -3,12 +3,11 @@
 // longer supported." It remains a reserved word (Annex B.1), so it cannot be
 // reached as an identifier either.
 //
-// The code pinned is the one raised AT the keyword. VerA also emits an E0205
-// on the stray `end` once the parser resynchronises; that is recovery
-// behaviour, not the rule, so it is deliberately not pinned.
+// E0256 is raised AT the keyword, and the loop is then parsed in full, so the
+// rest of the module reports nothing.
 //! lrm G.2.1
 //! lrm 5.9
-//! reject E0209
+//! reject E0256
 //! reject forever
 module annex_g_obsolete_forever(p, n);
   inout p, n; electrical p, n;

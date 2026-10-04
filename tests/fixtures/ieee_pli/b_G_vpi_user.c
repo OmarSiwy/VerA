@@ -35,6 +35,9 @@
  * G's signatures as weak symbols: one the product does not provide links as
  * NULL and is counted.
  *
+ * The include guard VPI_USER_H and the portability macros must be defined
+ * (one check).
+ *
  * The expected result is 0 missing names, 0 missing routines, and no
  * mismatch.
  */
@@ -2270,6 +2273,21 @@ static void constants(void)
   XFAIL(missing == 0, "G", msg);
 }
 
+/* Annex G's include guard and portability block (PLI_DLLISPEC, PLI_DLLESPEC,
+ * PLI_EXTERN, PLI_VEXTERN, PLI_PROTOTYPES, PROTO_PARAMS, XXTERN, EETERN) name
+ * no question an application asks, so the header defines all of them. One
+ * check. */
+static void macros(void)
+{
+#if defined(VPI_USER_H) && defined(PLI_TYPES) && defined(PLI_DLLISPEC) && defined(PLI_DLLESPEC) && \
+    defined(PLI_EXTERN) && defined(PLI_VEXTERN) && defined(PLI_PROTOTYPES) && defined(PROTO_PARAMS) && \
+    defined(XXTERN) && defined(EETERN)
+  CHECK(1, "G: the include guard and the portability macros are defined");
+#else
+  CHECK(0, "G: the include guard and the portability macros are defined");
+#endif
+}
+
 static void routines(void)
 {
   static char msg[96];
@@ -2283,6 +2301,7 @@ static void routines(void)
 static void startup(void)
 {
   constants();
+  macros();
   routines();
   p02_done("b_G_vpi_user");
 }

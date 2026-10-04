@@ -108,7 +108,7 @@ pub const Design = struct {
     /// port is not to be connected", for an `input` port. One entry per such
     /// port, naming the internal net the flatten gave it.
     ///
-    /// Judged later for the same reason: IEEE 1364 §19.10 `unconnected_drive`
+    /// Judged later for the same reason: IEEE 1364 §19.9 `unconnected_drive`
     /// is positional text (`Lower.applyUnconnectedDrive`).
     unconnected_inputs: []const NameSite = &.{},
     /// §9.15 Table 9-28's two hierarchy rows, indexed by `Ast.AnalogBlock.unit`:

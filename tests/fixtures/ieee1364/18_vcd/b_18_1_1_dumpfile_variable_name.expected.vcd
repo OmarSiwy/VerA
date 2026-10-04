@@ -1,3 +1,5 @@
+$date $end
+$version $end
 $timescale 1ns $end
 $scope module b_18_1_1_dumpfile_variable_name $end
 $var reg 1 ! a $end

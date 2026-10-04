@@ -1877,6 +1877,13 @@ pub const State = struct {
         return a.v;
     }
 
+    /// §17.4.2 `$stop`: a batch run has nothing to suspend into, so it ends
+    /// as `$finish` does (VD-070), reporting on stderr, not the design's stdout.
+    pub fn stopRun(self: *State, verbose: bool, file: []const u8, byte: u32) Error!void {
+        if (verbose) std.debug.print("$stop at tick {d}, {s} byte {d}\n", .{ self.sched.now, file, byte });
+        return self.finish(false, file, byte);
+    }
+
     /// §17.4.1 `$finish`: end the run after this process step.
     pub fn finish(self: *State, verbose: bool, file: []const u8, byte: u32) Error!void {
         if (verbose) try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.sched.now, file, byte });

@@ -7,14 +7,16 @@
 // device existed; the runtime casts below were the same cast compiled into a
 // ReleaseFast artifact, i.e. silent UB.
 //
-// VerA's defined answer is saturation (clamp to the 64-bit carrier; NaN reads
-// 0), applied identically by the constant folder, the parameter-default
-// emitter and the emitted runtime cast, so a folded expression and the running
-// device agree on garbage. The literal 2147483647 is §3.2's minimum integer
-// ceiling: a saturated 1e300 must exceed it, a saturated -1e300 must sit below
-// its negation — those comparisons are what a wrap (which would land near 0 or
-// flip sign arbitrarily) fails. The multiplications by V(p,n) = 1 keep the
-// runtime casts out of every constant fold's reach.
+// VerA's defined answer is saturation; NaN reads 0. A variable's 64-bit
+// carrier clamps there. The parameter is declared `integer`, which §3.4.1
+// converts to the 32-bit type, so `big` saturates at that type's ceiling,
+// 2147483647: no 32-bit integer exceeds it (until 2026-10 this row asserted
+// `big > 2147483647`, which only the defect of reading the raw 64-bit
+// carrier could satisfy). The variable rows compare against §3.2's minimum
+// integer ceiling: a saturated 1e300 must exceed it, a saturated -1e300 must
+// sit below its negation, which is what a wrap (landing near 0 or flipping
+// sign) fails. The multiplications by V(p,n) = 1 keep the runtime casts out
+// of every constant fold's reach.
 //
 //! lrm 3.4.1
 //! lrm 4.2.1.1
@@ -27,7 +29,7 @@ module ch03_integer_conversion_saturates(p, n);
     integer i_pos, i_neg;
 
     analog begin
-        `CHECKI("a 1e300 integer parameter default saturates high", big > 2147483647, 1);
+        `CHECKI("a 1e300 integer parameter default saturates at the 32-bit ceiling", big, 2147483647);
         i_pos = 1.0e300 * V(p, n);
         `CHECKI("runtime real->integer assignment saturates high", i_pos > 2147483647, 1);
         i_neg = -1.0e300 * V(p, n);

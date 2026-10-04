@@ -84,7 +84,7 @@ module d10_resetall_restores_the_unconnected_drive_default(p);
     analog begin
         `CHECKX("above the `resetall the pull is in force", V(mi.u.a), 1.0);
         `CHECKX("and drives: 0.001*(1.0 - 0.5) A flows a->b", I(mi.u.a, mi.u.b), 5e-4);
-        `CHECKX("`resetall put §19.10 back to its default, so this input floats", V(mo.u.a), 0.5);
+        `CHECKX("`resetall put §19.9 back to its default, so this input floats", V(mo.u.a), 0.5);
         `CHECKX("and no current flows into it", I(mo.u.a, mo.u.b), 0.0);
         I(p) <+ 0.0;
     end

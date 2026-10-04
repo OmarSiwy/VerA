@@ -1,11 +1,11 @@
-// D10 x D03. The one part of IEEE Std 1364 §19.10 that the analog kernel
+// D10 x D03. The one part of IEEE Std 1364 §19.9 that the analog kernel
 // CANNOT express, written for the digital source-execution path instead.
 //
 // §10.1 Table 10-1 carries `unconnected_drive over from IEEE Std 1364, where it
 // pulls an unconnected input port to a logic level THROUGH A PULL-STRENGTH
 // DRIVER. ch10_directives/58, 59 and 60 pin the level and say in their own
 // headers why that is the weak half — 58, quoted exactly: "WHAT A PULL IS IN
-// THE ANALOG KERNEL, since §19.10 describes a logic level and a drive
+// THE ANALOG KERNEL, since §19.9 describes a logic level and a drive
 // STRENGTH, and this engine has neither." So those three fixtures approximate
 // the pull as a potential source at 1 V or 0 V, and `lib/ir/lower.zig`
 // (`applyUnconnectedDrive`) records the same approximation as its stated
@@ -14,7 +14,7 @@
 // The approximation is invisible as long as the pull is the ONLY driver of the
 // port's net. It stops being invisible the moment the net has a second opinion,
 // and that is the entire content of this file: on a four-state net the pull
-// competes, and IEEE 1364 §7.10's eight drive strengths decide who wins.
+// competes, and IEEE 1364 §7.9's eight drive strengths decide who wins (§7.10 combines them).
 //
 // STRENGTH LEVELS, which are what the three answers below are computed from:
 //
@@ -25,14 +25,14 @@
 // meets the Pu1 driver with a different opponent:
 //
 //   w   wire     — no second driver at all. The net's own undriven value is Z,
-//                  which is the identity of IEEE 1364 §7.9's resolution table,
+//                  which is the identity of IEEE 1364 §7.10's resolution of combined signals,
 //                  so the only driver decides: Pu1 -> the net reads 1.
-//   t   tri0     — IEEE 1364 §3.7: a `tri0` net pulls itself to 0 AT PULL
+//   t   tri0     — IEEE 1364 §4.6.4: a `tri0` net pulls itself to 0 AT PULL
 //                  STRENGTH when nothing else drives it. So the net has Pu0
 //                  against Pu1: equal strength, opposite values, and IEEE 1364
-//                  §7.11 resolves that to X. This is the case no approximation
+//                  §7.10 resolves that to X. This is the case no approximation
 //                  can reach — a potential source cannot produce an X.
-//   s   supply0  — IEEE 1364 §3.7: a supply net drives at SUPPLY strength,
+//   s   supply0  — IEEE 1364 §4.6.6/§7.13: a supply net drives at SUPPLY strength,
 //                  level 7, which is two levels above the pull. Su0 beats Pu1
 //                  and the net reads 0 — the directive is honoured and still
 //                  loses.
@@ -51,21 +51,10 @@
 // potential — "there is nothing to hold it at" — so the analog harness has no
 // way to observe them, and `V()` on a discrete net is E0501, not a number.
 //
-// WHAT BLOCKS IT TODAY, all three of which are named in the source:
-//   1. `src/sim/digital.zig` `wired()`: "every driver here is at the SAME
-//      strength, so §7.10's eight drive strengths and §7.11's strength
-//      resolution are not implemented" — quoted verbatim, and its §7.x are
-//      IEEE 1364's, not this LRM's. That is the D03 carry-over, and the
-//      comment's own upgrade path (a (strength0, strength1) pair per driver
-//      bit) is exactly what the `t` and `s` columns need;
-//   2. the same file refuses a module with instances (`m.instances.len != 0`),
-//      so `--run` cannot elaborate the child at all;
-//   3. nothing on the `--run` path reads the `DriveRegion` list the
-//      preprocessor publishes — `applyUnconnectedDrive` is the only consumer
-//      and it is analog-only.
-//
-// So this file fails for three independent reasons and will keep failing until
-// D03's strength model exists. It is here to state the target, not to pass.
+// It runs and passes: the digital runner (`src/sim/digital/`) elaborates the
+// child, applies the preprocessor's `DriveRegion` list to the unconnected
+// inputs as pull-strength drivers, and resolves them with §7.10's strength
+// model. (Until that landed this header listed three blockers; they are gone.)
 
 //! inherited IEEE 1364-2005 4.6.4 4.6.6 7.10.1 19.9
 `unconnected_drive pull1

@@ -37,16 +37,13 @@
 // every other column, and the whole primitive around it, is well formed.
 //
 // No `E0xxx` is written, and that is deliberate rather than lazy:
-// `lib/diag_code.zig` has no code for a UDP table alphabet violation today, and
-// a fixtures-only row may not mint one in `src/`. Prose is the weaker of the
-// two forms the runner accepts — it pins wording, where a code pins the rule
-// (torture.zig:248-252). Whoever implements UDPs should allocate the code for
-// "UDP table entry uses a symbol outside `output_symbol`" and replace the line
-// below with it. Replace, not delete: a bare `DiagnosticsReported` must not
-// come back.
+// The refusal is E0233 ("a UDP table symbol is outside the alphabet its column
+// admits"), pinned by code with the symbol named, so the fixture holds the
+// rule and the offending output symbol rather than a phrase of the message.
 //
 //! lrm A.5.3
-//! reject output symbol
+//! reject E0233
+//! reject `z` is not a UDP output symbol
 //! inherited IEEE 1364-2005 8.1.4 8.1.5
 `timescale 1ns/1ns
 

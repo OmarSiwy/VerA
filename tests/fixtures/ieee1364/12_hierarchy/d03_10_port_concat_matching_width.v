@@ -17,16 +17,18 @@
 // z). The sentence quoted above forbids exactly that: under the shipped
 // Verilog-AMS 2.4 document a size mismatch is not a legal connection at all, so
 // no conforming implementation owes anyone a value for it. The permissive rule
-// lives in IEEE Std 1364-2005 §12.3.6, which is NOT part of the offline
-// document set in `docs/` (`grep -ri "low-order bit" docs/` = 0 hits) and which
-// §6.5.7.1 narrows. No row owns that claim now. It can come back only if
-// (a) 1364-2005 clause 12 is added to `docs/`, AND (b) someone resolves the
-// conflict with §6.5.7.1 in favour of the base standard — a fixture cannot
-// assume that resolution. See tests/fixtures/ieee1364/07_gate_switch_level/d03_SPEC.md at 8b1514d4.
+// is IEEE Std 1364-2005's by composition, not a sentence of §12.3.6 (which is
+// connection by name): §12.3.9.2 makes each port connection "a continuous
+// assignment of source to sink", and §5.6 truncates or extends an assignment
+// and says "Implementations are not required to warn or report any errors
+// related to assignment size mismatch". §6.5.7.1 narrows that. No row owns the
+// claim now. It can come back only if someone resolves the conflict with
+// §6.5.7.1 in favour of the base standard — a fixture cannot assume that
+// resolution. See tests/fixtures/ieee1364/07_gate_switch_level/d03_SPEC.md at 8b1514d4.
 //
 // NOT asserted here: that a mismatched connection is DIAGNOSED. §6.5.7.1 states
 // a constraint on legal source and names no diagnostic, and the inherited
-// 1364-2005 §12.3.6 explicitly permits the mismatch with at most a warning.
+// 1364-2005 §12.3.9.2 with §5.6 permits the mismatch and requires no warning.
 // Demanding a refusal would pin a rule neither document states.
 //
 //! lrm 6.5.7.1

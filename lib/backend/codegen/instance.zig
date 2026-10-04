@@ -195,6 +195,13 @@ pub fn emitInstance(self: *Gen) Error!void {
                     try self.w("    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n", .{ n, n });
                     try keepHist(self, "{s}__nk", .{n});
                     try keepHist(self, "{s}__out", .{n});
+                    // §4.5.12 τ/t0: where the running transition starts from,
+                    // and when (`zZiEvalRamp`).
+                    if (p.tau != null) {
+                        try self.w("    {s}__from: f64 = 0.0,\n    {s}__ts: f64 = -std.math.inf(f64),\n", .{ n, n });
+                        try keepHist(self, "{s}__from", .{n});
+                        try keepHist(self, "{s}__ts", .{n});
+                    }
                 }
             },
             // Every `.static` and `.none` row: already handled above, or

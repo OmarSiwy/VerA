@@ -272,6 +272,10 @@ noise_val: std.AutoHashMapUnmanaged(u32, Mir.Value) = .empty,
 finite_scan: std.AutoHashMapUnmanaged(Mir.Value, lower_contrib.FiniteScan) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
+/// `loops.items.len` when the innermost §5.9.3 analog_for being unrolled
+/// began, or null outside one. A jump with no runtime loop pushed since is
+/// inside the analog_for, §5.11's E0440.
+analog_for_base: ?usize = null,
 /// §5.3.2 "All identifiers declared within a named sequential block can be
 /// accessed outside the scope in which they are declared." The qualified
 /// `<label>.<local>` spellings `publishBlockLocals` bound, which is what tells
@@ -687,7 +691,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the end-of-block read even when the site is under an `if`.
     for (module.analog) |blk| try lower_func.scanCallSites(self, blk.body, true, {}, {});
 
-    // IEEE 1364 §19.10, also before the body and for a related reason: the pull
+    // IEEE 1364 §19.9, also before the body and for a related reason: the pull
     // on an unconnected `input` is the OUTSIDE driving the port, so it is there
     // when the child's equations read it, not added after them.
     try lower_node.applyUnconnectedDrive(self);
