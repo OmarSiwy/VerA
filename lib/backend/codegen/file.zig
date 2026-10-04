@@ -127,6 +127,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitModel(self);
     try emitDerive(self);
     try emitShapeCheck(self);
+    try emitCardCheck(self);
     try gen_setup.emitSetupDecl(self);
     try gen_instance.emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
@@ -665,6 +666,38 @@ fn emitShapeCheck(self: *Gen) Error!void {
     }
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
     try self.w("    return null;\n}}\n\n", .{});
+}
+
+/// Emits `checkCard`, which names the first §9.18 hierarchical system
+/// parameter whose card-dependent value (`Lowered.system_checks`) lies
+/// outside Table 9-29's "Allowed values" ($mfactor > 0, $hflip/$vflip = ±1,
+/// 0 <= $angle < 360), or returns null. A literal outside them is E0890 at
+/// compile time; this is the same rule for a value the host writes. The host
+/// calls it after `derive`. Not emitted when nothing is card-dependent.
+fn emitCardCheck(self: *Gen) Error!void {
+    const checks = self.lowered.system_checks.items;
+    if (checks.len == 0) return;
+    var body: std.ArrayList(u8) = .empty;
+    for (checks) |c| {
+        const v = try gen_host.f64Const(self, c.v, 0, false) orelse {
+            if (self.diags) |bag| try bag.add(.codegen, .E1004, .{ .start = 0, .end = 0 }, "the card-time check of `{s}` uses an unsupported expression", .{c.name});
+            return error.UnsupportedParameterDefault;
+        };
+        const out = switch (c.kind) {
+            .mfactor => "!(v > 0.0)",
+            .hflip, .vflip => "!(v == 1.0 or v == -1.0)",
+            .angle => "!(v >= 0.0 and v < 360.0)",
+            .xposition, .yposition => unreachable, // `Kind.constrained` records neither
+        };
+        try body.print(self.arena, "    {{\n        const v: f64 = {s};\n        if ({s}) return \"{f}\";\n    }}\n", .{ v, out, std.zig.fmtString(c.name) });
+    }
+    try self.w(
+        \\/// §9.18 Table 9-29: the first hierarchical system parameter the card
+        \\/// (after `derive`) puts outside its allowed values, or null.
+        \\pub fn checkCard({s}: *const Model) ?[]const u8 {{
+        \\
+    , .{if (std.mem.indexOf(u8, body.items, "model.") != null) "model" else "_"});
+    try self.w("{s}    return null;\n}}\n\n", .{body.items});
 }
 
 /// Emits `derive`'s §5.6.5 tail: every card-only retention flag into the

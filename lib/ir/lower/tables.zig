@@ -124,6 +124,9 @@ pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
 /// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
 /// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
 /// `[3:5]`), so nothing here assumes msb ≥ lsb.
+/// One `Lowered.system_checks` row.
+pub const SystemCheck = struct { kind: @import("../hier_param.zig").Kind, name: []const u8, v: Mir.Value };
+
 pub const VecRange = struct {
     msb: i64,
     lsb: i64,
@@ -699,6 +702,10 @@ discrete_params: std.StringArrayHashMapUnmanaged(u32) = .empty,
 mixed_signal: bool = false,
 /// §7.8.4 the connect modules elaboration inserted (see `Elaborate.Design.inserts`).
 inserts: []const Inserted = &.{},
+/// §9.18 Table 9-29 domains of card-dependent system parameters
+/// (`Elaborate.SystemCheck`), each value lowered over the parameters.
+/// Codegen's `checkCard` names the first one the card puts outside.
+system_checks: std.ArrayList(SystemCheck) = .empty,
 
 /// Returns the byte range of token `tok`, for a diagnostic.
 pub fn tokenSpan(self: *const Lowered, tok: u32) diag.Span {
