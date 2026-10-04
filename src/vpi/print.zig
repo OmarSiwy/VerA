@@ -3,12 +3,14 @@
 //! unclosable; `vpi_mcd_open` hands out the lowest free channel from 4. VerA
 //! has no product log file, so channel 3 discards and `vpi_printf` is stdout.
 //! While a digital design runs, the HDL's §17.2 tasks share these channels
-//! (`share`, IEEE 1364-2005 §27.25). Formatting is C's printf done over
-//! `@cVaArg`, since the `vpi` module is linked into binaries without libc.
+//! (`share`, IEEE 1364-2005 §27.25). Formatting is C's printf done here over
+//! `va.arg`, since the `vpi` module is linked into binaries without libc; the
+//! variadic entry points themselves are C, in `varargs.c` (see `va.zig`).
 
 const std = @import("std");
 const root = @import("root.zig");
 const digital = @import("sim").digital;
+const va = @import("va.zig");
 
 const Io = std.Io;
 const FileIo = @typeInfo(@FieldType(digital.Run, "file_io")).optional.child;
@@ -250,39 +252,16 @@ fn channelFile(i: usize) error{NotOpen}!?Io.File {
     };
 }
 
+/// The body of `varargs.c`'s vpi_printf (mcd 1), vpi_mcd_printf and their
+/// IEEE 1364-2005 §27.37/§27.27 `v` forms over a started `va_list`.
+///
 /// §12.28 "shall write to both stdout and the current product log file ...
 /// shall return the number of characters printed or EOF if an error occurred."
-pub export fn vpi_printf(format: [*c]const u8, ...) callconv(.c) c_int {
-    root.clearError();
-    var ap = @cVaStart();
-    defer @cVaEnd(&ap);
-    return emit(1, format, &ap);
-}
-
-/// §12.27. The return is the number of characters in ONE expansion, however
+/// §12.27: the return is the number of characters in ONE expansion, however
 /// many channels receive it: "the number of characters printed" is a property
 /// of the format and its arguments, and a count multiplied by the channel set
 /// would change with a bit of the mcd that has nothing to do with the text.
-pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c) c_int {
-    root.clearError();
-    var ap = @cVaStart();
-    defer @cVaEnd(&ap);
-    return emit(mcd, format, &ap);
-}
-
-/// IEEE 1364-2005 §27.37: vpi_printf "except that varargs have already been
-/// started".
-///
-/// ponytail: `va_list` is taken as a pointer, which is how the SysV x86-64
-/// and AAPCS64 ABIs pass one; a target that passes it by value needs its own
-/// entry point.
-pub export fn vpi_vprintf(format: [*c]const u8, ap: *std.lang.VaList) c_int {
-    root.clearError();
-    return emit(1, format, ap);
-}
-
-/// IEEE 1364-2005 §27.27: vpi_mcd_printf over a started `va_list`.
-pub export fn vpi_mcd_vprintf(mcd: c_uint, format: [*c]const u8, ap: *std.lang.VaList) c_int {
+export fn vera_vpi_emit(mcd: c_uint, format: [*c]const u8, ap: *va.List) c_int {
     root.clearError();
     return emit(mcd, format, ap);
 }
@@ -314,7 +293,7 @@ pub export fn vpi_mcd_flush(mcd: c_uint) c_int {
 
 const EOF: c_int = -1;
 
-fn emit(mcd: c_uint, format: [*c]const u8, ap: *std.lang.VaList) c_int {
+fn emit(mcd: c_uint, format: [*c]const u8, ap: *va.List) c_int {
     // IEEE 1364-2005 §27.26: the most significant bit marks "a file descriptor
     // instead of an mcd", and vpi_mcd_printf "shall not write to" one.
     if (mcd & 0x8000_0000 != 0) {
@@ -368,14 +347,13 @@ const Length = enum { none, hh, h, l, ll, j, z, t, L };
 /// `%n` is not supported: it writes through an application pointer, and a
 /// logging routine that stores into memory is a hazard this one does not take.
 ///
-/// C calling convention because `@cVaArg` is only legal in one; false when the
-/// writer failed (out of memory).
-pub fn cformat(w: *Io.Writer, format: [*:0]const u8, ap: *std.lang.VaList) callconv(.c) bool {
+/// False when the writer failed (out of memory).
+pub fn cformat(w: *Io.Writer, format: [*:0]const u8, ap: *va.List) bool {
     expand(w, std.mem.span(format), ap) catch return false;
     return true;
 }
 
-inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer.Error!void {
+fn expand(w: *Io.Writer, fmt: []const u8, ap: *va.List) Io.Writer.Error!void {
     var i: usize = 0;
     while (i < fmt.len) {
         if (fmt[i] != '%') {
@@ -397,7 +375,7 @@ inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer
         };
         if (i < fmt.len and fmt[i] == '*') {
             i += 1;
-            const v = @cVaArg(ap, c_int);
+            const v = va.arg(ap, c_int);
             if (v < 0) s.left = true;
             s.width = @abs(v);
         } else while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) {
@@ -407,7 +385,7 @@ inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer
             i += 1;
             if (i < fmt.len and fmt[i] == '*') {
                 i += 1;
-                const v = @cVaArg(ap, c_int);
+                const v = va.arg(ap, c_int);
                 s.prec = if (v < 0) null else @intCast(v);
             } else {
                 var p: usize = 0;
@@ -462,34 +440,34 @@ inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer
             'd', 'i' => {
                 const v: i128 = switch (len) {
                     .none, .h, .hh => blk: {
-                        const x = @cVaArg(ap, c_int);
+                        const x = va.arg(ap, c_int);
                         break :blk switch (len) {
                             .h => @as(i16, @truncate(x)),
                             .hh => @as(i8, @truncate(x)),
                             else => x,
                         };
                     },
-                    .l => @cVaArg(ap, c_long),
-                    .ll, .L => @cVaArg(ap, c_longlong),
-                    .j => @cVaArg(ap, i64),
-                    .z, .t => @cVaArg(ap, isize),
+                    .l => va.arg(ap, c_long),
+                    .ll, .L => va.arg(ap, c_longlong),
+                    .j => va.arg(ap, i64),
+                    .z, .t => va.arg(ap, isize),
                 };
                 try integer(w, s, @intCast(@abs(v)), v < 0, 10, false);
             },
             'u', 'x', 'X', 'o' => {
                 const v: u64 = switch (len) {
                     .none, .h, .hh => blk: {
-                        const x: c_uint = @bitCast(@cVaArg(ap, c_int));
+                        const x: c_uint = @bitCast(va.arg(ap, c_int));
                         break :blk switch (len) {
                             .h => @as(u16, @truncate(x)),
                             .hh => @as(u8, @truncate(x)),
                             else => x,
                         };
                     },
-                    .l => @cVaArg(ap, c_ulong),
-                    .ll, .L => @cVaArg(ap, c_ulonglong),
-                    .j => @cVaArg(ap, u64),
-                    .z, .t => @cVaArg(ap, usize),
+                    .l => va.arg(ap, c_ulong),
+                    .ll, .L => va.arg(ap, c_ulonglong),
+                    .j => va.arg(ap, u64),
+                    .z, .t => va.arg(ap, usize),
                 };
                 const base: u8 = switch (conv) {
                     'o' => 8,
@@ -499,17 +477,17 @@ inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer
                 try integer(w, s, v, false, base, conv == 'X');
             },
             'c' => {
-                const b: u8 = @truncate(@as(c_uint, @bitCast(@cVaArg(ap, c_int))));
+                const b: u8 = @truncate(@as(c_uint, @bitCast(va.arg(ap, c_int))));
                 try padded(w, s, &.{b});
             },
             's' => {
-                const p = @cVaArg(ap, ?[*:0]const u8);
+                const p = va.arg(ap, ?[*:0]const u8);
                 var text: []const u8 = if (p) |q| std.mem.span(q) else "(null)";
                 if (s.prec) |pr| text = text[0..@min(pr, text.len)];
                 try padded(w, s, text);
             },
             'p' => {
-                const p = @cVaArg(ap, usize);
+                const p = va.arg(ap, usize);
                 var buf: [2 + 16]u8 = undefined;
                 const text = std.mem.print(&buf, "0x{x}", .{p}) catch unreachable;
                 try padded(w, s, text);
@@ -520,9 +498,9 @@ inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer
                 // argument would be misread: the rest of the format goes out
                 // verbatim instead. `%L` in a VPI log line is the ceiling.
                 if (len == .L) return w.writeAll(fmt[start..]);
-                try real(w, s, @cVaArg(ap, f64), conv);
+                try real(w, s, va.arg(ap, f64), conv);
             },
-            'n' => _ = @cVaArg(ap, ?*anyopaque),
+            'n' => _ = va.arg(ap, ?*anyopaque),
             else => try w.writeAll(fmt[start..i]),
         }
     }
@@ -679,14 +657,19 @@ fn stripZeros(s: []const u8) []const u8 {
 // p02_09_printf_mcd.c, run by `zig build test-vpi`.
 // ---------------------------------------------------------------------------
 
-/// Calls `cformat` the way a C caller would: through a variadic.
-fn formatted(buf: [*]u8, fmt: [*:0]const u8, ...) callconv(.c) usize {
-    var ap = @cVaStart();
-    defer @cVaEnd(&ap);
-    var w: Io.Writer = .fixed(buf[0..512]);
-    if (!cformat(&w, fmt, &ap)) return 0;
+/// `cformat` into `buf`, for `varargs.c`'s `vera_vpi_format`: 0 when it fails.
+export fn vera_vpi_cformat(buf: [*]u8, len: usize, format: [*:0]const u8, ap: *va.List) usize {
+    var w: Io.Writer = .fixed(buf[0..len]);
+    if (!cformat(&w, format, ap)) return 0;
     return w.end;
 }
+
+/// Calls `cformat` the way a C caller would: through a variadic, into a
+/// 512-byte buffer.
+/// `varargs.c`, for the tests below.
+extern fn vpi_mcd_printf(mcd: c_uint, format: [*:0]const u8, ...) c_int;
+
+const formatted = @extern(*const fn (buf: [*]u8, format: [*:0]const u8, ...) callconv(.c) usize, .{ .name = "vera_vpi_format" });
 
 fn expectFormat(want: []const u8, got_len: usize, buf: []const u8) !void {
     try std.testing.expectEqualStrings(want, buf[0..got_len]);

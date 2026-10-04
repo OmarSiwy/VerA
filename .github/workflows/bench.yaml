@@ -12,7 +12,7 @@ name: bench
 
 on:
   push:
-    branches: [main, zig-0.17]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -148,6 +148,45 @@ jobs:
             /tmp/devices.txt
             /tmp/sweep.txt
             /tmp/source-audit.txt
+
+  # Cross-platform builds hold because VerA calls no OS but through `std`
+  # (tests/exhaustive.zig's portability guard; lib/dynlib.zig is the one
+  # allowlisted file). `build-all` compiles every artifact `test` builds, the
+  # emitted test devices and the VPI host and applications included, for the
+  # target, and runs none: a foreign binary cannot run on this runner.
+  cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-linux-gnu, aarch64-linux-gnu, x86_64-macos, aarch64-macos, x86_64-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build every artifact for ${{ matrix.target }}
+        run: zig build build-all -Dtarget=${{ matrix.target }}
+
+  # The gate, run where the cross job can only compile.
+  native:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Unit tests (gate)
+        shell: bash
+        run: |
+          zig build test --summary all 2>&1 | tee unit.txt
+          exit "${PIPESTATUS[0]}"
 
   # The conformance and speed report (tools/report.py): one self-contained
   # page with the measures, the clause-by-clause rule map, the gaps, and the

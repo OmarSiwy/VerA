@@ -6,6 +6,8 @@
 //! src/vpi/vpi_user.h, so the ABI itself is under test.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const DynLib = @import("dynlib").DynLib;
 const vera = @import("vera");
 const vpi = @import("vpi");
 const sim = @import("sim");
@@ -16,7 +18,15 @@ const Io = std.Io;
 /// C's `main`, because this file is built ONCE as a static library and linked
 /// into one executable per application: the application is the C half, and a
 /// Zig executable per fixture would recompile the whole engine per fixture.
+/// The C runtime's, on Windows: `_O_BINARY` keeps an application's `printf`
+/// from writing `\r\n`, so its stdout is the bytes build.zig expects.
+extern "c" fn _setmode(fd: c_int, mode: c_int) c_int;
+
 export fn main(argc: c_int, argv: [*]const [*:0]const u8) c_int {
+    if (builtin.os.tag == .windows) {
+        _ = _setmode(1, 0x8000);
+        _ = _setmode(2, 0x8000);
+    }
     // §12.17: the invocation a vpi_get_vlog_info() reports is this one.
     vpi.setInvocation(argc, @ptrCast(@constCast(argv)));
     const code = host(if (argc > 1) std.mem.span(argv[1]) else null, if (argc > 2) std.mem.span(argv[2]) else null) catch |e| {
@@ -73,21 +83,26 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const analyses = if (app) |c| try readAnalyses(arena, io, c) else &.{};
-    var loaded: ?std.DynLib = null;
+    var loaded: ?DynLib = null;
     defer if (loaded) |*l| l.close();
     if (analyses.len != 0) {
         // Building the library spawns `zig`, which the global single-threaded
         // Io cannot do (no allocator, no environment): a real one, over this
         // process's own environment.
         var threaded: Io.Threaded = .init(gpa, .{
-            .environ = .{ .block = .{ .slice = std.mem.span(@as([*:null]const ?[*:0]const u8, @ptrCast(std.c.environ))) } },
+            .environ = .{
+                .block = switch (builtin.os.tag) {
+                    .windows => .global, // the process's own block, read by std
+                    else => .{ .slice = std.mem.span(@as([*:null]const ?[*:0]const u8, @ptrCast(std.c.environ))) },
+                },
+            },
         });
         defer threaded.deinit();
         const lib_path = buildAnalogLib(gpa, arena, threaded.io(), path, std.fs.path.stem(app.?), source, &.{ dir, up }) catch |e| {
             std.debug.print("vpi_host: `{s}` has no analog library: {t}\n", .{ path, e });
             return 1;
         };
-        loaded = try std.DynLib.open(lib_path);
+        loaded = try DynLib.open(lib_path);
         try vpi.analog_run.attach(try bindLib(&loaded.?));
     }
     defer if (loaded != null) vpi.analog_run.detach();
@@ -166,7 +181,8 @@ fn buildAnalogLib(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, path
     d.validate_contract = true;
     const runner = try vera.tb.renderVpiLib(arena, stem, d);
     const work = try std.fs.path.join(arena, &.{ host_options.work_root, app_stem });
-    const out = try arena.print("{s}/lib{s}.so", .{ work, stem });
+    const t = &builtin.target;
+    const out = try arena.print("{s}/{s}{s}{s}", .{ work, t.libPrefix(), stem, t.dynamicLibSuffix() });
     const built = try vera.tb.buildExe(gpa, io, device, runner, .{
         .work_dir = work,
         .contract = host_options.contract,
@@ -194,7 +210,7 @@ fn stderrWriter() *Io.Writer {
     return &S.w.?.interface;
 }
 
-fn bindLib(l: *std.DynLib) !vpi.analog_run.Lib {
+fn bindLib(l: *DynLib) !vpi.analog_run.Lib {
     var out: vpi.analog_run.Lib = undefined;
     const s = @typeInfo(vpi.analog_run.Lib).@"struct";
     inline for (s.field_names, s.field_types) |name, F| {

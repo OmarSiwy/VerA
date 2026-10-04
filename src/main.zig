@@ -429,7 +429,8 @@ fn simTree(io: Io, arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
 /// The compiler cache the prebuilt digital engine lives in, shared by every
 /// work directory: `vera-engine` in Zig's global cache directory
 /// (`ZIG_GLOBAL_CACHE_DIR`, else `XDG_CACHE_HOME/zig`, else
-/// `HOME/.cache/zig`), else the work directory's own cache.
+/// `HOME/.cache/zig`, else Windows' `LOCALAPPDATA/zig`), else the work
+/// directory's own cache.
 pub fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, work_dir: ?[]const u8) ![]const u8 {
     const global = if (env.get("ZIG_GLOBAL_CACHE_DIR")) |d|
         d
@@ -437,6 +438,8 @@ pub fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map
         try std.fs.path.join(arena, &.{ d, "zig" })
     else if (env.get("HOME")) |d|
         try std.fs.path.join(arena, &.{ d, ".cache", "zig" })
+    else if (env.get("LOCALAPPDATA")) |d|
+        try std.fs.path.join(arena, &.{ d, "zig" })
     else
         return std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
     return std.fs.path.join(arena, &.{ global, "vera-engine" });
