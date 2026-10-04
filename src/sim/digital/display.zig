@@ -254,8 +254,8 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
         self.exprFail(args[0], too_large)
     else
         self.exprFail(args[0], "the memory file cannot be read");
-    const start = if (args.len >= 3) (try evaluate.eval(self, a, args[2], 0)).asInt() else null;
-    const finish = if (args.len == 4) (try evaluate.eval(self, a, args[3], 0)).asInt() else null;
+    const start = if (args.len >= 3) (try evaluate.eval(self, a, args[2], 0)).asInt() orelse return self.exprFail(args[2], unknown_bound) else null;
+    const finish = if (args.len == 4) (try evaluate.eval(self, a, args[3], 0)).asInt() orelse return self.exprFail(args[3], unknown_bound) else null;
     var load: MemLoad = .init(text, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
     while (load.next(a) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -267,6 +267,10 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
         try self.bag.add(.lower, .W1150, .{ .start = at, .end = at }, MemLoad.mismatch_text, .{ m.found, m.expected });
     }
 }
+
+/// §17.2.9 gives an address no x or z digit, so a bound that evaluates to
+/// one names no address and the load is refused rather than defaulted.
+pub const unknown_bound = "a $readmem start or finish address evaluates to x or z";
 
 /// The data file sits beside the source that names it, which is what makes
 /// a fixture self-contained. The working directory is tried second, so a

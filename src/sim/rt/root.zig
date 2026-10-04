@@ -1819,6 +1819,7 @@ pub const State = struct {
     /// start and finish addresses `first`/`last` the call has (null: x or z).
     pub fn readmem(self: *State, source: []const u8, name: []const u8, radix: fmt.Radix, width: u32, slot: u32, off: u32, low: i64, high: i64, given: u2, first: ?i64, last: ?i64) Error!void {
         if (self.quiet) return;
+        if ((given >= 1 and first == null) or (given == 2 and last == null)) return self.fail(display.unknown_bound, .{});
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
