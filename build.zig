@@ -483,6 +483,7 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
     .{ .host = "tests/revert_host.zig", .va = "tests/fixtures/ch04_expressions/revert_ops.va" },
+    .{ .host = "tests/fixtures/ch09_system_tasks/bound_step_smallest_host.zig", .va = "tests/fixtures/ch09_system_tasks/bound_step_smallest_active_wins.va" },
     .{ .host = "tests/status_host.zig", .va = "tests/fixtures/ch09_system_tasks/status_ops.va" },
     .{ .host = "tests/port_mask_host.zig", .va = "tests/fixtures/ch09_system_tasks/port_mask.va" },
     .{ .host = "tests/table_status_host.zig", .va = "tests/fixtures/ch09_system_tasks/table_status.va" },
