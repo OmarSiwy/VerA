@@ -57,6 +57,21 @@ fn scanAccept(self: *Gen) Error!Accept {
     return a;
 }
 
+/// Returns filter unit `n`'s `__sec` call in `updateState`'s frame. A filter
+/// with §4.5.14 sampled coefficients first gets their latch: "the value of
+/// the dynamic expression at the start of the analysis", taken at the static
+/// point (`dt`, the step its kernel tests for one) and read after it.
+fn secStep(self: *Gen, n: []const u8, p: cg_filters.FilterPlan, dt: []const u8) Error![]const u8 {
+    if (p.sampled.len == 0) return self.arena.print("{s}__sec(model)", .{n});
+    try self.w("        if (!({s} > 0.0)) inst.{s}__k = .{{ ", .{ dt, n });
+    for (p.sampled, 0..) |v, j| {
+        if (j != 0) try self.w(", ", .{});
+        try self.w("{s}", .{try gen_call.ctrlStep(self, &.{v}, 0, "0.0")});
+    }
+    try self.w(" }};\n", .{});
+    return self.arena.print("{s}__sec(model, inst.{s}__k)", .{ n, n });
+}
+
 /// The core field of VerA's `$vera_reject_step` retry time, in `self.core`.
 fn rejectStepIdx(self: *const Gen) ?u32 {
     if (self.lowered.reject_step == .undef) return null;
@@ -470,8 +485,8 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             .laplace => {
                 const p = cg_filters.planOf(self, i);
                 if (p.err == null) try self.w(
-                    "        zLaplaceStep({d}, {d}, in, {s}__sec(model), dt, &inst.{s}__u, &inst.{s}__y);\n",
-                    .{ p.ns, p.deg, n, n, n },
+                    "        zLaplaceStep({d}, {d}, in, {s}, dt, &inst.{s}__u, &inst.{s}__y);\n",
+                    .{ p.ns, p.deg, try secStep(self, n, p, "dt"), n, n },
                 );
             },
             // §4.5.12 the filter runs on its own timebase: sample when the
@@ -479,6 +494,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // The step bound keeps the solver from stepping over a sample.
             .zi => {
                 const p = cg_filters.planOf(self, i);
+                const sec = if (p.err == null) try secStep(self, n, p, "sim.dt") else "";
                 // §4.5.12 τ/t0: the samples fall on t0 + k·T, and each starts a
                 // τ-long transition from wherever the previous one had reached
                 // (`zZiRamp`). Before a positive t0 the output holds the
@@ -489,7 +505,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     \\        const zi_t0: f64 = {4s};
                     \\        const zi_tau: f64 = {5s};
                     \\        if (!(sim.dt > 0.0) and inst.{0s}__nk == 0.0 and zi_t0 > 0.0) {{
-                    \\            inst.{0s}__out = in * zZiGain({2d}, {3d}, {0s}__sec(model));
+                    \\            inst.{0s}__out = in * zZiGain({2d}, {3d}, {6s});
                     \\            inst.{0s}__from = inst.{0s}__out;
                     \\        }}
                     \\        var zi_k = zZiDue(sim.t - zi_t0, inst.{0s}__nk, period);
@@ -499,7 +515,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     \\            inst.{0s}__ts = zi_ts;
                     \\            inst.{0s}__nk += @as(f64, @floatFromInt(zi_k));
                     \\            while (zi_k > 0) : (zi_k -= 1)
-                    \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
+                    \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {6s}, &inst.{0s}__u, &inst.{0s}__y);
                     \\            // §9.17.1: a step in value, or with τ > 0 a corner in slope.
                     \\            const zi_order: i32 = if (zi_tau > 0.0) 1 else 0;
                     \\            if (inst.discontinuity_order < 0 or inst.discontinuity_order > zi_order) inst.discontinuity_order = zi_order;
@@ -507,7 +523,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     \\        inst.bound_step = @min(inst.bound_step, period);
                     \\        if (zi_tau > 0.0) inst.bound_step = @min(inst.bound_step, zi_tau);
                     \\
-                , .{ n, p.period orelse "0.0", p.ns, p.deg, p.t0.?, p.tau.? }) else if (p.err == null) try self.w(
+                , .{ n, p.period orelse "0.0", p.ns, p.deg, p.t0.?, p.tau.?, sec }) else if (p.err == null) try self.w(
                     \\        const period = {1s};
                     \\        // §4.5.12: "T specifies the sampling period of the filter".
                     \\        // The recurrence runs once per T of SIMULATED TIME, so a step that
@@ -526,12 +542,12 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     \\        if (zi_k > 0) {{
                     \\            inst.{0s}__nk += @as(f64, @floatFromInt(zi_k));
                     \\            while (zi_k > 0) : (zi_k -= 1)
-                    \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
+                    \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {4s}, &inst.{0s}__u, &inst.{0s}__y);
                     \\            inst.discontinuity_order = 0; // §9.17.1 the held output steps
                     \\        }}
                     \\        inst.bound_step = @min(inst.bound_step, period);
                     \\
-                , .{ n, p.period orelse "0.0", p.ns, p.deg });
+                , .{ n, p.period orelse "0.0", p.ns, p.deg, sec });
             },
             .none => {},
         }

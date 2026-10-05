@@ -10,6 +10,7 @@ const Mir = @import("ir").Mir;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
+const gen_host = @import("codegen/host_expr.zig");
 
 // =======================================================================
 // §4.5.11 / §4.5.12 filters
@@ -47,6 +48,10 @@ pub const FilterPlan = struct {
     /// `const zr<k> = zRootSecs(...)` lines `__sec` runs before its return:
     /// one per root vector whose parts the card sets (`cardRoots`).
     lets: []const []const u8 = &.{},
+    /// §4.5.14 the coefficients that move during the analysis, in the order `__sec`'s `k` parameter takes them; a
+    /// coefficient's text reads `k[<j>]`. `updateState` latches them at the
+    /// static point into `inst.<unit>__k`, and `eval` reads them live there.
+    sampled: []const Mir.Value = &.{},
     /// The LRM refusal planning produced; the plan is unusable when set.
     err: ?[]const u8 = null,
     /// The unit refusal `f64Expr` raised while planning (E0515: a coefficient
@@ -93,8 +98,11 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
     var den: std.ArrayList(Poly) = .empty;
     // At most one `zRootSecs` let per side (`runtimeRoots`).
     var lets: std.ArrayList([]const u8) = try .initCapacity(g.arena, 2);
-    if (try filterSide(g, &num, &lets, nv.elems, num_roots, z, false)) |m| return .{ .err = m };
-    if (try filterSide(g, &den, &lets, dv.elems, den_roots, z, true)) |m| return .{ .err = m };
+    // ponytail: §4.5.14 sampling covers the coefficients; a moving zi_*
+    // period, τ or t0 is still refused (the same latch is the upgrade path).
+    var cx: Coefs = .{};
+    if (try filterSide(g, &cx, &num, &lets, nv.elems, num_roots, z, false)) |m| return .{ .err = m };
+    if (try filterSide(g, &cx, &den, &lets, dv.elems, den_roots, z, true)) |m| return .{ .err = m };
 
     var p: FilterPlan = .{
         .num = num.items,
@@ -102,6 +110,7 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         .ns = @max(num.items.len, den.items.len),
         .uses_model = g.uses.model,
         .lets = lets.items,
+        .sampled = cx.sampled.items,
     };
     for (0..p.ns) |i| {
         p.deg = @max(p.deg, @max(p.poly(true, i).len, p.poly(false, i).len) - 1);
@@ -204,11 +213,26 @@ pub fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
     return .{ .elems = args[i + 1 ..][0..n], .next = i + 1 + n };
 }
 
+/// Renders filter coefficients, collecting the ones §4.5.14 samples.
+pub const Coefs = struct {
+    sampled: std.ArrayList(Mir.Value) = .empty,
+
+    /// Returns coefficient `e` as `__sec` text: `k[<j>]` for one the solve
+    /// moves (§4.5.14 "the value of the dynamic expression at the start of
+    /// the analysis"), else `f64Expr`'s text over Model.
+    fn text(cx: *Coefs, g: *Gen, e: Mir.Value) Error![]const u8 {
+        if (!try gen_host.ctrlIsDynamic(g, e)) return g.f64Expr(e);
+        try cx.sampled.append(g.arena, e);
+        return g.arena.print("k[{d}]", .{cx.sampled.items.len - 1});
+    }
+};
+
 /// Appends one side of a filter to `out` as sections. `roots` selects the
 /// root-vector reading (real/imaginary pairs) over the coefficient reading.
 /// Returns an LRM diagnostic, or null on success.
 pub fn filterSide(
     g: *Gen,
+    cx: *Coefs,
     out: *std.ArrayList(Poly),
     lets: *std.ArrayList([]const u8),
     elems: []const Mir.Value,
@@ -227,7 +251,7 @@ pub fn filterSide(
         var poly = try g.arena.alloc([]const u8, elems.len);
         var all_zero = true;
         for (elems, 0..) |e, i| {
-            poly[i] = try g.f64Expr(e);
+            poly[i] = try cx.text(g, e);
             const c = g.an.foldConst(e, true);
             if (c == null or c.?.f != 0.0) all_zero = false;
         }
@@ -251,12 +275,14 @@ pub fn filterSide(
         card = card or c;
         card_im = card_im or (c and i % 2 == 1);
     }
-    if (card_im) return runtimeRoots(g, out, lets, elems, z);
+    if (card_im) return runtimeRoots(g, cx, out, lets, elems, z);
     const mark = out.items.len;
-    const msg = (try constRoots(g, out, elems, z)) orelse return null;
+    const smark = cx.sampled.items.len;
+    const msg = (try constRoots(g, cx, out, elems, z)) orelse return null;
     if (!card) return msg;
     out.shrinkRetainingCapacity(mark);
-    return runtimeRoots(g, out, lets, elems, z);
+    cx.sampled.shrinkRetainingCapacity(smark);
+    return runtimeRoots(g, cx, out, lets, elems, z);
 }
 
 /// The root vector `elems` as `zRootSecs` sections, paired at run time from
@@ -264,6 +290,7 @@ pub fn filterSide(
 /// `zr<k>`, which `__sec` computes first (`FilterPlan.lets`).
 fn runtimeRoots(
     g: *Gen,
+    cx: *Coefs,
     out: *std.ArrayList(Poly),
     lets: *std.ArrayList([]const u8),
     elems: []const Mir.Value,
@@ -275,7 +302,7 @@ fn runtimeRoots(
     try t.print(g.arena, "const zr{d} = zRootSecs({d}, {s}, .{{ ", .{ k, m, if (z) "true" else "false" });
     for (elems, 0..) |e, i| {
         if (i != 0) try t.appendSlice(g.arena, ", ");
-        try t.appendSlice(g.arena, try g.f64Expr(e));
+        try t.appendSlice(g.arena, try cx.text(g, e));
     }
     try t.appendSlice(g.arena, " });");
     lets.appendAssumeCapacity(t.items);
@@ -290,7 +317,7 @@ fn runtimeRoots(
 /// The root vector `elems` as sections whose structure is fixed here: one per
 /// real root, one real quadratic per conjugate pair. Returns an LRM
 /// diagnostic, or null on success.
-fn constRoots(g: *Gen, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: bool) Error!?[]const u8 {
+fn constRoots(g: *Gen, cx: *Coefs, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: bool) Error!?[]const u8 {
     const m = elems.len / 2;
     const used = try g.arena.alloc(bool, m);
     @memset(used, false);
@@ -303,7 +330,7 @@ fn constRoots(g: *Gen, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: b
         const im = g.an.foldConst(elems[2 * k + 1], true) orelse
             return "LRM 4.5.11/4.5.12: the imaginary part of a filter root must be a constant expression " ++
                 "(the conjugate pairing decides the section structure)";
-        const re = try g.f64Expr(elems[2 * k]);
+        const re = try cx.text(g, elems[2 * k]);
         const re_c = g.an.foldConst(elems[2 * k], true);
         if (im.f == 0.0) {
             // "If a root is zero, then the term associated with it is
@@ -373,7 +400,8 @@ pub fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []
 /// Emits `pub fn <n>__sec(model)`, the cascade's coefficients read from Model
 /// on every call so a card override needs no recompile. It is `pub` in the
 /// device because a host doing `.ac`/`.noise` builds `H(jω)` from exactly these
-/// numbers. Returns the output offset where the fn starts.
+/// numbers. A filter with §4.5.14 sampled coefficients takes them as `k`
+/// after `model`. Returns the output offset where the fn starts.
 pub fn emitFilterSections(g: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!usize {
     const var_name = if (z) "z⁻¹" else "s";
     try g.w(
@@ -382,9 +410,10 @@ pub fn emitFilterSections(g: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!
         .{ if (z) "12" else "11", n, var_name, var_name },
     );
     const at_fn = g.out.items.len;
-    try g.w("pub fn {s}__sec({s}: *const Model) [{d}][2][{d}]f64 {{\n", .{
-        n, if (p.uses_model) "model" else "_", p.ns, p.deg + 1,
-    });
+    try g.w("pub fn {s}__sec({s}: *const Model", .{ n, if (p.uses_model) "model" else "_" });
+    // §4.5.14 the sampled coefficients, which the caller picks (`sampledCoefs`).
+    if (p.sampled.len != 0) try g.w(", k: [{d}]f64", .{p.sampled.len});
+    try g.w(") [{d}][2][{d}]f64 {{\n", .{ p.ns, p.deg + 1 });
     for (p.lets) |l| try g.w("    {s}\n", .{l});
     try g.w("    return .{{\n", .{});
     for (0..p.ns) |i| {

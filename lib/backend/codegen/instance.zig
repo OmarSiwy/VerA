@@ -187,6 +187,10 @@ pub fn emitInstance(self: *Gen) Error!void {
                 try self.w("    {s}__y: [{d}]f64 = @splat(0.0),\n", .{ n, p.ns * p.deg });
                 try keepHist(self, "{s}__u", .{n});
                 try keepHist(self, "{s}__y", .{n});
+                if (p.sampled.len != 0) {
+                    try self.w("    {s}__k: [{d}]f64 = @splat(0.0), // §4.5.14 coefficients, sampled at the start of the analysis\n", .{ n, p.sampled.len });
+                    try keepHist(self, "{s}__k", .{n});
+                }
                 // §4.5.12 the filter's clock as a count of samples taken, not
                 // the next sample time: `next += zn*T` drifts off the k·T grid
                 // by an ulp or two (1e-9 + 1e-9 + 1e-9 > 3e-9 in f64), and a

@@ -2265,7 +2265,7 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     // §4.5.8's rise_time, not §4.5.7's td: Table 4-20 lists every one of
     // `transition`'s times among the CONSTANT expression arguments and
     // `absdelay`'s td among the DYNAMIC ones, so `absdelay(V(p,n), V(c))` is
-    // legal and compiled (see `dynCtrlArgs` and
+    // legal and compiled (see `isDynCtrlArg` and
     // ch04_expressions/a04_03_absdelay_td_frozen_without_maxdelay.va).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,

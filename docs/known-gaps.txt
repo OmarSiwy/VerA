@@ -1,7 +1,6 @@
 ONEWAY-LRM §7.4.4.2
 XFAIL annex_f_resolution/digital_behavioral_net_is_digital.va
 XFAIL ch03_data_types/81_natureless_domainless_port_compatibility.va
-XFAIL ch04_expressions/audit_laplace_dynamic_coefficient_sampled.va
 XFAIL ch07_mixed_signal/m01_12_continuous_variable_read_from_digital.va
 XFAIL ch07_mixed_signal/m01_13_same_value_analog_assignment_fires.va
 XFAIL ch07_mixed_signal/m02_15_explicit_d2a_per_delta_cycle.va
