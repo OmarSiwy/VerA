@@ -98,8 +98,9 @@ pub const Elab = struct {
     insts: std.ArrayList(struct { module: *const Ast.ModuleDecl, scope: u32 }) = .empty,
     /// §7.6 pass switches, with the instance scope their control is read in.
     trans: std.ArrayList(struct { tran: Tran, scope: u32, tok: u32 }) = .empty,
-    /// §6.6 the processes of each elaborated generate block, with its scope.
-    procs: std.ArrayList(struct { scope: u32, blocks: []const Ast.DiscreteBlock }) = .empty,
+    /// §6.6 the processes and variables of each elaborated generate block,
+    /// with its scope; the variables for their §6.2.1 initializers.
+    procs: std.ArrayList(struct { scope: u32, blocks: []const Ast.DiscreteBlock, vars: []const Ast.VarDecl }) = .empty,
 };
 
 /// §6.2.2: the roots of the design are the descriptions nothing instantiates
@@ -1067,7 +1068,18 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events);
             try declareDrivers(r, e, scope, b.gen.*, &.{});
-            if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
+            // §12.4: so are its variables, which §12.5 names reach as
+            // `blk[i].v` (#56). A mixed design's are the analog block's
+            // (§7.2.2), as `declare` leaves a module's.
+            // ponytail: a mixed design's generate-block variables stay
+            // undeclared here; give them `declare`'s domain test when a
+            // digital process there needs to write one.
+            const vars: []const Ast.VarDecl = if (r.mixed) &.{} else b.vars;
+            for (vars) |v| {
+                if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
+                _ = try mintVar(r, v);
+            }
+            if (b.gen.discrete.len != 0 or vars.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete, .vars = vars });
             for (b.gen.discrete) |d| try blockScopes(r, scope, d.body);
             for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
             // A mixed design's generate block also holds its analog blocks,

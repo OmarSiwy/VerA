@@ -1619,19 +1619,7 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try compile.compileSubs(&r);
     for (e.insts.items) |inst| {
         r.scope = inst.scope;
-        // IEEE 1364-2005 §6.2.1: a variable declaration assignment "shall be
-        // the same as" an initial block making the assignment, so it is one,
-        // queued ahead of the instance's own processes. A mixed module's
-        // initialized variables are the analog block's and were skipped.
-        for (inst.module.vars) |v| if (v.init != .none) {
-            const at = r.names.get(.{ .scope = inst.scope, .str = v.name }) orelse continue;
-            try compile.checkExpr(&r, v.init);
-            // §6.2.1: "The assignment shall be to a constant expression."
-            if (!compile.constantExpression(&r, v.init)) return r.exprFail(v.init, "§6.2.1: a constant expression is required here");
-            const start = try compile.append(&r, .{ .init_var = .{ .slot = at, .value = v.init } });
-            _ = try compile.append(&r, .stop);
-            _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
-        };
+        try initVars(&r, inst.module.vars);
         if (r.mixed) {
             // The names the digital processes mention, for `analogTriggers`.
             var named: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
@@ -1661,6 +1649,7 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     }
     for (e.procs.items) |p| {
         r.scope = p.scope;
+        try initVars(&r, p.vars);
         try processes(&r, p.blocks);
     }
     // A.6.5's `disable` names a block that needs no declaration before its
@@ -1733,6 +1722,23 @@ fn netRuns(
 }
 
 /// Compiles each of `blocks` in `r.scope` and queues it at time 0.
+/// IEEE 1364-2005 §6.2.1: a variable declaration assignment "shall be the
+/// same as" an initial block making the assignment, so each initializer of
+/// `vars`, declared in `r.scope`, is one, queued ahead of the scope's own
+/// processes. A mixed module's initialized variables are the analog block's
+/// and were never declared here.
+fn initVars(r: *Run, vars: []const Ast.VarDecl) Error!void {
+    for (vars) |v| if (v.init != .none) {
+        const at = r.names.get(.{ .scope = r.scope, .str = v.name }) orelse continue;
+        try compile.checkExpr(r, v.init);
+        // §6.2.1: "The assignment shall be to a constant expression."
+        if (!compile.constantExpression(r, v.init)) return r.exprFail(v.init, "§6.2.1: a constant expression is required here");
+        const start = try compile.append(r, .{ .init_var = .{ .slot = at, .value = v.init } });
+        _ = try compile.append(r, .stop);
+        _ = try exec.enqueue(r, .{ .run_process = start }, null, false);
+    };
+}
+
 fn processes(r: *Run, blocks: []const Ast.DiscreteBlock) Error!void {
     for (blocks) |process| {
         const start: u32 = @intCast(r.code.items.len);
