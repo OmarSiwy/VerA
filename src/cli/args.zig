@@ -46,6 +46,9 @@ pub const usage_text =
     \\  --check                 type-check the generated device with zig, running
     \\                          the contract's conformance checks
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
+    \\  --emit-osdi             build an OSDI 0.4 library (ngspice `pre_osdi`) of a
+    \\                          .va: --emit-so under this vera's tools/osdi_dyn.zig,
+    \\                          copied to -o PATH (default <module>.osdi); print it
     \\  --emit-exe              build a runnable Verilog-A testbench,
     \\                          or a .v design's executable; print its path
     \\                          (--emit-zig, --check and --emit-so of a .v build its
@@ -147,6 +150,10 @@ pub const Cli = struct {
     check: bool = false,
     validate_contract: bool = false,
     emit_so: bool = false,
+    /// `--emit-osdi`; `emit_so` is set too, and `-o` names the `.osdi`.
+    emit_osdi: bool = false,
+    /// `--emit-zig` typed, as opposed to implied by `-o`.
+    emit_zig_typed: bool = false,
     /// `--run`; `exe_flag` is set too.
     run_exe: bool = false,
     display: vera.codegen.Display = .drop,
@@ -211,6 +218,7 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
             cli.lint_flag = true;
         } else if (std.mem.eql(u8, arg, "--emit-zig")) {
             cli.emit_zig = true;
+            cli.emit_zig_typed = true;
             cli.codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-verilog")) {
             cli.emit_verilog = true;
@@ -230,6 +238,10 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
             cli.codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-so")) {
             cli.emit_so = true;
+            cli.codegen_flag = arg;
+        } else if (std.mem.eql(u8, arg, "--emit-osdi")) {
+            cli.emit_so = true;
+            cli.emit_osdi = true;
             cli.codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-exe") or std.mem.eql(u8, arg, "--run")) {
             // The testbench IS the display output, so asking for one and then
