@@ -490,6 +490,9 @@ Learned expensively, and none of it is style preference:
 
 - **Own worktree per agent.** Two in-tree agents plus a main session shared one
   checkout; one ran `git reset --hard` and destroyed uncommitted work.
+- **No `Co-Authored-By:` trailers**, and no other AI attribution, in any commit
+  message. Every commit is authored and committed by the repository's git user
+  (`git config user.name` / `user.email`); never set `--author` to an agent.
 - **Stage by explicit path. Never `git add -A` in a shared tree.** `git commit`
   commits the *index*: a docs commit once swept in three unrelated test-file
   deletions and nothing noticed for a session.
