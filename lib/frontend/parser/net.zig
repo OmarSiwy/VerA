@@ -299,8 +299,10 @@ fn parseDelays(self: *Parser, three: bool) Error!Ast.Delay3 {
     defer self.in_digital_delay = saved_delay;
     _ = try self.expect(.hash);
     if (!self.eat(.lparen)) {
-        // A.2.2.3 `delay_value`, the unparenthesized arm, parsed as an expression.
-        const v = try parse_expr.parseExpr(self);
+        // A.2.2.3 `delay_value ::= unsigned_number | real_number |
+        // identifier`: one primary, as A.6.5's `delay_control` reads it, never
+        // an expression. `wire #3 [7:0] w` must not read `3[7:0]` (#63).
+        const v = try parse_expr.parsePrimary(self);
         return .{ .rise = v, .fall = v, .off = v };
     }
     var out: Ast.Delay3 = .{};
@@ -332,6 +334,10 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
     // IEEE 1364, and A.2.1.3 grants the bracket to every alternative. Analog
     // lowering does not read it.
     const delay: Ast.Delay3 = if (self.peek() == .hash) try parseDelay3(self) else .{};
+    // A.2.1.3 writes `[ range ] [ delay3 ]` in that order, so a range after
+    // the delay is a syntax error, named as one (#63).
+    if (delay.rise != .none and self.peek() == .lbracket)
+        return self.failAt(self.pos, .E0207, "A.2.1.3: a net's range comes before its delay (`wire [7:0] #3 w;`), found `[` after the delay", .{});
     // A.2.1.3 lists either `list_of_net_identifiers` or
     // `list_of_net_decl_assignments`, never a mix (E0292): the first name
     // decides which.
