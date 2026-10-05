@@ -59,8 +59,7 @@ pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
 /// Address conversion preserves unsigned magnitude: the engine's signed
 /// index range cannot contain an unsigned value above maxInt(i64).
 pub fn indexInt(value: Int.Literal) ?i64 {
-    if (value.width == 64 and !value.signed and value.values()[0] > std.math.maxInt(i64)) return null;
-    return value.asInt();
+    return std.math.cast(i64, value.asIndex() orelse return null);
 }
 
 /// §4.9 row-major: the element `indices` (one per dimension, outermost
@@ -114,9 +113,9 @@ pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
         // is least significant follows the vector declaration's direction.
         .indexed_range => {
             count = @intCast(self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?.msb + 1); // infer folded it
-            const base = indexInt(try eval(self, a, ex.lhs(rg), 0)) orelse return null;
-            const p = range.position(base);
-            first = if ((range.msb >= range.lsb) == (ex.extraOf(rg) == 0)) p else p -| (count - 1);
+            const base = (try eval(self, a, ex.lhs(rg), 0)).asIndex() orelse return null;
+            const p = if (range.msb >= range.lsb) base -| range.lsb else range.lsb -| base;
+            first = std.math.lossyCast(i64, if ((range.msb >= range.lsb) == (ex.extraOf(rg) == 0)) p else p -| (count - 1));
         },
         else => first = range.position(indexInt(try eval(self, a, rg, 0)) orelse return null), // else: a bit-select's index
     }
