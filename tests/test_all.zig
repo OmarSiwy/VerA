@@ -1,7 +1,8 @@
 //! The one test compilation that imports every module: `refAllDecls` over all
 //! of them (Zig analyses lazily, so an unreferenced `pub` decl is otherwise
 //! never type-checked), plus the claims that span two modules neither of which
-//! imports the other: the contract-name check below and `exhaustive.zig`.
+//! imports the other: the contract-name check below, `exhaustive.zig` and
+//! `citations.zig`.
 
 const std = @import("std");
 
@@ -24,6 +25,8 @@ pub const vpi = @import("vpi");
 
 /// The stage-boundary exhaustiveness guard.
 pub const exhaustive = @import("exhaustive.zig");
+/// Every diagnostic's `.lrm` names a clause the LRM or IEEE 1364-2005 has.
+pub const citations = @import("citations.zig");
 /// ARCHITECTURE.md's fitness rules R1-R7, each with its shrinking allowlist.
 pub const fitness = @import("fitness.zig");
 /// The in-process fuzz targets, replayed with seeded
