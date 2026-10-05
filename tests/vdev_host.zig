@@ -56,6 +56,11 @@
 //! never crosses; clk is the same PULSE. q starts 0; after the rising
 //! crossing at 5.5 ns q = d. d[599] is 1 (599 mod 3 = 2), so y is 5 V
 //! through rout into 10 kΩ from the operating point on.
+//!
+//! v_say prints "born" at time 0 and "edge" at each rising clk. The device
+//! holds a step's text until the host commits it: the step that runs the
+//! 5.5 ns edge holds "edge\n", a revert drops it, and the retried step that
+//! is committed prints it (to stderr) and holds nothing after.
 const std = @import("std");
 const contract = @import("contract");
 const expect = std.testing.expect;
@@ -444,6 +449,32 @@ test "v_huge: 1202 pins, one lane per output row" {
     while (c.t < 8e-9) try c.step(1e-9, 5e-14);
     for (0..600) |b| try expectEqual(@as(f64, if (b % 3 == 2) 5 else 0), c.inst.lvl_to[599 - b]);
     try std.testing.expectApproxEqAbs(5.0 * 1e4 / (1e4 + 1), c.x[C.pin("q[2]")], 1e-9);
+}
+
+test "v_say: a step's transcript is printed when it is accepted, never when rejected" {
+    const C = Circuit(@import("v_say"));
+    var c: C = .{};
+    c.src[C.pin("clk")] = pulse;
+    c.g_gnd[C.pin("q")] = 1e-4;
+    c.birth();
+    // "born" went out at birth, which is never rejected.
+    try expectEqual(@as(u32, 0), c.st.say_len);
+    _ = try c.op();
+    while (true) {
+        var sim = C.at(c.t + 1e-9);
+        sim.dt = 1e-9;
+        try c.solve(sim);
+        _ = C.Dev.updateState(C.Fam, &c.m, &c.inst, c.x, &c.st, sim);
+        if (c.st.say_len != 0) break;
+        _ = C.Dev.stateCtl(&c.m, &c.inst, &c.st, .commit);
+        c.t += 1e-9;
+    }
+    try std.testing.expectEqualStrings("edge\n", c.st.say[0..c.st.say_len]);
+    _ = C.Dev.stateCtl(&c.m, &c.inst, &c.st, .revert);
+    try expectEqual(@as(u32, 0), c.st.say_len);
+    try c.step(1e-9, 5e-14);
+    while (c.inst.lvl_to[0] != 5) try c.step(1e-9, 5e-14);
+    try expectEqual(@as(u32, 0), c.st.say_len);
 }
 
 test "every .v device is stamped with the contract's abi_version" {
