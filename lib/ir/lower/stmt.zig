@@ -834,7 +834,10 @@ pub fn readLvalue(self: *Lower, lv: Lvalue) Oom!Mir.Value {
 /// Writes `v` to `lv` in the current block.
 pub fn writeLvalue(self: *Lower, lv: Lvalue, v: Mir.Value) Oom!void {
     switch (lv.at) {
-        .place => |p| try self.builder.writeVariable(p, self.cur, v),
+        .place => |p| {
+            try self.builder.writeVariable(p, self.cur, v);
+            try lower_var.countAssign(self, p);
+        },
         .elem => |el| try lower_var.storeElem(self, el.place, el.index, v),
     }
 }

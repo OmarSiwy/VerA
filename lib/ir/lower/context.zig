@@ -587,6 +587,26 @@ fn probeOutsideEventFn(file: *const Ast.SourceFile, e: Ast.ExprId) ?Ast.ExprId {
     return null;
 }
 
+/// The first analog variable in `e`, outside an analog event function's
+/// arguments, that no analog event statement assigns (a `Lowered.discrete_reads`
+/// name not held as `.event`), or null.
+fn freeVarOutsideEventFn(self: *const Lower, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .event_function => return null,
+        .ident => {
+            const name = self.file.str(ex.strOf(e));
+            if (self.out.discrete_reads.contains(name) and self.var_state.held_names.get(name) != .event) return e;
+            return null;
+        },
+        else => {}, // else: every other node is searched through its children
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (freeVarOutsideEventFn(self, c)) |v| return v;
+    return null;
+}
+
 /// Whether `name` is a net of `module` (`isNetName` by spelling, for the tables
 /// keyed by string).
 pub fn isNetSpelling(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, name: []const u8) bool {
@@ -875,6 +895,11 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
         const c = self.file.stmt(id).event_control;
         if (c.kind == .event and c.event != .none) if (probeOutsideEventFn(self.file, c.event)) |p|
             try self.err(ex.mainTok(p), .E0484, "`{s}(...)` in the event control of {s}", .{ self.file.str(ex.strOf(p)), ctx.where });
+        // §7.3.6.1 admits "analog variables that are only assigned values in
+        // analog event statements"; one the analog block assigns outside
+        // every event statement changes with the solution, as a probe does.
+        if (c.kind == .event and c.event != .none) if (freeVarOutsideEventFn(self, c.event)) |v|
+            try self.err(ex.mainTok(v), .E0484, "`{s}`, which the analog block assigns outside any event statement, in the event control of {s}", .{ self.file.str(ex.strOf(v)), ctx.where });
     }
     // A.6.2: a blocking, nonblocking or procedural `assign`/`deassign` write
     // is to a `variable_lvalue`; only `force`/`release` also take a net.

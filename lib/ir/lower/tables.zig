@@ -354,6 +354,15 @@ pub const HeldVar = struct {
     inits: []const Mir.Value = &.{},
     /// Why the variable is held; see `Why`.
     why: Why = .event,
+    /// §8.5.3.6 every event body that assigns it waits on explicit D2A terms
+    /// only, so a host evaluating one region-1b event before the next delta
+    /// cycle's commits it alone (the mixed runner's `latch`).
+    d2a: bool = false,
+
+    /// The name of a variable's §7.3.6.1 assignment count is this followed
+    /// by the variable's (`lower_var.countAssign`): no identifier starts
+    /// with `$`.
+    pub const assign_count_prefix = "$assigned.";
 
     /// Why a variable needs a persistent slot.
     pub const Why = enum {
@@ -368,6 +377,10 @@ pub const HeldVar = struct {
         /// observable. The backend's `pruneHeld` drops it when every merge
         /// of the held value is solve-invariant.
         unless_invariant,
+        /// §7.3.3 a discrete context reads it (`Lowered.discrete_reads`): the
+        /// mixed-signal coordinator copies its value off a solution, so it
+        /// needs a slot even when every evaluation assigns it first.
+        a2d,
     };
 };
 

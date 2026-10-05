@@ -53,6 +53,9 @@ pub const Options = struct {
 ///   snapshot(a, dig)              region 1b (§8.5.3.6): keep, for the next
 ///                                 setInputs, the values the statements guarded
 ///                                 by an explicit D2A event read
+///   latch(a)                      commit what the tentative solution's explicit
+///                                 D2A event statements assigned, and nothing
+///                                 else: one region-1b evaluation (§8.5.3.6)
 ///   solveAt(a, t, dt, first, last) a TENTATIVE solution at `t`; `first` opens the
 ///                                 analysis (dt = 0), `last` is its final point
 ///   finish(a)                     the last tentative solution is final: report it
@@ -96,6 +99,8 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
     }
     for (opts.times, 0..) |target, i| {
         const horizon = tickAtOrBefore(target, opts.tick);
+        s.target = target;
+        s.dc = i == 0;
         if (sync and i > 0) {
             while (s.acc.? < target) {
                 var t_end = target;
@@ -201,6 +206,12 @@ fn State(comptime A: type) type {
         dig: *digital.Run,
         opts: Options,
         final: f64,
+        /// The declared point being stepped toward (`timeOf`'s `target`).
+        target: f64 = 0,
+        /// Settling the activity at or before the first time into its DC point.
+        dc: bool = false,
+        /// `settleA2d` is running: the tentative solution is already finished.
+        settling: bool = false,
         /// Time of the tentative, not yet finished, solution.
         acc: ?f64 = null,
         /// Time of the last finished solution: the base of `dt`.
@@ -221,6 +232,17 @@ fn State(comptime A: type) type {
         fn timeOf(s: *const Self, k: Tick, target: f64, horizon: Tick) f64 {
             const tk = @as(f64, @floatFromInt(k)) * s.opts.tick;
             return if (k == horizon and @abs(tk - target) <= ulps * target) target else tk;
+        }
+
+        /// The analog time of the digital tick being run: the tentative
+        /// solution's when that is at or past this tick (time never runs
+        /// back), else as `run` would solve it
+        /// (§8.4.2: the DC point's before it opens the analysis).
+        fn nowTime(s: *const Self) f64 {
+            if (s.dc) return s.target;
+            const k = s.dig.scheduler.now;
+            if (s.acc) |ta| if (tickAtOrBefore(ta, s.opts.tick) >= k) return ta;
+            return s.timeOf(k, s.target, tickAtOrBefore(s.target, s.opts.tick));
         }
 
         /// A solution at `t`, tentative: `acc` moves, `prev` does not.
@@ -250,6 +272,8 @@ fn State(comptime A: type) type {
         // ponytail: the finished point is not re-solved for an implicit D2A
         // they cause (§8.4.3.2 "accept at wake-up time"); the next point is.
         fn settleA2d(s: *Self, horizon: Tick) !void {
+            s.settling = true;
+            defer s.settling = false;
             while (true) switch (try s.dig.runUntil(horizon)) {
                 .idle => break,
                 .explicit_d2a => try s.explicitD2a(),
@@ -257,7 +281,31 @@ fn State(comptime A: type) type {
             };
         }
 
-        fn explicitD2a(s: *Self) !void {
+        /// §8.5.3.6 "An explicit D2A event is processed by evaluating the
+        /// analog block": one evaluation per region-1b event. The terms of
+        /// one 1b are delivered together to the next solve, so an earlier 1b
+        /// of this tick still pending (a #0 delta cycle later) is evaluated
+        /// first, with its own snapshot, and what its statements assigned is
+        /// committed before this one's values replace the snapshot. That is
+        /// `accept` without `settleA2d`: the tick is mid-flight, so the A2D
+        /// writes of a point it finishes run with the rest of the tick.
+        // ponytail: that evaluation reads the unguarded inputs as they are now,
+        // not as they were at its 1b, and one pending while the finished point
+        // settles its A2D writes stays coalesced with the next.
+        fn explicitD2a(s: *Self) anyerror!void {
+            if (s.pending != 0 and !s.settling) {
+                const t = s.nowTime();
+                if (s.acc) |ta| if (ta != t) {
+                    try s.a.finish();
+                    s.prev = ta;
+                    s.fired = 0;
+                };
+                s.fired |= s.pending;
+                s.pending = 0;
+                try s.solve(t);
+                try s.a.latch();
+                s.fired = 0;
+            }
             s.pending |= s.dig.d2a_fired;
             s.dig.d2a_fired = 0;
             try s.a.snapshot(s.dig);
@@ -544,6 +592,7 @@ const Fake = struct {
     t: f64 = 0,
     solves: std.ArrayList(Point) = .empty,
     points: std.ArrayList(Point) = .empty,
+    latched: std.ArrayList(Point) = .empty,
     gpa: std.mem.Allocator,
     const Point = struct { t: f64, dt: f64, v: i64, first: bool, last: bool, fired: u64 = 0, snap: i64 = -1 };
 
@@ -553,6 +602,9 @@ const Fake = struct {
     }
     pub fn snapshot(f: *Fake, dig: *digital.Run) !void {
         f.snap = dig.values[f.slot].asInt() orelse -1;
+    }
+    pub fn latch(f: *Fake) !void {
+        try f.latched.append(f.gpa, f.solves.items[f.solves.items.len - 1]);
     }
     pub fn solveAt(f: *Fake, t: f64, dt: f64, first: bool, last: bool) !void {
         f.t = t;
@@ -688,6 +740,35 @@ test "§8.5.3.6 an explicit D2A reads region 1b's values and forces a solution a
     try testing.expectEqual(@as(i64, 3), p.snap);
     try testing.expectEqual(@as(u64, 0), f.points.items[1].fired);
     try testing.expectEqual(@as(u64, 0), f.points.items[3].fired);
+}
+
+test "§8.5.3.6 an explicit D2A in each delta cycle of a tick is evaluated once each, with its own region-1b values" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\`timescale 1ns/1ns
+        \\module m; integer d;
+        \\initial begin d = 1; #4 d = 2; #0 d = 3; end
+        \\endmodule
+    , .{}, &bag, &out.writer);
+    try dig.watchEvent(dig.slotOf("d").?, .any, 0);
+    var f: Fake = .{ .slot = dig.slotOf("d").?, .gpa = arena };
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 2e-9, 6e-9 }, .tick = 1e-9 });
+    // The cycle-1 event is evaluated at 4 ns with d = 2 and committed alone;
+    // the cycle-2 event reaches the tick's own solution with d = 3.
+    try testing.expectEqual(@as(usize, 1), f.latched.items.len);
+    const l = f.latched.items[0];
+    try testing.expectApproxEqAbs(@as(f64, 4e-9), l.t, 1e-18);
+    try testing.expectEqual(@as(u64, 1), l.fired);
+    try testing.expectEqual(@as(i64, 2), l.snap);
+    try testing.expectEqual(@as(usize, 4), f.points.items.len);
+    const p = f.points.items[2];
+    try testing.expectApproxEqAbs(@as(f64, 4e-9), p.t, 1e-18);
+    try testing.expectEqual(@as(u64, 1), p.fired);
+    try testing.expectEqual(@as(i64, 3), p.snap);
 }
 
 test "§8.4.3.3 A2D crossings at 5.2 ns and 7.6 ns reach ticks 5 and 8; §7.3.6.3 a probe reads the promoted tick" {

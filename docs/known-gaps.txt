@@ -1,3 +1,0 @@
-XFAIL ch07_mixed_signal/m01_12_continuous_variable_read_from_digital.va
-XFAIL ch07_mixed_signal/m01_13_same_value_analog_assignment_fires.va
-XFAIL ch07_mixed_signal/m02_15_explicit_d2a_per_delta_cycle.va
