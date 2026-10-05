@@ -11,6 +11,7 @@ const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
 const elab_resolve = @import("resolve.zig");
 const elab_paramset = @import("paramset.zig");
+const elab_segment = @import("segment.zig");
 const discipline = @import("../discipline_rules.zig");
 const Ast = @import("frontend").Ast;
 const Error = elaborate.Error;
@@ -58,20 +59,25 @@ const Hit = struct {
 /// module. All other ports shall have an instance of the selected connect
 /// module".
 ///
-/// A port no statement matches is left joined and recorded in
-/// `unbridged`: whether it is mixed is known only once §7.4 has resolved
-/// its net, and `checkUnbridged` judges it then (E0927).
-///
-/// An undeclared upper connection takes §7.4.4.1's basic answer at this
-/// level (`levelDiscipline`) so a statement can match it; the resolution
-/// proper still runs as the children are bound.
+/// Both connections are read as §7.4 resolution leaves them
+/// (`segment.up`/`segment.down`), not as declared: "The disciplines of mixed
+/// nets are determined prior to the connect module insertion phase of
+/// elaboration" (§7.6). So an undeclared port takes the discipline its
+/// segment resolved to, and under §7.4.4.2's detail mode an undeclared
+/// digital segment below an analog one is analog, which moves the bridge down
+/// to its discrete children. A port both of whose domains are known and that
+/// no statement matches is E0927, and one whose upper connection this pass
+/// could not decide is judged by the net the walk resolves: both are left
+/// joined and recorded in `unbridged`, for `checkUnbridged` after the walk.
 ///
 /// ponytail: rules are read only from connect modules with exactly one
-/// continuous and one discrete port (every §7.6 example), and a port is judged
-/// only when both of its connections declare a discipline. Supply-sensitive
-/// bridges with a third port (§7.8.6) and the Figure 7-6 coercion through
-/// undeclared interconnect are the upgrade.
+/// continuous and one discrete port (every §7.6 example). Supply-sensitive
+/// bridges with a third port (§7.8.6) are the upgrade.
 pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error![]const Ast.Instance {
+    // Per level: an out-of-context declaration below is collected only when
+    // its module is walked (`resolve.collectOoc`), so an answer cached for
+    // the level above may predate it.
+    self.seg_up.clearRetainingCapacity();
     var rules: std.ArrayList(Rule) = .empty;
     for (self.ctx.file.connectrules) |cr| for (cr.insertions) |*ins| {
         // `checkConnectRules` has reported what is wrong with a statement;
@@ -90,22 +96,18 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
             const ci = connIndex(&inst, p, pi) orelse continue;
             const sig = elab_names.netRefName(self, inst.ports[ci].expr) orelse continue;
             const bound = self.unit.rename.get(sig) orelse sig;
-            const lower = p.discipline;
-            const lo_d = domain(file, lower) orelse continue;
-            const unbridged: Unbridged = .{ .tok = inst.ports[ci].main_tok, .net = bound, .lower = lower, .port = p.name, .inst = inst.name, .dir = p.direction };
-            const upper = self.disc_of.get(bound) orelse levelDiscipline(self, module, sig) orelse {
-                try self.unbridged.append(self.ctx.arena, unbridged);
-                continue;
-            };
-            const up_d = domain(file, upper) orelse continue;
-            if (up_d == lo_d) {
-                // Not mixed yet: an undeclared net may still resolve continuous.
-                try self.unbridged.append(self.ctx.arena, unbridged);
+            const upper = self.seg_down.get(try segKey(self, path, sig)) orelse try elab_segment.up(self, module, path, sig, 0);
+            const lower = try elab_segment.down(self, child, child_path, p.name, upper);
+            try self.seg_down.put(self.ctx.arena, try segKey(self, child_path, p.name), lower);
+            if (lower.domain == .unspecified) continue;
+            if (upper.domain == .unspecified) {
+                try self.unbridged.append(self.ctx.arena, .{ .tok = inst.ports[ci].main_tok, .net = bound, .lower = lower.disc, .port = p.name, .inst = inst.name, .dir = p.direction });
                 continue;
             }
+            if (upper.domain == lower.domain) continue;
             var found: ?usize = null;
             var count: usize = 0;
-            for (rules.items, 0..) |r, ri| if (matches(file, r, p.direction, upper, lower)) {
+            for (rules.items, 0..) |r, ri| if (matches(file, r, p.direction, upper.disc, lower.disc)) {
                 count += 1;
                 if (found == null) found = ri;
             };
@@ -119,11 +121,13 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
                 .inst = ii,
                 .conn = ci,
                 .rule = found orelse {
-                    try self.unbridged.append(self.ctx.arena, unbridged);
+                    // Judged with the rest after the walk, so the order of
+                    // diagnostics stays §7.4's before §7.8's.
+                    try self.unbridged.append(self.ctx.arena, .{ .tok = inst.ports[ci].main_tok, .net = bound, .lower = lower.disc, .port = p.name, .inst = inst.name, .dir = p.direction, .upper = upper });
                     continue;
                 },
                 .sig = sig,
-                .bottom = lower,
+                .bottom = lower.disc,
                 .port = p.name,
             });
         }
@@ -199,6 +203,9 @@ pub const Unbridged = struct {
     port: Ast.StrId,
     inst: Ast.StrId,
     dir: Ast.Direction,
+    /// The upper connection as `plan` resolved it, when it could: then the
+    /// port is known mixed and no statement matched it.
+    upper: ?elab_segment.Seg = null,
 };
 
 /// §7.8.4 "the port shall match one (and only one) connect statement", the
@@ -210,9 +217,13 @@ pub const Unbridged = struct {
 pub fn checkUnbridged(self: *Flatten) Error!void {
     const file = self.ctx.file;
     for (self.unbridged.items) |u| {
+        if (u.upper) |up| {
+            try unmatched(self, u.tok, u.port, u.inst, u.lower, u.net, up.disc);
+            continue;
+        }
         const upper = self.disc_of.get(u.net) orelse continue;
         const up_d = domain(file, upper) orelse continue;
-        const lo_d = domain(file, u.lower).?;
+        const lo_d = domain(file, u.lower) orelse continue;
         if (up_d == lo_d or up_d == .unspecified or lo_d == .unspecified) continue;
         // A statement that matches, which `plan` could not apply: the net
         // resolved continuous above the level that elaborated this port.
@@ -229,29 +240,21 @@ pub fn checkUnbridged(self: *Flatten) Error!void {
             });
             continue;
         }
-        try self.err(u.tok, .E0927, "port `{s}` of `{s}` is `{s}` and its net `{s}` is `{s}`, and no connect statement bridges them", .{
-            file.str(u.port), file.str(u.inst), file.str(u.lower), file.str(u.net), file.str(upper),
-        });
+        try unmatched(self, u.tok, u.port, u.inst, u.lower, u.net, upper);
     }
 }
 
-/// §7.4.4.1 basic mode at this level, for an upper connection no
-/// declaration has reached yet: "At each level of the hierarchy where
-/// continuous and discrete meet for an undeclared net that net segment is
-/// declared continuous". The first continuous discipline a child port of
-/// `module` brings to `sig`, else null (the net is not continuous here, so
-/// no port of it is mixed yet).
-fn levelDiscipline(self: *Flatten, module: *const Ast.ModuleDecl, sig: Ast.StrId) ?Ast.StrId {
-    for (module.instances) |inst| {
-        const child = elab_names.findModule(self, inst.module) orelse continue;
-        if (child.is_connect) continue;
-        for (child.ports, 0..) |p, pi| {
-            const ci = connIndex(&inst, p, pi) orelse continue;
-            if (elab_names.netRefName(self, inst.ports[ci].expr) != sig) continue;
-            if (domain(self.ctx.file, p.discipline) == .continuous) return p.discipline;
-        }
-    }
-    return null;
+/// E0927 for a mixed port no connect statement matches.
+fn unmatched(self: *Flatten, tok: u32, port: Ast.StrId, inst: Ast.StrId, lower: Ast.StrId, net: Ast.StrId, upper: Ast.StrId) Error!void {
+    const file = self.ctx.file;
+    try self.err(tok, .E0927, "port `{s}` of `{s}` is `{s}` and its net `{s}` is `{s}`, and no connect statement bridges them", .{
+        file.str(port), file.str(inst), file.str(lower), file.str(net), file.str(upper),
+    });
+}
+
+/// A `segment` cache key: the segment's instance path and local name.
+fn segKey(self: *Flatten, path: []const u8, net: Ast.StrId) Error![]const u8 {
+    return self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(net) });
 }
 
 /// The module `inst` elaborates to: the one it names, or (§6.9.3) the module
@@ -265,7 +268,7 @@ fn levelDiscipline(self: *Flatten, module: *const Ast.ModuleDecl, sig: Ast.StrId
 /// Quiet: selection proper (`elab_paramset.selectParamset`) runs again when the
 /// instance is inlined and reports anything wrong there, once. A set that does
 /// not narrow to one paramset here inserts nothing.
-fn moduleOf(self: *Flatten, inst: *const Ast.Instance, path: []const u8) Error!?*const Ast.ModuleDecl {
+pub fn moduleOf(self: *Flatten, inst: *const Ast.Instance, path: []const u8) Error!?*const Ast.ModuleDecl {
     if (elab_names.findModule(self, inst.module)) |m| return m;
     var live: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
     _ = try elab_paramset.matchingParamsets(self, inst, path, &live);
@@ -314,7 +317,7 @@ fn ident(self: *Flatten, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
 }
 
 /// The index into `inst.ports` that binds `p`, the `pi`'th declared port.
-fn connIndex(inst: *const Ast.Instance, p: Ast.Port, pi: usize) ?usize {
+pub fn connIndex(inst: *const Ast.Instance, p: Ast.Port, pi: usize) ?usize {
     const named = inst.ports.len != 0 and inst.ports[0].name != .none;
     if (!named) return if (pi < inst.ports.len) pi else null;
     for (inst.ports, 0..) |c, i| if (c.name == p.name) return i;

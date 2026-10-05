@@ -45,6 +45,7 @@ const elab_names = @import("elaborate/names.zig");
 const elab_override = @import("elaborate/override.zig");
 const elab_paramset = @import("elaborate/paramset.zig");
 const elab_resolve = @import("elaborate/resolve.zig");
+const elab_segment = @import("elaborate/segment.zig");
 /// §6.7 a hierarchical expression → the flat name it denotes; lowering's
 /// path resolution and the §3.4.7 alias check share it. See
 /// `elaborate/names.zig`.
@@ -250,9 +251,8 @@ pub const Ctx = struct {
 /// §7.4.4 "There are two modes for this method of resolution, basic (the
 /// default) and detail"; F.2.2: "The selection of this algorithm instead of
 /// the default shall be controlled by a simulator option" (VerA's is
-/// `--discipline-resolution=`). Detail mode is parsed and selected, then
-/// refused where it would decide something basic mode decides differently
-/// (`resolve.refuseDetail`, E0930).
+/// `--discipline-resolution=`). The mode decides where connect modules go
+/// (`segment.down`, read by `insert.plan`).
 pub const DisciplineResolution = enum { basic, detail };
 
 /// §3.4 compile-time overrides, shared with Lower.Options. Elaboration needs
@@ -482,6 +482,13 @@ pub const Flatten = struct {
     /// Ports `insert.plan` bridged with nothing, judged once every net's
     /// discipline is resolved (`insert.checkUnbridged`, E0927).
     unbridged: std.ArrayList(elab_insert.Unbridged) = .empty,
+    /// `segment.up`'s answers for the level `insert.plan` is planning, keyed
+    /// by instance path and local net name.
+    seg_up: std.StringHashMapUnmanaged(elab_segment.Seg) = .empty,
+    /// The answer each port's lower connection resolved to when its parent
+    /// was planned (`segment.down`), the same keys: the upper connection of
+    /// the ports one level further down.
+    seg_down: std.StringHashMapUnmanaged(elab_segment.Seg) = .empty,
 
     /// The discipline every flat net has been declared with, keyed by the flat
     /// name: §3.10's precedence orders 1 and 2 after they have been decided.
@@ -706,10 +713,7 @@ pub const Flatten = struct {
         // candidate set of a signal against §7.7.2's resolution statements.
         try elab_resolve.resolveMultiCandidates(self);
         try elab_resolve.applyOocInits(self); // §3.6.3.2 hierarchical nodesets
-        // §7.4.4.2 / F.2.2 detail mode, refused where it differs from basic.
-        // Its refusal makes basic's insertion verdicts moot, so they wait.
-        if (self.ctx.discipline_resolution != .detail or !try elab_resolve.refuseDetail(self))
-            try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
+        try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
 
         // §5.2 analog blocks are concurrent, but §5.4.2.2's flow read is
         // ordered: `I(b)` after a flow contribution to `b` reads the retained

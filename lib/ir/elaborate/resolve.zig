@@ -97,40 +97,6 @@ pub fn collectOoc(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u
     }
 }
 
-/// §7.4.4.2 detail mode: "continuous disciplines propagate up and then back
-/// down to meet discrete disciplines. Discrete disciplines do not propagate
-/// up the hierarchy" (F.2.2 steps 4 and 5). It decides differently from
-/// basic mode only on a signal whose segments include both domains and an
-/// undeclared segment for the continuous one to propagate down into; on any
-/// other signal F.2.2 step 5 has nothing to re-decide, so the two modes
-/// agree and basic's answer stands. VerA does not implement step 5's
-/// top-down pass, so such a signal is refused by name (E0930) rather than
-/// given basic's answer under detail's name. Returns whether it reported.
-pub fn refuseDetail(self: *Flatten) Error!bool {
-    const file = self.ctx.file;
-    var reported = false;
-    var it = self.segs.iterator();
-    while (it.next()) |entry| {
-        const net = entry.key_ptr.*;
-        var cont: ?Ast.StrId = null;
-        var disc: ?Ast.StrId = null;
-        var undeclared = self.port_resolved.contains(net);
-        for (entry.value_ptr.discs.items) |d| {
-            if (d == .none) {
-                undeclared = true;
-                continue;
-            }
-            if (discipline.isContinuous(file, d)) cont = cont orelse d else disc = disc orelse d;
-        }
-        if (cont == null or disc == null or !undeclared) continue;
-        try self.err(entry.value_ptr.tok, .E0930, "`{s}` joins `{s}` and `{s}` through undeclared interconnect, where detail mode's top-down pass decides differently from basic mode", .{
-            file.str(net), file.str(cont.?), file.str(disc.?),
-        });
-        reported = true;
-    }
-    return reported;
-}
-
 /// An out-of-context declaration's initializer: the segment it names
 /// (`collectOoc`'s key), how deep its declaring module sits (its path's
 /// length), and the initializer in flat names.
@@ -367,7 +333,7 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
     }
     if (cands.items.len <= 1) return if (cands.items.len == 1) cands.items[0] else null;
 
-    if (try matchResolution(self, cands.items)) |r| {
+    if (try matchResolution(self, cands.items, true)) |r| {
         if (r.exclude) {
             // §7.7.2: "deemed to be incompatible and an error is indicated
             // if they are found on the same net."
@@ -392,11 +358,22 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
     return cands.items[0];
 }
 
+/// Step 4.b's choice among one segment's same-domain candidate
+/// disciplines, without the diagnostics `levelAnswer` reports for the
+/// flattened net: `.none` for no candidate or a `resolveto exclude`, the
+/// one candidate, the `resolveto` result, or the first of an unresolved
+/// set. For `segment.up`.
+pub fn levelCandidates(self: *Flatten, cands: []const Ast.StrId) Error!Ast.StrId {
+    if (cands.len <= 1) return if (cands.len == 1) cands[0] else .none;
+    const r = try matchResolution(self, cands, false) orelse return cands[0];
+    return if (r.exclude) .none else r.resolved;
+}
+
 /// §7.7.2 the first resolution statement whose discipline list matches
 /// `cands` as a set (order-free, duplicate-free on both sides: 4.b's
 /// "the contents of the list match"). First match across every
 /// `connectrules` block in source order, which is §7.7.2.1's tie-break.
-fn matchResolution(self: *Flatten, cands: []const Ast.StrId) Error!?*const Ast.ConnectResolution {
+fn matchResolution(self: *Flatten, cands: []const Ast.StrId, report: bool) Error!?*const Ast.ConnectResolution {
     // §7.7.2.1: an exact set wins even over an earlier subset match.
     // In the fallback, the candidate set is a subset of the rule's list.
     for ([_]bool{ true, false }) |want_exact| {
@@ -412,7 +389,7 @@ fn matchResolution(self: *Flatten, cands: []const Ast.StrId) Error!?*const Ast.C
                 }
                 if (exact != want_exact) continue;
                 if (first != null) {
-                    try self.ctx.bag.add(.lower, .W0950, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, r.main_tok), "multiple {s} resolution rules apply; using the first", .{
+                    if (report) try self.ctx.bag.add(.lower, .W0950, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, r.main_tok), "multiple {s} resolution rules apply; using the first", .{
                         if (want_exact) "exact" else "subset",
                     });
                     return first;
