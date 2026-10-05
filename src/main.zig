@@ -76,6 +76,11 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
+    if (cli.emit_verilog) if (cli.check or cli.emit_so or cli.exe_flag != null) {
+        try err.writeAll("error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n");
+        return 2;
+    };
+
     if (cli.paths.items.len == 0) {
         try err.writeAll(args.usage_text);
         return 2;
@@ -148,6 +153,10 @@ pub fn main(init: std.process.Init) !u8 {
         try err.print("error: {s} builds a .v design's executable; it takes --emit-exe and a .v file\n", .{f});
         return 2;
     };
+    if (digital_source and cli.emit_verilog) {
+        try err.print("error: {s}: --emit-verilog takes a Verilog-A model (.va)\n", .{in_path});
+        return 2;
+    }
     if (digital_source) return digital_cli.run(gpa, io, init.environ_map, &cli, source, in_path, opt, backend, use_color, out, err);
 
     if (!ams) {
@@ -256,6 +265,7 @@ fn compileAnalog(
     defer report(&bag, err, json, use_color) catch {};
 
     if (cli.codegen_flag == null) return 0;
+    if (cli.emit_verilog) return emitVerilog(io, cli, &result, tb_arena.allocator(), in_path, out, err);
 
     // The catalogue that consumes the generated file keys devices by the name
     // the BUILD chose, while the netlist dispatch and the generated type name
@@ -407,6 +417,44 @@ fn compileAnalog(
             try out.writeAll(device);
         }
     }
+    return 0;
+}
+
+/// `--emit-verilog`: the behavioural module to `-o PATH` or stdout. A model
+/// the abstraction cannot take is refused (exit 1) with nothing written.
+fn emitVerilog(io: Io, cli: *const args.Cli, result: *const vera.CompileResult, arena: std.mem.Allocator, in_path: []const u8, out: *Io.Writer, err: *Io.Writer) !u8 {
+    // `--digital-pins` names a file of pins when one exists, else is the list.
+    var digital: std.ArrayList([]const u8) = .empty;
+    if (cli.digital_pins) |spec| {
+        const text = Io.Dir.cwd().readFileAlloc(io, spec, arena, .limited(1 << 20)) catch |e| switch (e) {
+            error.FileNotFound => spec,
+            else => {
+                try readFailed(err, spec, e);
+                return 2;
+            },
+        };
+        var it = std.mem.tokenizeAny(u8, text, ", \t\r\n");
+        while (it.next()) |n| try digital.append(arena, n);
+    }
+    var why: []const u8 = "";
+    const text = vera.beh_verilog.emit(arena, result.mir, result.lowered, .{
+        .digital = digital.items,
+        .power_pins = cli.power_pins,
+        .vdd = cli.vdd,
+        .source = std.fs.path.basename(in_path),
+    }, &why) catch |e| switch (e) {
+        error.Refused => {
+            try err.print("error: {s}: --emit-verilog: {s}\n", .{ in_path, why });
+            return 1;
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    if (cli.out_path) |p| {
+        Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = text }) catch |e| {
+            try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
+            return 1;
+        };
+    } else try out.writeAll(text);
     return 0;
 }
 

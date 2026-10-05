@@ -36,6 +36,13 @@ pub const usage_text =
     \\  --emit-zig              generate the device; to stdout unless -o is given
     \\  -o PATH                 write the generated device.zig here
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
+    \\  --emit-verilog          a behavioural Verilog module of the .va for digital
+    \\                          simulation (same name and ports; -o PATH, else stdout)
+    \\  --digital-pins LIST|FILE   ports that are logic: a comma/space-separated
+    \\                          list, or a file of names (also `(* vera_pin *)`)
+    \\  --power-pins            --emit-verilog: supply pins only under
+    \\                          `ifdef USE_POWER_PINS
+    \\  --vdd=X                 --emit-verilog: logic-high potential in V (default 1.8)
     \\  --check                 type-check the generated device with zig, running
     \\                          the contract's conformance checks
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
@@ -132,6 +139,12 @@ pub const Cli = struct {
     language: vera.KeywordSet = if (ams) .vams_2023 else .v1364_2005,
     out_path: ?[]const u8 = null,
     expect_module: ?[]const u8 = null,
+    /// `--emit-verilog`; `-o` then names the Verilog file.
+    emit_verilog: bool = false,
+    /// `--digital-pins`, unparsed: a list or a file (`main` reads it).
+    digital_pins: ?[]const u8 = null,
+    power_pins: bool = false,
+    vdd: f64 = 1.8,
     check: bool = false,
     validate_contract: bool = false,
     emit_so: bool = false,
@@ -200,6 +213,19 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
         } else if (std.mem.eql(u8, arg, "--emit-zig")) {
             cli.emit_zig = true;
             cli.codegen_flag = arg;
+        } else if (std.mem.eql(u8, arg, "--emit-verilog")) {
+            cli.emit_verilog = true;
+            cli.codegen_flag = arg;
+        } else if (std.mem.eql(u8, arg, "--digital-pins")) {
+            cli.digital_pins = args.next() orelse return try missing(err, "--digital-pins", "a list of ports or a file");
+        } else if (std.mem.eql(u8, arg, "--power-pins")) {
+            cli.power_pins = true;
+        } else if (std.mem.startsWith(u8, arg, "--vdd=")) {
+            cli.vdd = std.fmt.parseFloat(f64, arg["--vdd=".len..]) catch 0;
+            if (!(cli.vdd > 0) or !std.math.isFinite(cli.vdd)) {
+                try err.print("error: `{s}`: not a positive number\n", .{arg});
+                return 2;
+            }
         } else if (std.mem.eql(u8, arg, "--check")) {
             cli.check = true;
             cli.codegen_flag = arg;
