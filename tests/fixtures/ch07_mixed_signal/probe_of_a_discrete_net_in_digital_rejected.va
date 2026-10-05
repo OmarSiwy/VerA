@@ -7,7 +7,7 @@
 //
 // The clause makes the discrete context's probes the SAME probes as the
 // continuous context's, reached through the same access functions. An access
-// function is the one a discipline binds (§3.6.1.4 `access = V`, §4.4): `V`
+// function is the one a discipline binds (§3.6.1.2 `access = V`, §4.4): `V`
 // exists on a net only if the net's discipline binds a potential nature to it.
 // `dn` is `ddiscrete` — annex D's `discipline ddiscrete; domain discrete;
 // enddiscipline`, natureless — so it has no potential, `V(dn)` names nothing,

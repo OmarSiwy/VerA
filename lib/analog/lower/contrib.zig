@@ -11,7 +11,7 @@
 //! `lowerIndirect` per `V(o) : e == f;`.
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4, §1.3.4.1,
-//! §1.3.4.2, §2.9, §3.4.7, §3.6.1.4, §3.6.2.4, §3.6.3, §3.6.5, §3.11, §3.12, §3.12.1,
+//! §1.3.4.2, §2.9, §3.4.7, §3.6.1.2, §3.6.2.4, §3.6.3, §3.6.5, §3.11, §3.12, §3.12.1,
 //! §4.4, §4.4.1, §4.5.2, §4.5.3, §4.5.6, §4.5.12, §4.5.14, §4.6.3, §4.6.4, §4.6.4.1,
 //! §4.6.4.2, §4.6.4.3, §4.6.4.4, §4.6.4.6, §5.4.1, §5.4.2.1, §5.4.2.2, §5.4.3, §5.5.1,
 //! §5.5.5, §5.6, §5.6.1, §5.6.1.2, §5.6.1.3, §5.6.5, §5.6.6, §5.6.7, §5.6.7.1, §5.6.7.2,
@@ -944,7 +944,7 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
 }
 
 /// §5.5.1 Syntax 5-3's generic potential access name. The generic pair is the
-/// only access names not read from a §3.6.1.4 `access =` attribute.
+/// only access names not read from a §3.6.1.2 `access =` attribute.
 pub const generic_potential = "potential";
 /// §5.5.1 Syntax 5-3's generic flow access name.
 pub const generic_flow = "flow";
@@ -958,7 +958,7 @@ pub const generic_flow = "flow";
 ///    declaration; §3.6.3 and §6.5.2.1 forbid it in analog behaviour.
 ///  - E0501 with no suggestion: the discipline binds no nature for this half
 ///    (natureless, or `I` on a signal-flow `voltage`; §1.3.4).
-///  - E0501 with a suggestion: the §3.6.1.4 name mismatch.
+///  - E0501 with a suggestion: the §3.6.1.2 name mismatch.
 pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u32) Oom!void {
     if (node == ground or self.local_accesses.contains(e)) return;
     const dname = self.out.nodes.items(.disc)[node];

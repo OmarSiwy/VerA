@@ -4,7 +4,7 @@
 // discipline name is an ordinary identifier with source-text scope (§3.13.1).
 // This file does exactly that, without the include, so by the LRM the
 // declaration below IS `electrical`, and its access functions are the ones its
-// natures name (§3.6.1.4): `Vx` for the potential and `Ix` for the flow.
+// natures name (§3.6.1.2): `Vx` for the potential and `Ix` for the flow.
 //
 // VerA prepends its own copy of disciplines.vams to every compilation, so it
 // sees two declarations of the name, the prelude's first. The prelude is not

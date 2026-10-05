@@ -403,7 +403,7 @@ pub const Builder = struct {
         /// Flat branch name -> branch object.
         branches: std.StringHashMapUnmanaged(u32) = .empty,
         /// Discipline object -> its flow access name, for telling a flow
-        /// contribution from a potential one (§3.6.1.4).
+        /// contribution from a potential one (§3.6.1.2).
         flow_access: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
     };
 

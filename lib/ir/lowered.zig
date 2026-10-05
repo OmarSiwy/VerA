@@ -15,7 +15,7 @@
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4,
 //! §2.7, §2.8.1, §2.9, §2.9.2, §3.1, §3.2, §3.2.2, §3.4, §3.4.2, §3.4.5, §3.4.7,
-//! §3.6, §3.6.1.2, §3.6.1.4, §3.6.2, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §4.2,
+//! §3.6, §3.6.1.2, §3.6.2, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §4.2,
 //! §4.2.12, §4.4, §4.5.2, §4.5.3, §4.5.15, §4.6.3, §4.6.4, §5.4.1, §5.4.2,
 //! §5.4.3, §5.5.3, §5.6, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.8.2, §5.10, §5.10.3.3,
 //! §5.10.4, §6.2, §6.3.4, §6.5, §6.5.2.2, §6.6, §6.7, §7.2.4, §7.3.1, §7.3.2,
@@ -190,7 +190,7 @@ pub const DisciplineInfo = struct {
     /// the distinction: a contribution to a signal-flow net has no KCL meaning.
     has_potential: bool = false,
     has_flow: bool = false,
-    /// §3.6.1.4 the access identifier each bound nature declares, `""` when the
+    /// §3.6.1.2 the access identifier each bound nature declares, `""` when the
     /// discipline binds none. §4.4 requires the name in `V(n)` to be this one,
     /// so the check needs the discipline's spelling, not just the global set of
     /// access names.
@@ -207,7 +207,7 @@ pub const DisciplineInfo = struct {
 pub const unnamed_branch: u32 = 0;
 
 /// §4.4 access-function flavour. `V(a,b)` is a potential, `I(a,b)` a flow;
-/// user natures rename them (§3.6.1.4) but the two roles are closed.
+/// user natures rename them (§3.6.1.2) but the two roles are closed.
 pub const Access = enum(u8) { potential, flow };
 
 /// Whether a `Contribution` is a `<+` (`.direct`) or a §5.6.7 indirect

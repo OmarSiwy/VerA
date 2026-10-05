@@ -59,7 +59,7 @@ pub const Parser = struct {
     /// Whether this parse reported an error. The bag is shared across stages and
     /// drops entries at its cap and dedupe set, so its length cannot answer.
     failed: bool = false,
-    /// §3.6.1.4 nature `access` names. `name(...)` is a branch probe (§4.4.1)
+    /// §3.6.1.2 nature `access` names. `name(...)` is a branch probe (§4.4.1)
     /// iff the name is in here, otherwise it is a user function call (§4.7).
     /// Seeded with V/I (disciplines.vams, annex D) and grown by every
     /// `access = X;` nature attribute parsed ahead of the module.
@@ -190,7 +190,7 @@ pub const Parser = struct {
         /// Stores and decl lists. See `Ast.SourceFile.seedFrom` for which half
         /// is copied and which is borrowed, and why the borrow is sound.
         file: Ast.SourceFile,
-        /// §3.6.1.4 access names in effect at the seam. A list, not the map:
+        /// §3.6.1.2 access names in effect at the seam. A list, not the map:
         /// re-inserting a handful of keys is cheaper than cloning a hash map.
         access_names: []const []const u8,
         /// Token index the prefix parse stopped on: its `.eof`, which is the

@@ -12,7 +12,7 @@
 //! Every task with an effect on the host joins the display chain, so codegen
 //! runs it once per accepted point and never per Newton iteration (§9.5.9).
 //!
-//! LRM clauses this file's code cites: §2.7, §3.2, §3.3, §3.4.1, §3.6.1.4, §4.2.1.1,
+//! LRM clauses this file's code cites: §2.7, §3.2, §3.3, §3.4.1, §3.6.1.2, §4.2.1.1,
 //! §4.4.1, §5.3.2, §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.8.1, §5.9.3, §5.10, §5.12,
 //! §7.3.1, §9.2, §9.4, §9.4.1, §9.4.3, §9.4.5, §9.4.6, §9.5, §9.5.2, §9.5.3, §9.5.4,
 //! §9.5.4.1, §9.5.4.2, §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17,
@@ -612,7 +612,7 @@ fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
 }
 
 /// Does this operand tree read a branch FLOW (§4.4.1 `I(...)` under any
-/// §3.6.1.4 spelling)? That is the one read whose value is position-dependent
+/// §3.6.1.2 spelling)? That is the one read whose value is position-dependent
 /// inside the block (§5.6.1.2 retention); potentials and §5.4.3 port flows
 /// resolve to solver unknowns and read the same value everywhere, so they do
 /// not force an operand to the end. Every child edge is searched

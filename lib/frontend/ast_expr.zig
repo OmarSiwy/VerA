@@ -89,7 +89,7 @@ pub const ExprTag = enum(u8) {
 
     // ---- access functions: §4.4 ----
     /// §4.4.1 branch probe: `V(a)`, `V(a,b)`, `I(br)`. `str` = access
-    /// identifier (`V`/`I`/nature access name, §3.6.1.4), `lhs` = first
+    /// identifier (`V`/`I`/nature access name, §3.6.1.2), `lhs` = first
     /// net-or-branch reference, `rhs` = second net reference or `.none`.
     /// `extra` = `branch_ref_hier_unnamed` for §5.6.8.2's
     /// `inst.branch(x, y)` spelling, 0 otherwise.

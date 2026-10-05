@@ -4,7 +4,7 @@
 //! also grows `Parser.access_names`, which decides whether a later `X(...)`
 //! is a branch probe (§4.4.1) or a function call (§4.7).
 //!
-//! LRM clauses cited: §3.6.1, §3.6.1.2 to §3.6.1.6, §3.6.2, §3.6.2.1 to
+//! LRM clauses cited: §3.6.1, §3.6.1.2, §3.6.1.3, §3.6.2, §3.6.2.1 to
 //! §3.6.2.3, §3.6.2.7.
 
 const std = @import("std");
@@ -41,7 +41,7 @@ pub fn parseNature(self: *Parser) Error!Ast.NatureDecl {
     var attrs: std.ArrayList(Ast.NatureAttr) = .empty;
     while (self.peek() != .kw_endnature and self.peek() != .eof) {
         const attr = try parseNatureAttr(self);
-        // §3.6.1.4: this is where the branch-probe names come from.
+        // §3.6.1.2: this is where the branch-probe names come from.
         if (self.file.strings.eql(attr.name, "access") and
             self.file.exprs.tag(attr.value) == .ident)
         {
@@ -61,8 +61,8 @@ pub fn parseNature(self: *Parser) Error!Ast.NatureDecl {
 }
 
 /// A.1.6 `nature_attribute ::= identifier = nature_attribute_expression ;`.
-/// The LRM-defined attribute names (§3.6.1.2 abstol, §3.6.1.3 units,
-/// §3.6.1.4 access, §3.6.1.5/6 idt_nature/ddt_nature) are keywords.
+/// The five LRM-defined attribute names (§3.6.1.2: abstol, access,
+/// idt_nature, ddt_nature, units) are keywords.
 pub fn parseNatureAttr(self: *Parser) Error!Ast.NatureAttr {
     const tok = self.pos;
     const name: Ast.StrId = switch (self.peek()) {

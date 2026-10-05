@@ -1,7 +1,7 @@
 //! §3.6 disciplines and natures, §3.11 net compatibility.
 //!
 //! In: the file's discipline and nature declarations, and the `nodes` table's
-//! per-node disciplines. Out: `Lowered.disciplines`, the §3.6.1.4 access-name
+//! per-node disciplines. Out: `Lowered.disciplines`, the §3.6.1.2 access-name
 //! map (`Lower.access_kind`), the declaration diagnostics, and the §3.11
 //! compatibility diagnostics. The AST-only rules live in
 //! `elab/discipline_rules.zig`.
@@ -10,7 +10,7 @@
 //! `checkNetCompat` per access function, branch and port connection.
 //!
 //! LRM clauses this file's code cites: §1.3.1.1, §3.6, §3.6.1, §3.6.1.1, §3.6.1.2,
-//! §3.6.1.3, §3.6.1.4, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.2.3, §3.6.2.5, §3.6.2.7, §3.11,
+//! §3.6.1.3, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.2.3, §3.6.2.5, §3.6.2.7, §3.11,
 //! §3.11.1, §3.12, §3.13, §3.13.1, §3.13.2, §4.4, §5.5.1, §7.4.3.
 
 const std = @import("std");
@@ -28,7 +28,7 @@ const DisciplineInfo = Lower.DisciplineInfo;
 
 // ---- §3.6 disciplines & natures --------------------------------------------
 
-/// Builds the discipline table and the §3.6.1.4 access-name map. The
+/// Builds the discipline table and the §3.6.1.2 access-name map. The
 /// preprocessor inlines annex D.1, so `electrical`, `thermal` and the rest arrive
 /// as ordinary declarations in `file.disciplines`.
 pub fn collectDisciplines(self: *Lower) Oom!void {
@@ -38,7 +38,7 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
     // §5.5.1 Syntax 5-3 / §4.4 the generic access functions, which resolve on
     // every discipline that binds the half they name. Registered in the same map
     // so they are "an alternative spelling": downstream sees an `Access` and cannot
-    // tell which word produced it, except `checkAccessMatch`'s §3.6.1.4 name match.
+    // tell which word produced it, except `checkAccessMatch`'s §3.6.1.2 name match.
     try self.access_kind.put(self.arena, lower_contrib.generic_potential, .potential);
     try self.access_kind.put(self.arena, lower_contrib.generic_flow, .flow);
 
@@ -118,7 +118,7 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
 /// when the source includes annex D.1 (specification/Vague_Decisions.md VD-096).
 pub fn checkNatureTable(self: *Lower) Oom!void {
     const natures = self.file.natures;
-    // §3.6.1.4 access identifier per nature, `.none` when it declares no
+    // §3.6.1.2 access identifier per nature, `.none` when it declares no
     // `access` of its own (a derived nature inherits it, §3.6.1.2).
     const access = try self.arena.alloc(Ast.StrId, natures.len);
 
@@ -321,7 +321,7 @@ const NatureAttrs = struct {
 };
 
 /// Returns a nature's `abstol`, `access` and `units`, walking a derived nature's
-/// parents for what it does not override (LRM §3.6.1.1, §3.6.1.2, §3.6.1.4).
+/// parents for what it does not override (LRM §3.6.1.1, §3.6.1.2).
 pub fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     var out: NatureAttrs = .{};
     // ponytail: share the AST's 16-hop walk; extend it there if deeper inheritance is needed.

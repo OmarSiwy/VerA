@@ -837,8 +837,8 @@ pub const LteAttr = struct {
 
 /// Nature attribute: `name = expr;`. LRM §3.6.1 (A.1.6 nature_attribute).
 /// The LRM-defined names are `abstol` (§3.6.1.2, required for a base nature),
-/// `access` (§3.6.1.4), `units` (§3.6.1.3), `idt_nature` (§3.6.1.5) and
-/// `ddt_nature` (§3.6.1.6), plus user attributes (`huge`, `blowup`, …).
+/// `access`, `units`, `idt_nature` and `ddt_nature` (all §3.6.1.2), plus
+/// user attributes (§3.6.1.3: `huge`, `blowup`, …).
 /// `value` may be an `.ident` (A.8.3 nature_attribute_expression allows a
 /// nature or access identifier, not just a constant).
 pub const NatureAttr = struct {

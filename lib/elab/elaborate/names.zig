@@ -1,7 +1,7 @@
 //! Hierarchical names: an instance path and a local name → the flat, injective
 //! name the lowered design uses; module and paramset lookup; access-function
 //! respelling across a port join; constant folding of instance bounds.
-//! LRM §3.6.1.4, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.6.1, §6.6.2, §6.6.3, §6.7, §7.4,
+//! LRM §3.6.1.2, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.6.1, §6.6.2, §6.6.3, §6.7, §7.4,
 //! E.3.2, E.3.3.
 
 const std = @import("std");
@@ -519,7 +519,7 @@ fn decorates(self: *Flatten, t: u32, inst: *const Ast.Instance) bool {
 /// Table E.1's Behavior column writes V and I for every row, but E.3.2 lets a
 /// primitive "be used in any design, including mixed disciplines" (E.3.2.1's
 /// `vcvs` with a `rotational_omega` control pair). So V is the port pair's
-/// potential and I its flow, spelled with the §3.6.1.4 access function of the
+/// potential and I its flow, spelled with the §3.6.1.2 access function of the
 /// discipline the net resolved to. The discipline is read from the net,
 /// where `walkInstances` binds E.3.2's three sources in order.
 ///

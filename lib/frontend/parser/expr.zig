@@ -266,7 +266,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             }
             if (self.peek() == .lparen) {
                 // §4.4 branch probe vs §4.7 user function: only a declared
-                // nature access name (§3.6.1.4) probes a branch.
+                // nature access name (§3.6.1.2) probes a branch.
                 if (self.access_names.contains(self.file.str(name))) {
                     return parseAccess(self, name, tok);
                 }
@@ -276,7 +276,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
         },
         // §4.4: "the generic potential and flow access functions are also
         // supported" (§5.5.1 Syntax 5-3). Parsed as `V(...)`/`I(...)` are;
-        // lowering skips only the §3.6.1.4 name match. The words are annex B
+        // lowering skips only the §3.6.1.2 name match. The words are annex B
         // keywords, so they arrive as their own tags and `real potential;`
         // cannot shadow them (§3.13.2).
         .kw_potential, .kw_flow => {

@@ -16,7 +16,7 @@
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §2.7, §2.8, §2.9,
 //! §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §3.4.1, §3.4.4, §3.4.7, §3.4.8, §3.5, §3.6,
-//! §3.6.1, §3.6.1.4, §3.6.2, §3.6.3, §3.6.4, §3.6.5, §3.11, §3.12, §3.12.1,
+//! §3.6.1, §3.6.1.2, §3.6.2, §3.6.3, §3.6.4, §3.6.5, §3.11, §3.12, §3.12.1,
 //! §3.13, §4.2, §4.2.1, §4.2.1.1, §4.2.1.2, §4.2.1.3, §4.2.8, §4.2.13, §4.3,
 //! §4.4, §4.5, §4.5.2, §4.6.4, §4.6.4.3, §4.6.4.6, §4.7, §4.7.1, §4.7.2, §4.7.3,
 //! §5.2, §5.2.1, §5.3.2, §5.4.1, §5.4.2, §5.4.2.1, §5.4.3, §5.5.3, §5.6,
@@ -249,7 +249,7 @@ bag: *diag.Bag = undefined,
 /// Set by `err`; `lowerFile` reads it. Not `bag.entries.len`, which the cap
 /// and the dedupe both make an unreliable answer to "did lowering fail".
 had_error: bool = false,
-/// §3.6.1.4 access identifier → which half of the discipline it reads.
+/// §3.6.1.2 access identifier → which half of the discipline it reads.
 access_kind: std.StringHashMapUnmanaged(Access) = .empty,
 /// Visible variables (§3.2) — locals, function args, scalarized array elements.
 vars: std.StringHashMapUnmanaged(VarSlot) = .empty,

@@ -158,7 +158,7 @@ pub fn unitNameAlloc(a: std.mem.Allocator, module: []const u8, unit: Unit) std.m
 /// Writes §5.6 contribution `c`'s unit target, `V_<hi>_<lo>` or `I_<hi>_<lo>`.
 fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.Writer.Error!void {
     // §4.4: the two access roles are closed even when a user nature renames
-    // the access identifier (§3.6.1.4), so V/I is the canonical spelling.
+    // the access identifier (§3.6.1.2), so V/I is the canonical spelling.
     try w.writeAll(switch (c.access) {
         .potential => "V",
         .flow => "I",

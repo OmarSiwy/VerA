@@ -132,7 +132,7 @@ pub fn isContinuous(file: *const Ast.SourceFile, name: Ast.StrId) bool {
     return domainOf(d) == .continuous;
 }
 
-/// §3.6.1.4 the access-function spelling of one half of discipline `name`:
+/// §3.6.1.2 the access-function spelling of one half of discipline `name`:
 /// the `access` identifier of the nature bound to that half, inherited per
 /// §3.6.1.1. Null when the discipline is undeclared, binds nothing to the
 /// half, or the nature's `access` is not an identifier (E0340's case).
@@ -263,7 +263,7 @@ test "discipline rules: §3.6 lookups and §3.11.1 compatibility on a hand-built
     try t.expectEqual(@as(?Ast.DisciplineDecl.Domain, .discrete), domainOf(&file.disciplines[1]));
     try t.expect(isContinuous(&file, electrical) and !isContinuous(&file, logic));
     try t.expect(!isContinuous(&file, bare) and !isContinuous(&file, nowhere) and !isContinuous(&file, .none));
-    // §3.6.1.4 access spellings, inherited through a derived nature.
+    // §3.6.1.2 access spellings, inherited through a derived nature.
     try t.expectEqualStrings("V", file.str(accessOf(&file, electrical, .potential).?));
     try t.expectEqualStrings("I", file.str(accessOf(&file, electrical, .flow).?));
     try t.expectEqualStrings("V", file.str(accessOf(&file, mv, .potential).?));
