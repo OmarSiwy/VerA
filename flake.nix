@@ -1,5 +1,5 @@
 {
-  description = "ARPice";
+  description = "VerA";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -42,6 +42,35 @@
           rocm-smi # GPU monitoring
           hip-common # headers
         ];
+        # OpenVAF-Reloaded is not in nixpkgs: its release binary, linked against
+        # the LLVM 18 it was built with. The reference Verilog-A compiler the
+        # external accuracy suites compare VerA against (tests/fixtures/external/).
+        openvaf = pkgs.stdenv.mkDerivation rec {
+          pname = "openvaf-reloaded";
+          version = "24.0.2mob";
+          src = pkgs.fetchurl {
+            url = "https://github.com/OpenVAF/OpenVAF-Reloaded/releases/download/v${version}/openvaf-r-v${version}-linux-x86_64.tar.gz";
+            hash = "sha256-sSt7FybRA+GMJYjDofkfhHXPA9+KO94U2Rl5fSIeMRA=";
+          };
+          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+          buildInputs = [ pkgs.llvmPackages_18.libllvm pkgs.stdenv.cc.cc.lib ];
+          installPhase = ''
+            install -Dm755 bin/openvaf-r $out/bin/openvaf-r
+            ln -s openvaf-r $out/bin/openvaf
+          '';
+        };
+
+        # The tools VerA's results are checked against, by name.
+        referenceTools = [
+          pkgs.iverilog # IEEE 1364 simulation reference (ivtest, sv-tests)
+          pkgs.verilator # lint / parse reference
+          pkgs.yosys # parse / elaborate reference
+          pkgs.ngspice # OSDI host: VerA's .osdi vs OpenVAF's, same deck
+          pkgs.xyce # second analog simulator
+          pkgs.gnucap # third opinion for disagreements
+          pkgs.python3 # harness scripts
+        ] ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
+
         gpuLibPath = pkgs.lib.makeLibraryPath (
           [
             "/run/opengl-driver" # NixOS NVIDIA driver (libcuda.so.1)
@@ -75,6 +104,7 @@
               pkgs.flamegraph
               pkgs.inferno
             ]
+            ++ referenceTools
             ++ cudaPkgs
             ++ rocmPkgs;
           LD_LIBRARY_PATH = gpuLibPath;
