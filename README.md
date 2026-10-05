@@ -166,4 +166,4 @@ classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Changes are listed in [CHANGELOGS.md](CHANGELOGS.md).

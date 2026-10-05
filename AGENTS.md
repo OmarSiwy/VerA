@@ -47,6 +47,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 |---|---|---|
 | `git show ae9633f1:docs/ROADMAP.md` | the old v1.0.0 roadmap (deleted 2026-10-04 as outdated; a citation of `ROADMAP.md` means this revision) | history only. v1.0.0 is §2 below; open decisions and their work items are `docs/Vague_Decisions.md` |
 | `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.py`; absent until the next release) | where the project actually stands |
+| `CHANGELOGS.md` | every change since v1.0.0, one bullet each; fixes cite their GitHub issue | what changed, and where to add your own bullet (§9) |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
@@ -496,6 +497,9 @@ Learned expensively, and none of it is style preference:
 
 ## 9. Before you say you are done
 
+- [ ] Your change has a bullet in `CHANGELOGS.md` under `## Unreleased`
+      (see below).
+
 - [ ] `zig build test` exits 0. Checked `$?`, not a log tail.
 - [ ] `zig build test` includes `zig fmt --check` (`zig build fmt-check` alone).
 - [ ] FAIL/XFAIL **name lists** diffed (captured as §0 rule 3 shows, not from
@@ -511,3 +515,14 @@ Learned expensively, and none of it is style preference:
 - [ ] Said which of the four measures this moves, and by how much.
 - [ ] Every number you wrote came from a command, or names the document and
       date it was read from.
+
+### `CHANGELOGS.md`
+
+Every change since v1.0.0 adds one bullet to `CHANGELOGS.md` under
+`## Unreleased`, in the same commit as the change. Keep it light: one line
+saying what a user of VerA would notice. A fix always names the GitHub issue
+it closes, as `(#123)`; open the issue first if there isn't one. At a
+release, the `## Unreleased` heading becomes the version and date, and a new
+empty `## Unreleased` starts above it. `CHANGELOGS.md` is the human record;
+`CHANGELOG.md` stays the measured one that only `tools/conformance.py`
+writes.
