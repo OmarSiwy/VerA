@@ -48,6 +48,9 @@ pub const State = struct {
     /// make `lo.n`, `hi.n` and the module's own `n` one slot.
     /// The value says why (`Lower.HeldVar.Why`).
     held_names: std.StringHashMapUnmanaged(Lower.HeldVar.Why) = .empty,
+    /// The `held_names` keys an event body writes, true while every such body
+    /// waits on explicit D2A terms only (`Lower.HeldVar.d2a`).
+    d2a_only: std.StringHashMapUnmanaged(bool) = .empty,
     /// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
     /// nearest declaration of it — a module variable assigned from inside a block
     /// still keys bare, because the block does not declare it.
@@ -90,7 +93,7 @@ const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
 /// §5.10. Collect the variables assigned inside an `@(<event>)` body, before
 /// any of them is declared.
 pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    for (module.analog) |blk| try scanHeld(self, blk.body, false);
+    for (module.analog) |blk| try scanHeld(self, blk.body, .none);
     self.var_state.held_frames.clearRetainingCapacity();
     // §3.2 retention, beside the §5.10 rule above: see `Exposed`.
     var x: Exposed = .{ .l = self, .vars = module.vars };
@@ -451,9 +454,9 @@ fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
 /// `@(...)`; inside one, every variable a statement WRITES has to survive to
 /// the next evaluation. "Writes" is `Ast.SourceFile.stmtWrites`, not only the
 /// assignment target: an output actual or a `$random` seed counts too.
-fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
+fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: Body) Oom!void {
     if (id == .none) return;
-    if (in_event) {
+    if (in_event != .none) {
         const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
         var writes: std.ArrayList(Ast.ExprId) = .empty;
         defer writes.deinit(self.arena);
@@ -462,7 +465,10 @@ fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
         for (writes.items) |w| {
             const t = self.file.lvalueBase(w);
             if (t == .none) continue;
-            try self.var_state.held_names.put(self.arena, try heldKey(self, self.file.str(self.file.exprs.strOf(t))), .event);
+            const key = try heldKey(self, self.file.str(self.file.exprs.strOf(t)));
+            try self.var_state.held_names.put(self.arena, key, .event);
+            const only = try self.var_state.d2a_only.getOrPutValue(self.arena, key, true);
+            only.value_ptr.* = only.value_ptr.* and in_event == .d2a;
         }
     }
     switch (self.file.stmt(id)) {
@@ -482,15 +488,27 @@ fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
         },
         // §5.10 forbids nesting, so `true` is never re-entered; lowering
         // diagnoses that (E0703) and this walk does not need to.
-        .event_control => |s| try scanHeld(self, s.body, true),
+        .event_control => |s| try scanHeld(self, s.body, if (s.kind == .event and d2aOnly(self, s.event)) .d2a else .analog),
         // The rest: only their child statements, whose writes the walk collects.
         else => try self.file.stmtEdges(id, Held{ .l = self, .in_event = in_event }), // else: stmtEdges is exhaustive
     }
 }
 
+/// Where `scanHeld` is: outside any event body, or in one whose terms are all
+/// explicit D2A events (§8.5), or in any other.
+const Body = enum { none, d2a, analog };
+
+/// Is every term of event expression `e` an explicit D2A event?
+fn d2aOnly(self: *const Lower, e: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    if (e == .none) return false;
+    if (ex.tag(e) == .event_or) return d2aOnly(self, ex.lhs(e)) and d2aOnly(self, ex.rhs(e));
+    return self.out.discrete_events.contains(e);
+}
+
 const Held = struct {
     l: *Lower,
-    in_event: bool,
+    in_event: Body,
     pub fn expr(_: Held, _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
     pub fn stmt(h: Held, s: Ast.StmtId) Oom!void {
         try scanHeld(h.l, s, h.in_event);
@@ -622,6 +640,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     // §5.10. A string is held too: it never reaches the residual, but a §9.4
     // task in a later evaluation reads what an event body left in it.
     const why = self.var_state.held_names.get(held_key);
+    const d2a = self.var_state.d2a_only.get(held_key) orelse false;
     // VerA's `vera_scratch` (§2.9): no slot, so every evaluation starts from
     // the initializer below. Only a value an `analog initial` or `@(...)` body
     // leaves for a later evaluation's read needs one anyway (E0536).
@@ -657,7 +676,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
                 else
                     zeroOf(ty);
                 const id = self.arrays.get(name).?.mem.?.id;
-                try self.builder.writeVariable(place, self.cur, try holdArray(self, try qualifyHeld(self, prefix, name), ty, id, inits, place));
+                try self.builder.writeVariable(place, self.cur, try holdArray(self, try qualifyHeld(self, prefix, name), ty, id, inits, place, d2a));
                 return;
             }
             // §3.2 an element the pattern does not reach keeps the zero start.
@@ -690,7 +709,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
             else
                 zeroOf(ty);
             try self.builder.writeVariable(slot.place, self.cur, if (hold)
-                try holdSlot(self, try qualifyHeld(self, prefix, en), ty, init_val, slot.place, why.?)
+                try holdSlot(self, try qualifyHeld(self, prefix, en), ty, init_val, slot.place, why.?, d2a)
             else
                 init_val);
         }
@@ -708,7 +727,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     else
         try self.coerceTo(decl.init, ty, try lower_expr.lowerExpr(self, decl.init));
     try self.builder.writeVariable(slot.place, self.cur, if (hold)
-        try holdSlot(self, held_key, ty, init_val, slot.place, why.?)
+        try holdSlot(self, held_key, ty, init_val, slot.place, why.?, d2a)
     else
         init_val);
     try lower_contrib.noteVarNoise(self, name, decl.init);
@@ -777,7 +796,7 @@ fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
 /// (`callee.opKind`), so they create no unit and renumber no `Instance` state.
 /// The single argument is the index into `held_vars`, which is how codegen
 /// recovers the field.
-fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: Ssa.Place, why: Lower.HeldVar.Why) Oom!Mir.Value {
+fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: Ssa.Place, why: Lower.HeldVar.Why, d2a: bool) Oom!Mir.Value {
     // Emitted into the DECLARATION's block — `.entry`, unless the initializer
     // itself opened a diamond (§4.2.7 `&&`/`||` short-circuit), in which case it
     // is that diamond's join. Either way it dominates every statement of the
@@ -794,6 +813,7 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
         .init = init_val,
         .seed = seed,
         .why = why,
+        .d2a = d2a,
     });
     try self.held_places.append(self.arena, place);
     return seed;
@@ -806,7 +826,7 @@ pub fn hiddenHeldInt(self: *Lower, name: []const u8) Oom!VarSlot {
     const at = self.cur;
     self.cur = .entry;
     defer self.cur = at;
-    const seed = try holdSlot(self, name, .integer, .zero, place, .retained);
+    const seed = try holdSlot(self, name, .integer, .zero, place, .retained, false);
     try self.builder.writeVariable(place, .entry, seed);
     return .{ .place = place, .ty = .integer };
 }
@@ -814,7 +834,7 @@ pub fn hiddenHeldInt(self: *Lower, name: []const u8) Oom!VarSlot {
 /// §5.10 `holdSlot` for a memory-backed array: ONE held row whose seed is the
 /// array's `anew` (which codegen fills from the `Instance` field) and whose
 /// final value is the array version the block ends with.
-fn holdArray(self: *Lower, name: []const u8, ty: Ty, id: u32, inits: []const Mir.Value, place: Ssa.Place) Oom!Mir.Value {
+fn holdArray(self: *Lower, name: []const u8, ty: Ty, id: u32, inits: []const Mir.Value, place: Ssa.Place, d2a: bool) Oom!Mir.Value {
     const idx: u32 = @intCast(self.out.held_vars.items.len);
     const seed = try self.mir.emitAnew(self.arena, self.cur, id);
     self.out.mem_arrays.items[id].held = idx;
@@ -825,6 +845,7 @@ fn holdArray(self: *Lower, name: []const u8, ty: Ty, id: u32, inits: []const Mir
         .seed = seed,
         .array = id,
         .inits = inits,
+        .d2a = d2a,
     });
     try self.held_places.append(self.arena, place);
     return seed;
