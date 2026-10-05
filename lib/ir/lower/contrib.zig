@@ -850,7 +850,7 @@ pub const generic_flow = "flow";
 ///    (natureless, or `I` on a signal-flow `voltage`; §1.3.4).
 ///  - E0501 with a suggestion: the §3.6.1.4 name mismatch.
 pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
-    if (node == ground) return;
+    if (node == ground or self.local_accesses.contains(e)) return;
     const dname = self.out.nodes.items(.disc)[node];
     if (dname.len == 0) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0337);

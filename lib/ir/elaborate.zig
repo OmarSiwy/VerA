@@ -139,6 +139,10 @@ pub const Design = struct {
     /// §5.5.3 attribute reads on bound ports keep the source segment's
     /// discipline even after the expression names the shared flattened net.
     attribute_disciplines: std.AutoHashMapUnmanaged(Ast.ExprId, Ast.StrId) = .empty,
+    /// §4.4 accesses in a child that `names.localAccess` already judged
+    /// against the child's own declaration, on a node whose discipline binds
+    /// no nature for that half (§3.11.1's natureless or domainless parent).
+    local_accesses: std.AutoHashMapUnmanaged(Ast.ExprId, void) = .empty,
     /// §6.4.3 "If a paramset variable without a description has the same name
     /// as a module output variable, the module output variable shall not be
     /// available for instances using the paramset." The flat names of those
@@ -516,6 +520,7 @@ pub const Flatten = struct {
     port_widths: std.ArrayList(PortWidth) = .empty,
     signal_disciplines: std.ArrayList(SignalDiscipline) = .empty,
     attribute_disciplines: std.AutoHashMapUnmanaged(Ast.ExprId, Ast.StrId) = .empty,
+    local_accesses: std.AutoHashMapUnmanaged(Ast.ExprId, void) = .empty,
     /// Attribute reads of undeclared ports wait for bottom-up resolution.
     pending_attributes: std.ArrayList(struct { expr: Ast.ExprId, net: Ast.StrId, path: []const u8 }) = .empty,
 
@@ -736,6 +741,7 @@ pub const Flatten = struct {
             .port_widths = self.port_widths.items,
             .signal_disciplines = self.signal_disciplines.items,
             .attribute_disciplines = self.attribute_disciplines,
+            .local_accesses = self.local_accesses,
             .ps_hidden = self.ps_hidden.items,
             .paramset_defparams = self.paramset_defparams.items,
             .selection_params = self.selection_params.items,

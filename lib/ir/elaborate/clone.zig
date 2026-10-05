@@ -284,6 +284,7 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
     if (e == .none) return .none;
     const x = &self.ctx.file.exprs;
     var n = x.get(e);
+    var local_only = false;
     switch (n.tag) {
         // Literals and the two infinities carry no reference; the side-table
         // index in `extra` is shared, which is safe because `reals`/`ints`
@@ -323,15 +324,19 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             // this unit; the terminals are `lhs`/`rhs`.
             n.lhs = try cloneExpr(self, x.lhs(e));
             n.rhs = try cloneExpr(self, x.rhs(e));
-            n.str = if (self.unit.primitive)
-                elab_names.primitiveAccess(self, n.str, n.lhs)
-            else
-                try elab_names.localAccess(self, n.str, x.lhs(e), n.lhs, n.main_tok);
+            if (self.unit.primitive) {
+                n.str = elab_names.primitiveAccess(self, n.str, n.lhs);
+            } else {
+                const a = try elab_names.localAccess(self, n.str, x.lhs(e), n.lhs, n.main_tok);
+                n.str = a.name;
+                local_only = a.local_only;
+            }
             // §6.3.6 rule 2: a flow probe inside a scaled instance reads
             // $mfactor copies' worth of flow, so the per-copy value is that
             // over $mfactor. Not the branch a `<+` drives (`contrib_target`).
             if (!self.contrib_target) {
                 const probe = try self.ctx.file.exprs.add(self.ctx.arena, n);
+                if (local_only) try self.local_accesses.put(self.ctx.arena, probe, {});
                 return (try elab_names.mfactorScale(self, probe, n.str, n.lhs, .div, n.main_tok)) orelse probe;
             }
         },
@@ -350,6 +355,7 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
         },
     }
     const out = try self.ctx.file.exprs.add(self.ctx.arena, n);
+    if (local_only) try self.local_accesses.put(self.ctx.arena, out, {});
     // §5.5.3 reads the nature of the local net segment. Renaming a bound
     // port to its parent must not replace that segment's nature attributes.
     if (n.tag == .hier_ident) {
