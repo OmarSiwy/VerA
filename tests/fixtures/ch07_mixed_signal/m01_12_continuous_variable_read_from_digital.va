@@ -33,7 +33,11 @@
 // assert the literal against itself (the copies happen at 15n). Two checks
 // per point at every point the runner solves.
 //
-//! xfail a digital process cannot read an analog-assigned variable: `x` is E1100 "undeclared digital variable", and the event-assigned `h` reads 0 at tick 15
+// No refusal here: the sentence's invalid form, a read from a module other
+// than the declaring one, is refused when the digital half runs (E1100), and
+// `//! reject` pins compile-time diagnostics only. The clause's compile-time
+// refusal is probe_of_a_discrete_net_in_digital_rejected.va.
+//
 //! lrm 7.3.3
 //! lrm 7.3.6.3
 //! analysis tran
