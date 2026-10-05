@@ -247,9 +247,19 @@ pub fn checkUnbridged(self: *Flatten) Error!void {
 /// E0927 for a mixed port no connect statement matches.
 fn unmatched(self: *Flatten, tok: u32, port: Ast.StrId, inst: Ast.StrId, lower: Ast.StrId, net: Ast.StrId, upper: Ast.StrId) Error!void {
     const file = self.ctx.file;
-    try self.err(tok, .E0927, "port `{s}` of `{s}` is `{s}` and its net `{s}` is `{s}`, and no connect statement bridges them", .{
-        file.str(port), file.str(inst), file.str(lower), file.str(net), file.str(upper),
+    try self.err(tok, .E0927, "port `{s}` of `{s}` is {s}{s}{s} and its net `{s}` is {s}{s}{s}, and no connect statement bridges them", .{
+        file.str(port), file.str(inst), q(lower), discName(file, lower), q(lower), file.str(net), q(upper), discName(file, upper), q(upper),
     });
+}
+
+/// A segment's discipline for a message: §3.6.2.4's digital net with none
+/// (`segment.Seg.behavioral`) is named by what it is.
+fn discName(file: *const Ast.SourceFile, d: Ast.StrId) []const u8 {
+    return if (d == .none) "discrete with no discipline (3.6.2.4)" else file.str(d);
+}
+
+fn q(d: Ast.StrId) []const u8 {
+    return if (d == .none) "" else "`";
 }
 
 /// A `segment` cache key: the segment's instance path and local name.
@@ -444,6 +454,11 @@ pub fn paramsDeclared(self: *Flatten, ins: *const Ast.ConnectInsertion, m: *cons
 fn matches(file: *const Ast.SourceFile, r: Rule, dir: Ast.Direction, upper: Ast.StrId, lower: Ast.StrId) bool {
     const compat = struct {
         fn f(fl: *const Ast.SourceFile, a: Ast.StrId, b: Ast.StrId) bool {
+            // §3.6.2.4 a net with no discipline that digital behavioral code
+            // uses is discrete and binds no nature, which §3.11.1's
+            // Natureless Discipline Rule makes compatible with every
+            // discrete discipline.
+            if (b == .none) return domain(fl, a) == .discrete;
             return discipline.disciplineConflict(fl, a, b) == null and domain(fl, a) == domain(fl, b);
         }
     }.f;

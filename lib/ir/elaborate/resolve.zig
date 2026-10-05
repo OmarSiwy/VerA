@@ -227,7 +227,8 @@ pub fn noteSignalDiscipline(self: *Flatten, net: Ast.StrId, disc: Ast.StrId) Err
 /// `levelAnswer` is 4.a/4.b for one level. Reports E0903 and E0917.
 ///
 /// The other 4.a sentence (a net "used in digital behavioral code" is
-/// digital) has no input here: a net's domain comes from its segments.
+/// digital) is `segment.up`'s: it decides the mixed ports, and `insert.plan`
+/// bridges them, so the net arrives here with its digital segments only.
 pub fn resolveMultiCandidates(self: *Flatten) Error!void {
     var it = self.segs.iterator();
     while (it.next()) |entry| {

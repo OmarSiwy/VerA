@@ -25,6 +25,9 @@ pub const Seg = struct {
     /// Steps 2 and 3 decided it (an in-context or out-of-context
     /// declaration), so steps 4 and 5 leave it alone.
     declared: bool = false,
+    /// Steps 4.a and 5.a: "Any net which is used in digital behavioral code
+    /// shall be considered digital", whatever its children or parent are.
+    behavioral: bool = false,
 };
 
 fn ofDiscipline(file: *const Ast.SourceFile, d: Ast.StrId, declared: bool) Seg {
@@ -39,7 +42,9 @@ fn ofDiscipline(file: *const Ast.SourceFile, d: Ast.StrId, declared: bool) Seg {
 /// 4.b then picks among the children's disciplines of that domain: one is
 /// the answer, several are a §7.7.2 `resolveto` (`resolve.levelCandidates`).
 /// A child of unknown domain says nothing, so an undeclared port with
-/// nothing below it does not make its parent analog.
+/// nothing below it does not make its parent analog. A segment the module's
+/// digital behavioral code uses is digital whatever is below it (4.a), its
+/// discipline the discrete children's, or none (§3.6.2.4).
 ///
 /// Memoized per segment. `depth` stops a recursive instantiation, which the
 /// walk itself reports (E0905, E1018).
@@ -63,7 +68,10 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     const file = self.ctx.file;
     if (elab_resolve.oocDiscipline(self, path, net) orelse declaredIn(module, net)) |d|
         return ofDiscipline(file, d, true);
-    if (depth >= elaborate.max_depth) return .{};
+    // §3.6.2.4: "If the net is referenced in behavioral code, then it shall
+    // be treated as having no discipline with a domain binding of discrete."
+    const behavioral = digitalUse(file, module, net);
+    if (depth >= elaborate.max_depth) return .{ .domain = if (behavioral) .discrete else .unspecified, .behavioral = behavioral };
     var below: std.ArrayList(Seg) = .empty;
     for (module.instances) |*inst| {
         if (inst.range != null) continue;
@@ -80,11 +88,11 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
             if (s.domain != .unspecified) try below.append(self.ctx.arena, s);
         }
     }
-    var domain: Ast.DisciplineDecl.Domain = .unspecified;
-    for (below.items) |s| {
+    var domain: Ast.DisciplineDecl.Domain = if (behavioral) .discrete else .unspecified;
+    if (!behavioral) for (below.items) |s| {
         if (s.domain == .continuous) domain = .continuous;
         if (s.domain == .discrete and domain == .unspecified) domain = .discrete;
-    }
+    };
     if (domain == .unspecified) return .{};
     var cands: std.ArrayList(Ast.StrId) = .empty;
     for (below.items) |s| {
@@ -92,7 +100,37 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
         if (std.mem.indexOfScalar(Ast.StrId, cands.items, s.disc) == null)
             try cands.append(self.ctx.arena, s.disc);
     }
-    return .{ .disc = try elab_resolve.levelCandidates(self, cands.items), .domain = domain };
+    return .{ .disc = try elab_resolve.levelCandidates(self, cands.items), .domain = domain, .behavioral = behavioral };
+}
+
+/// Is `net` read or written by `module`'s digital behavioral code: a
+/// continuous assignment (A.6.1) or an `initial`/`always` block (A.6.2)?
+/// Undeclared names reach here only as nets (§3.6.5's implicit nets of a
+/// port connection or an assignment target).
+fn digitalUse(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, net: Ast.StrId) bool {
+    const Walk = struct {
+        file: *const Ast.SourceFile,
+        net: Ast.StrId,
+        hit: *bool,
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
+            if (e == .none) return;
+            const ex = &w.file.exprs;
+            if (ex.tag(e) == .ident and ex.strOf(e) == w.net) w.hit.* = true;
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
+            if (s != .none) try w.file.stmtEdges(s, w);
+        }
+    };
+    var hit = false;
+    const w: Walk = .{ .file = file, .net = net, .hit = &hit };
+    for (module.assigns) |a| {
+        w.expr(a.target, .read) catch unreachable;
+        w.expr(a.value, .read) catch unreachable;
+    }
+    for (module.discrete) |d| w.stmt(d.body) catch unreachable;
+    return hit;
 }
 
 /// The discipline `module` itself declares for `net`, on a port or a net
@@ -124,7 +162,7 @@ fn declaredIn(module: *const Ast.ModuleDecl, net: Ast.StrId) ?Ast.StrId {
 pub fn down(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net: Ast.StrId, parent: Seg) Error!Seg {
     const s = try up(self, module, path, net, 0);
     if (self.ctx.discipline_resolution == .basic) return s;
-    if (s.declared or s.domain == .continuous) return s;
+    if (s.declared or s.behavioral or s.domain == .continuous) return s;
     return switch (parent.domain) {
         .continuous => .{ .disc = parent.disc, .domain = .continuous },
         .discrete => if (s.domain == .discrete) s else .{ .disc = parent.disc, .domain = .discrete },
