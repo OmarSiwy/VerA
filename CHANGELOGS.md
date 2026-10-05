@@ -8,5 +8,6 @@ only `tools/conformance.py` writes.
 
 ## Unreleased
 
+- `nix develop .#benchmarking` carries the reference tools for accuracy checks: iverilog, verilator, yosys, ngspice, Xyce, gnucap and OpenVAF-Reloaded.
 - License: Apache 2.0 (was MIT). Third-party notices are in `NOTICE`.
 - `CHANGELOGS.md` started: every change from now on gets a bullet here.
