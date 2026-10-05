@@ -206,7 +206,9 @@ pub fn walkInstances(
     self: *Flatten,
     source_module: *const Ast.ModuleDecl,
     path: []const u8,
-    stack: *std.ArrayList(Ast.StrId),
+    /// The module names being elaborated, top first: `stack[0..depth + 1]`.
+    /// `depth < max_depth` holds before each push (E1018), so it never overflows.
+    stack: *[max_depth + 1]Ast.StrId,
     depth: u32,
 ) Error!void {
     // §6.3/§6.4.2 an indexed defparam can select a different paramset for
@@ -217,7 +219,7 @@ pub fn walkInstances(
         if (inst.range == null) continue;
         if (isUdp(self.ctx.file, inst.module)) continue;
         if (elab_names.findModule(self, inst.module)) |child| {
-            for (stack.items) |on_stack| if (on_stack == child.name) {
+            for (stack[0 .. depth + 1]) |on_stack| if (on_stack == child.name) {
                 try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
                     self.ctx.file.str(child.name), path, self.ctx.file.str(inst.name),
                 });
@@ -348,7 +350,7 @@ pub fn walkInstances(
             if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
             // §7.1 manually and automatically inserted connect modules
             // follow this same instance walk.
-            for (stack.items) |on_stack| if (on_stack == child.name) {
+            for (stack[0 .. depth + 1]) |on_stack| if (on_stack == child.name) {
                 try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}`", .{ self.ctx.file.str(child.name), child_path });
                 return;
             };
@@ -411,7 +413,7 @@ fn inlineInstance(
     /// overrides belong to the paramset, not to `child`.
     ps: ?*const Ast.ParamsetDecl,
     path: []const u8,
-    stack: *std.ArrayList(Ast.StrId),
+    stack: *[max_depth + 1]Ast.StrId,
     depth: u32,
     /// §6.6 the scheme of the generate block `inst` sits in (`genInstances`).
     gate: Ast.ExprId,
@@ -428,8 +430,9 @@ fn inlineInstance(
     // Resolved in the PARENT's namespace, which means through the parent's
     // rename map: an actual naming a net of a mid-level module has already
     // been flattened to `u.n`.
-    var concats: std.ArrayList(struct { port: Ast.Port, elems: []const []const u8, tok: u32 }) = .empty;
-    var widths: std.ArrayList(struct { port: Ast.Port, net: Ast.StrId, tok: u32 }) = .empty;
+    // At most one of each per child port.
+    var concats: std.ArrayList(struct { port: Ast.Port, elems: []const []const u8, tok: u32 }) = try .initCapacity(self.ctx.arena, child.ports.len);
+    var widths: std.ArrayList(struct { port: Ast.Port, net: Ast.StrId, tok: u32 }) = try .initCapacity(self.ctx.arena, child.ports.len);
     for (child.ports, 0..) |p, i| {
         const conn = connectionFor(inst, p, i);
         try unit.connected.put(self.ctx.arena, p.name, conn != null and conn.?.expr != .none);
@@ -452,7 +455,7 @@ fn inlineInstance(
                 try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
                 const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
                 if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
-                try concats.append(self.ctx.arena, .{ .port = p, .elems = elems, .tok = c.main_tok });
+                concats.appendAssumeCapacity(.{ .port = p, .elems = elems, .tok = c.main_tok });
             }
             continue;
         };
@@ -476,7 +479,7 @@ fn inlineInstance(
             if (unit.primitive) {
                 try self.prim_ports.append(self.ctx.arena, .{ .path = path, .port = p, .bound = bound });
             } else {
-                try widths.append(self.ctx.arena, .{ .port = p, .net = bound, .tok = conn.?.main_tok });
+                widths.appendAssumeCapacity(.{ .port = p, .net = bound, .tok = conn.?.main_tok });
                 try elab_resolve.resolveDiscipline(self, path, p, bound, conn.?.main_tok);
                 const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
                 if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
@@ -665,9 +668,8 @@ fn inlineInstance(
         try self.switches.append(self.ctx.arena, o);
     }
     // ---- recurse, with this unit's map in force ------------------------
-    try stack.append(self.ctx.arena, child.name);
+    stack[depth + 1] = child.name;
     try walkInstances(self, child, path, stack, depth + 1);
-    _ = stack.pop();
 
     self.unit = parent;
 }

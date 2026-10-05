@@ -295,9 +295,10 @@ fn buildCfg(self: *Analysis) Error!void {
         var seen = try a.alloc(bool, nb);
         @memset(seen, false);
         const Frame = struct { b: u32, i: u32 };
-        var stack: std.ArrayList(Frame) = .empty;
+        // `seen` admits each block once: at most `nb` frames.
+        var stack: std.ArrayList(Frame) = try .initCapacity(a, nb);
         defer stack.deinit(a);
-        try stack.append(a, .{ .b = 0, .i = 0 });
+        stack.appendAssumeCapacity(.{ .b = 0, .i = 0 });
         seen[0] = true;
         while (stack.items.len != 0) {
             const top = &stack.items[stack.items.len - 1];
@@ -306,7 +307,7 @@ fn buildCfg(self: *Analysis) Error!void {
                 top.i += 1;
                 if (!seen[s]) {
                     seen[s] = true;
-                    try stack.append(a, .{ .b = s, .i = 0 });
+                    stack.appendAssumeCapacity(.{ .b = s, .i = 0 });
                 }
             } else {
                 post[n_post] = top.b;
@@ -471,7 +472,8 @@ fn buildCfg(self: *Analysis) Error!void {
     // wins, so `loop_of` ends up naming the outermost nest. That is what
     // makes a nest one decision: re-materializing an inner loop needs the
     // outer loop's structure too, so they stand or fall together.
-    var body: std.ArrayList(u32) = .empty;
+    // A block is pushed only as its `loop_of` is first set: at most one row each.
+    var body: std.ArrayList(u32) = try .initCapacity(self.arena, self.loop_of.len);
     defer body.deinit(self.arena);
     for (self.rpo) |h| {
         if (!self.is_loop[h]) continue;
@@ -481,13 +483,13 @@ fn buildCfg(self: *Analysis) Error!void {
             if (self.loop_of[p] != none_u32 and p != h) continue;
             if (p != h) {
                 self.loop_of[p] = self.loop_of[h];
-                try body.append(self.arena, p);
+                body.appendAssumeCapacity(p);
             }
             while (body.pop()) |cur| {
                 for (self.preds[cur]) |q| {
                     if (self.loop_of[q] != none_u32) continue;
                     self.loop_of[q] = self.loop_of[h];
-                    try body.append(self.arena, q);
+                    body.appendAssumeCapacity(q);
                 }
             }
         }
