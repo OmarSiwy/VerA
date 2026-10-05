@@ -414,9 +414,12 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
             const args = ex.args(e);
             break :blk switch (f) {
                 .realtime => self.timeOf(self.scope).scale.realAt(self.scheduler.now),
+                .abstime => @import("../time.zig").secondsAt(self.scheduler.now, self.finest),
                 .itor => realOfInt(try eval(self, a, args[0], 0)),
                 .bitstoreal => @bitCast((try eval(self, a, args[0], 64)).values()[0]),
                 .ln => @log(try evalReal(self, a, args[0])),
+                .ln1p => std.math.log1p(try evalReal(self, a, args[0])),
+                .expm1 => std.math.expm1(try evalReal(self, a, args[0])),
                 .log10 => @log10(try evalReal(self, a, args[0])),
                 .exp => @exp(try evalReal(self, a, args[0])),
                 .sqrt => @sqrt(try evalReal(self, a, args[0])),

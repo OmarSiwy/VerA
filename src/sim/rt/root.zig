@@ -1641,6 +1641,11 @@ pub const State = struct {
         return scale.realAt(self.sched.now);
     }
 
+    /// VAMS §9.10 `$abstime`: now in seconds, the tick being 10^`finest` s.
+    pub fn abstime(self: *const State, finest: i32) f64 {
+        return @import("../time.zig").secondsAt(self.sched.now, finest);
+    }
+
     /// §17.6 queue task `op` (`system.queueStep`), at now in `scale`'s unit.
     pub fn queue(self: *State, op: system.QueueOp, id: ?i64, in1: ?i64, in2: ?i64, scale: Scale) Error!system.QueueResult {
         return system.queueStep(&self.queues, self.gpa, op, id, in1, in2, self.units(scale));

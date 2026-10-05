@@ -523,6 +523,9 @@ pub const Code = enum(u16) {
     /// §9.4.3 an analog-context format's field width or precision past
     /// VerA's limit of 2^30.
     E0828,
+    /// §9.2 a system function the tables allow in the digital context that
+    /// VerA's digital engine does not run, refused by name.
+    E0829,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -6081,6 +6084,26 @@ fn infoOf(c: Code) Info {
             \\A field that wide is already a gigabyte of text. Write a smaller
             \\width or precision. (The digital context writes its padding as it
             \\goes and takes any width.)
+            ,
+        },
+        .E0829 => .{
+            .title = "system function not run by VerA's digital engine",
+            .lrm = "9.2",
+            .explain =
+            \\Every 9.2 table has a "Supported in digital context" column. This
+            \\name's cell is Yes, so the call is legal in an `initial` or
+            \\`always` block, and VerA's digital engine does not evaluate it
+            \\yet: $arandom and the $rdist_ functions (Table 9-10), $min, $max
+            \\and $abs (Table 9-11), $temperature, $vt, $simparam and
+            \\$simparam$str (Table 9-12), the hierarchical parameter functions
+            \\$mfactor, $xposition, $yposition, $angle, $hflip and $vflip
+            \\(Table 9-15), and $table_model (Table 9-18). It is refused by name
+            \\rather than run as something else.
+            \\
+            \\The digital context does run $abstime, $realtime, the IEEE 1364
+            \\math functions with $ln1p and $expm1, and the $dist_ functions.
+            \\Compute the value in the analog block and read the variable from
+            \\the digital process (VAMS 7.3.6.4), or use one of those.
             ,
         },
         .E0817 => .{

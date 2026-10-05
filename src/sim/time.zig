@@ -125,6 +125,25 @@ pub const Scale = struct {
     }
 };
 
+/// VAMS §9.10 `$abstime` of `ticks` ticks of 10^`finest` seconds (`finest`
+/// one of `Quantum`'s exponents): the tick count divided, or multiplied, by
+/// an exact power of ten, so the result is the correctly rounded seconds.
+pub fn secondsAt(ticks: u64, finest: i32) f64 {
+    std.debug.assert(finest >= @backingInt(Quantum.fs) and finest <= @backingInt(Quantum.hundred_s));
+    const powers = [_]f64{ 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15 };
+    const t: f64 = @floatFromInt(ticks);
+    const p = powers[@abs(finest)];
+    return if (finest < 0) t / p else t * p;
+}
+
+test secondsAt {
+    // 1500 ps is 1.5 ns, exactly as the literal 1.5e-9 rounds.
+    try std.testing.expectEqual(@as(f64, 1.5e-9), secondsAt(1500, -12));
+    try std.testing.expectEqual(@as(f64, 3e-15), secondsAt(3, -15));
+    try std.testing.expectEqual(@as(f64, 700), secondsAt(7, 2));
+    try std.testing.expectEqual(@as(f64, 0), secondsAt(0, -9));
+}
+
 /// The greatest tick whose time is <= `t` (§7.3.6.5's "greatest digital time
 /// tick which is less than or equal to the analog time"). A `t` within a few
 /// ulps of a tick IS that tick: 4e-9 / 1e-9 is 3.9999999999999996 in

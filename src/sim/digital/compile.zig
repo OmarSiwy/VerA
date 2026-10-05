@@ -217,6 +217,11 @@ pub const SysFn = enum {
     pow,
     atan2,
     hypot,
+    /// VAMS §9.14 Table 9-11's additions, digital context "Yes".
+    ln1p,
+    expm1,
+    /// VAMS §9.10 Table 9-7 `$abstime`: now, in seconds, a real.
+    abstime,
     /// §17.9 `$random` and the `$dist_*` functions (`system.dist`).
     random,
     dist_uniform,
@@ -234,7 +239,7 @@ pub const SysFn = enum {
     /// operation, a draw from a distribution and a driver query never are.
     fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => false,
+            .time, .stime, .realtime, .abstime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => false,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => false,
             .user => false,
@@ -247,7 +252,7 @@ pub const SysFn = enum {
     fn mathArity(self: SysFn) ?u32 {
         return switch (self) {
             .pow, .atan2, .hypot => 2,
-            .ln, .log10, .exp, .sqrt, .floor, .ceil, .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
+            .ln, .ln1p, .log10, .exp, .expm1, .sqrt, .floor, .ceil, .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
             else => null, // else: not a math function
         };
     }
@@ -279,6 +284,36 @@ pub const SysFn = enum {
         };
     }
 };
+
+/// VAMS §9.2's functions whose "Supported in digital context" cell is Yes
+/// and that the digital engine does not run, each with its table: refused by
+/// name (E0829), never as an unknown form. ponytail: each row is one
+/// `SysFn` and its two evaluators (interpreter, `lib/digital/emit_expr.zig`)
+/// away from running.
+const vams_digital_unrun = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "$arandom", "9-10" },
+    .{ "$rdist_chi_square", "9-10" },
+    .{ "$rdist_exponential", "9-10" },
+    .{ "$rdist_poisson", "9-10" },
+    .{ "$rdist_uniform", "9-10" },
+    .{ "$rdist_erlang", "9-10" },
+    .{ "$rdist_normal", "9-10" },
+    .{ "$rdist_t", "9-10" },
+    .{ "$min", "9-11" },
+    .{ "$max", "9-11" },
+    .{ "$abs", "9-11" },
+    .{ "$temperature", "9-12" },
+    .{ "$vt", "9-12" },
+    .{ "$simparam", "9-12" },
+    .{ "$simparam$str", "9-12" },
+    .{ "$mfactor", "9-15" },
+    .{ "$xposition", "9-15" },
+    .{ "$yposition", "9-15" },
+    .{ "$angle", "9-15" },
+    .{ "$hflip", "9-15" },
+    .{ "$vflip", "9-15" },
+    .{ "$table_model", "9-18" },
+});
 
 const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$time", .time },
@@ -335,6 +370,9 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$pow", .pow },
     .{ "$atan2", .atan2 },
     .{ "$hypot", .hypot },
+    .{ "$ln1p", .ln1p },
+    .{ "$expm1", .expm1 },
+    .{ "$abstime", .abstime },
     .{ "$random", .random },
     .{ "$dist_uniform", .dist_uniform },
     .{ "$dist_normal", .dist_normal },
@@ -703,8 +741,13 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                 },
                 .task => {},
             };
-            const f = sys_fns.get(name) orelse
+            const f = sys_fns.get(name) orelse {
+                // VAMS §9.2: a name whose "Supported in digital context"
+                // cell is Yes, which this engine does not run (#58).
+                if (vams_digital_unrun.get(name)) |table|
+                    return self.failWith(.E0829, ex.mainTok(e), "VAMS §9.2 Table {s}: `{s}` is supported in the digital context, and VerA's digital engine does not run it", .{ table, name });
                 return self.exprFail(e, "this digital expression form is not implemented");
+            };
             self.sys_calls[@backingInt(e)] = f;
             const args = ex.args(e);
             switch (f) {
@@ -772,8 +815,8 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                         return self.exprFail(args[1], "§17.2.1: an $fopen type is one of Table 17-7's r, w, a, r+, w+, a+ (with b)");
                     break :blk .{ .width = 32, .signed = f != .fopen };
                 },
-                .realtime => {
-                    if (args.len != 0) return self.exprFail(e, "$realtime takes no arguments");
+                .realtime, .abstime => {
+                    if (args.len != 0) return self.exprFail(e, "$realtime and $abstime take no arguments");
                     break :blk real_type;
                 },
                 .rtoi, .itor, .realtobits, .bitstoreal => {

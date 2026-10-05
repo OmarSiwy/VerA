@@ -129,6 +129,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
                     const scale = r.timeOf(r.scope).scale;
                     return self.print("s.realtime(.{{ .local_per_unit = {d}, .global_per_local = {d} }})", .{ scale.local_per_unit, scale.global_per_local });
                 },
+                .abstime => return self.print("s.abstime({d})", .{r.finest}),
                 .itor => return real(self, args[0]),
                 .bitstoreal => {
                     const t = try natural(self, args[0]);
@@ -140,6 +141,8 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
             }
             const name: []const u8 = switch (f) {
                 .ln => "@log",
+                .ln1p => "std.math.log1p",
+                .expm1 => "std.math.expm1",
                 .log10 => "@log10",
                 .exp => "@exp",
                 .sqrt => "@sqrt",
