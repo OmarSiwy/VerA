@@ -8,6 +8,7 @@ only `tools/conformance.py` writes.
 
 ## Unreleased
 
+- `` `include "discipline.h" `` and `"constants.h"`, the Verilog-A 1.0 names of the Annex D headers, now resolve to the built-ins (VD-093) (#4).
 - `vera --emit-osdi FILE.va -o out.osdi`: an OSDI 0.4 library ngspice loads with `pre_osdi` (`tools/osdi_dyn.zig`), the same device `--emit-so` builds.
 - `nix develop .#benchmarking` carries the reference tools for accuracy checks: iverilog, verilator, yosys, ngspice, Xyce, gnucap and OpenVAF-Reloaded.
 - License: Apache 2.0 (was MIT). Third-party notices are in `NOTICE`.
