@@ -753,7 +753,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     const st = try self.driverTransition(at);
                     if (try resolution.schedule(self, d.current, d.or_z, value, or_z, st)) {
                         const delay = switch (d.source) {
-                            .expr => d.delay.continuous(d.current, st.target),
+                            .expr => d.delay.continuous(d.current.truth(), st.target),
                             .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
                             .udp => |u| d.delay.to(st.target.bit(u.out_bit orelse 0)),
                             .bridge, .mos, .pull => d.delay.to(st.target.bit(0)),

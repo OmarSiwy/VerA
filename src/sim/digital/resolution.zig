@@ -89,7 +89,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         const c = try self.netColdMut(net);
         const st = &c.transition;
         if (try schedule(self, self.values[n.slot], false, n.resolved, false, st))
-            st.in_flight = try exec.enqueue(self, .{ .net_update = net }, c.delay.to(st.target.bit(0)), false);
+            st.in_flight = try exec.enqueue(self, .{ .net_update = net }, c.delay.continuous(self.values[n.slot].truth(), st.target), false);
         return;
     }
     try waiters.store(self, n.slot, n.resolved.planes);

@@ -51,11 +51,13 @@ pub const Delay = struct {
         };
     }
 
-    /// The delay of a continuous assignment from `from` (the published
-    /// driver value, not a pending target) to `value` (§6.1.3): fall for
-    /// nonzero to zero, turn-off for all z, rise otherwise. Unlike a scalar
-    /// gate, a mix of x and z does not select the minimum.
-    pub fn continuous(self: Delay, from: Int.Literal, value: Int.Literal) u64 {
+    /// The delay of a continuous assignment, or of a net's own `delay3`,
+    /// to `value` (§6.1.3): fall for nonzero to zero, turn-off for all z,
+    /// rise otherwise. `from` is the §5.1.9 truth of the published value
+    /// (the driver's, or the net's), never of a pending target. Unlike a
+    /// scalar gate, a mix of x and z does not select the minimum. The one
+    /// place this rule lives: both engines' drivers and nets call it.
+    pub fn continuous(self: Delay, from: Int.Bit, value: Int.Literal) u64 {
         if (value.width == 1) return self.to(value.bit(0));
         // z is (value 0, unknown 1): one plane word tests 64 bits.
         const all_z = for (0..(value.width + 63) / 64) |w| {
@@ -63,7 +65,7 @@ pub const Delay = struct {
             if (value.unknowns()[w] & ~value.values()[w] & m != m) break false;
         } else true;
         if (all_z) return self.off;
-        if (from.truth() == .one and value.truth() == .zero) return self.fall;
+        if (from == .one and value.truth() == .zero) return self.fall;
         return self.rise;
     }
 };
@@ -845,13 +847,13 @@ test "continuous vector delay examines upper limbs and keeps scalar selection" {
     const mixed = try filled(arena.allocator(), 129, false, .z);
     setBit(mixed, 128, .x);
     const delay = Delay{ .rise = 7, .fall = 5, .off = 2, .present = true };
-    try std.testing.expectEqual(@as(u64, 7), delay.continuous(zero, high));
-    try std.testing.expectEqual(@as(u64, 5), delay.continuous(high, zero));
-    try std.testing.expectEqual(@as(u64, 2), delay.continuous(high, off));
-    try std.testing.expectEqual(@as(u64, 7), delay.continuous(high, mixed));
+    try std.testing.expectEqual(@as(u64, 7), delay.continuous(zero.truth(), high));
+    try std.testing.expectEqual(@as(u64, 5), delay.continuous(high.truth(), zero));
+    try std.testing.expectEqual(@as(u64, 2), delay.continuous(high.truth(), off));
+    try std.testing.expectEqual(@as(u64, 7), delay.continuous(high.truth(), mixed));
     for ([_]Int.Bit{ .zero, .one, .x, .z }) |bit| {
         const scalar = try filled(arena.allocator(), 1, false, bit);
-        try std.testing.expectEqual(delay.to(bit), delay.continuous(scalar, scalar));
+        try std.testing.expectEqual(delay.to(bit), delay.continuous(scalar.truth(), scalar));
     }
 }
 

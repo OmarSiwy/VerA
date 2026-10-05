@@ -298,7 +298,7 @@ pub fn drive(s: *State, i: u32, planes: []const u64, or_z: bool) Error!void {
         const h = planes.len / 2;
         if (!try inertial(s, &t.flight[i], tgt, &t.tgt_or_z[i], cur[0..h], cur[h..], t.or_z[i], planes, or_z)) return;
         const w = t.nets[d.net].width;
-        const ticks = if (d.delay_bit) |b| d.delay.to(bitAt(tgt, b)) else d.delay.continuous(literal(cur, w), literal(tgt, w));
+        const ticks = if (d.delay_bit) |b| d.delay.to(bitAt(tgt, b)) else d.delay.continuous(literal(cur, w).truth(), literal(tgt, w));
         t.flight[i] = s.sched.scheduleAfter(ticks, .inactive, drive_base + i) catch |e| return s.timeFail(e);
         return;
     }
@@ -402,8 +402,14 @@ pub fn resolve(s: *State, k: u32) Error!void {
     if (n.delay.present) {
         const tgt = t.ntgt[t.nat[k]..][0 .. 2 * nw];
         var or_z = false;
-        if (try inertial(s, &t.nflight[k], tgt, &or_z, cv, cx, false, res, false))
-            t.nflight[k] = s.sched.scheduleAfter(n.delay.to(bitAt(tgt, 0)), .inactive, net_base + k) catch |e| return s.timeFail(e);
+        if (try inertial(s, &t.nflight[k], tgt, &or_z, cv, cx, false, res, false)) {
+            // §5.1.9 truth of what the net shows: any known 1 is true.
+            const from: Int.Bit = for (cv, cx) |v, x| {
+                if (v & ~x != 0) break .one;
+            } else .zero;
+            const ticks = n.delay.continuous(from, literal(tgt, n.width));
+            t.nflight[k] = s.sched.scheduleAfter(ticks, .inactive, net_base + k) catch |e| return s.timeFail(e);
+        }
         return;
     }
     return s.store(n.slot, n.off, res[0..nw], res[nw..], t.ones[0..nw]);

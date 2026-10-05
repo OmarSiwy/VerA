@@ -160,6 +160,7 @@ summary and has a **Status** line naming what landed.
 | VD-116 | VAMS 7.3.1, 3.2; IEEE 1364-2005 5.4.1, 5.5.1-5.5.3 | An assignment to a `reg` wider than 32 bits in the analog context is computed at IEEE 1364 context width (the reg's width joins the right-hand side's); every other analog integer stays §3.2's 32 bits | DONE (2026-10-15) |
 | VD-117 | VAMS 4.6.1 (Tables 4-21, 4-22), 4.6.2, 3.6.3.2, 5.10.2 | A §3.6.3.2 nodeset is Newton's starting point, applied before the first evaluation, so no evaluation is in a nodeset phase: `analysis("nodeset")` and `initial_step("nodeset")` are 0 in every host | no (#67) |
 | VD-118 | VAMS 9.15 Table 9-28, 4.6.1 Table 4-21 | `$simparam$str("analysis_type")` is the Table 4-21 name the point evaluates as: "ic" at a transient's t = 0 operating point, "tran" at every later point | no (#67) |
+| VD-119 | IEEE 1364-2005 6.1.3, 7.14 | A vector net's own `delay3` picks one delay for the whole value by §6.1.3's vector rule, as a continuous assignment does; never per bit, never from bit 0 | DONE (#55) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1328,6 +1329,15 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **VerA today**: `lib/backend/codegen/call.zig` (`$simparam$str`, `@tagName(sim.kind)`), set by `runner_text.zig` `atPoint` and `src/sim/spice/tran.zig` `runTran`. No change.
 - **Measure impact**: A (+1 fixture). C: 9.15 gains the transient half of "analysis_type".
 - **Status**: DONE 2026-10-17 (#67): `ch09_system_tasks/simparam_str_analysis_type_tran_op.va`.
+### VD-119: Which delay a vector net's own `delay3` applies
+- **Source**: GitHub issue #55 (bug hunt 2026-10-17, finding clauses-04).
+- **Rule**: IEEE 1364-2005 6.1.3: for a continuous assignment to a vector net, "If the right-hand side makes a transition from nonzero to zero, then the falling delay shall be used", to z the turn-off delay, "For all other cases, the rising delay shall be used"; for a declaration assignment "the delay is part of the continuous assignment and is not a net delay", and "if the assignment is to a vector net, then the rising and falling delays shall not be applied to the individual bits if the assignment is included in the declaration". 7.14: "Net delays refer to the time it takes from any driver on the net changing value to the time when the net value is updated", with Table 7-9's from/to rules stated for one value.
+- **Why vague**: neither clause says how a net delay (`wire [7:0] #(3,5) n;` plus a separate driver) chooses among its delays for a vector. The 6.1.3 sentence contrasting the declaration case suggests a net delay might apply per bit, but no clause states that, and 7.14 speaks of "the net value".
+- **Options**: (a) 6.1.3's vector rule over the whole value, as for a continuous assignment; (b) Table 7-9 per bit, each bit on its own schedule; (c) Table 7-9 on bit 0 for the whole value (VerA before #55).
+- **Decision**: `DECIDED:` (a). One rule for every vector delay VerA applies, in one place (`Delay.continuous`, `src/sim/digital/net.zig`), and the net updates as one value, as 7.14's "the net value is updated" reads. (c) has no clause behind it: 1 -> 2 waited the falling delay because bit 0 of 2 is 0. (b) would let a vector show values no driver ever drove (`00000011` between `1` and `2`), from a reading the text only implies. Other tools: iverilog refuses net delays ("sorry: Net delays not supported"); others not established. Revisit if the user prefers (b).
+- **VerA today**: `resolution.resolve` (interpreter) and `rt/net.zig` `resolve` (a `.v` `--emit-exe`) both call `Delay.continuous` with the truth of the net's published value; a 1-bit net keeps the gate rule (VD-038). A declaration assignment's delay is still elaborated as the net's delay (`elab.declareNet`), which is the same for a net with one driver; with a second driver it also delays that driver, which 6.1.3 forbids ("it shall not be added to the delay of other drivers on the net"): open.
+- **Measure impact**: A: +1 fixture (`ieee1364/06_assignments/b_6_1_3_vector_net_delay.v`, declaration assignment and net delay beside `assign #(3,5)`). B: 6.1.3 gains a positive case.
+- **Status**: DONE (#55).
 
 ## 6. Implementation-defined choices
 
