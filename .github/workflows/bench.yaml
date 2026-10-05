@@ -101,11 +101,14 @@ jobs:
         run: zig build test-vpi-fixtures
 
       # --emit-verilog's modules: verilator -Wall lint and an iverilog testbench each.
+      # Ubuntu's verilator (5.020) has no rise/fall delays (RISEFALLDLY) and
+      # rejects the emitted modules; nixpkgs' (5.050) is the version they are
+      # linted against locally.
+      - uses: cachix/install-nix-action@v31
+        if: always()
       - name: Behavioural Verilog simulates and lints
         if: always()
-        run: |
-          sudo apt-get update && sudo apt-get install -y iverilog verilator
-          zig build test-beh-verilog
+        run: nix shell nixpkgs#verilator nixpkgs#iverilog -c zig build test-beh-verilog
 
       # Every .sp deck runs on sim.spice (ESPice's solver) and is graded against its
       # .expected.json oracle; any FAIL exits 1. NOT RUN is not a FAIL.
