@@ -206,7 +206,8 @@ fn isTimeReason(r: c_int) bool {
 pub fn all(a: std.mem.Allocator, ref: vpiHandle) ![]vpiHandle {
     const queue = root.run.asQueue(ref);
     const next = if (queue != null) try root.run.nextTime(root.run.now(), a) else null;
-    var out: std.ArrayList(vpiHandle) = .empty;
+    // At most one handle per registration.
+    var out: std.ArrayList(vpiHandle) = try .initCapacity(a, cbs.items.len);
     errdefer out.deinit(a);
     for (cbs.items) |cb| {
         if (cb.dead) continue;
@@ -227,7 +228,7 @@ pub fn all(a: std.mem.Allocator, ref: vpiHandle) ![]vpiHandle {
             }
             break :blk false;
         } else queue == null and cb.reference == ref;
-        if (matches) try out.append(a, @ptrCast(cb));
+        if (matches) out.appendAssumeCapacity(@ptrCast(cb));
     }
     return out.toOwnedSlice(a);
 }
