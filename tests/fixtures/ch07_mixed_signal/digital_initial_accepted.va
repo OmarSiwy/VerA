@@ -21,13 +21,13 @@
 // context reads, for the whole analysis, with no schedule consulted. A compiler
 // that parsed the block and threw it away reads §3.2's initial 0 here.
 //
-// WHY `always` STAYS REFUSED, since one AMS ruling covers both keywords: an
-// `always` block RE-RUNS on an event, so its variable's value is a function of a
-// schedule, and there is no reading of it that does not need §8.5's simulation
-// cycle. The `initial` block's constant has exactly one meaning. (Both now run:
-// any other `initial` body — a delay, a loop, an event control, a system task,
-// a non-constant right-hand side — runs on the mixed-signal kernel,
-// initial_untimed_process_runs.va, #57.)
+// WHY THIS FILE ASSERTS ONLY `initial`: an `always` block RE-RUNS on an event,
+// so its variable's value is a function of a schedule (§8.5's simulation
+// cycle); m02_10 asserts that on the mixed-signal kernel. The `initial` block's
+// constant has exactly one meaning, read with no schedule. Any other `initial`
+// body (a delay, a loop, an event control, a system task, a non-constant
+// right-hand side) also runs on the mixed-signal kernel:
+// initial_untimed_process_runs.va (#57).
 //
 //! lrm 7.2.2
 //! lrm C.7
