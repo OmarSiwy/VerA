@@ -597,14 +597,20 @@ pub const Run = struct {
     /// value the analog block left it, as a write at the current tick, so a
     /// continuous assign over it re-evaluates like over any other operand.
     /// Table 7-1 in reverse: a real "with no conversion", an integer as itself.
-    pub fn a2dWrite(r: *Run, at: u32, v: f64) Error!void {
+    /// `assigned`: an analog event statement assigned it, which §7.3.6.1 makes
+    /// an event "regardless of whether the variable changes value or not".
+    pub fn a2dWrite(r: *Run, at: u32, v: f64, assigned: bool) Error!void {
         const cur = r.values[at];
-        const lit = if (r.reals.contains(at)) try evaluate.realLiteral(r.arena, v) else blk: {
+        const real = r.reals.contains(at);
+        const lit = if (real) try evaluate.realLiteral(r.arena, v) else blk: {
             const w = try filled(r.arena, 64, true, .zero);
             w.values()[0] = @bitCast(std.math.lossyCast(i64, v));
             break :blk try evaluate.normalize(r.arena, w, .{ .width = cur.width, .signed = cur.signed });
         };
+        // `store`'s own test for a change, taken before it overwrites `cur`.
+        const same = if (real) @as(f64, @bitCast(cur.planes[0])) == v else std.mem.eql(u64, cur.planes, lit.planes);
         try waiters.store(r, at, lit.planes);
+        if (assigned and same) try waiters.wake(r, at, .x, .x);
     }
 
     /// VAMS §7.3.4 / §8.5: an analog event control waits on `edge` of `slot`
@@ -1924,7 +1930,7 @@ test "VAMS §7.3.6.4 an analog variable a continuous assign reads is declared an
     var out = std.Io.Writer.Allocating.init(arena.allocator());
     var r = try elaborate(arena.allocator(), "module m; real level; wire hi; assign hi = level > 0.5; endmodule\n", .{ .mixed = .{ .top = "m", .timescale = null, .reads = &.{"level"} } }, &bag, &out.writer);
     _ = try r.runUntil(0);
-    try r.a2dWrite(r.slotOf("level").?, 0.75);
+    try r.a2dWrite(r.slotOf("level").?, 0.75, false);
     _ = try r.runUntil(0);
     try std.testing.expectEqual(@as(?i64, 1), r.values[r.slotOf("hi").?].asInt());
 }
