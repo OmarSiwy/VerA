@@ -111,7 +111,7 @@ pub fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
         for (defs) |d| _ = try connectable(r, &r.file.modules[d], 0);
         return defs;
     }
-    var tops: std.ArrayList(u32) = .empty;
+    var tops: std.ArrayList(u32) = try .initCapacity(r.arena, modules.len); // each module once at most
     // §12.1.1: "an instantiated module is not a top", wherever it is
     // instantiated, a generate arm the scheme does not select included.
     var generated: std.ArrayList(Ast.StrId) = .empty;
@@ -127,7 +127,7 @@ pub fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
         if (for (modules[d + 1 ..], r.def_lib[d + 1 ..]) |later, l| {
             if (later.name == candidate.name and l == r.def_lib[d]) break true;
         } else false) continue;
-        try tops.append(r.arena, d);
+        tops.appendAssumeCapacity(d);
     }
     if (tops.items.len == 0) return r.fail(0, "digital execution found no top-level module", .{});
     return tops.items;
@@ -762,8 +762,9 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]cons
     if (r.inserts.len == 0) return m.instances;
     const arena = r.arena;
     const path = try scopePath(r, scope);
-    var out: std.ArrayList(Ast.Instance) = .empty;
-    try out.appendSlice(arena, m.instances);
+    // The source's instances and at most one bridge per inserted row.
+    var out: std.ArrayList(Ast.Instance) = try .initCapacity(arena, m.instances.len + r.inserts.len);
+    out.appendSliceAssumeCapacity(m.instances);
     for (r.inserts, r.insert_segs) |row, seg| {
         if (!std.mem.eql(u8, row.path, path)) continue;
         const inst = for (out.items[0..m.instances.len]) |*it| {
@@ -793,7 +794,7 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]cons
             const conns = try arena.alloc(Ast.PortConn, 2);
             conns[0] = .{ .name = try interned(r, row.upper_port), .expr = up.expr, .main_tok = up.main_tok };
             conns[1] = .{ .name = lower, .expr = seg, .main_tok = up.main_tok };
-            try out.append(arena, .{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
+            out.appendAssumeCapacity(.{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
         }
     }
     return out.items;

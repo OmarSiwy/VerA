@@ -1641,6 +1641,9 @@ fn resolvedNets(self: *Emitter) Error!void {
     self.drv_ix = try self.arena.alloc(?u32, r.drivers.len);
     @memset(self.net_ix, null);
     @memset(self.drv_ix, null);
+    // A subset of the nets, and of their drivers, each once.
+    try self.rt_nets.ensureTotalCapacityPrecise(self.arena, r.nets.len);
+    try self.rt_drivers.ensureTotalCapacityPrecise(self.arena, r.drivers.len);
     for (r.nets, 0..) |n, k| {
         // §7.6 a switch terminal resolves with the nets it is joined to.
         const resolved = n.strength_read or r.netCold(n).trans.len != 0 or selectForced(r, n.slot) or for (r.netDrivers(@intCast(k))) |di| {
@@ -1649,10 +1652,10 @@ fn resolvedNets(self: *Emitter) Error!void {
         if (!resolved) continue;
         if (n.kind == .wreal) return self.refuse("a VAMS wreal net");
         self.net_ix[k] = @intCast(self.rt_nets.items.len);
-        try self.rt_nets.append(self.arena, @intCast(k));
+        self.rt_nets.appendAssumeCapacity(@intCast(k));
         for (r.netDrivers(@intCast(k))) |di| {
             self.drv_ix[di] = @intCast(self.rt_drivers.items.len);
-            try self.rt_drivers.append(self.arena, di);
+            self.rt_drivers.appendAssumeCapacity(di);
         }
     }
 }
@@ -1677,13 +1680,13 @@ fn portDumps(self: *Emitter) Error!void {
         if (ins != .task or ins.task.task != .ports or ins.task.task.ports != .ports) continue;
         const t = ins.task;
         r.scope = r.code_scope.items[pc];
-        var scopes: std.ArrayList(u32) = .empty;
-        var name: []const u8 = "dumpports.vcd";
         const given = portArgs(t.args);
+        var scopes: std.ArrayList(u32) = try .initCapacity(self.arena, @max(given.len, 1));
+        var name: []const u8 = "dumpports.vcd";
         for (given, 0..) |e, i| {
             if (ex.tag(e) == .ident or ex.tag(e) == .hier_ident) switch (vcd.target(r, e) catch return self.refuse("a $dumpports scope the engine resolves only at run time")) {
                 .scope => |sc| {
-                    try scopes.append(self.arena, sc);
+                    scopes.appendAssumeCapacity(sc);
                     continue;
                 },
                 .slot => {},
@@ -1692,7 +1695,7 @@ fn portDumps(self: *Emitter) Error!void {
             if (ex.tag(e) != .str_literal) return self.refuse("a $dumpports file name held in a variable");
             name = r.file.str(ex.strOf(e));
         }
-        if (scopes.items.len == 0) try scopes.append(self.arena, r.instanceOf(r.scope));
+        if (scopes.items.len == 0) scopes.appendAssumeCapacity(r.instanceOf(r.scope));
         for (scopes.items) |sc| for (r.file.modules[r.scope_info.items[sc].def].ports) |mp| {
             const slot = r.names.get(.{ .scope = sc, .str = mp.name }) orelse continue;
             if (r.net_of.get(slot)) |n| r.nets[n].strength_read = true;
@@ -1778,16 +1781,19 @@ fn portTask(self: *Emitter, pc: u32, op: @import("evcd.zig").Op, args: []const A
 /// distinct ones the code forces, in code order (`rt.Layers.parts`); null
 /// when none forces it.
 fn partOf(self: *Emitter, slot: u32, sel: compile.Bits) Error!?u32 {
-    var seen: std.ArrayList(compile.Bits) = .empty;
+    // `rt.max_parts` distinct selects are all the executable keeps: one past
+    // them that is `sel` is refused, any other is never asked for.
+    var seen: [@import("../rt/root.zig").max_parts]compile.Bits = undefined;
+    var n: u8 = 0;
     for (self.r.code.items) |ins| if (ins == .override_on) if (ins.override_on.bits) |b| if (ins.override_on.slot == slot) {
-        for (seen.items) |q| {
+        for (seen[0..n]) |q| {
             if (std.meta.eql(q, b)) break;
-        } else try seen.append(self.arena, b);
+        } else if (n < seen.len) {
+            seen[n] = b;
+            n += 1;
+        } else if (std.meta.eql(b, sel)) return self.refuse("more forced selects of one net than the executable keeps");
     };
-    for (seen.items, 0..) |q, k| if (std.meta.eql(q, sel)) {
-        if (k >= @import("../rt/root.zig").max_parts) return self.refuse("more forced selects of one net than the executable keeps");
-        return @intCast(k);
-    };
+    for (seen[0..n], 0..) |q, k| if (std.meta.eql(q, sel)) return @intCast(k);
     return null;
 }
 
@@ -1825,7 +1831,7 @@ fn netTables(self: *Emitter) Error!void {
         try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(c.delay), n.charge, c.decay });
     }
     try self.print("\n    }},\n    .drivers = &.{{", .{});
-    var udps: std.ArrayList(*const @import("net.zig").Udp) = .empty;
+    var udps: std.ArrayList(*const @import("net.zig").Udp) = try .initCapacity(self.arena, self.rt_drivers.items.len);
     for (self.rt_drivers.items) |di| {
         const d = r.drivers[di];
         r.scope = d.scope;
@@ -1835,7 +1841,7 @@ fn netTables(self: *Emitter) Error!void {
             .gate => |g| try self.print("{d}, .source = .{{ .gate = {d} }} }},", .{ g.out_bit orelse 0, g.out_bit orelse 0 }),
             .udp => |u| {
                 try self.print("{d}, .source = .{{ .udp = {d} }} }},", .{ u.out_bit orelse 0, udps.items.len });
-                try udps.append(self.arena, u);
+                udps.appendAssumeCapacity(u);
             },
             .mos => |m| {
                 var data_net: ?u32 = null;

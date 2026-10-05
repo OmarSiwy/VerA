@@ -706,6 +706,8 @@ pub const State = struct {
         @memset(self.terms, .empty);
         @memset(self.armed, false);
         @memset(self.pending, false);
+        // Each slot at most once (`pending`): `changed` never grows.
+        try self.changed.ensureTotalCapacityPrecise(gpa, self.pending.len);
         @memset(self.diff, 0);
         @memset(self.dirty, 0);
         @memset(self.waiting, 0);
@@ -854,11 +856,11 @@ pub const State = struct {
             .running => self.markReaders(slot),
             .queued => if (!self.pending[slot]) {
                 self.pending[slot] = true;
-                try self.changed.append(self.gpa, slot);
+                self.changed.appendAssumeCapacity(slot);
             },
             .idle => {
                 self.pending[slot] = true;
-                try self.changed.append(self.gpa, slot);
+                self.changed.appendAssumeCapacity(slot);
                 self.settle = .queued;
                 _ = self.sched.schedule(.active, settle_payload) catch |e| return self.schedFail(e);
             },

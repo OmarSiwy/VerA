@@ -540,7 +540,9 @@ pub fn udpRows(a: std.mem.Allocator, decl: *const Ast.UdpDecl) Error!?[]const Ud
     const inputs = decl.ports.len - 1;
     const rows = try a.alloc(UdpRow, decl.rows.len);
     for (decl.rows, rows) |src, *row| {
-        var syms: std.ArrayList(UdpSym) = .empty;
+        // Exactly one symbol per input, else the row is malformed: a symbol
+        // past `inputs` already makes it so.
+        var syms: std.ArrayList(UdpSym) = try .initCapacity(a, inputs);
         var edge_at: ?u32 = null;
         var i: usize = 0;
         while (i < src.inputs.len) : (i += 1) {
@@ -555,8 +557,9 @@ pub fn udpRows(a: std.mem.Allocator, decl: *const Ast.UdpDecl) Error!?[]const Ud
                 'r', 'R', 'f', 'F', 'p', 'P', 'n', 'N', '*' => .{ .letter = std.ascii.toLower(c) },
                 else => .{ .level = std.ascii.toLower(c) },
             };
+            if (syms.items.len == inputs) return null;
             if (sym != .level) edge_at = @intCast(syms.items.len);
-            try syms.append(a, sym);
+            syms.appendAssumeCapacity(sym);
         }
         if (syms.items.len != inputs) return null;
         row.* = .{ .ins = syms.items, .state = std.ascii.toLower(src.state), .out = std.ascii.toLower(src.output), .edge_at = edge_at };
