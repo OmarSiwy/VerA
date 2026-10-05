@@ -229,6 +229,8 @@ port_concats: []const Elaborate.PortConcat = &.{},
 port_widths: []const Elaborate.PortWidth = &.{},
 /// §5.5.3 source-segment disciplines for attributes cloned across a port.
 attribute_disciplines: std.AutoHashMapUnmanaged(Ast.ExprId, Ast.StrId) = .empty,
+/// `Elaborate.Design.local_accesses`: accesses `checkAccessMatch` leaves alone.
+local_accesses: std.AutoHashMapUnmanaged(Ast.ExprId, void) = .empty,
 /// Where every diagnostic of this compilation goes. Shared with the other
 /// stages, so the cap, the dedupe and the source order are global.
 bag: *diag.Bag = undefined,
@@ -548,6 +550,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     self.port_concats = design.port_concats;
     self.port_widths = design.port_widths;
     self.attribute_disciplines = design.attribute_disciplines;
+    self.local_accesses = design.local_accesses;
     try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
     try lower_node.collectSignalAbstols(self, design.signal_disciplines);
