@@ -94,40 +94,263 @@ pub fn statusSite(comptime D: type, inst: *const D.Instance) ?StatusSite {
 }
 
 /// Writes `D`'s latched status as `<file>:<line>: fatal|error: <message>`,
-/// the message being the site's format with each `%d %i %g %e %f %h %x %o
-/// %b %c %t %r` taking the next numeric argument and `%s` writing `?` (a
-/// string has no numeric slot); `%%` is `%`. Writes nothing when `inst`
-/// reports no status.
+/// the message being the site's format rendered by `formatSay`'s rules over
+/// its numeric arguments (`%s` writes `?`: a string has no numeric slot).
+/// Writes nothing when `inst` reports no status.
 pub fn formatStatus(comptime D: type, inst: *const D.Instance, w: *std.Io.Writer) std.Io.Writer.Error!void {
     const s = statusSite(D, inst) orelse return;
     try w.print("{s}:{d}: {s}: ", .{ s.file, s.line, @tagName(s.severity) });
+    try formatC(s.fmt, &inst.vera_status_args__, "", w);
+}
+
+/// §9.4 one display task of a device (`D.say_sites`, in source order):
+/// a `$strobe`, `$display`, `$write`, `$debug`, `$warning` or `$info` in the
+/// analog context. A device cannot print, so its optional `say` entry point,
+///
+///     pub fn say(comptime S: type, x: *const [n_u]S.V, model: *const Model,
+///                inst: InstancePtr, sim: SimState, out: *Say) void
+///
+/// runs the model's display tasks at `x` and records each one that runs into
+/// `out`, as this site's index and `nargs` values; the host renders the
+/// records with `formatSay`. A host calls it once per ACCEPTED point, after
+/// the solve and before `updateState`, with the `Instance` `eval` saw:
+/// §9.4.6, "All the display tasks, except $debug, shall not display output
+/// unless an iteration has been accepted", which is also when `$display`
+/// prints, since §9.4.1 gives it "the same capabilities as $strobe".
+/// `$monitor` (it needs change detection a device does not keep) and a task
+/// with a string argument that is not a constant are not recorded (W0850).
+/// Optional: a host that never calls `say` is unaffected, and a GPU host
+/// does not compile it. Additive: no `abi_version` change.
+pub const SaySite = struct {
+    /// The task's text as one C-style format: its constant strings are in
+    /// it, and each conversion (`%d %i %c %h %x %o %b %e %f %g %r`, with
+    /// flags, width and precision) takes the next recorded value; `%%` is
+    /// `%` and `%m` the instance's name, which the host supplies. A
+    /// line-ending task's format ends in `\n`, and `$warning`/`$info`'s
+    /// begin with `WARNING: `/`INFO: `.
+    fmt: []const u8,
+    /// Where the call is.
+    file: []const u8,
+    line: u32,
+    /// The values one record of this site carries after its index.
+    nargs: u32,
+};
+
+/// The buffer a host lends `D.say`: records `site, v0, ..., v(nargs - 1)`
+/// back to back as f64. A record that does not fit is counted in `lost` and
+/// dropped whole. Fixed storage and no allocation, so `say` compiles
+/// wherever `eval` does.
+pub const Say = struct {
+    buf: []f64,
+    len: usize = 0,
+    lost: usize = 0,
+
+    /// Appends one record of site `site`; a device's `say` calls it.
+    pub fn put(s: *Say, site: u32, args: []const f64) void {
+        if (s.buf.len - s.len < 1 + args.len) {
+            s.lost += 1;
+            return;
+        }
+        s.buf[s.len] = @floatFromInt(site);
+        for (args, s.buf[s.len + 1 ..][0..args.len]) |a, *b| b.* = a;
+        s.len += 1 + args.len;
+    }
+};
+
+/// Writes the records `D.say` put in `s`, each as its site's format renders
+/// it, `name` standing for `%m`; then, if any record did not fit, a line
+/// saying how many. Empties `s` for the next accepted point.
+pub fn formatSay(comptime D: type, s: *Say, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    var i: usize = 0;
+    while (i < s.len) {
+        const site = D.say_sites[@intFromFloat(s.buf[i])];
+        try formatC(site.fmt, s.buf[i + 1 ..][0..site.nargs], name, w);
+        i += 1 + site.nargs;
+    }
+    if (s.lost != 0) try w.print("[{d} display record(s) did not fit the host's buffer]\n", .{s.lost});
+    s.len = 0;
+    s.lost = 0;
+}
+
+/// Renders `fmt` C-style (C11 7.21.6.1, which §9.4.3 Table 9-23 grants the
+/// real conversions) over `args`, each conversion taking the next value, 0
+/// past the end. Integer conversions round the value (§4.2.1.1); `%h`, `%x`,
+/// `%o` and `%b` print its 64-bit two's complement, `%c` its low byte, `%r`
+/// is §2.6.2 engineering notation, `%t` is `%g`, `%s` writes `?`, and
+/// `%m`/`%l` write `name`. Precision past 64 is cut to 64.
+fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
     var next: usize = 0;
     var i: usize = 0;
-    while (i < s.fmt.len) : (i += 1) {
-        const c = s.fmt[i];
-        if (c != '%' or i + 1 == s.fmt.len) {
-            try w.writeByte(c);
+    while (i < fmt.len) : (i += 1) {
+        if (fmt[i] != '%' or i + 1 == fmt.len) {
+            try w.writeByte(fmt[i]);
             continue;
         }
-        // Width, precision and the `0` flag are skipped: the value prints
-        // at its own width.
         i += 1;
-        while (i < s.fmt.len and (std.ascii.isDigit(s.fmt[i]) or s.fmt[i] == '.')) i += 1;
-        if (i == s.fmt.len) break;
-        const conv = std.ascii.toLower(s.fmt[i]);
-        if (conv == '%') {
-            try w.writeByte('%');
-            continue;
+        var f: CSpec = .{};
+        while (i < fmt.len) : (i += 1) switch (fmt[i]) {
+            '-' => f.left = true,
+            '+' => f.plus = true,
+            ' ' => f.space = true,
+            '0' => f.zero = true,
+            '#' => f.alt = true,
+            else => break,
+        };
+        while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) f.width = f.width *| 10 +| (fmt[i] - '0');
+        if (i < fmt.len and fmt[i] == '.') {
+            i += 1;
+            var p: usize = 0;
+            while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) p = p *| 10 +| (fmt[i] - '0');
+            f.prec = @min(p, 64);
         }
-        const v: f64 = if (next < inst.vera_status_args__.len) inst.vera_status_args__[next] else 0.0;
-        next += 1;
+        if (i == fmt.len) break;
+        const conv = fmt[i];
         switch (conv) {
-            's' => try w.writeByte('?'),
-            'd', 'i', 'h', 'x', 'o', 'b', 'c', 't' => if (!std.math.isFinite(v)) try w.print("{d}", .{v}) else try w.print("{d}", .{@as(i64, @intFromFloat(@round(std.math.clamp(v, -9.2e18, 9.2e18))))}),
-            'e' => try w.print("{e}", .{v}),
-            else => try w.print("{d}", .{v}),
+            '%' => {
+                try w.writeByte('%');
+                continue;
+            },
+            'm', 'M', 'l', 'L' => {
+                try cPad(w, "", name, f, false);
+                continue;
+            },
+            's', 'S' => {
+                try cPad(w, "", "?", f, false);
+                continue;
+            },
+            else => {},
+        }
+        const v: f64 = if (next < args.len) args[next] else 0.0;
+        next += 1;
+        var buf: [512]u8 = undefined;
+        switch (conv) {
+            'd', 'D', 'i', 'h', 'H', 'x', 'X', 'o', 'O', 'b', 'B', 'c', 'C' => {
+                const n: i64 = if (std.math.isNan(v)) 0 else @intFromFloat(@round(std.math.clamp(v, -0x1p63, 0x1p63 - 1024)));
+                const u: u64 = @bitCast(n);
+                const digits = switch (conv) {
+                    'd', 'D', 'i' => std.fmt.bufPrint(&buf, "{d}", .{@abs(n)}),
+                    'h', 'x' => std.fmt.bufPrint(&buf, "{x}", .{u}),
+                    'H', 'X' => std.fmt.bufPrint(&buf, "{X}", .{u}),
+                    'o', 'O' => std.fmt.bufPrint(&buf, "{o}", .{u}),
+                    'b', 'B' => std.fmt.bufPrint(&buf, "{b}", .{u}),
+                    else => std.fmt.bufPrint(&buf, "{c}", .{@as(u8, @truncate(u))}),
+                } catch unreachable;
+                const signed = conv == 'd' or conv == 'D' or conv == 'i';
+                try cPad(w, if (signed) cSign(n < 0, f) else "", digits, f, true);
+            },
+            'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R', 't', 'T' => {
+                if (!std.math.isFinite(v)) {
+                    const up = std.ascii.isUpper(conv);
+                    const t: []const u8 = if (std.math.isNan(v)) (if (up) "NAN" else "nan") else if (up) "INF" else "inf";
+                    try cPad(w, cSign(v < 0, f), t, f, false);
+                    continue;
+                }
+                const body = cReal(&buf, @abs(v), std.ascii.toLower(conv), f.prec orelse 6, f.alt);
+                // `%E`/`%G` spell the exponent marker upper case; `%R`'s scale
+                // letters keep their case (`m` is milli, `M` mega).
+                if (conv == 'E' or conv == 'G') for (@constCast(body)) |*b| {
+                    b.* = std.ascii.toUpper(b.*);
+                };
+                try cPad(w, cSign(std.math.signbit(v), f), body, f, true);
+            },
+            else => {
+                try w.writeByte('%');
+                try w.writeByte(conv);
+            },
         }
     }
+}
+
+/// A §9.4.3 conversion's flags, width and precision.
+const CSpec = struct {
+    left: bool = false,
+    plus: bool = false,
+    space: bool = false,
+    zero: bool = false,
+    alt: bool = false,
+    width: usize = 0,
+    prec: ?usize = null,
+};
+
+fn cSign(neg: bool, f: CSpec) []const u8 {
+    return if (neg) "-" else if (f.plus) "+" else if (f.space) " " else "";
+}
+
+/// Writes `sign` and `body` in a field `f.width` wide: left-justified,
+/// zero-filled after the sign (numbers only), or right-justified.
+fn cPad(w: *std.Io.Writer, sign: []const u8, body: []const u8, f: CSpec, number: bool) std.Io.Writer.Error!void {
+    const n = sign.len + body.len;
+    const fill = f.width -| n;
+    if (f.left) {
+        try w.writeAll(sign);
+        try w.writeAll(body);
+        try w.splatByteAll(' ', fill);
+    } else if (f.zero and number) {
+        try w.writeAll(sign);
+        try w.splatByteAll('0', fill);
+        try w.writeAll(body);
+    } else {
+        try w.splatByteAll(' ', fill);
+        try w.writeAll(sign);
+        try w.writeAll(body);
+    }
+}
+
+/// `v` (finite, not negative) as C's `%e`, `%f` or `%g` at precision `p`, or
+/// §9.4.3's `%r`: `%g`'s digits over a §2.6.2 scale factor (`T G M K k m u
+/// n p f a`; `k` for 1e3, Table 2-1's spelling).
+fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
+    const float = std.fmt.float;
+    switch (conv) {
+        'f' => return float.render(buf, v, .{ .mode = .decimal, .precision = p }) catch "?",
+        'e' => return cExp(buf, float.render(buf[256..], v, .{ .mode = .scientific, .precision = p }) catch return "?"),
+        'r' => {
+            const scales = "afpnum kMGT";
+            var e: i32 = if (v == 0) 0 else @intFromFloat(@floor(@log10(v) / 3.0));
+            e = std.math.clamp(e, -6, 4);
+            const m = v / std.math.pow(f64, 1000.0, @floatFromInt(e));
+            const g = cReal(buf, m, 'g', p, alt);
+            const c = scales[@intCast(e + 6)];
+            if (c == ' ') return g;
+            buf[g.len] = c;
+            return buf[0 .. g.len + 1];
+        },
+        else => {
+            // C11 7.21.6.1 %g: P significant digits; X the exponent %e would
+            // print; %f with P - 1 - X decimals when P > X >= -4, else %e.
+            const sig = @max(p, 1);
+            const sci = float.render(buf[256..], v, .{ .mode = .scientific, .precision = sig - 1 }) catch return "?";
+            const x = std.fmt.parseInt(i32, sci[std.mem.indexOfScalar(u8, sci, 'e').? + 1 ..], 10) catch 0;
+            var out = if (x < -4 or x >= @as(i32, @intCast(sig)))
+                cExp(buf, sci)
+            else
+                float.render(buf, v, .{ .mode = .decimal, .precision = @intCast(@as(i32, @intCast(sig)) - 1 - x) }) catch return "?";
+            if (alt) return out;
+            // Trailing zeros of the fraction go, then a bare point.
+            const e_at = std.mem.indexOfScalar(u8, out, 'e') orelse out.len;
+            if (std.mem.indexOfScalar(u8, out[0..e_at], '.') == null) return out;
+            var end = e_at;
+            while (out[end - 1] == '0') end -= 1;
+            if (out[end - 1] == '.') end -= 1;
+            const exp_part = out[e_at..];
+            std.mem.copyForwards(u8, buf[end..], exp_part);
+            out = buf[0 .. end + exp_part.len];
+            return out;
+        },
+    }
+}
+
+/// Zig's `1.5e-7` as C's `1.5e-07`: a signed exponent of at least two
+/// digits, copied to the front of `buf`.
+fn cExp(buf: *[512]u8, sci: []const u8) []const u8 {
+    const e = std.mem.indexOfScalar(u8, sci, 'e').?;
+    var exp = sci[e + 1 ..];
+    const neg = exp.len != 0 and exp[0] == '-';
+    if (neg) exp = exp[1..];
+    var tmp: [64]u8 = undefined;
+    const t = std.fmt.bufPrint(&tmp, "{s}e{c}{s}{s}", .{ sci[0..e], @as(u8, if (neg) '-' else '+'), if (exp.len < 2) "0" else "", exp }) catch return "?";
+    @memcpy(buf[0..t.len], t);
+    return buf[0..t.len];
 }
 
 /// f64 transcendentals that also compile for NVPTX and AMDGCN, which have no
@@ -3083,6 +3306,14 @@ pub fn validate(comptime D: type) void {
     }
     if (@hasDecl(D, "file_io") and @TypeOf(D.file_io) != FileIo)
         @compileError(@typeName(D) ++ ".file_io must be a contract.FileIo");
+    // §9.4 the output channel: the site table and the entry point that
+    // records into a host's `Say`, one without the other being of no use.
+    if (@hasDecl(D, "say_sites") != @hasDecl(D, "say"))
+        @compileError(name ++ ": say_sites and say come together");
+    if (@hasDecl(D, "say")) {
+        expectArray(D, "say_sites", SaySite);
+        expectGeneric(D, "say", 6, "fn (comptime S: type, *const [n_u]S.V, *const Model, InstancePtr, SimState, *contract.Say) void");
+    }
     if (@hasDecl(D, "status_sites")) {
         if (@typeInfo(@TypeOf(D.status_sites)) != .array or @typeInfo(@TypeOf(D.status_sites)).array.child != StatusSite)
             @compileError(name ++ ".status_sites must be an array of contract.StatusSite");
@@ -3504,6 +3735,9 @@ const AllowedPubDecl = enum {
     acDyn,
     systf_calls,
     status_sites,
+    // §9.4 the device's display tasks as records a host renders (`SaySite`).
+    say_sites,
+    say,
     mc_param,
     derive,
     checkShape,
@@ -3840,6 +4074,55 @@ test "formatStatus renders the latched site with its numeric arguments" {
     try std.testing.expectEqual(@as(u32, 0x0200_0001), inst.vera_status__);
 }
 
+test "formatSay renders each record with its site's format, then what did not fit" {
+    var store: [7]f64 = undefined;
+    var s: Say = .{ .buf = &store };
+    const x = [2]f64{ 1.25, 0.25 };
+    MockAll.say(f64, &x, undefined, undefined, .{}, &s);
+    MockAll.say(f64, &x, undefined, undefined, .{}, &s);
+    MockAll.say(f64, &x, undefined, undefined, .{}, &s); // 9 values do not fit 7
+    try std.testing.expectEqual(@as(usize, 6), s.len);
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try formatSay(MockAll, &s, "x1", &w);
+    try std.testing.expectEqualStrings("? v = 1.000 ok=1\n? v = 1.000 ok=1\n[1 display record(s) did not fit the host's buffer]\n", w.buffered());
+    try std.testing.expectEqual(@as(usize, 0), s.len);
+}
+
+test "formatC: §9.4.3's conversions as C11 7.21.6.1 prints them" {
+    const cases = [_]struct { fmt: []const u8, v: f64, want: []const u8 }{
+        .{ .fmt = "%g", .v = 0.1, .want = "0.1" },
+        .{ .fmt = "%g", .v = 1e-9, .want = "1e-09" },
+        .{ .fmt = "%g", .v = 123456789, .want = "1.23457e+08" },
+        .{ .fmt = "%g", .v = 100000, .want = "100000" },
+        .{ .fmt = "%G", .v = 2.5e-5, .want = "2.5E-05" },
+        .{ .fmt = "%.3e", .v = 1234.56, .want = "1.235e+03" },
+        .{ .fmt = "%e", .v = 0, .want = "0.000000e+00" },
+        .{ .fmt = "%8.2f|", .v = -3.14159, .want = "   -3.14|" },
+        .{ .fmt = "%-6d|", .v = 42, .want = "42    |" },
+        .{ .fmt = "%05d", .v = -42, .want = "-0042" },
+        .{ .fmt = "%+d", .v = 7, .want = "+7" },
+        .{ .fmt = "%d", .v = 2.5, .want = "3" },
+        .{ .fmt = "%h", .v = -1, .want = "ffffffffffffffff" },
+        .{ .fmt = "%o %%", .v = 8, .want = "10 %" },
+        .{ .fmt = "%b", .v = 5, .want = "101" },
+        .{ .fmt = "%c", .v = 65, .want = "A" },
+        .{ .fmt = "%r", .v = 4.7e-9, .want = "4.7n" },
+        .{ .fmt = "%r", .v = 2200, .want = "2.2k" },
+        .{ .fmt = "%g", .v = std.math.inf(f64), .want = "inf" },
+        .{ .fmt = "%m: %g", .v = 1, .want = "top.x1: 1" },
+    };
+    for (cases) |c| {
+        var buf: [128]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try formatC(c.fmt, &.{c.v}, "top.x1", &w);
+        std.testing.expectEqualStrings(c.want, w.buffered()) catch |e| {
+            std.debug.print("format \"{s}\" of {d}\n", .{ c.fmt, c.v });
+            return e;
+        };
+    }
+}
+
 /// Declares every contract member, so `AllowedPubDecl` cannot drift from
 /// `validate`: a member missing from the allowlist is a stray-pub-decl error
 /// here.
@@ -3872,6 +4155,10 @@ const MockAll = struct {
     };
     pub const Setup = struct { r: [1]f64 = @splat(std.math.nan(f64)) };
     pub const status_sites = [_]StatusSite{.{ .severity = .@"error", .fmt = "g = %g%% of %s", .file = "m.va", .line = 3 }};
+    pub const say_sites = [_]SaySite{.{ .fmt = "%s v = %.3f ok=%d\n", .file = "m.va", .line = 4, .nargs = 2 }};
+    pub fn say(comptime _: type, x: *const [n_u]f64, _: *const Model, _: *const Instance, _: SimState, out: *Say) void {
+        out.put(0, &.{ x[0] - x[1], 1 });
+    }
     pub const setup_simparams = [_][]const u8{"tnom"};
     pub fn setup(comptime V: type, m: *Model) void {
         m.su.r[0] = V.con(@floatCast(m.g)).val();

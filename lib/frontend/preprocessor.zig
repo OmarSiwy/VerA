@@ -24,6 +24,9 @@ pub const Options = struct {
     /// appends nothing. Read only with `std_defs`, because a model card's
     /// interface comes from a Table E.1 primitive.
     spice_netlist: []const u8 = "",
+    /// The file `spice_netlist` was read from, or "": its `.INCLUDE`, `.LIB`
+    /// and `.HDL` names are looked for beside it (`spice_cards.Reader`).
+    spice_path: []const u8 = "",
     /// Files that follow the compilation unit in the same text stream, in
     /// order, as files given together on a command line are (IEEE 1364-2005
     /// §13.4.1). A directive's effect carries across the boundary.
@@ -338,25 +341,33 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
 
     var netlist_modules: u32 = 0;
     var netlist_unsupported: []const []const u8 = &.{};
+    var hdl: []const []const u8 = &.{};
     if (opts.std_defs) {
         // Replayed from the process-lifetime snapshot (`Prelude`), which
         // pp/test.zig checks against a fresh `runStdDefs`.
         try pp.replayStdDefs();
         // Annex E.2 after Table E.1: a `.MODEL` wrapper instantiates the
         // primitive its type names, so the primitive has to be declared first.
-        const cards = try spice_cards.synthesize(arena, opts.spice_netlist);
+        const cards = try spice_cards.synthesize(arena, opts.spice_netlist, opts.spice_path);
         if (cards.refused.len != 0) {
             // E.1.2: a card inside a definition outside VerA's claimed SPICE
             // subset is refused, not skipped (see `spice_cards`).
-            const netlist = try opts.bag.addFile("<spice netlist>", opts.spice_netlist);
+            const ids = try pp.scratch.alloc(?diag.FileId, cards.files.len);
+            @memset(ids, null);
             for (cards.refused) |r| {
-                var b = opts.bag.build(.preprocess, .E0928, .{ .start = r.at, .end = r.at + r.len });
-                b.inFile(netlist);
+                const id = ids[r.file] orelse try opts.bag.addFile(cards.files[r.file].name, cards.files[r.file].text);
+                ids[r.file] = id;
+                var b = opts.bag.build(.preprocess, switch (r.code) {
+                    .E0928 => .E0928,
+                    .E0953 => .E0953,
+                }, .{ .start = r.at, .end = r.at + r.len });
+                b.inFile(id);
                 b.msg("{s}", .{r.why});
                 try b.emit();
             }
             return error.PreprocessFailed;
         }
+        hdl = cards.hdl;
         if (cards.modules != 0) {
             try pp.runFile(cards.text, "spice_netlist.vams", null);
             netlist_modules = cards.modules;
@@ -375,6 +386,25 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         try pp.out.append(pp.scratch, '\n');
         at.* = @intCast(pp.out.items.len);
         try pp.runFile(f.text, f.name, null);
+    }
+    // HSPICE `.HDL "model.va"` in the netlist: a Verilog-A source of the
+    // design, read after the compilation unit like a file given beside it on
+    // the command line (IEEE 1364-2005 §13.4.1), so its modules are the
+    // user's and E.3.3 selects them by name.
+    for (hdl) |path| {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_include_bytes)) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                var b = opts.bag.build(.preprocess, .E0126, .{ .start = 0, .end = 0 });
+                b.inFile(root);
+                b.msg("\"{s}\", named by the netlist's `.hdl` card ({t})", .{ path, e });
+                try b.emit();
+                return error.PreprocessFailed;
+            },
+        };
+        try pp.out.append(pp.scratch, '\n');
+        try pp.runFile(text, path, null);
     }
 
     if (pp.conds.items.len != 0) {

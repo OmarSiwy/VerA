@@ -338,18 +338,21 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/paramset_host.zig")) test_paramsets.dependOn(run_host);
-        // §9.7.3 the status channel on the GPU targets a device also builds
+        // §9.7.3 the status channel and §9.4 `say` on the GPU targets a device also builds
         // for: AMDGCN to an object; NVPTX to LLVM IR only, because `@export`
         // of a `callconv(.kernel)` function is an LLVM alias the NVPTX
         // backend refuses (a host rewrites the IR first, as Gompute does).
-        if (std.mem.eql(u8, h.host, "tests/status_host.zig")) for ([_][2][]const u8{
+        const gpu_root: ?[]const u8 = if (std.mem.eql(u8, h.host, "tests/status_host.zig"))
+            "tests/status_gpu.zig"
+        else if (std.mem.eql(u8, h.host, "tests/say_host.zig")) "tests/say_gpu.zig" else null;
+        if (gpu_root) |gpu_src| for ([_][2][]const u8{
             .{ "nvptx64-cuda", "sm_70" },
             .{ "amdgcn-amdhsa", "gfx906" },
         }) |gpu| {
             const gt = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = gpu[0], .cpu_features = gpu[1] }) catch unreachable);
             const gc = b.createModule(.{ .root_source_file = b.path("tools/contract.zig"), .target = gt, .optimize = .fast });
-            const obj = b.addObject(.{ .name = "status-gpu", .root_module = b.createModule(.{
-                .root_source_file = b.path("tests/status_gpu.zig"),
+            const obj = b.addObject(.{ .name = std.fs.path.stem(gpu_src), .root_module = b.createModule(.{
+                .root_source_file = b.path(gpu_src),
                 .target = gt,
                 .optimize = .fast,
                 .strip = true,
@@ -364,7 +367,8 @@ pub fn build(b: *std.Build) void {
                 },
             }) });
             const out = if (gt.result.cpu.arch == .nvptx64) obj.getEmittedLlvmIr() else obj.getEmittedBin();
-            test_step.dependOn(&b.addCheckFile(out, .{ .expected_matches = &.{"status_ops_kernel"} }).step);
+            const kernel = if (std.mem.eql(u8, gpu_src, "tests/say_gpu.zig")) "say_ops_kernel" else "status_ops_kernel";
+            test_step.dependOn(&b.addCheckFile(out, .{ .expected_matches = &.{kernel} }).step);
         };
     }
 
@@ -556,6 +560,7 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/revert_host.zig", .va = "tests/fixtures/ch04_expressions/revert_ops.va" },
     .{ .host = "tests/fixtures/ch09_system_tasks/bound_step_smallest_host.zig", .va = "tests/fixtures/ch09_system_tasks/bound_step_smallest_active_wins.va" },
     .{ .host = "tests/status_host.zig", .va = "tests/fixtures/ch09_system_tasks/status_ops.va" },
+    .{ .host = "tests/say_host.zig", .va = "tests/fixtures/ch09_system_tasks/say_ops.va" },
     .{ .host = "tests/port_mask_host.zig", .va = "tests/fixtures/ch09_system_tasks/port_mask.va" },
     .{ .host = "tests/table_status_host.zig", .va = "tests/fixtures/ch09_system_tasks/table_status.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_fixed.va" },
