@@ -65,7 +65,9 @@ pub fn buildDigital(model_gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Des
     const file = r.file;
     const top_name = try arena.dupe(u8, file.str(r.scope_info.items[0].name));
 
-    var scopes: std.ArrayList(Building) = .empty;
+    var n_scopes: usize = 0;
+    for (r.scope_info.items) |info| n_scopes += @intFromBool(!info.lexical);
+    var scopes: std.ArrayList(Building) = try .initCapacity(gpa, n_scopes);
     defer {
         for (scopes.items) |*s| s.deinit(gpa);
         scopes.deinit(gpa);
@@ -93,7 +95,7 @@ pub fn buildDigital(model_gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Des
         const m = &file.modules[info.def];
         const cfg = if (r.binds.get(@intCast(e))) |b| b.cfg else null;
         const mt = r.timeOf(@intCast(e));
-        try scopes.append(gpa, .{
+        scopes.appendAssumeCapacity(.{
             .time_unit = @intCast(mt.unit_exp),
             .time_precision = @intCast(mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)))),
             .decl = m,
@@ -164,15 +166,20 @@ pub fn buildDigital(model_gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Des
         for (s.nets.items) |n| if (objects.hot.items[n].slot.get()) |slot| try have.put(gpa, slot, {});
         for (m.ports) |p| try implicitNet(gpa, arena, r, &objects, s, &have, scope, top_name, p.name);
         const ex = &file.exprs;
-        var terms: std.ArrayList(Ast.ExprId) = .empty;
-        for (m.instances) |inst| for (inst.ports) |c| try terms.append(arena, c.expr);
+        var n_terms = m.gates.len + m.pulls.len + m.assigns.len;
+        for (m.instances) |inst| n_terms += inst.ports.len;
+        for (m.gates) |g| n_terms += g.ins.len;
+        for (m.switches) |sw| n_terms += sw.terms.len;
+        var terms: std.ArrayList(Ast.ExprId) = try .initCapacity(gpa, n_terms);
+        defer terms.deinit(gpa);
+        for (m.instances) |inst| for (inst.ports) |c| terms.appendAssumeCapacity(c.expr);
         for (m.gates) |g| {
-            try terms.append(arena, g.out);
-            try terms.appendSlice(arena, g.ins);
+            terms.appendAssumeCapacity(g.out);
+            terms.appendSliceAssumeCapacity(g.ins);
         }
-        for (m.switches) |sw| try terms.appendSlice(arena, sw.terms);
-        for (m.pulls) |p| try terms.append(arena, p.out);
-        for (m.assigns) |a| try terms.append(arena, a.target);
+        for (m.switches) |sw| terms.appendSliceAssumeCapacity(sw.terms);
+        for (m.pulls) |p| terms.appendAssumeCapacity(p.out);
+        for (m.assigns) |a| terms.appendAssumeCapacity(a.target);
         for (terms.items) |x| if (x != .none and ex.tag(x) == .ident) try implicitNet(gpa, arena, r, &objects, s, &have, scope, top_name, ex.strOf(x));
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
@@ -284,11 +291,12 @@ fn addConnections(b: *code.Builder, scopes: []Building, r: *const sim.digital.Ru
     for (m.instances) |*inst| {
         if (inst.range) |range| for (s.module_arrays.items) |at| {
             if (!std.mem.eql(u8, b.objects.hot.items[at].name, file.str(inst.name))) continue;
-            var conns: std.ArrayList(Ast.ExprId) = .empty;
-            for (inst.ports) |c| try conns.append(b.arena, c.expr);
+            const conns = try b.gpa.alloc(Ast.ExprId, inst.ports.len);
+            defer b.gpa.free(conns);
+            for (inst.ports, conns) |c, *e| e.* = c.expr;
             const l = try b.expr(range.msb);
             const rr = try b.expr(range.lsb);
-            const list = try b.operation(code.vpiListOp, conns.items);
+            const list = try b.operation(code.vpiListOp, conns);
             b.objects.hot.items[at].edges = try b.arena.dupe(code.Edge, &.{
                 .{ .tag = code.vpiLeftRange, .to = l },
                 .{ .tag = code.vpiRightRange, .to = rr },
@@ -481,12 +489,14 @@ fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *mode
                     .{ .prop = code.vpiImplicitDecl, .value = @intFromBool(r.scope_info.items[e].implicit) },
                 }),
             });
-            var nets: std.ArrayList(u32) = .empty;
-            for (r.gen_nets.get(e) orelse &.{}) |n| {
+            const gen_nets = r.gen_nets.get(e) orelse &.{};
+            // At most one per generated net.
+            var nets: std.ArrayList(u32) = try .initCapacity(arena, gen_nets.len);
+            for (gen_nets) |n| {
                 const slot = r.names.get(.{ .scope = e, .str = n.name }) orelse continue;
                 if (r.arrays.contains(slot)) continue;
                 const net_name = try arena.dupe(u8, r.file.str(n.name));
-                try nets.append(arena, @intCast(objects.hot.items.len));
+                nets.appendAssumeCapacity(@intCast(objects.hot.items.len));
                 try objects.append(.{
                     .kind = .net,
                     .owner = .of(k.scope),

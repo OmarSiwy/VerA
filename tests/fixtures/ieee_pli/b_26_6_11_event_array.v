@@ -3,6 +3,8 @@
 // but that does not cause an event. Thus c0=2, c1=1, selected=2 at t=5.
 // The C application adds one eva[1], descending[3], matrix[0][3] and scalar
 // occurrence at t=6; their waiters must run before its read-only callback.
+// The constant source references include wide integer indices; VPI must
+// canonicalize them to the same persistent element objects as narrow ones.
 `timescale 1ns/1ns
 module b26_event_array;
   parameter LO = -1;
@@ -37,11 +39,11 @@ module b26_event_array;
   initial begin
     c0 = 0; c1 = 0; selected = 0; desc_hits = 0;
     matrix_hits = 0; scalar_hits = 0; task_hits = 0; i = 0; retained_hits = 0;
-    #1 -> eva[0];
+    #1 -> eva[130'd0];
     #1 i = 1;
     #1 -> eva[0];
     #1 -> eva[i];
-    #1 begin -> descending[2]; -> matrix[-1][4]; -> scalar; end
+    #1 begin -> descending[130'd2]; -> matrix[-130'sd1][130'd4]; -> scalar; end
     #5 $finish(0);
   end
   always @(eva[0]) c0 = c0 + 1;

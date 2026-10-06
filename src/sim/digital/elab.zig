@@ -111,7 +111,7 @@ pub fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
         for (defs) |d| _ = try connectable(r, &r.file.modules[d], 0);
         return defs;
     }
-    var tops: std.ArrayList(u32) = .empty;
+    var tops: std.ArrayList(u32) = try .initCapacity(r.arena, modules.len); // each module once at most
     // §12.1.1: "an instantiated module is not a top", wherever it is
     // instantiated, a generate arm the scheme does not select included.
     var generated: std.ArrayList(Ast.StrId) = .empty;
@@ -127,7 +127,7 @@ pub fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
         if (for (modules[d + 1 ..], r.def_lib[d + 1 ..]) |later, l| {
             if (later.name == candidate.name and l == r.def_lib[d]) break true;
         } else false) continue;
-        try tops.append(r.arena, d);
+        tops.appendAssumeCapacity(d);
     }
     if (tops.items.len == 0) return r.fail(0, "digital execution found no top-level module", .{});
     return tops.items;
@@ -331,7 +331,10 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                     .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(e.values.items[var_slot].width, e.nets.items[net].resolved.width) } },
                     .tok = p.main_tok,
                 }),
-                .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
+                // §12.3.9.2 a select or concatenation outside: the variable
+                // drives exactly those bits, as a net port's value does.
+                .send => |c| try sendPort(r, e, p, c.operands, c.tok, var_slot, e.values.items[var_slot].width, scope, false),
+                .receive => unreachable, // `bindPort` makes `receive` for an input port only
                 .group => unreachable, // `groupPorts` takes an expression-ported module's
 
             }
@@ -400,27 +403,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                 try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok });
             },
             .group => unreachable, // `groupPorts` takes an expression-ported module's
-            .send => |c| {
-                // §6.5.7.1 joins the operands highest-order first, so the
-                // rightmost operand takes the port's low bits.
-                var lo: u32 = 0;
-                var k = c.operands.len;
-                for (c.operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
-                while (k != 0) {
-                    k -= 1;
-                    const op = c.operands[k];
-                    const w = op.width;
-                    if (lo + w > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
-                    try e.wires.append(arena, .{
-                        .net = op.net,
-                        .scope = scope,
-                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = op.lo, .width = w } },
-                        .tok = c.tok,
-                    });
-                    lo += w;
-                }
-                if (lo != width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
-            },
+            .send => |c| try sendPort(r, e, p, c.operands, c.tok, e.nets.items[at].slot, width, scope, true),
         }
     }
     // §10.4.2: "It is illegal to declare another object with the same name
@@ -431,6 +414,30 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
     try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
+}
+
+/// §12.3.9.2 an output port's value, slot `src` of `width` bits, bridged
+/// into the operands of the structural net expression it connects to.
+/// §6.5.7.1 joins them highest-order first, so the rightmost operand takes
+/// the port's low bits. `warn`: Table 12-1's net-type cells apply (a net
+/// port; a variable port has no net type to meet).
+fn sendPort(r: *Run, e: *Elab, p: Ast.Port, operands: []const Sink, tok: u32, src: u32, width: u32, scope: u32, warn: bool) Error!void {
+    if (warn) for (operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
+    var lo: u32 = 0;
+    var k = operands.len;
+    while (k != 0) {
+        k -= 1;
+        const op = operands[k];
+        if (lo + op.width > width) return r.fail(tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+        try e.wires.append(r.arena, .{
+            .net = op.net,
+            .scope = scope,
+            .source = .{ .bridge = .{ .src = src, .src_lo = lo, .dst_lo = op.lo, .width = op.width } },
+            .tok = tok,
+        });
+        lo += op.width;
+    }
+    if (lo != width) return r.fail(tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
 }
 
 /// IEEE 1364-2005 §12.2 the parameters `params` of `scope` (an instance, or a
@@ -762,8 +769,9 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]cons
     if (r.inserts.len == 0) return m.instances;
     const arena = r.arena;
     const path = try scopePath(r, scope);
-    var out: std.ArrayList(Ast.Instance) = .empty;
-    try out.appendSlice(arena, m.instances);
+    // The source's instances and at most one bridge per inserted row.
+    var out: std.ArrayList(Ast.Instance) = try .initCapacity(arena, m.instances.len + r.inserts.len);
+    out.appendSliceAssumeCapacity(m.instances);
     for (r.inserts, r.insert_segs) |row, seg| {
         if (!std.mem.eql(u8, row.path, path)) continue;
         const inst = for (out.items[0..m.instances.len]) |*it| {
@@ -793,7 +801,7 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]cons
             const conns = try arena.alloc(Ast.PortConn, 2);
             conns[0] = .{ .name = try interned(r, row.upper_port), .expr = up.expr, .main_tok = up.main_tok };
             conns[1] = .{ .name = lower, .expr = seg, .main_tok = up.main_tok };
-            try out.append(arena, .{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
+            out.appendAssumeCapacity(.{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
         }
     }
     return out.items;
@@ -2248,7 +2256,7 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] a; integer i; initial $display(\"%b\",a[i:0]); endmodule", "constant expression is required");
     try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"%b\", mem[0]); endmodule", "requires an element index");
-    try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
+    try expectRun("module m; reg [3:0] mem [0:1]; initial begin mem[65'h1] = 15; $display(\"%h\", mem[65'h1]); end endmodule", "f\n");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
     // A.2.4's `net_decl_assignment` on an undisciplined net runs.
     try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined and ground");

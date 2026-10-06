@@ -126,12 +126,12 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
         // simulation time".
         if (d.selected_at) |t| if (t != r.scheduler.now) return r.fail(tok, "§18.3.1: every $dumpports shall execute at the same simulation time", .{});
         d.selected_at = r.scheduler.now;
-        var scopes: std.ArrayList(u32) = .empty;
+        var scopes: std.ArrayList(u32) = try .initCapacity(r.arena, @max(given.len, 1));
         var name: []const u8 = "dumpports.vcd";
         for (given, 0..) |e, i| {
             if (ex.tag(e) == .ident or ex.tag(e) == .hier_ident) switch (try vcd.target(r, e)) {
                 .scope => |sc| {
-                    try scopes.append(r.arena, sc);
+                    scopes.appendAssumeCapacity(sc);
                     continue;
                 },
                 .slot => {},
@@ -140,14 +140,16 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
         }
         // "If no scope_list is specified, the scope shall be the one
         // containing the $dumpports call" (§18.3.1).
-        if (scopes.items.len == 0) try scopes.append(r.arena, r.instanceOf(r.scope));
+        if (scopes.items.len == 0) scopes.appendAssumeCapacity(r.instanceOf(r.scope));
         for (d.files.items) |f| if (std.mem.eql(u8, f.name, name)) return r.fail(tok, "§18.3.1: the same file_pathname shall not be given to two $dumpports calls", .{});
-        var ports: std.ArrayList(Port) = .empty;
+        var n_ports: usize = 0;
+        for (scopes.items) |sc| n_ports += r.file.modules[r.scope_info.items[sc].def].ports.len;
+        var ports: std.ArrayList(Port) = try .initCapacity(r.arena, n_ports);
         for (scopes.items) |sc| {
             const m = &r.file.modules[r.scope_info.items[sc].def];
             for (m.ports) |p| {
                 const slot = r.names.get(.{ .scope = sc, .str = p.name }) orelse continue;
-                try ports.append(r.arena, .{ .inst = sc, .slot = slot, .net = r.net_of.get(slot), .dir = p.direction });
+                ports.appendAssumeCapacity(.{ .inst = sc, .slot = slot, .net = r.net_of.get(slot), .dir = p.direction });
                 r.watch[slot].insert(.ports);
             }
         }

@@ -13,7 +13,7 @@ code that an external simulator links and calls inside a Newton loop.
 
 **1. Never type a conformance number. Measure it.**
 `tools/conformance.py` is the only thing that may write measures A, B and C.
-`CHANGELOG.md` is its output. `.github/workflows/publish.yaml` re-measures on
+At a release it writes them into `CHANGELOG.md` (§3). `.github/workflows/publish.yaml` re-measures on
 the runner and refuses any tag whose entry disagrees with the tree. If you find
 yourself about to write a percentage into a document, run the script instead.
 
@@ -46,8 +46,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | Document | What it is | Use it for |
 |---|---|---|
 | `git show ae9633f1:docs/ROADMAP.md` | the old v1.0.0 roadmap (deleted 2026-10-04 as outdated; a citation of `ROADMAP.md` means this revision) | history only. v1.0.0 is §2 below; open decisions and their work items are `docs/Vague_Decisions.md` |
-| `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.py`; absent until the next release) | where the project actually stands |
-| `CHANGELOGS.md` | every change since v1.0.0, one bullet each; fixes cite their GitHub issue | what changed, and where to add your own bullet (§9) |
+| `CHANGELOG.md` | every change since v1.0.0, one bullet each (fixes cite their GitHub issue); at each release, `tools/conformance.py`'s measured table under the version heading | what changed and where the project stands; where to add your own bullet (§9) |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
@@ -491,6 +490,9 @@ Learned expensively, and none of it is style preference:
 
 - **Own worktree per agent.** Two in-tree agents plus a main session shared one
   checkout; one ran `git reset --hard` and destroyed uncommitted work.
+- **No `Co-Authored-By:` trailers**, and no other AI attribution, in any commit
+  message. Every commit is authored and committed by the repository's git user
+  (`git config user.name` / `user.email`); never set `--author` to an agent.
 - **Stage by explicit path. Never `git add -A` in a shared tree.** `git commit`
   commits the *index*: a docs commit once swept in three unrelated test-file
   deletions and nothing noticed for a session.
@@ -507,7 +509,7 @@ Learned expensively, and none of it is style preference:
 
 ## 9. Before you say you are done
 
-- [ ] Your change has a bullet in `CHANGELOGS.md` under `## Unreleased`
+- [ ] Your change has a bullet in `CHANGELOG.md` under `## Unreleased`
       (see below).
 
 - [ ] `zig build test` exits 0. Checked `$?`, not a log tail.
@@ -526,13 +528,13 @@ Learned expensively, and none of it is style preference:
 - [ ] Every number you wrote came from a command, or names the document and
       date it was read from.
 
-### `CHANGELOGS.md`
+### `CHANGELOG.md`
 
-Every change since v1.0.0 adds one bullet to `CHANGELOGS.md` under
+It starts after v1.0.0 (that release's numbers are its GitHub release notes
+and `git show v1.0.0:CHANGELOG.md`). Every change adds one bullet under
 `## Unreleased`, in the same commit as the change. Keep it light: one line
 saying what a user of VerA would notice. A fix always names the GitHub issue
 it closes, as `(#123)`; open the issue first if there isn't one. At a
-release, the `## Unreleased` heading becomes the version and date, and a new
-empty `## Unreleased` starts above it. `CHANGELOGS.md` is the human record;
-`CHANGELOG.md` stays the measured one that only `tools/conformance.py`
-writes.
+release, `tools/conformance.py --changelog vX.Y.Z` turns `## Unreleased`
+into `## vX.Y.Z — date`, puts the measured table under it above the bullets,
+and opens a new empty `## Unreleased`. Only the script writes the table.

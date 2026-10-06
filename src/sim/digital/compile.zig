@@ -567,7 +567,8 @@ fn replicationCount(self: *Run, e: Ast.ExprId) Error!u32 {
 fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
     const v = try self.constant(e, self.file.exprs.mainTok(e));
     if (typeOf(self, e).real) return self.exprFail(e, "§4.8.1: a real is not a part-select bound");
-    return v.asInt() orelse self.exprFail(e, "a part-select bound cannot contain x or z");
+    if (v.hasUnknown()) return self.exprFail(e, "a part-select bound cannot contain x or z");
+    return evaluate.indexInt(v) orelse self.exprFail(e, "a part-select bound is outside the supported i64 range");
 }
 
 // IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up.
@@ -602,7 +603,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     .range => {
                         const msb = try partBound(self, ex.lhs(rg));
                         const lsb = try partBound(self, ex.rhs(rg));
-                        if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
+                        if (@abs(@as(i128, msb) - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
                         // "The first expression has to address a more
                         // significant bit than the second expression."
                         const range = self.vecRange(at);
@@ -614,7 +615,6 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     .indexed_range => {
                         const base = try inferValue(self, ex.lhs(rg), depth + 1);
                         if (base.real) return self.exprFail(ex.lhs(rg), "§4.8.1: a real is not a part-select index");
-                        if (base.width > 64) return self.exprFail(ex.lhs(rg), "bit indices wider than 64 bits are not implemented");
                         // "the width_expr shall be a positive constant
                         // integer expression". Kept as the part-select
                         // `[width-1:0]`, which only its width is read from.
@@ -626,7 +626,6 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     else => { // else: any other expression is a bit-select's index
                         const index = try inferValue(self, rg, depth + 1);
                         if (index.real) return self.exprFail(rg, "§4.8.1: a real is not a bit-select index");
-                        if (index.width > 64) return self.exprFail(rg, "bit indices wider than 64 bits are not implemented");
                         break :blk .{ .width = 1, .signed = false };
                     },
                 }
@@ -637,8 +636,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 // supplying an address for each dimension".
                 if (ex.tag(ex.rhs(x)) == .range or ex.tag(ex.rhs(x)) == .indexed_range)
                     return self.exprFail(ex.rhs(x), "§5.2.2: each array dimension takes an index, not a part-select");
-                const index = try inferValue(self, ex.rhs(x), depth + 1);
-                if (index.width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
+                _ = try inferValue(self, ex.rhs(x), depth + 1);
             }
             const base = try self.slot(x);
             if (self.events.contains(base)) return self.exprFail(e, "§9.7.3: a named event holds no data; it can only be triggered and waited on");
@@ -1694,7 +1692,6 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
         var x = e;
         while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
             try checkExpr(self, ex.rhs(x));
-            if (typeOf(self, ex.rhs(x)).width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
         }
         return;
     }
@@ -1789,7 +1786,6 @@ fn eventReference(self: *Run, e: Ast.ExprId) Error!?u32 {
         if (ex.tag(i) == .range or ex.tag(i) == .indexed_range) return self.exprFail(i, "§9.7.3: an event array takes an index, not a part-select");
         try checkExpr(self, i);
         if (typeOf(self, i).real) return self.exprFail(i, "§9.7.3: an event array index must be integral");
-        if (typeOf(self, i).width > 64) return self.exprFail(i, "array indices wider than 64 bits are not implemented");
     }
     return at;
 }
