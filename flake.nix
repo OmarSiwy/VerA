@@ -191,6 +191,9 @@
         pkgs = import (if system == "x86_64-darwin" then nixpkgs-x86_64-darwin else nixpkgs) {
           inherit system;
           config.allowUnfree = true;
+          # 26.05's "last release for x86_64-darwin" warning, on every
+          # evaluation; a no-op on nixpkgs-unstable.
+          config.allowDeprecatedx86_64Darwin = true;
         };
 
         built = veraFor pkgs;
@@ -206,7 +209,7 @@
 
         # GPU Toolchains: CUDA on Linux, ROCm on x86_64-linux. Gated by hand,
         # since `available` sees only the top package, not its dependencies.
-        cudaPkgs = lib.optionals pkgs.stdenv.isLinux (
+        cudaPkgs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (
           with pkgs.cudaPackages;
           [
             cudatoolkit # nvcc, headers, libs, nvidia-smi
