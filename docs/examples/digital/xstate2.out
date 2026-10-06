@@ -1,0 +1,1 @@
+$ "$(vera --emit-exe --state=2 xstate.v)"

@@ -1,0 +1,19 @@
+// A capacitor: I = c * dV/dt (LRM 4.5.3). The testbench ramps V(p) by 1 V
+// every microsecond; between points the testbench's backward Euler step makes
+// ddt(V) = (V_now - V_before) / dt = 1 V / 1 us, so with c = 1 nF:
+//   I = 1n * 1e6 = 1 mA at every point after the first.
+// The first point (t = 0) has no history, and ddt is 0 there.
+//! time 0, 1u, 2u, 3u
+//! wave V(p) = 0, 1, 2, 3
+//! print none
+`include "disciplines.vams"
+
+module cap(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real c = 1n from [0:inf);
+  analog begin
+    I(p, n) <+ c * ddt(V(p, n));
+    $strobe("t = %g s: V = %g V, I = %g A", $abstime, V(p, n), I(p, n));
+  end
+endmodule

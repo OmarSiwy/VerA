@@ -1,0 +1,2 @@
+$ vera --run ladder.va
+$ vera --run --param mode=1 ladder.va

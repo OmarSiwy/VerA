@@ -1,0 +1,12 @@
+//! bias V(p) = 2.0
+`include "disciplines.vams"
+
+module hello(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  analog begin
+    I(p, n) <+ V(p, n) / r;
+    $strobe("V(p,n) = %g V, I(p,n) = %g A", V(p, n), I(p, n));
+  end
+endmodule

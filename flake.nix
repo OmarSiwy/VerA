@@ -110,6 +110,16 @@
           LD_LIBRARY_PATH = gpuLibPath;
         });
 
+        # The user documentation (docs/): `mdbook build docs`, and
+        # tools/doctest.py re-running every transcript a page shows.
+        devShells.docs = pkgs.mkShell {
+          packages = commonInputs ++ [
+            pkgs.mdbook
+            pkgs.python3
+            pkgs.nodejs # the in-browser runner's smoke test (docs/runner/)
+          ];
+        };
+
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "vera";
           version = "1.0.0";

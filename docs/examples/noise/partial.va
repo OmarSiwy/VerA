@@ -1,0 +1,26 @@
+// Exercise: partially correlated noise (LRM §4.6.4.6, Example 2). n1 and n2
+// are each used once and n12 on both branches, so the table has four rows:
+// (a,b) from n1 and n12, (b,c) from n2 and n12. The shared n12 rows have the
+// same source id; n1 and n2 have ids of their own. VerA numbers generators
+// in the order they are called: n1 is #0, n2 #1, n12 #2.
+//! bias V(a) = 1.0, V(b) = 0.5
+//! noise thermal(a,b)#0
+//! noise thermal(a,b)#2
+//! noise thermal(b,c)#1
+//! noise thermal(b,c)#2
+//! print none
+`include "disciplines.vams"
+
+module partial(a, b, c);
+  inout a, b, c;
+  electrical a, b, c;
+  parameter real corr = 0.25 from [0:1];
+  real n1, n2, n12;
+  analog begin
+    n1 = white_noise(1 - corr);
+    n2 = white_noise(1 - corr);
+    n12 = white_noise(corr);
+    I(a, b) <+ 1e-9 * (n1 + n12);
+    I(b, c) <+ 1e-9 * (n2 + n12);
+  end
+endmodule

@@ -1,0 +1,27 @@
+// clip.va with separate limits: vpos = 1 V above, vneg = -0.25 V below.
+//   v = -2   -> i = g * vneg = -0.25 mA
+//   v = 0.5  -> i = 0.5 mA
+//   v = 2    -> i = g * vpos = 1 mA
+//! sweep V(p) = -2, 0.5, 2
+//! print none
+`include "disciplines.vams"
+
+module clip2(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real g = 1m from (0:inf);
+  parameter real vpos = 1 from (0:inf);
+  parameter real vneg = -0.25 from (-inf:0);
+  real v, i;
+  analog begin
+    v = V(p, n);
+    if (v > vpos)
+      i = g * vpos;
+    else if (v < vneg)
+      i = g * vneg;
+    else
+      i = g * v;
+    I(p, n) <+ i;
+    $strobe("v = %g V  i = %g A", v, i);
+  end
+endmodule

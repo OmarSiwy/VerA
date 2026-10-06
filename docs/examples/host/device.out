@@ -1,0 +1,17 @@
+$ vera --emit-zig --allow=W0650 diode.va | grep "^pub "
+pub const U = enum(u8) {
+pub const num_ports: usize = 2;
+pub const contract_abi: u32 = 6;
+pub const u_abstol = [n_u]f64{
+pub const Model = struct {
+pub const Setup = struct {
+pub const Instance = struct {
+pub const setup_simparams = [_][]const u8{};
+pub fn setup(comptime V: type, model: *Model) void {
+pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {
+pub const jac_pattern = [n_u]u64{
+pub const jac_rows: u64 = 0x0000000000000007;
+pub const deriv_reads: u64 = 0x0000000000000007;
+pub const ddx_reads: u64 = 0x0000000000000000;
+pub const jac_const = [_]contract.JacConst(U){
+pub const lane_masks = [_]contract.LaneUse{

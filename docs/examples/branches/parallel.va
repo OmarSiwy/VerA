@@ -1,0 +1,15 @@
+// Two contributions to the same branch add (LRM 5.6.1.2): 1k in parallel
+// with 4k is 800 Ohm, so 2 V draws 2/1k + 2/4k = 2.5 mA.
+//! bias V(p) = 2
+//! print none
+`include "disciplines.vams"
+
+module parallel(p, n);
+  inout p, n;
+  electrical p, n;
+  analog begin
+    I(p, n) <+ V(p, n) / 1k;
+    I(p, n) <+ V(p, n) / 4k;
+    $strobe("I(p,n) = %g A", I(p, n));
+  end
+endmodule

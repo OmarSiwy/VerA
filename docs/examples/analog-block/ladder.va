@@ -1,0 +1,30 @@
+// `count` resistors in parallel, of r, 2r, 3r, ... Their conductances add:
+//   g = (1 + 1/2 + 1/3) / r   for count = 3
+//     = 1.833333 / 1k = 1.833333 mS
+// so 0.5 V across the bank draws 0.916667 mA.
+// `mode` picks what the bank does, with a case statement:
+//   0: conduct; 1: conduct twice as much; anything else: nothing.
+//! bias V(p) = 0.5
+//! print none
+`include "disciplines.vams"
+
+module ladder(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  parameter integer count = 3 from [1:100];
+  parameter integer mode = 0;
+  real g;
+  integer k;
+  analog begin
+    g = 0;
+    for (k = 1; k <= count; k = k + 1)
+      g = g + 1 / (k * r);
+    case (mode)
+      0: I(p, n) <+ g * V(p, n);
+      1: I(p, n) <+ 2 * g * V(p, n);
+      default: I(p, n) <+ 0;
+    endcase
+    $strobe("count %d, mode %d: g = %g S, I = %g A", count, mode, g, I(p, n));
+  end
+endmodule

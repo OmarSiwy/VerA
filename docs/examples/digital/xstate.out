@@ -1,0 +1,2 @@
+$ vera --run xstate.v
+r = xxxx, w = zzzz, r + 1 = xxxx, r == 0 is x

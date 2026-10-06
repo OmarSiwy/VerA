@@ -1,0 +1,27 @@
+// A conductance that saturates: i = g*v inside [-vmax, vmax], and g*vmax
+// outside it. With g = 1 mS and vmax = 1 V the three points give
+//   v = -2   -> i = -1 mA   (clipped)
+//   v = 0.5  -> i = 0.5 mA
+//   v = 2    -> i = 1 mA    (clipped)
+//! sweep V(p) = -2, 0.5, 2
+//! print none
+`include "disciplines.vams"
+
+module clip(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real g = 1m from (0:inf);
+  parameter real vmax = 1 from (0:inf);
+  real v, i;
+  analog begin
+    v = V(p, n);
+    if (v > vmax)
+      i = g * vmax;
+    else if (v < -vmax)
+      i = -g * vmax;
+    else
+      i = g * v;
+    I(p, n) <+ i;
+    $strobe("v = %g V  i = %g A", v, i);
+  end
+endmodule

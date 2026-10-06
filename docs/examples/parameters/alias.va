@@ -1,0 +1,18 @@
+// `aliasparam` gives a parameter a second name for overrides (LRM 3.4.7).
+// The equations use the original name, r. Setting the alias to 4k gives
+// I = 1 V / 4k = 0.25 mA.
+//! param res = 4000
+//! bias V(p) = 1
+//! print none
+`include "disciplines.vams"
+
+module alias(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  aliasparam res = r;
+  analog begin
+    I(p, n) <+ V(p, n) / r;
+    $strobe("r = %g: I(p,n) = %g A", r, I(p, n));
+  end
+endmodule

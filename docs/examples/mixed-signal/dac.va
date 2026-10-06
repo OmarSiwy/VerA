@@ -1,0 +1,25 @@
+// A one-bit DAC in one module: an initial process owns the reg `q`, and
+// the analog block reads it (LRM §7.3.1, Table 7-1: a bit reads as an
+// integer). q is 0 until 5 ns and 1 after, so the output is a 0 V source
+// before and a 1.8 V source after.
+//! time 0, 2n, 4n, 6n, 8n
+//! solve
+//! print none
+`include "disciplines.vams"
+`timescale 1ns/1ns
+
+module dac1(out);
+  output out;
+  electrical out;
+  reg q;
+
+  initial begin
+    q = 0;
+    #5 q = 1;
+  end
+
+  analog begin
+    V(out) <+ (q == 1) ? 1.8 : 0.0;
+    $strobe("t = %g  q = %d  V(out) = %g", $abstime, q, V(out));
+  end
+endmodule

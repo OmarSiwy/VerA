@@ -1,0 +1,19 @@
+// Overriding a child's parameters at instantiation (LRM 6.3.3): `pair` holds
+// two `unit` resistors in parallel, one by name with r = 500, one left at
+// its default 1k. 1 V draws 1/500 + 1/1k = 3 mA.
+//! bias V(p) = 1
+`include "disciplines.vams"
+
+module unit(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  analog I(p, n) <+ V(p, n) / r;
+endmodule
+
+module pair(p, n);
+  inout p, n;
+  electrical p, n;
+  unit #(.r(500)) a(p, n);
+  unit b(p, n);
+endmodule

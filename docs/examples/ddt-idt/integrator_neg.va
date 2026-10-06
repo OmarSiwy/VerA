@@ -1,0 +1,18 @@
+// integrator.va with V(in) = -1 V and ic = 0: the output falls 1 V per
+// millisecond from 0, so V(out) = 0, -1, -2, -3 V at 0, 1, 2, 3 ms.
+//! time 0, 1m, 2m, 3m
+//! bias V(in) = -1
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module integrator_neg(in, out);
+  inout in, out;
+  electrical in, out;
+  parameter real k = 1000;
+  parameter real ic = 0;
+  analog begin
+    V(out) <+ idt(k * V(in), ic);
+    $strobe("t = %g s: V(out) = %g V", $abstime, V(out));
+  end
+endmodule

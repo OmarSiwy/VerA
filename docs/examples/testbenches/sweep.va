@@ -1,0 +1,15 @@
+// A diode swept over three forward biases. `n` is tied to ground, the
+// default for every unknown no directive names.
+//! sweep V(a) = 0.5, 0.6, 0.7
+//! print none
+`include "disciplines.vams"
+
+module sweep(a, k);
+  inout a, k;
+  electrical a, k;
+  parameter real is = 1e-14 from (0:1];
+  analog begin
+    I(a, k) <+ is * (limexp(V(a, k) / $vt) - 1);
+    $strobe("V(a,k) = %.2f V  I(a,k) = %.4e A", V(a, k), I(a, k));
+  end
+endmodule

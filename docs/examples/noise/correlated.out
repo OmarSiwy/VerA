@@ -1,0 +1,33 @@
+$ vera --run correlated.va
+=== correlated ===
+noise count got=2 want=2 ok=1
+noise[0] got=thermal(a,b)#0 want=thermal(a,b)#0 ok=1
+noise[1] got=thermal(b,c)#0 want=thermal(b,c)#0 ok=1
+--- point 0 ---
+  x[a] = 1.000000e0
+  x[b] = 5.000000e-1
+  x[c] = 0.000000e0
+warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 0 — I(a,b) — compiles with @setFloatMode(.strict)
+  --> correlated.va:16:5
+   |
+16 |     I(a, b) <+ n;
+   |     ^
+   |     - a computed expression is not provably finite
+   |
+   = note: LRM 4.3
+   = help: constrain the operands with a range or a guard the prover can see
+   = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
+   = help: run `vera --explain W0650` for a detailed explanation
+
+warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 1 — I(b,c) — compiles with @setFloatMode(.strict)
+  --> correlated.va:17:5
+   |
+17 |     I(b, c) <+ 2.0 * n;
+   |     ^
+   |     - a computed expression is not provably finite
+   |
+   = note: LRM 4.3
+   = help: constrain the operands with a range or a guard the prover can see
+   = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
+
+warning: 2 warning(s) emitted
