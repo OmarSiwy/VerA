@@ -1,0 +1,3 @@
+$ vera --run --param r=4k residual.va
+error: --param r=4k: `4k` is not a number
+(exit 2)

@@ -1,0 +1,17 @@
+// `ground` makes a net the global reference (LRM 3.6.4): it is not an
+// unknown, so the testbench prints no x[gnd]. One terminal of a branch may
+// be left out, and then it is the reference: I(a) is I(a, gnd).
+// 1.5 V across 1k is 1.5 mA.
+//! bias V(a) = 1.5
+//! print none
+`include "disciplines.vams"
+
+module grounded(a);
+  inout a;
+  electrical a, gnd;
+  ground gnd;
+  analog begin
+    I(a, gnd) <+ V(a, gnd) / 1k;
+    $strobe("V(a) = %g V, I(a) = %g A", V(a), I(a));
+  end
+endmodule

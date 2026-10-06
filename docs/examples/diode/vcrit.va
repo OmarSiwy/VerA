@@ -1,0 +1,18 @@
+// vcrit from LRM 9.17.3's formula, vte * ln(vte / (sqrt(2) * is)):
+//   0.025 * ln(0.025 / (1.41421356 * 1e-14)) = 0.025 * ln(1.76777e12)
+//                                            = 0.025 * 28.2007 = 0.70502 V
+//! print none
+`include "disciplines.vams"
+`include "constants.vams"
+
+module vcrit(a, k);
+  inout a, k;
+  electrical a, k;
+  parameter real is = 1e-14 from (0:inf);
+  parameter real vte = 0.025 from (0:inf);
+  parameter real vcrit = vte * ln(vte / (`M_SQRT2 * is));
+  analog begin
+    I(a, k) <+ is * (limexp($limit(V(a, k), "pnjlim", vte, vcrit) / vte) - 1);
+    $strobe("vcrit = %.6f V", vcrit);
+  end
+endmodule

@@ -1,0 +1,25 @@
+// A sample-and-hold, LRM §5.10.3.1's own example, on a fixed time grid.
+// V(clk) is 0 V at 0 and 1 us and 1 V from 2 us, so V(clk) - 0.5 rises
+// through zero once, somewhere in (1 us, 2 us). The testbench evaluates only
+// the declared points, so the event fires at the first point after the
+// crossing, 2 us, and samples V(in) = 0.2 there. `held` keeps that value at
+// every later point, including 4 us where the clock falls (dir = +1 ignores
+// falling crossings).
+//! time 0, 1u, 2u, 3u, 4u
+//! wave V(clk) = 0, 0, 1, 1, 0
+//! wave V(in) = 0, 0.1, 0.2, 0.3, 0.4
+//! print none
+`include "disciplines.vams"
+
+module sample_hold(in, clk, out);
+  input in, clk;
+  output out;
+  electrical in, clk, out;
+  real held;
+  analog begin
+    @(cross(V(clk) - 0.5, +1))
+      held = V(in);
+    V(out) <+ held;
+    $strobe("t = %g  V(clk) = %g  V(in) = %g  held = %g", $abstime, V(clk), V(in), held);
+  end
+endmodule

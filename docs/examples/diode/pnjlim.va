@@ -1,0 +1,33 @@
+// $limit with "pnjlim" (LRM 9.17.3). The device publishes the clamp and the
+// host applies it between Newton iterations; `//! limit` asks the device
+// what it would return. VerA's "pnjlim" is ngspice's DEVpnjlim. With
+// vte = 25 mV and vcrit = 0.6 V, Newton proposes V(ai) = 0.9 V:
+//
+//  from 0.7 V: 0.9 > vcrit and |0.9 - 0.7| > 2 * vte, the old value is
+//    positive, so the step is compressed:
+//      arg  = (0.9 - 0.7) / 0.025         = 8
+//      vnew = 0.7 + 0.025 * (2 + ln(8 - 2)) = 0.7947939867
+//    and the iteration may not stop (converged = 0).
+//  from 0.88 V: the step is 20 mV, under 2 * vte, so 0.9 V passes unchanged.
+//
+// `ai` is internal: a device clamps its own nodes, never a port.
+//! bias V(a) = 0.9, V(ai) = 0.9
+//! print none
+//! limit V(ai) = 0.7 -> V(ai) = 0.7947939867, converged = 0
+//! limit V(ai) = 0.88 -> V(ai) = 0.9, converged = 1
+`include "disciplines.vams"
+
+module pnjlim_diode(a, k);
+  inout a, k;
+  electrical a, k, ai;
+  parameter real is = 1e-14 from (0:inf);
+  parameter real rs = 10 from (0:inf);
+  parameter real vte = 0.025 from (0:inf);
+  parameter real vcrit = 0.6 from (0:inf);
+  real vd;
+  analog begin
+    I(a, ai) <+ V(a, ai) / rs;
+    vd = $limit(V(ai, k), "pnjlim", vte, vcrit);
+    I(ai, k) <+ is * (exp(vd / vte) - 1);
+  end
+endmodule

@@ -1,0 +1,12 @@
+// LRM 5.6.3's linear conductor: a flow (current) source branch.
+// At V(p) = 1 V with r = 1 kOhm the branch carries 1 mA from p to n.
+//! bias V(p) = 1
+`include "disciplines.vams"
+
+module conductor(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  branch (p, n) res;
+  analog I(res) <+ V(res) / r;
+endmodule

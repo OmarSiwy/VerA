@@ -1,0 +1,15 @@
+// `exclude` removes values from a range (LRM 3.4.2). This resistance may be
+// negative, but not zero: I = V / r is 1 V / -500 = -2 mA at r = -500.
+//! bias V(p) = 1
+//! print none
+`include "disciplines.vams"
+
+module negres(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k exclude 0;
+  analog begin
+    I(p, n) <+ V(p, n) / r;
+    $strobe("r = %g: I(p,n) = %g A", r, I(p, n));
+  end
+endmodule

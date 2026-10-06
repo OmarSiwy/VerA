@@ -1,0 +1,16 @@
+// A tabulated spectrum (LRM §4.6.4.3). The pairs are (frequency, power) and
+// may be written in any order: the simulator sorts them, so the device
+// publishes them ascending. Between knots the density is interpolated
+// linearly in (f, p).
+//! bias V(p) = 1.0
+//! noise table(p,n)#0 name=tbl interp=linear points=1:1e-18,1e3:1e-21,1e6:1e-24
+//! print none
+`include "disciplines.vams"
+
+module tabled(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  analog I(p, n) <+ V(p, n) / r
+    + noise_table('{1e6, 1e-24, 1, 1e-18, 1e3, 1e-21}, "tbl");
+endmodule

@@ -1,0 +1,59 @@
+// Exercise: the same transistor at 400.15 K, 100 K above tnom. By hand:
+//
+//   beta = 1m * (400.15 / 300.15)^-1.5 = 0.649641 mA/V^2
+//   vth  = 0.5 - 1m * 100              = 0.4 V
+//   vgs = 1.5 V, vds = 2.0 V: vgst = 1.1 V, saturation,
+//   ids  = 0.649641m / 2 * 1.1^2 * (1 + 0.02 * 2) = 0.408754 mA
+//
+// The lower mobility wins over the lower threshold: the current drops.
+//! temp 400.15
+//! bias V(s) = 0, V(g) = 1.5, V(d) = 2.0
+//! solve
+//! print none
+`include "constants.vams"
+`include "disciplines.vams"
+
+module nmos1_hot(d, g, s);
+  inout d, g, s;
+  electrical d, g, s, di, si;
+  parameter real w = 10u from (0:inf);
+  parameter real l = 1u from (0:inf);
+  parameter real kp = 100u from (0:inf);
+  parameter real vto = 0.5 from [-5:5];
+  parameter real lambda = 0.02 from [0:1];
+  parameter real rd = 0 from [0:inf);
+  parameter real rs = 0 from [0:inf);
+  parameter real cgs = 1f from [0:inf);
+  parameter real cgd = 1f from [0:inf);
+  parameter real tnom = 300.15 from (0:inf);   // kelvin
+  parameter real tcv = 1m;                     // threshold drift, V/K
+  parameter real bex = -1.5;                   // mobility exponent
+  real beta, vth, vgs, vds, vgst, ids;
+  analog begin
+    // Temperature: the card is measured at tnom.
+    beta = kp * pow($temperature / tnom, bex) * w / l;
+    vth = vto - tcv * ($temperature - tnom);
+
+    // The channel. A real model also swaps drain and source when vds < 0.
+    vgs = $limit(V(g, si), "fetlim", vth);
+    vds = V(di, si);
+    vgst = vgs - vth;
+    if (vgst <= 0)
+      ids = 0;
+    else if (vds < vgst)
+      ids = beta * (vgst - vds / 2) * vds * (1 + lambda * vds);
+    else
+      ids = beta / 2 * vgst * vgst * (1 + lambda * vds);
+    I(di, si) <+ ids;
+
+    // Series resistances; zero means a short (a switch branch, LRM §5.6.5).
+    if (rd > 0) I(d, di) <+ V(d, di) / rd; else V(d, di) <+ 0;
+    if (rs > 0) I(s, si) <+ V(s, si) / rs; else V(s, si) <+ 0;
+
+    // Gate charge: two linear capacitors, through ddt.
+    I(g, si) <+ ddt(cgs * V(g, si));
+    I(g, di) <+ ddt(cgd * V(g, di));
+
+    $strobe("vgs = %.1f V  vds = %.1f V  ids = %.5e A", V(g, s), V(d, s), ids);
+  end
+endmodule

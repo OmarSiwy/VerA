@@ -1,0 +1,14 @@
+// What a simulator sees of a capacitor: a charge q = c * V(p, n), stamped
+// +q on row p and -q on row n, which the host differentiates in time with
+// its own integration method. `//! qsite` asserts that one site, and that it
+// takes part in the truncation-error check (`lte`).
+//! qsite p+ n- lte
+//! print none
+`include "disciplines.vams"
+
+module qsite(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real c = 1n from [0:inf);
+  analog I(p, n) <+ ddt(c * V(p, n));
+endmodule

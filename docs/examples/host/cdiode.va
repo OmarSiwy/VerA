@@ -1,0 +1,16 @@
+// diode.va with a junction capacitance: the device gains charges.
+`include "disciplines.vams"
+
+module cdiode(a, k);
+  inout a, k;
+  electrical a, k, ai;
+  parameter real is = 1e-14 from (0:1];
+  parameter real n = 1.0 from [0.5:4];
+  parameter real rs = 10 from (0:inf);
+  parameter real cj = 1p from [0:inf);
+  analog begin
+    I(a, ai) <+ V(a, ai) / rs;
+    I(ai, k) <+ is * (limexp(V(ai, k) / (n * $vt)) - 1);
+    I(ai, k) <+ ddt(cj * V(ai, k));
+  end
+endmodule

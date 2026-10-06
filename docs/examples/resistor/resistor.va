@@ -1,0 +1,15 @@
+// LRM 5.6.3's linear resistor: a potential (voltage) source branch,
+// V(res) = r * I(res). The branch current is now an unknown of its own, so
+// `//! solve` lets the testbench find it: with V(p) = 1 V and V(n) = 0 V,
+// I(res) = 1 / 1k = 1 mA.
+//! bias V(p) = 1, V(n) = 0
+//! solve
+`include "disciplines.vams"
+
+module resistor(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  branch (p, n) res;
+  analog V(res) <+ r * I(res);
+endmodule

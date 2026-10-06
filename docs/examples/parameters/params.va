@@ -1,0 +1,29 @@
+// Parameter kinds (LRM 3.4). The card sets r = 2k (`//! param`), and
+// everything computed from r follows it (LRM 6.3.4):
+//   g      = 1 / 2k         = 0.5 mS
+//   rtotal = 2k * 2 stages  = 4k     (topology is "series")
+//   I      = 1 V / 4k       = 0.25 mA
+//! param r = 2000
+//! bias V(p) = 1
+//! print none
+`include "disciplines.vams"
+
+module params(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  parameter integer stages = 2 from [1:8];
+  parameter real g = 1 / r;
+  parameter string topology = "series" from '{"series", "parallel"};
+  localparam real rseries = r * stages;
+  localparam real rparallel = r / stages;
+  analog begin
+    if (topology == "series")
+      I(p, n) <+ V(p, n) / rseries;
+    else
+      I(p, n) <+ V(p, n) / rparallel;
+    $strobe("r = %g (given: %d), stages = %d, g = %g S, topology = %s",
+            r, $param_given(r), stages, g, topology);
+    $strobe("I(p,n) = %g A", I(p, n));
+  end
+endmodule

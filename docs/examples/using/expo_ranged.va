@@ -1,0 +1,9 @@
+`include "disciplines.vams"
+
+module expo_ranged(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real is = 1e-14 from (0:1];
+  parameter real vt = 0.026 from [0.01:1];
+  analog I(p, n) <+ is * (exp(V(p, n) / vt) - 1);
+endmodule

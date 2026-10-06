@@ -1,0 +1,30 @@
+// pnjlim, by hand (SPICE3's algorithm, which VerA's "pnjlim" follows):
+// vte = 25 mV and vcrit = 0.6 V. From an old junction voltage of 0.65 V,
+// Newton proposes 1.0 V. That is above vcrit and moves more than 2*vte, and
+// the old value is positive, so the step is compressed logarithmically:
+//
+//   arg  = 1 + (1.0 - 0.65) / 0.025 = 15
+//   vnew = 0.65 + 0.025 * ln(15)    = 0.7177012550
+//
+// and the iteration is not converged, since the value was changed. The
+// junction sits behind a series resistance, so the limited node `ai` is
+// internal: a device clamps only its own nodes, never a port.
+//! bias V(a) = 1.0, V(ai) = 1.0
+//! print none
+//! limit V(ai) = 0.65 -> V(ai) = 0.7177012550, converged = 0
+`include "disciplines.vams"
+
+module pnjlim(a, k);
+  inout a, k;
+  electrical a, k, ai;
+  parameter real is = 1e-14 from (0:1];
+  parameter real rs = 10 from (0:inf);
+  parameter real vte = 0.025 from (0:1];
+  parameter real vcrit = 0.6 from (0:1];
+  real vd;
+  analog begin
+    I(a, ai) <+ V(a, ai) / rs;
+    vd = $limit(V(ai, k), "pnjlim", vte, vcrit);
+    I(ai, k) <+ is * (exp(vd / vte) - 1);
+  end
+endmodule

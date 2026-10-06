@@ -1,0 +1,18 @@
+// The ideal (Shockley) diode: I = is * (exp(V / (n * $vt)) - 1).
+// $vt is kT/q at the simulation temperature (LRM 9.15), about 25.86 mV at
+// the testbench's default 300.15 K. With n = 1 the current grows tenfold for
+// every n * $vt * ln(10), about 59.6 mV of forward bias.
+//! sweep V(a) = 0.5, 0.56, 0.62
+//! print none
+`include "disciplines.vams"
+
+module diode(a, k);
+  inout a, k;
+  electrical a, k;
+  parameter real is = 1e-14 from (0:inf);
+  parameter real n = 1 from [0.5:10];
+  analog begin
+    I(a, k) <+ is * (exp(V(a, k) / (n * $vt)) - 1);
+    $strobe("$vt = %.6f V  V(a,k) = %.2f V  I = %.4e A", $vt, V(a, k), I(a, k));
+  end
+endmodule

@@ -1,0 +1,13 @@
+// A contribution inside a `for` loop is not allowed (LRM 5.9): the number of
+// times it would run is not known before the analog block runs.
+`include "disciplines.vams"
+
+module loop_contrib(p, n);
+  inout p, n;
+  electrical p, n;
+  integer k;
+  analog begin
+    for (k = 0; k < 2; k = k + 1)
+      I(p, n) <+ V(p, n) / 1k;
+  end
+endmodule

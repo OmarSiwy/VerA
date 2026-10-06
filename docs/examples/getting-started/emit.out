@@ -1,0 +1,4 @@
+$ vera --emit-zig resistor.va -o resistor.zig
+$ grep "pub fn eval(" resistor.zig
+pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {
+$ rm resistor.zig

@@ -1,0 +1,24 @@
+// ladder.va with the conductance computed once, in an analog initial block
+// (LRM 5.2.1): it reads only parameters, so it need not run at every
+// iteration. Same numbers: g = 1.833333 mS, I = 0.916667 mA at 0.5 V.
+//! bias V(p) = 0.5
+//! print none
+`include "disciplines.vams"
+
+module ladder_initial(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  parameter integer count = 3 from [1:100];
+  real g;
+  integer k;
+  analog initial begin
+    g = 0;
+    for (k = 1; k <= count; k = k + 1)
+      g = g + 1 / (k * r);
+  end
+  analog begin
+    I(p, n) <+ g * V(p, n);
+    $strobe("count %d: g = %g S, I = %g A", count, g, I(p, n));
+  end
+endmodule

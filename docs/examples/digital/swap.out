@@ -1,0 +1,2 @@
+$ vera --run swap.v
+blocking: a = 2, b = 2    nonblocking: c = 2, d = 1
