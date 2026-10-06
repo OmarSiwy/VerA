@@ -288,6 +288,12 @@ pub const MemLoad = struct {
 
     /// The W1156 text; the arguments are `outside`, then `low` and `high`.
     pub const outside_text = "memory file address @{x} is outside the memory's declared range [{d}:{d}]; its words are skipped";
+
+    /// The E1157 text, after `next` failed with `AddressOutOfRange`; the
+    /// arguments are the address (`at`), then `range_low` and `range_high`.
+    /// §17.2.9: "an error message is issued, and the load operation is
+    /// terminated": the load, not the run (#65).
+    pub const out_of_range_text = "§17.2.9: memory file address @{x} is outside the load range [{d}:{d}] the task gives; the load is terminated, the words before it stay loaded";
 };
 
 /// The interpreter's `$readmemb` / `$readmemh` (`MemLoad`).
@@ -306,6 +312,12 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
     var load: MemLoad = .init(&in.interface, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
     while (load.next(a) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
+        // An error message, the load terminated, and the run goes on.
+        error.AddressOutOfRange => {
+            const tok = ex.mainTok(args[0]);
+            const at = self.starts[@min(tok, self.starts.len - 1)];
+            return self.bag.add(.lower, .E1157, .{ .start = at, .end = at }, MemLoad.out_of_range_text, .{ load.at, load.range_low, load.range_high });
+        },
         else => |f| return self.fail(ex.mainTok(args[0]), "{s}", .{MemLoad.message(f)}),
     }) |w| try waiters.store(self, base + w.index, w.value.planes);
     if (load.mismatch()) |m| {

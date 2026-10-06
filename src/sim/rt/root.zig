@@ -677,6 +677,9 @@ pub const State = struct {
     /// no transcript, no diagnostic, no file opened, read or written, no
     /// dump. Every file descriptor reads as unknown.
     quiet: bool = false,
+    /// A run-time error was issued that does not end the run (§17.2.9's
+    /// terminated load, E1157): the run exits 1 when it ends.
+    errored: bool = false,
     io: std.Io,
     buf: [1 << 16]u8,
 
@@ -915,7 +918,7 @@ pub const State = struct {
     pub fn exit(self: *State, failed: ?Error) u8 {
         const flushed = if (self.out.flush()) true else |_| false;
         if (failed) |e| if (e != error.Failed) self.say("digital execution failed: {t}", .{e});
-        return if (failed == null and flushed) 0 else 1;
+        return if (failed == null and flushed and !self.errored) 0 else 1;
     }
 
     /// A run-time refusal in `vera --run`'s words (E1100), on stderr.
@@ -1788,11 +1791,17 @@ pub const State = struct {
 
     /// A run-time warning in `vera --run`'s words, on stderr.
     pub fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
+        self.diagnose("warning[" ++ code ++ "]: ", message, args);
+    }
+
+    /// One diagnostic line on stderr, `head` then the message, after the
+    /// transcript so far.
+    fn diagnose(self: *State, comptime head: []const u8, comptime message: []const u8, args: anytype) void {
         if (self.quiet) return;
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
         var e = std.Io.File.stderr().writerStreaming(self.io, &buf);
-        e.interface.print("warning[" ++ code ++ "]: " ++ message ++ "\n", args) catch {};
+        e.interface.print(head ++ message ++ "\n", args) catch {};
         e.interface.flush() catch {};
     }
 
@@ -1815,7 +1824,15 @@ pub const State = struct {
         const m = try a.alloc(u64, n);
         @memset(m, std.math.maxInt(u64));
         m[n - 1] = @as(u64, std.math.maxInt(u64)) >> @intCast(64 * n - width);
-        while (load.next(a) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("{s}", .{display.MemLoad.message(e)})) |w| {
+        while (load.next(a) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // An error message, the load terminated, and the run goes on.
+            error.AddressOutOfRange => {
+                self.errored = true;
+                return self.diagnose("error[E1157]: ", display.MemLoad.out_of_range_text, .{ load.at, load.range_low, load.range_high });
+            },
+            else => return self.fail("{s}", .{display.MemLoad.message(e)}),
+        }) |w| {
             const v = w.value.values();
             const x = w.value.unknowns();
             // `--two-state`: an x or z digit loads 0.

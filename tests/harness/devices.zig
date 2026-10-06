@@ -32,6 +32,9 @@ const Args = std.process.Args.Iterator;
 ///
 /// A `.v` is a case when it has `.expected.txt` or `// digital-runner: reject`;
 /// a support design with neither (a UDP library a fixture instantiates) is not.
+/// A reject with an `.expected.txt` is a run an error did not end (IEEE
+/// 1364-2005 §17.2.9's terminated load): it must fail as the reject lines say
+/// and print the transcript.
 pub const digital_dirs = [_][]const u8{ "digital", ieee1364_dir };
 pub const ieee1364_dir = "ieee1364";
 
@@ -200,17 +203,16 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
     const argv = try std.mem.concat(arena, []const u8, &.{ &.{ vera_exe, "--run", src }, try digital.runnerArgs(arena, source, std.fs.path.dirname(src).?) });
     if (digital.negative(source)) {
-        const golden = try arena.print("{s}/{s}.expected.txt", .{ options.fixture_root, case });
-        if (Io.Dir.cwd().access(io, golden, .{})) |_| {
-            try w.print("FAIL {s}: digital reject also has a positive transcript\n", .{case});
-            return false;
-        } else |_| {}
         const r = try child.capture(arena, io, argv);
         if (!digital.rejectionMatches(source, r.exit, r.stderr)) {
             try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, r.exit, r.stderr });
             return false;
         }
-        return true;
+        // A run-time error that does not end the run (IEEE 1364-2005
+        // §17.2.9's terminated load) also pins what the run printed.
+        const golden = try arena.print("{s}/{s}.expected.txt", .{ options.fixture_root, case });
+        const want = Io.Dir.cwd().readFileAlloc(io, golden, arena, .limited(1 << 20)) catch return true;
+        return diff(w, case, want, r.stdout);
     }
     const want = try Io.Dir.cwd().readFileAlloc(
         io,

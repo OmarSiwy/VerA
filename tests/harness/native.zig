@@ -210,7 +210,15 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
     };
     const stderr = try std.mem.concat(arena, u8, &.{ built.stderr, ran.stderr });
     if (negative) {
-        if (digital.rejectionMatches(source, ran.exit, stderr)) return .{ .pass = true, .fallback = fallback, .state = state };
+        if (digital.rejectionMatches(source, ran.exit, stderr)) {
+            // A rejection with a transcript (`devices.digitalCase`): the run
+            // went on after the error, and printed this.
+            const golden = try arena.print("{s}/{s}.expected.txt", .{ options.fixture_root, case });
+            const want = Io.Dir.cwd().readFileAlloc(io, golden, arena, .limited(1 << 20)) catch
+                return .{ .pass = true, .fallback = fallback, .state = state };
+            const same = if (two_state) try twoStateDiff(w, case, want, ran.stdout) else try devices.diff(w, case, want, ran.stdout);
+            return .{ .pass = same, .fallback = fallback, .state = state };
+        }
         try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, ran.exit, stderr });
         return .{ .pass = false, .fallback = fallback, .state = state };
     }

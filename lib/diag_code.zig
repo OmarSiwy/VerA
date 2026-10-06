@@ -450,6 +450,9 @@ pub const Code = enum(u16) {
     W1155,
     /// A `$readmem` file address outside the memory, with no bounds given.
     W1156,
+    /// IEEE 1364-2005 §17.2.9: a `$readmem` file address outside the
+    /// task's range; the load is terminated, the run goes on.
+    E1157,
     W1160,
     /// IEEE 1364-2005 §15: a timing check reported a violation at run time.
     W1199,
@@ -7294,6 +7297,11 @@ fn infoOf(c: Code) Info {
             .title = "memory file address outside the memory",
             .lrm = "IEEE 1364-2005 17.2.9",
             .explain = "A `$readmemb`/`$readmemh` call with no start or finish argument met an `@` address outside the memory's declared range. The clause's error for an address outside the load range applies only when the task gives addresses, so VerA does not stop the load: the words at addresses outside the memory are skipped, and loading continues at the next in-range address. The warning names the first such address (specification/Vague_Decisions.md VD-040).",
+        },
+        .E1157 => .{
+            .title = "memory file address outside the task's load range",
+            .lrm = "IEEE 1364-2005 17.2.9",
+            .explain = "A `$readmemb`/`$readmemh` call that gives a start (and finish) address met an `@` address in the file outside that range. §17.2.9 makes that an error that ends the load operation. VerA issues this error and stops that load: the words loaded before the address stay, none after it is loaded, and the simulation goes on. The run exits 1 when it ends, because an error was issued. With no start or finish argument the rule does not apply (W1156).",
         },
         .W1160 => .{
             .title = "dissimilar net types joined through a port",
