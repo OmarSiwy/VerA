@@ -400,6 +400,8 @@ class Test:
                 self.tran = (f[0], f[1], f[2])
                 self.kind = "tran"
         self.temps = self.temps or list(setup.temps)
+        if self.tran:  # `outputs I(...)` after `tran` must not make it a DC test
+            self.kind = "tran"
         if self.kind == "noise" and not self.freq:
             self.freq = "lin 1 1 1"
         if self.kind == "ac" and not self.freq:

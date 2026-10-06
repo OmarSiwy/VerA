@@ -359,8 +359,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         // ---- Jacobian entries ----------------------------------------------
 
         const Entry = struct { r: u8, c: u8, resist: bool, react: bool };
-        fn bit(row: u64, c: usize) bool {
-            return c >= 64 or (row >> @intCast(c)) & 1 != 0;
+        fn bit(row: anytype, c: usize) bool {
+            return c >= @bitSizeOf(@TypeOf(row)) or (row >> @intCast(c)) & 1 != 0;
         }
         const entries: []const Entry = blk: {
             @setEvalBranchQuota(10_000_000);
@@ -510,7 +510,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             readback(&d, &m.vals, &m.given);
         }
 
-        fn setupInstance(handle: ?*anyopaque, ip: *anyopaque, mp: *anyopaque, temperature: f64, _: u32, paras: *const SimParas, res: *InitInfo) callconv(.c) void {
+        fn setupInstance(handle: ?*anyopaque, ip: *anyopaque, mp: *anyopaque, temperature: f64, connected: u32, paras: *const SimParas, res: *InitInfo) callconv(.c) void {
             @setEvalBranchQuota(10_000_000);
             const self: *Instance = @ptrCast(@alignCast(ip));
             const m: *Model = @ptrCast(@alignCast(mp));
@@ -519,6 +519,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             _ = hostParams(&self.row, paras.*);
             overlay(&self.row, &self.vals, &self.given);
             if (@hasField(D.Model, "temperature__")) self.row.temperature__ = temperature;
+            // §9.19 `$port_connected`: ngspice connects the first
+            // `connected` terminals and makes the rest internal nodes.
+            if (@hasField(D.Model, "port_connected__"))
+                self.row.port_connected__ = if (connected >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(connected)) - 1;
             if (!derive(handle, &self.row)) res.flags |= eval_ret_flag_fatal;
             readback(&self.row, &self.vals, &self.given);
             if (@hasDecl(D, "setup")) D.setup(Val, &self.row);
