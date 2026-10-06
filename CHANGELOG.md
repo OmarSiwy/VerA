@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `tools/external_analog.py`: the external analog suites under `tests/fixtures/external/` (hand-derived OSDI decks, VA-Models against OpenVAF-Reloaded, the CMC and TU Dresden QA references, Xyce), run in `nix develop .#benchmarking`; CI job `external-analog` reports their FAIL names.
 - `` `include "discipline.h" `` and `"constants.h"`, the Verilog-A 1.0 names of the Annex D headers, now resolve to the built-ins (VD-093) (#4).
 - `vera --emit-osdi FILE.va -o out.osdi`: an OSDI 0.4 library ngspice loads with `pre_osdi` (`tools/osdi_dyn.zig`), the same device `--emit-so` builds.
 - Fix: a hosted `.v` device prints its `$display` output (to stderr) for each step the host accepts; a rejected step prints nothing, and a step past 4096 bytes is cut (#8).
