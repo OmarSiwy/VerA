@@ -541,6 +541,12 @@ pub const Run = struct {
     /// `runUntil` is running: it is not reentrant, since a nested call would
     /// reset `scratch` under the outer one.
     running: bool = false,
+    /// The stage every diagnostic raised now files under (`stage`, #72):
+    /// `.lower` while `elaborate` runs, `.run` once it returns, so an error
+    /// from `runUntil` or from a host (VPI) between its calls is the run's.
+    /// An emitter that compiles the elaborated design instead of running it
+    /// (`lib/digital/emit.zig` `program`, `device`) sets it back to `.lower`.
+    diag_stage: diag.Stage = .lower,
     /// `resolution.resolveJoined`'s scratch, likewise, and how deep its
     /// calls are: only the outermost resets it.
     resolve_scratch: std.heap.ArenaAllocator,
@@ -984,11 +990,9 @@ pub const Run = struct {
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         return self.failWith(.E1100, tok, fmt, args);
     }
-    /// The stage a diagnostic raised now belongs to: `.run` inside
-    /// `runUntil`, after the design compiled (#72); `.lower` while it
-    /// elaborates.
+    /// The stage a diagnostic raised now belongs to (`diag_stage`, #72).
     pub fn stage(self: *const Run) diag.Stage {
-        return if (self.running) .run else .lower;
+        return self.diag_stage;
     }
     /// `fail` under a rule's own code, for a refusal the analog side reports.
     pub fn failWith(self: *Run, code: diag.Code, tok: u32, comptime fmt: []const u8, args: anytype) Error {
@@ -1695,6 +1699,7 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try tchk.arm(&r);
     try waiters.buildFanout(&r);
     try driver.arm(&r);
+    r.diag_stage = .run;
     return r;
 }
 
@@ -1876,6 +1881,32 @@ test "elaborate + runUntil step the engine one bounded horizon at a time" {
     _ = try r.runUntil(std.math.maxInt(Tick));
     try std.testing.expectEqual(@as(?i64, 9), r.values[at].asInt());
     try std.testing.expectEqual(@as(?Tick, null), r.scheduler.peekTime());
+}
+
+test "an error raised once elaboration finished, between runUntil calls too, is the run's (#72)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    // An elaboration failure is still a compile error.
+    try std.testing.expectError(error.DigitalFailed, elaborate(arena.allocator(), "module m; initial disable nope; endmodule\n", .{}, &bag, &output.writer));
+    try std.testing.expectEqual(diag.Stage.lower, bag.at(bag.count() - 1).stage);
+    const compile_errs = bag.err_count;
+    var r = try elaborate(arena.allocator(), "module m; reg a; initial #5 a = 1; endmodule\n", .{}, &bag, &output.writer);
+    _ = try r.runUntil(1);
+    // What a VPI host raises between two `runUntil` calls (`vpi/run.zig`
+    // `timeSteps`'s callback-pass cap), and after the last one.
+    _ = r.fail(0, "between", .{});
+    try std.testing.expectEqual(diag.Stage.run, bag.at(bag.count() - 1).stage);
+    _ = try r.runUntil(std.math.maxInt(Tick));
+    _ = r.fail(0, "after", .{});
+    try std.testing.expectEqual(diag.Stage.run, bag.at(bag.count() - 1).stage);
+    // The summary counts the elaboration's errors only, not the two the run
+    // raised.
+    var text = std.Io.Writer.Allocating.init(arena.allocator());
+    try diag.render(&bag, &text.writer, .{});
+    const want = try std.fmt.allocPrint(arena.allocator(), "could not compile due to {d} previous error(s)", .{compile_errs});
+    try std.testing.expect(std.mem.find(u8, text.written(), want) != null);
 }
 
 test "IEEE 1364 §5.2.1 a bit-select names its bit against the declared range" {

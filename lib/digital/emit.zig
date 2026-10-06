@@ -81,6 +81,9 @@ pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedu
 }
 
 fn programDeep(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
+    // Emitting compiles `r`, it does not run it: what it raises through `r`
+    // is a compile error (#72).
+    r.diag_stage = .lower;
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = logic == .two, .auto = logic == .auto };
     if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null, .four = e.four } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -95,6 +98,7 @@ pub const Device = union(enum) { zig: []const u8, refused: []const u8 };
 /// processes and tables, then one pin per port bit, 4-state. `r` is read and
 /// its time-0 queue drained, never run.
 pub fn device(arena: std.mem.Allocator, r: *Run, file_name: []const u8, schedule: Schedule) std.mem.Allocator.Error!Device {
+    r.diag_stage = .lower; // compiled, never run: as in `programDeep` (#72)
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .device = true };
     // `rt` reads these from the root module, which in a host is the host's.
     for (r.code.items) |ins| if (ins == .override_on) return .{ .refused = "a §9.3 procedural continuous assignment (assign or force)" };

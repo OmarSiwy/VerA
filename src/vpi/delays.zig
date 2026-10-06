@@ -519,7 +519,7 @@ fn putPathDelays(m: *InterModPath, delay_p: ?*Delay) void {
     const from = &objects[m.ports[0]];
     if (r.bag.enabled(.W0251)) {
         const start = r.starts[@min(from.src_tok, r.starts.len - 1)];
-        r.bag.add(.lower, .W0251, .{ .start = start, .end = start }, "vpi_put_delays: the inter-module path from `{s}` to `{s}` holds its delays for vpi_get_delays; no simulation applies an interconnect delay", .{
+        r.bag.add(r.stage(), .W0251, .{ .start = start, .end = start }, "vpi_put_delays: the inter-module path from `{s}` to `{s}` holds its delays for vpi_get_delays; no simulation applies an interconnect delay", .{
             from.full,
             objects[m.ports[1]].full,
         }) catch {
