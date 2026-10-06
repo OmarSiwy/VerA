@@ -2268,9 +2268,16 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                 't', 'T' => {
                     arg += 1;
                     try flush(self, &text);
-                    try self.print("            try s.time(", .{});
-                    const t = try expr.selfDetermined(self, args[arg]);
-                    try self.print(", {d}, {}, {d}, {?d});\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, width });
+                    // A real operand is formatted as it is (#64).
+                    if (compile.typeOf(r, args[arg]).real) {
+                        try self.print("            try s.timeReal(", .{});
+                        try expr.real(self, args[arg]);
+                        try self.print(", {d}, {?d});\n", .{ r.timeOf(r.scope).unit_exp, width });
+                    } else {
+                        try self.print("            try s.time(", .{});
+                        const t = try expr.selfDetermined(self, args[arg]);
+                        try self.print(", {d}, {}, {d}, {?d});\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, width });
+                    }
                 },
                 's', 'S', 'c', 'C' => {
                     arg += 1;
@@ -2352,9 +2359,15 @@ fn dynamicFormat(self: *Emitter, args: []const Ast.ExprId) Error!void {
         try self.print("            switch (c{d}_{d}.conv) {{\n                'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D' => try s.value(", .{ lb, k });
         var t = try expr.selfDetermined(self, a);
         try self.print(", {d}, {}, switch (c{d}_{d}.conv) {{\n                    'b', 'B' => .binary,\n                    'o', 'O' => .octal,\n                    'h', 'H' => .hex,\n                    else => .decimal,\n                }}, c{d}_{d}.width),\n", .{ t.width, t.signed, lb, k, lb, k });
-        try self.print("                't', 'T' => try s.time(", .{});
-        t = try expr.selfDetermined(self, a);
-        try self.print(", {d}, {}, {d}, c{d}_{d}.width),\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, lb, k });
+        if (compile.typeOf(r, a).real) {
+            try self.print("                't', 'T' => try s.timeReal(", .{});
+            try expr.real(self, a);
+            try self.print(", {d}, c{d}_{d}.width),\n", .{ r.timeOf(r.scope).unit_exp, lb, k });
+        } else {
+            try self.print("                't', 'T' => try s.time(", .{});
+            t = try expr.selfDetermined(self, a);
+            try self.print(", {d}, {}, {d}, c{d}_{d}.width),\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, lb, k });
+        }
         try self.print("                's', 'S', 'c', 'C' => try s.text(", .{});
         t = try expr.selfDetermined(self, a);
         try self.print(", {d}, c{d}_{d}.conv == 'c' or c{d}_{d}.conv == 'C', c{d}_{d}.width),\n", .{ t.width, lb, k, lb, k, lb, k });

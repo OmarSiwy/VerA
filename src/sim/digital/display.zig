@@ -611,7 +611,12 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     arg += 1;
                     if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
-                    if (allocator) |a| try emitTime(self, try evaluate.eval(self, a, args[arg], 0), width);
+                    // A real operand is formatted as it is, not rounded to
+                    // a whole unit first (#64).
+                    if (allocator) |a| try emitTime(self, if (compile.typeOf(self, args[arg]).real)
+                        try evaluate.evalReal(self, a, args[arg])
+                    else
+                        fmt.timeOperand(try evaluate.eval(self, a, args[arg], 0)), width);
                     continue;
                 },
                 // §17.1.1.6 `%m` and §13.6 `%l` consume no argument: they
@@ -725,7 +730,7 @@ pub fn strength(out: *std.Io.Writer, s: Signal) std.Io.Writer.Error!void {
 
 /// `%t`; a field width in the format (`%0t`: none) replaces §17.3.2's
 /// minimum field width.
-fn emitTime(self: *Run, v: Int.Literal, width: ?u64) Error!void {
+fn emitTime(self: *Run, v: f64, width: ?u64) Error!void {
     var f = self.time_format;
     if (width) |w| f.width = w;
     try fmt.time(self.out, v, f, self.timeOf(self.scope).unit_exp);

@@ -1882,12 +1882,18 @@ pub const State = struct {
         return fmt.value(self.out, self.gpa, literal(&buf, w, signed), radix, width);
     }
 
-    /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).
+    /// One integral `%t` operand, in a module whose unit is 10^`unit_exp` s
+    /// (§17.3).
     pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
+        return self.timeReal(fmt.timeOperand(literal(&buf, w, signed)), unit_exp, width);
+    }
+
+    /// One `%t` operand of real type, formatted as it is (#64).
+    pub fn timeReal(self: *State, v: f64, unit_exp: i32, width: ?u64) Error!void {
         var f = self.time_format;
         if (width) |fw| f.width = fw;
-        try fmt.time(self.out, literal(&buf, w, signed), f, unit_exp);
+        try fmt.time(self.out, v, f, unit_exp);
     }
 
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text

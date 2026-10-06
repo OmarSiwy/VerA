@@ -83,21 +83,25 @@ pub fn text(out: *std.Io.Writer, v: Int.Literal, char: bool, width: ?u64) std.Io
 ///     value · 10^(unit_exp − units_number)
 ///
 /// and nothing here needs the precision: scaling a unit count by a ratio of
-/// decades is exact in the only direction that matters. An operand with an
-/// x or z bit prints as 0, as does a signed one wider than 64 bits; an
-/// unsigned one wider than 64 bits is read by its low 64.
-pub fn time(out: *std.Io.Writer, v: Int.Literal, f: TimeFormat, unit_exp: i32) std.Io.Writer.Error!void {
-    const raw: f64 = if (v.hasUnknown())
-        0
-    else if (v.signed)
-        @floatFromInt(v.asInt() orelse 0)
-    else
-        @floatFromInt(v.values()[0]);
-    const scaled = raw * std.math.pow(f64, 10, @floatFromInt(unit_exp - f.units));
+/// decades is exact in the only direction that matters. `t` is the
+/// operand as a real: a real operand (`$realtime`, `1.55`) as it is, never
+/// first rounded to a whole unit (§17.3.2's own example formats
+/// `$realtime`; #64), an integral one through `timeOperand`.
+pub fn time(out: *std.Io.Writer, t: f64, f: TimeFormat, unit_exp: i32) std.Io.Writer.Error!void {
+    const scaled = t * std.math.pow(f64, 10, @floatFromInt(unit_exp - f.units));
     const len = std.fmt.count("{d:.[1]}", .{ scaled, f.precision }) + f.suffix.len;
     if (len < f.width) try out.splatByteAll(' ', f.width - len);
     try out.print("{d:.[1]}", .{ scaled, f.precision });
     try out.writeAll(f.suffix);
+}
+
+/// An integral `%t` operand as the real `time` formats: one with an x or z
+/// bit is 0, as is a signed one wider than 64 bits; an unsigned one wider
+/// than 64 bits is read by its low 64.
+pub fn timeOperand(v: Int.Literal) f64 {
+    if (v.hasUnknown()) return 0;
+    if (v.signed) return @floatFromInt(v.asInt() orelse 0);
+    return @floatFromInt(v.values()[0]);
 }
 
 /// 10^e seconds in §19.8's spelling: 1, 10 or 100 of s, ms, us, ns, ps, fs.
@@ -437,7 +441,7 @@ test "%t scales a unit count to $timeformat's units and pads to its width (§17.
     var w: std.Io.Writer = .fixed(&out_buf);
     // 1500 units of 1 ns is 1500000 ps: 7 digits in the default 20 columns.
     var p = [2]u64{ 1500, 0 };
-    const v = lit(&p, 64, false);
+    const v = timeOperand(lit(&p, 64, false));
     try time(&w, v, .{ .units = -12 }, -9);
     try testing.expectEqualStrings("             1500000", w.buffered());
     w.end = 0;
@@ -450,13 +454,18 @@ test "%t scales a unit count to $timeformat's units and pads to its width (§17.
     w.end = 0;
     // Signed: -5 units of 1 ns in ns.
     var n = [2]u64{ @bitCast(@as(i64, -5)), 0 };
-    try time(&w, lit(&n, 64, true), .{ .units = -9, .width = 0 }, -9);
+    try time(&w, timeOperand(lit(&n, 64, true)), .{ .units = -9, .width = 0 }, -9);
     try testing.expectEqualStrings("-5", w.buffered());
     w.end = 0;
     // An x bit reads as no time at all.
     var x = [2]u64{ 1, 1 };
-    try time(&w, lit(&x, 64, false), .{ .units = -9, .width = 0 }, -9);
+    try time(&w, timeOperand(lit(&x, 64, false)), .{ .units = -9, .width = 0 }, -9);
     try testing.expectEqualStrings("0", w.buffered());
+    w.end = 0;
+    // A real operand is not rounded to a whole unit first (#64): 1.55 units
+    // of 10 ns is 15.5 ns.
+    try time(&w, 1.55, .{ .units = -9, .precision = 3, .width = 0 }, -8);
+    try testing.expectEqualStrings("15.500", w.buffered());
 }
 
 test "a group radix prints x and z per digit, lowercase when the whole group is unknown (§17.1.1.4)" {
