@@ -218,7 +218,7 @@ pub fn random(self: *Run, a: std.mem.Allocator, f: Dist, args: []const Ast.ExprI
     const y = if (args.len > 2) try long(self, a, args[2]) else 0;
     const d = dist(f, seed, x, y) orelse {
         const start = self.starts[@min(tok, self.starts.len - 1)];
-        try self.bag.add(.lower, .W1151, .{ .start = start, .end = start }, dist_warning, .{});
+        try self.bag.add(self.stage(), .W1151, .{ .start = start, .end = start }, dist_warning, .{});
         return 0;
     };
     try evaluate.assignInt(self, a, args[0], d.seed);
@@ -513,7 +513,7 @@ pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show
     self.out = saved;
     if (try channels(table(self), self.io, self.out, d, buf.written())) {
         const start = self.starts[@min(self.file.exprs.mainTok(args[0]), self.starts.len - 1)];
-        try self.bag.add(.lower, .W1154, .{ .start = start, .end = start }, unwritten, .{});
+        try self.bag.add(self.stage(), .W1154, .{ .start = start, .end = start }, unwritten, .{});
     }
 }
 

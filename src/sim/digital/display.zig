@@ -316,19 +316,19 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
         error.AddressOutOfRange => {
             const tok = ex.mainTok(args[0]);
             const at = self.starts[@min(tok, self.starts.len - 1)];
-            return self.bag.add(.lower, .E1157, .{ .start = at, .end = at }, MemLoad.out_of_range_text, .{ load.at, load.range_low, load.range_high });
+            return self.bag.add(self.stage(), .E1157, .{ .start = at, .end = at }, MemLoad.out_of_range_text, .{ load.at, load.range_low, load.range_high });
         },
         else => |f| return self.fail(ex.mainTok(args[0]), "{s}", .{MemLoad.message(f)}),
     }) |w| try waiters.store(self, base + w.index, w.value.planes);
     if (load.mismatch()) |m| {
         const tok = ex.mainTok(args[0]);
         const at = self.starts[@min(tok, self.starts.len - 1)];
-        try self.bag.add(.lower, .W1150, .{ .start = at, .end = at }, MemLoad.mismatch_text, .{ m.found, m.expected });
+        try self.bag.add(self.stage(), .W1150, .{ .start = at, .end = at }, MemLoad.mismatch_text, .{ m.found, m.expected });
     }
     if (load.outside) |o| {
         const tok = ex.mainTok(args[0]);
         const at = self.starts[@min(tok, self.starts.len - 1)];
-        try self.bag.add(.lower, .W1156, .{ .start = at, .end = at }, MemLoad.outside_text, .{ o, arr.low, arr.high });
+        try self.bag.add(self.stage(), .W1156, .{ .start = at, .end = at }, MemLoad.outside_text, .{ o, arr.low, arr.high });
     }
 }
 
@@ -506,7 +506,7 @@ pub const sformat_mismatch = "$sformat: the format's specifiers and the argument
 
 fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     const at = self.starts[@min(self.file.exprs.mainTok(e), self.starts.len - 1)];
-    try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
+    try self.bag.add(self.stage(), .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
 /// §17.1.1.2 one real conversion (`%e %f %g`, §9.4.7 `%r`): C's text under

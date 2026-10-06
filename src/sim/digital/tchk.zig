@@ -510,7 +510,7 @@ fn violation(r: *Run, i: u32, stamp: u64, check: u64) Error!void {
         @import("evcd.zig").path(r, &path.writer, c.scope) catch return error.OutOfMemory;
         const scale = r.timeOf(c.scope).scale;
         const start = r.starts[@min(c.tok, r.starts.len - 1)];
-        try r.bag.add(.lower, .W1199, .{ .start = start, .end = start }, "`${s}` in {s}: timestamp event at {d}, timecheck event at {d}", .{
+        try r.bag.add(r.stage(), .W1199, .{ .start = start, .end = start }, "`${s}` in {s}: timestamp event at {d}, timecheck event at {d}", .{
             @tagName(c.kind),
             path.written(),
             scale.realAt(stamp),

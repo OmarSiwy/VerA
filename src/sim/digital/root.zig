@@ -984,10 +984,16 @@ pub const Run = struct {
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         return self.failWith(.E1100, tok, fmt, args);
     }
+    /// The stage a diagnostic raised now belongs to: `.run` inside
+    /// `runUntil`, after the design compiled (#72); `.lower` while it
+    /// elaborates.
+    pub fn stage(self: *const Run) diag.Stage {
+        return if (self.running) .run else .lower;
+    }
     /// `fail` under a rule's own code, for a refusal the analog side reports.
     pub fn failWith(self: *Run, code: diag.Code, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         const start = self.starts[@min(tok, self.starts.len - 1)];
-        self.bag.add(.lower, code, .{ .start = start, .end = start }, fmt, args) catch return error.OutOfMemory;
+        self.bag.add(self.stage(), code, .{ .start = start, .end = start }, fmt, args) catch return error.OutOfMemory;
         return error.DigitalFailed;
     }
     /// `fail` at expression `e`'s main token, with a fixed message.

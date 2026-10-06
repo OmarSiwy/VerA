@@ -1198,6 +1198,25 @@ test "render: the summary line counts errors and warnings" {
     try std.testing.expect(std.mem.endsWith(u8, try renderToString(&warns, .{}), "\nwarning: 2 warning(s) emitted\n"));
 }
 
+test "render: a run-time error is no compile failure (#72)" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Only `.run` errors: the error lines alone, as the native runtime prints.
+    var ran = diag_bag.Bag.init(arena);
+    try ran.add(.run, .E1157, diag.Span.none, "", .{});
+    const out = try renderToString(&ran, .{});
+    try std.testing.expect(std.mem.find(u8, out, "could not compile") == null);
+    try std.testing.expect(std.mem.startsWith(u8, out, "error[E1157]"));
+    try std.testing.expect(ran.failed());
+    // A warning beside it is still counted; a compile error still is too.
+    try ran.add(.lower, .W1150, .at(1), "", .{});
+    try std.testing.expect(std.mem.endsWith(u8, try renderToString(&ran, .{}), "\nwarning: 1 warning(s) emitted\n"));
+    try ran.add(.lower, .E1100, .at(2), "", .{});
+    try std.testing.expect(std.mem.endsWith(u8, try renderToString(&ran, .{}), "\nerror: could not compile due to 1 previous error(s); 1 warning(s) emitted\n"));
+}
+
 test "render: a capped bag says how many it dropped" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();

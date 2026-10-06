@@ -135,10 +135,17 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
             p.warn, "warning", p.reset, bag.suppressed, diag_bag.max_entries,
         });
     }
-    if (opts.summary and (bag.err_count != 0 or bag.warn_count != 0)) {
-        if (bag.err_count != 0) {
+    // A `.run` error was raised after the design compiled: it is its own
+    // report, as the native runtime prints it, and no compile failure (#72).
+    var compile_errs: u32 = 0;
+    for (0..bag.count()) |i| {
+        const e = bag.at(i);
+        if (e.severity == .err and e.stage != .run) compile_errs += 1;
+    }
+    if (opts.summary and (compile_errs != 0 or bag.warn_count != 0)) {
+        if (compile_errs != 0) {
             try w.print("{s}error{s}: could not compile due to {d} previous error(s)", .{
-                p.err, p.reset, bag.err_count,
+                p.err, p.reset, compile_errs,
             });
             if (bag.warn_count != 0) try w.print("; {d} warning(s) emitted", .{bag.warn_count});
             try w.writeByte('\n');

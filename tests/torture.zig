@@ -382,7 +382,7 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
         if (std.mem.eql(u8, pattern, "ParseError")) {
             for (0..f.diags.count()) |i| switch (f.diags.at(i).stage) {
                 .preprocess, .parse => {},
-                .lower, .proof, .codegen => return false,
+                .lower, .proof, .codegen, .run => return false,
             };
             return true;
         }

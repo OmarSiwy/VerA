@@ -11,8 +11,10 @@ const Severity = diag.Severity;
 
 /// Which stage produced the diagnostic. Kept for filtering and for the JSON
 /// output; the code's class digits say the same thing, but a stage is what a
-/// person debugging the ENGINE wants to filter on.
-pub const Stage = enum(u8) { preprocess, parse, lower, proof, codegen };
+/// person debugging the ENGINE wants to filter on. `run`: raised while a
+/// design runs (the digital interpreter), after it compiled, so the
+/// renderer's "could not compile" summary does not count it.
+pub const Stage = enum(u8) { preprocess, parse, lower, proof, codegen, run };
 
 /// Index into `Bag.string_bytes`, at the first byte of a NUL-terminated
 /// string. 0 means "no string": byte 0 of the pool is a sentinel NUL, so no
