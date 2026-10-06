@@ -777,7 +777,8 @@ fn infoOf(c: Code) Info {
             \\path as written, and looks for a relative one in the directory of
             \\the file that holds the `include, then in each -I directory in
             \\order, then among the built-in annex D standard definitions
-            \\(disciplines.vams, constants.vams).
+            \\(disciplines.vams, constants.vams, and their Verilog-A 1.0 names
+            \\discipline.h and constants.h).
             \\
             \\Note that annex D headers are built in: including them works
             \\with no search path configured at all.
