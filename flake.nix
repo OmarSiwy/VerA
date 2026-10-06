@@ -50,46 +50,51 @@
           # `.override { zigJobs = 8; }` on a machine with the memory for it.
           zigJobs ? 2,
         }:
-        stdenv.mkDerivation {
-          pname = "vera";
-          version = "${latest}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
-          # Only what `zig build install` reads: docs/ and tests/ are 33 MB
-          # that would rebuild the package on every fixture edit.
-          src = lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./build.zig
-              ./build.zig.zon
-              ./lib
-              ./src
-              ./tools
+        stdenv.mkDerivation (
+          {
+            pname = "vera";
+            version = "${latest}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
+            # Only what `zig build install` reads: docs/ and tests/ are 33 MB
+            # that would rebuild the package on every fixture edit.
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                ./build.zig
+                ./build.zig.zon
+                ./lib
+                ./src
+                ./tools
+              ];
+            };
+            nativeBuildInputs = [
+              zig
+              makeWrapper
             ];
-          };
-          nativeBuildInputs = [
-            zig
-            makeWrapper
-          ];
-          dontConfigure = true;
-          dontBuild = true;
-          # -Dcpu=baseline: the default is the build machine's CPU, and a
-          # substituted binary must run on any CPU of the system.
-          installPhase = ''
-            runHook preInstall
-            # The environment, not --global-cache-dir: the build runner's own
-            # children read it, and $HOME does not exist in the sandbox.
-            export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-cache
-            zig build install -j${toString zigJobs} \
-              -Doptimize=ReleaseFast -Dcpu=baseline --prefix "$out"
-            ${wrapZig zig}
-            runHook postInstall
-          '';
-          meta = {
-            description = "Verilog-AMS compiler: Verilog-A to Zig device code";
-            homepage = "https://github.com/OmarSiwy/VerA";
-            license = lib.licenses.asl20;
-            mainProgram = "vera";
-          };
-        };
+            dontConfigure = true;
+            dontBuild = true;
+            # -Dcpu=baseline: the default is the build machine's CPU, and a
+            # substituted binary must run on any CPU of the system.
+            installPhase = ''
+              runHook preInstall
+              # The environment, not --global-cache-dir: the build runner's own
+              # children read it, and $HOME does not exist in the sandbox.
+              export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-cache
+              zig build install -j${toString zigJobs} \
+                -Doptimize=ReleaseFast -Dcpu=baseline --prefix "$out"
+              ${wrapZig zig}
+              runHook postInstall
+            '';
+            meta = {
+              description = "Verilog-AMS compiler: Verilog-A to Zig device code";
+              homepage = "https://github.com/OmarSiwy/VerA";
+              license = lib.licenses.asl20;
+              mainProgram = "vera";
+            };
+          }
+          # Zig's linker signs the Mach-O ad hoc; strip would void it. Unproven
+          # on a Mac here, so left as the release package does it.
+          // lib.optionalAttrs stdenv.hostPlatform.isDarwin { dontStrip = true; }
+        );
 
       # A release binary (sources.json). Statically linked on Linux, so
       # nothing to patch; not stripped, so the Darwin ad-hoc signature holds.
