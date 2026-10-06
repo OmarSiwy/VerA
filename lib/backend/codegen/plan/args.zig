@@ -10,12 +10,16 @@ const Input = @import("input.zig").Input;
 
 /// What to do with the §9.4 display tasks a model contains.
 ///
-/// `.drop` is the default: a device runs in the solver's inner loop, on a
-/// batch, sometimes on a GPU, where a print is a per-iteration syscall or does
-/// not compile at all (SPIR-V/PTX). So a device never prints, and a source
-/// that asked to is told so (W0850). `.emit` is the runnable testbench
-/// (`--emit-exe`, tb.zig), where the text is the point.
-pub const Display = enum { drop, emit };
+/// A device runs in the solver's inner loop, on a batch, sometimes on a GPU,
+/// where a print is a per-iteration syscall or does not compile at all
+/// (SPIR-V/PTX), so a device never prints. `.record` (a device's default)
+/// gives it `say` instead: one entry point, outside `eval`, that a host calls
+/// at an accepted point and that records each display task it runs as a
+/// site index and its numeric values in a host-lent `contract.Say`
+/// (`contract.SaySite`); what cannot be recorded is told so (W0850). `.drop`
+/// is a device without that entry point, every task void (W0850). `.emit` is
+/// the runnable testbench (`--emit-exe`, tb.zig), where the text is the point.
+pub const Display = enum { drop, record, emit };
 
 /// Is argument `i` of this call rendered as a value the calling unit must
 /// compute? The others are consumed at codegen time: analysis names (§4.6.1),
@@ -51,7 +55,8 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         => (enableArgIdx(Mir.callee.opKind(c)) orelse return false) == i,
         // §5.10.3.3 a latest period participates in the event condition too.
         .timer => i == 1 or i == 3,
-        // §9.4.1/§9.7.3 the printing tasks.
+        // §9.4.1/§9.7.3 the printing tasks: rendered by a printing artifact,
+        // and recorded by a device's `say` (`contract.SaySite`)...
         .@"$display",
         .@"$displayb",
         .@"$displayo",
@@ -64,12 +69,15 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$strobeb",
         .@"$strobeo",
         .@"$strobeh",
-        .@"$monitor",
         .@"$debug",
-        .@"$fatal",
-        .@"$error",
         .@"$warning",
         .@"$info",
+        => display != .drop,
+        // ...except a monitor, whose change detection a device does not
+        // keep, and the two §9.7.3 tasks a device reports as a status.
+        .@"$monitor",
+        .@"$fatal",
+        .@"$error",
         => display == .emit,
         // §9.5 every operand is live: the path, the type, the descriptor, the
         // control string, the offset. `emitCall` renders them all, in the
@@ -244,4 +252,10 @@ test "callArgIsValue: the display-gated prongs are the printing and §9.5 famili
         const want = Mir.callee.family(c) == .display or Mir.callee.isFileCall(c);
         try std.testing.expectEqual(want, callArgIsValue(c, 5, .emit) and !callArgIsValue(c, 5, .drop));
     }
+    // `.record` keeps what a device's `say` records, and none of the §9.5
+    // family, `$monitor` or the §9.7.3 status pair.
+    try std.testing.expect(callArgIsValue(.@"$strobe", 0, .record));
+    try std.testing.expect(callArgIsValue(.@"$warning", 0, .record));
+    for ([_]Mir.Callee{ .@"$monitor", .@"$fatal", .@"$error", .@"$fdisplay" }) |c|
+        try std.testing.expect(!callArgIsValue(c, 0, .record));
 }

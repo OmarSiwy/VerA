@@ -696,6 +696,19 @@ pub const runner_body =
     \\    if (stepPost(model, inst, x, state, solved_t)) |r3| retry(r3, n, x, forced, model, inst, state, depth + 1);
     \\}
     \\
+    \\/// §9.4 a device built `--display=record` prints nothing itself: what its
+    \\/// `say` records at this accepted point, rendered by `contract.formatSay`.
+    \\fn sayPoint(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime !@hasDecl(D, "say")) return;
+    \\    var store: [4096]f64 = undefined;
+    \\    var s: contract.Say = .{ .buf = &store };
+    \\    D.say(Dual, x, model, inst, sim_state, &s);
+    \\    var text: [65536]u8 = undefined;
+    \\    var w: std.Io.Writer = .fixed(&text);
+    \\    contract.formatSay(D, &s, title, &w) catch {};
+    \\    std.debug.print("{s}", .{w.buffered()});
+    \\}
+    \\
     \\const u_names = blk: {
     \\    const f = @typeInfo(D.U).@"enum".field_names;
     \\    var names: [f.len][]const u8 = undefined;
@@ -733,6 +746,7 @@ pub const runner_body =
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.
     \\    if (@hasDecl(D, "display")) D.display(Dual, x, model, inst, sim_state);
+    \\    sayPoint(x, model, inst);
     \\    if (!print_residual) return;
     \\
     \\    const res = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
@@ -1055,6 +1069,7 @@ pub const vpi_lib_body =
     \\/// reads its history from.
     \\export fn vera_vpi_accept() callconv(.c) void {
     \\    if (@hasDecl(D, "display")) D.display(Dual, &g_x, &g_model, &g_inst, sim_state);
+    \\    sayPoint(&g_x, &g_model, &g_inst);
     \\    if (stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved)) |r| retryUnsupported(r);
     \\}
     \\const n_rows = if (@hasDecl(D, "vpiContribs")) D.vpi_contrib_access.len else 0;

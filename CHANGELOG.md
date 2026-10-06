@@ -4,6 +4,8 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: a device built for a simulator no longer drops its `$strobe`/`$display`/`$write`/`$debug`/`$warning`/`$info` (W0850): it publishes `say_sites` and `say`, which a host calls once per accepted point to collect records into a buffer it lends (`contract.Say`) and prints with `contract.formatSay`; VerA's testbench (`--display=record`) and `sim.spice` print them, `--display=drop` keeps the old device, and W0850 now names only what is still dropped (`$monitor`, `$finish`/`$stop`, file tasks) (#10).
+- Fix: a `--spice` `.subckt` may hold M, Q, J and D cards: each instantiates its model, a `.model`'s Verilog-A module type (BSIM-CMG, BSIM4, ...) with the card's parameters over the model card's and `M=` as `$mfactor`, or a module of that name; `.include`, `.lib file entry` and `.hdl` are read, netlist names match the design's regardless of case, and a card whose model is a behaviourless Table E.1 `nmos`/`npn`/`d` is refused at the card (E0953) (#9).
 - Fix: a hosted `.v` device prints its `$display` output (to stderr) for each step the host accepts; a rejected step prints nothing, and a step past 4096 bytes is cut (#8).
 - Fix: a `.v` device holds up to 65535 pins (was 256), and past 64 its `deriv_reads`/`ddx_reads`/`jac_pattern` are declared in `contract.MaskOf(|U|)`: one derivative lane per output row instead of a dense Jacobian. The contract accepts any unsigned `U` tag of 8 bits or more; `contract.Mask(D)` is a device's mask type (u64 for every device that declares no wide mask) (#5).
 - Fix: an `output reg` port connected to a bit-select, part-select or concatenation drives exactly those bits (IEEE 1364-2005 §12.3.9.2), no longer E1100 (#6).

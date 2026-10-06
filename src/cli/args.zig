@@ -66,7 +66,11 @@ pub const usage_text =
     \\                          whose file_path_spec matches it, else `work`
     \\  -L LIB                  search LIB for an instance's cell (repeatable, in
     \\                          order; IEEE 1364 §13.7.1); default: map order, then work
-    \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
+    \\  --display=record|drop|emit
+    \\                          ch9 display tasks: recorded by the device's `say`
+    \\                          for its host to print (default), void, or
+    \\                          printed (--emit-exe's default; with record the
+    \\                          testbench prints the device's records)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
     \\  --jac-f32-host          ...and ask the host to use it on its CPU path
     \\  --validate-contract     run the contract's conformance checks (validate,
@@ -149,7 +153,7 @@ pub const Cli = struct {
     emit_so: bool = false,
     /// `--run`; `exe_flag` is set too.
     run_exe: bool = false,
-    display: vera.codegen.Display = .drop,
+    display: vera.codegen.Display = .record,
     jac_f32: bool = false,
     jac_f32_host: bool = false,
     // What the user typed, kept apart from the derived state above so
@@ -157,6 +161,9 @@ pub const Cli = struct {
     // order.
     lint_flag: bool = false,
     display_drop_flag: bool = false,
+    /// `--display=record`: with `--emit-exe`, the testbench prints what the
+    /// device's `say` records instead of printing in the device.
+    display_record_flag: bool = false,
     /// The last flag that implies codegen.
     codegen_flag: ?[]const u8 = null,
     /// `--emit-exe` or `--run`, whichever was typed last.
@@ -241,9 +248,15 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
         } else if (std.mem.eql(u8, arg, "--display=emit")) {
             cli.display = .emit;
             cli.display_drop_flag = false;
+            cli.display_record_flag = false;
         } else if (std.mem.eql(u8, arg, "--display=drop")) {
             cli.display = .drop;
             cli.display_drop_flag = true;
+            cli.display_record_flag = false;
+        } else if (std.mem.eql(u8, arg, "--display=record")) {
+            cli.display = .record;
+            cli.display_drop_flag = false;
+            cli.display_record_flag = true;
         } else if (std.mem.eql(u8, arg, "--validate-contract")) {
             cli.validate_contract = true;
         } else if (std.mem.eql(u8, arg, "--jac-f32")) {

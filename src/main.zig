@@ -62,6 +62,9 @@ pub fn main(init: std.process.Init) !u8 {
         );
         return 2;
     };
+    // §9.4 a testbench over the device a host gets: it prints the records
+    // the device's `say` makes, whichever flag came first.
+    if (cli.exe_flag != null and cli.display_record_flag) cli.display = .record;
     if (cli.validate_contract and cli.exe_flag == null) {
         try err.writeAll("error: `--validate-contract` turns the checks on in an --emit-exe or --run " ++
             "testbench; --check always runs them\n");
@@ -217,13 +220,15 @@ fn compileAnalog(
         .file_name = in_path,
         .include_dirs = cli.include_dirs.items,
         .spice_netlist = netlist,
+        .spice_path = cli.spice_path orelse "",
         .std_defs = cli.std_defs,
         .language = cli.language,
         .diags = &bag,
         .lint = cli.levels,
         .proof = .{ .unknown_bound = cli.unknown_bound },
         .discipline_resolution = cli.discipline_resolution,
-        .display = cli.display,
+        // `//! display record` asks a testbench for the device a host gets.
+        .display = if (directives.display_record) .record else cli.display,
         .jac_f32 = cli.jac_f32,
         .jac_f32_host = cli.jac_f32_host,
         .param_overrides = cli.overrides.items,

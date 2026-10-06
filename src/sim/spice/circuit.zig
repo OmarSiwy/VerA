@@ -188,6 +188,25 @@ pub fn Circuit(comptime D: type) type {
             return false;
         }
 
+        /// §9.4 the device's display output for the point `x` the analysis is
+        /// accepting, to stderr: what a `.record` device's `say` records,
+        /// rendered by `contract.formatSay`, or a printing device's own
+        /// `display`. Called before the commit, so the device reads the
+        /// `Instance` `eval` saw (`saved_inst`; §9.4.6: no display task but
+        /// `$debug` shows output unless an iteration has been accepted).
+        pub fn say(self: *const Self, x: []const f64) void {
+            var inst = self.saved_inst;
+            if (@hasDecl(D, "say")) {
+                var store: [4096]f64 = undefined;
+                var rec: contract.Say = .{ .buf = &store };
+                D.say(Dual, x[0..n_u], self.model, &inst, self.sim, &rec);
+                var text: [65536]u8 = undefined;
+                var w: std.Io.Writer = .fixed(&text);
+                contract.formatSay(D, &rec, "", &w) catch {};
+                std.debug.print("{s}", .{w.buffered()});
+            } else if (@hasDecl(D, "display")) D.display(Dual, x[0..n_u], self.model, &inst, self.sim);
+        }
+
         /// §9.17.2 the tightest `$bound_step` the device asked for, or null.
         /// Only meaningful after an accepted step ran `updateStates`.
         pub fn boundStep(self: *const Self) ?f64 {
