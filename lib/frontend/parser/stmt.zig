@@ -363,7 +363,7 @@ fn parseDelay(self: *Parser) Error!Ast.ExprId {
     self.in_digital_delay = true;
     defer self.in_digital_delay = saved_delay;
     if (!self.eat(.lparen)) return parse_expr.parsePrimary(self);
-    const value = try parse_expr.parseExpr(self);
+    const value = try parse_expr.parseMinTypMax(self);
     _ = try self.expect(.rparen);
     return value;
 }
