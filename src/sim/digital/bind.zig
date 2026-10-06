@@ -35,10 +35,10 @@ pub fn libraries(r: *Run, file: *Ast.SourceFile, opts: root.Options, more_starts
     for (file.modules, def_lib) |m, *l| l.* = libs[unitOf(r, more_starts, m.main_tok)];
     const cfg_lib = try arena.alloc(Ast.StrId, file.configs.len);
     for (file.configs, cfg_lib) |c, *l| l.* = libs[unitOf(r, more_starts, c.main_tok)];
-    var order: std.ArrayList(Ast.StrId) = .empty;
+    var order: std.ArrayList(Ast.StrId) = try .initCapacity(arena, if (opts.search.len != 0) opts.search.len else libs.len);
     if (opts.search.len != 0) {
-        for (opts.search) |s| try order.append(arena, try file.intern(arena, s));
-    } else for (libs) |l| if (std.mem.indexOfScalar(Ast.StrId, order.items, l) == null) try order.append(arena, l);
+        for (opts.search) |s| order.appendAssumeCapacity(try file.intern(arena, s));
+    } else for (libs) |l| if (std.mem.indexOfScalar(Ast.StrId, order.items, l) == null) order.appendAssumeCapacity(l);
     r.def_lib = def_lib;
     r.cfg_lib = cfg_lib;
     r.search = order.items;

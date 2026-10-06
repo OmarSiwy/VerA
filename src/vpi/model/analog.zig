@@ -68,7 +68,7 @@ pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design
     const units = if (lowered.unit_paths.len != 0) lowered.unit_paths else &[_]Elaborate.UnitPath{
         .{ .module = top_name, .path = "", .decl = flat },
     };
-    var scopes: std.ArrayList(Building) = .empty;
+    var scopes: std.ArrayList(Building) = try .initCapacity(gpa, units.len);
     defer {
         for (scopes.items) |*s| s.deinit(gpa);
         scopes.deinit(gpa);
@@ -83,7 +83,7 @@ pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design
         // Rows come parent first, so the parent is already in the table. Unit 0
         // is the top, whose path is "".
         const parent: ?u32 = if (i == 0) null else by_path.get(path[0 .. std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse 0]).?;
-        try scopes.append(gpa, .{
+        scopes.appendAssumeCapacity(.{
             .decl = u.decl,
             .def_name = try arena.dupe(u8, u.module),
             .path = path,
@@ -118,11 +118,12 @@ pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design
     // width is the width of the node it denotes, and `Lowered.vectors` is the
     // §3.6.3 range already folded, keyed by the flat name.
     for (scopes.items, 0..) |*s, i| {
+        try s.ports.ensureTotalCapacityPrecise(gpa, s.decl.ports.len);
         for (s.decl.ports, 0..) |p, k| {
             const local = try arena.dupe(u8, file.str(p.name));
             const path = try joinPath(arena, s.path, local);
             const node = lowered.hier_names.get(path) orelse path;
-            try s.ports.append(gpa, @intCast(objects.hot.items.len));
+            s.ports.appendAssumeCapacity(@intCast(objects.hot.items.len));
             try objects.append(.{
                 .kind = .port,
                 .owner = .of(@intCast(i)),
@@ -293,17 +294,16 @@ fn addAnalog(
     }
     // The inverse edges, nature ->> nature (vpiChild) and nature ->> discipline.
     for (natures) |at| {
-        var kids: std.ArrayList(u32) = .empty;
-        defer kids.deinit(gpa);
-        for (natures) |other| if (objects.coldOf(other).nature == at) try kids.append(gpa, other);
-        var users: std.ArrayList(u32) = .empty;
-        defer users.deinit(gpa);
-        for (disciplines) |di| {
-            const o = objects.coldOf(di);
-            if (o.flow == at or o.pot == at) try users.append(gpa, di);
-        }
-        const children = try arena.dupe(u32, kids.items);
-        const users_of = try arena.dupe(u32, users.items);
+        var n_kids: usize = 0;
+        for (natures) |other| n_kids += @intFromBool(objects.coldOf(other).nature == at);
+        var kids: std.ArrayList(u32) = try .initCapacity(arena, n_kids);
+        for (natures) |other| if (objects.coldOf(other).nature == at) kids.appendAssumeCapacity(other);
+        var n_users: usize = 0;
+        for (disciplines) |di| n_users += @intFromBool(binds(objects.coldOf(di), at));
+        var users: std.ArrayList(u32) = try .initCapacity(arena, n_users);
+        for (disciplines) |di| if (binds(objects.coldOf(di), at)) users.appendAssumeCapacity(di);
+        const children = kids.items;
+        const users_of = users.items;
         const c = try objects.coldFor(at);
         c.children = children;
         c.users = users_of;
@@ -319,10 +319,10 @@ fn addAnalog(
     for (objects.hot.items, 0..) |o, i| if (o.kind == .port and o.owner.get() == 0) try net_at.put(gpa, o.full, @intCast(i));
     for (objects.hot.items, 0..) |o, i| if (o.kind == .net) try net_at.put(gpa, o.full, @intCast(i));
     const Decl = struct { name: Ast.StrId, discipline: Ast.StrId };
-    var decls: std.ArrayList(Decl) = .empty;
+    var decls: std.ArrayList(Decl) = try .initCapacity(gpa, flat.ports.len + flat.nets.len);
     defer decls.deinit(gpa);
-    for (flat.ports) |p| try decls.append(gpa, .{ .name = p.name, .discipline = p.discipline });
-    for (flat.nets) |n| try decls.append(gpa, .{ .name = n.name, .discipline = n.discipline });
+    for (flat.ports) |p| decls.appendAssumeCapacity(.{ .name = p.name, .discipline = p.discipline });
+    for (flat.nets) |n| decls.appendAssumeCapacity(.{ .name = n.name, .discipline = n.discipline });
     for (decls.items) |n| {
         if (n.discipline == .none) continue;
         const di = disc_at.get(file.str(n.discipline)) orelse continue;
@@ -372,7 +372,8 @@ fn addAnalog(
 
     // --- branches, each with its two quantities. `named` keeps them in
     // object order: the rows a named contribution below is matched against.
-    var named: std.ArrayList(u32) = .empty;
+    // At most one per declared branch.
+    var named: std.ArrayList(u32) = try .initCapacity(gpa, flat.branches.len);
     defer named.deinit(gpa);
     for (flat.branches) |b| {
         const flat_name = file.str(b.name);
@@ -391,7 +392,7 @@ fn addAnalog(
             .hi_row = if (pos) |p| objects.coldOf(p).row orelse Lower.ground else Lower.ground,
             .lo_row = if (neg) |n| objects.coldOf(n).row orelse Lower.ground else Lower.ground,
         });
-        if (full.len != 0) try named.append(gpa, at);
+        if (full.len != 0) named.appendAssumeCapacity(at);
         // §11.6.7: a quantity's nature is the one its branch's discipline
         // binds on that side.
         const dobj: ?Cold = if (disc) |di| objects.coldOf(di).* else null;
@@ -438,6 +439,11 @@ fn addAnalog(
         }
     }
     return .{ .disciplines = disciplines, .natures = natures };
+}
+
+/// Does discipline `d` bind nature `at` on either side?
+fn binds(d: *const Cold, at: u32) bool {
+    return d.flow == at or d.pot == at;
 }
 
 const UnnamedKey = struct { scope: u32, hi: u16, lo: u16 };

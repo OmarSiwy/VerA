@@ -215,9 +215,11 @@ pub fn paramsetChain(
     near: *const Ast.ParamsetDecl,
     out: *std.ArrayList(*const Ast.ParamsetDecl),
 ) Error!bool {
+    // Every link is a distinct paramset (a repeat is the cycle refused below).
+    try out.ensureUnusedCapacity(self.ctx.arena, self.ctx.file.paramsets.len + 1);
     var link = near;
     while (true) {
-        try out.append(self.ctx.arena, link);
+        out.appendAssumeCapacity(link);
         if (findModule(self, link.target) != null) return true;
         const next = for (self.ctx.file.paramsets) |*p| {
             if (p.name == link.target) break p;
