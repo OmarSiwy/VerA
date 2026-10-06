@@ -171,9 +171,16 @@ pub const Config = struct {
 /// in RAM, so nothing was OOM-killed). `-j` still overrides.
 pub fn defaultJobs() usize {
     const cpus = std.Thread.getCpuCount() catch 1;
-    const ram = std.process.totalSystemMemory() catch return cpus;
-    return @max(1, @min(cpus, ram / job_ram));
+    const ram = std.process.totalSystemMemory() catch return @min(cpus, max_default_jobs);
+    return @max(1, @min(cpus, ram / job_ram, max_default_jobs));
 }
+
+/// The default never exceeds this many concurrent fixture builds, whatever
+/// the core and RAM count. 2026-10-17: a gate's suite (15 jobs by `job_ram`),
+/// a second suite and other projects' builds on the same 31 GB host ran it out
+/// of memory overnight: `job_ram` sizes against TOTAL memory, so two suites
+/// each assume the whole machine. `-j` still overrides.
+const max_default_jobs = 8;
 
 /// RAM budgeted per concurrent fixture build: 4x the measured mean, for the
 /// large devices and the other processes on the host.

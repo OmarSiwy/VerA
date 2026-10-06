@@ -271,7 +271,9 @@ fn snapshot(gpa: Allocator, io: Io, arena: Allocator, vera_exe: []const u8, out:
     // Absolute, because each child runs from the repository root.
     const exe = try Io.Dir.cwd().realPathFileAlloc(io, vera_exe, arena);
     var pool: Pool = .{ .io = io, .gpa = gpa, .vera = exe, .out = out, .rels = try fixtureList(arena, io) };
-    const jobs = std.Thread.getCpuCount() catch 1;
+    // The suite's default, not one per core: 32 concurrent `vera` runs and
+    // their device builds exhausted the host's memory (harness.defaultJobs).
+    const jobs = harness.defaultJobs();
     var group: Io.Group = .init;
     var hands: usize = 0;
     while (hands < jobs) : (hands += 1) group.concurrent(io, Pool.work, .{&pool}) catch break;

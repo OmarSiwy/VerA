@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- The fixture suite and `zig build golden` run at most 8 fixture builds at once by default (`-j` overrides): sizing by total memory let two suites on one host run it out of memory.
 - Fix: an error raised while a `.v` design runs (`vera --run`, an interpreted `--emit-exe`: E1157, an E1100 event budget) no longer ends with "could not compile due to N previous error(s)"; the error lines stand alone, as the native runtime prints them, and `--json` gives them `"stage":"run"` (#72).
 - Fix: a net declaration assignment's delay (`wire #3 w = a;`) times that one assignment, as §6.1.3 says, instead of being the net's own delay, so another driver of w is no longer delayed by it; `wire #3 w;` with separate assigns still delays every driver (both `vera --run` and a `.v` `--emit-exe`) (#71).
 - Fix: `zig build test-spice` decks start the operating point's Newton from a device's §3.6.3.2 nodesets (`u_nodeset`), as the testbench and VPI hosts do, over its `$limit` seeds and never clamped (VD-117), so a nodeset picks the root of a multi-root circuit in every host (#70).
