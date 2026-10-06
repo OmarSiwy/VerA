@@ -450,12 +450,13 @@ test "a trireg holds its charge for the decay time and then gives up" {
 }
 
 test "A.2.1.3 a net's own delay applies to its resolved value, rise and fall apart" {
-    // `wire #(2,5) w = a`: the delay is the net's. a rises at 10, so w at 12;
-    // a falls at 20, so w at 25. Sampled at 11, 13, 24 and 26.
+    // `wire #(2,5) w;` plus `assign w = a`: the delay is the net's (with
+    // `= a` on the declaration it would be the assignment's, §6.1.3). a rises
+    // at 10, so w at 12; a falls at 20, so w at 25. Sampled at 11, 13, 24, 26.
     try expectRun(
         \\`timescale 1ns/1ns
         \\module m;
-        \\reg a; wire #(2,5) w = a;
+        \\reg a; wire #(2,5) w; assign w = a;
         \\initial begin
         \\  a = 0; #10 a = 1;
         \\  #1 $write("%b", w); #2 $write("%b", w);

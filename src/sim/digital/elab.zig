@@ -1112,12 +1112,16 @@ fn declareNet(r: *Run, e: *Elab, scope: u32, n: Ast.NetDecl) Error!void {
             .lsb = try r.declaredBound(range.lsb, n.main_tok),
         });
         var net = &e.nets.items[at];
-        var cold: NetCold = .{ .delay = try r.declaredDelay3(n.delay, n.main_tok) };
+        // §6.1.3: beside a net_decl_assignment the `delay3` "is part of the
+        // continuous assignment and is not a net delay", so it times that one
+        // driver (below) and never the net's other drivers.
+        const net_delay: Ast.Delay3 = if (n.init == .none) n.delay else .{};
+        var cold: NetCold = .{ .delay = try r.declaredDelay3(net_delay, n.main_tok) };
         // A.2.1.3 gives `trireg` its own alternatives, and in them the third
         // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
         // a trireg in the capacitive state does not turn off, it holds, so the
         // net's own turn-off falls back to §7.14's "smallest of the delays".
-        if (n.kind == .trireg and n.delay.off != .none) {
+        if (n.kind == .trireg and net_delay.off != .none) {
             cold.decay = cold.delay.off;
             cold.delay.off = @min(cold.delay.rise, cold.delay.fall);
         }
@@ -1127,11 +1131,10 @@ fn declareNet(r: *Run, e: *Elab, scope: u32, n: Ast.NetDecl) Error!void {
         }
         net.charge = n.charge;
         // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-        // declaration: one more driver of that net. Its delay is the net's
-        // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
-        // not on the `=`), so the row it contributes carries none.
+        // declaration: one more driver of that net, timed by the declaration's
+        // `delay3` exactly as `assign #d` would be.
         if (n.init != .none)
-            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
+            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .delay = n.delay, .tok = n.main_tok });
     }
 }
 
