@@ -331,7 +331,10 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                     .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(e.values.items[var_slot].width, e.nets.items[net].resolved.width) } },
                     .tok = p.main_tok,
                 }),
-                .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
+                // §12.3.9.2 a select or concatenation outside: the variable
+                // drives exactly those bits, as a net port's value does.
+                .send => |c| try sendPort(r, e, p, c.operands, c.tok, var_slot, e.values.items[var_slot].width, scope, false),
+                .receive => unreachable, // `bindPort` makes `receive` for an input port only
                 .group => unreachable, // `groupPorts` takes an expression-ported module's
 
             }
@@ -400,27 +403,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                 try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok });
             },
             .group => unreachable, // `groupPorts` takes an expression-ported module's
-            .send => |c| {
-                // §6.5.7.1 joins the operands highest-order first, so the
-                // rightmost operand takes the port's low bits.
-                var lo: u32 = 0;
-                var k = c.operands.len;
-                for (c.operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
-                while (k != 0) {
-                    k -= 1;
-                    const op = c.operands[k];
-                    const w = op.width;
-                    if (lo + w > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
-                    try e.wires.append(arena, .{
-                        .net = op.net,
-                        .scope = scope,
-                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = op.lo, .width = w } },
-                        .tok = c.tok,
-                    });
-                    lo += w;
-                }
-                if (lo != width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
-            },
+            .send => |c| try sendPort(r, e, p, c.operands, c.tok, e.nets.items[at].slot, width, scope, true),
         }
     }
     // §10.4.2: "It is illegal to declare another object with the same name
@@ -431,6 +414,30 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
     try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
+}
+
+/// §12.3.9.2 an output port's value, slot `src` of `width` bits, bridged
+/// into the operands of the structural net expression it connects to.
+/// §6.5.7.1 joins them highest-order first, so the rightmost operand takes
+/// the port's low bits. `warn`: Table 12-1's net-type cells apply (a net
+/// port; a variable port has no net type to meet).
+fn sendPort(r: *Run, e: *Elab, p: Ast.Port, operands: []const Sink, tok: u32, src: u32, width: u32, scope: u32, warn: bool) Error!void {
+    if (warn) for (operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
+    var lo: u32 = 0;
+    var k = operands.len;
+    while (k != 0) {
+        k -= 1;
+        const op = operands[k];
+        if (lo + op.width > width) return r.fail(tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+        try e.wires.append(r.arena, .{
+            .net = op.net,
+            .scope = scope,
+            .source = .{ .bridge = .{ .src = src, .src_lo = lo, .dst_lo = op.lo, .width = op.width } },
+            .tok = tok,
+        });
+        lo += op.width;
+    }
+    if (lo != width) return r.fail(tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
 }
 
 /// IEEE 1364-2005 §12.2 the parameters `params` of `scope` (an instance, or a

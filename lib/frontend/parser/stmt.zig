@@ -492,7 +492,9 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
         const ex = &self.file.exprs;
         if (ex.tag(lhs) == .ident or ex.tag(lhs) == .call) {
             self.pos += 1;
-            const args: []const Ast.ExprId = if (ex.tag(lhs) == .call) ex.args(lhs) else &.{};
+            // A copy: `ex.args` points into the expression pool, which the
+            // rest of the file grows and moves.
+            const args: []const Ast.ExprId = if (ex.tag(lhs) == .call) try self.arena.dupe(Ast.ExprId, ex.args(lhs)) else &.{};
             return self.file.addStmt(self.arena, .{ .sys_task = .{ .name = ex.strOf(lhs), .args = args } }, tok);
         }
     }
