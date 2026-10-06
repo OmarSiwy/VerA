@@ -14,7 +14,7 @@ wave; every expected value below is derived by hand in its fixture's header.
 
 | # | Change | Reading | One place |
 | - | ------ | ------- | --------- |
-| 55 | a vector net's own `delay3` picks rise/fall/off from the whole value | IEEE 1364-2005 §6.1.3 (declaration assignment: unambiguous); a net delay on a vector: VD-117 (new), the same whole-value rule | `Delay.continuous(from: Int.Bit, value)`, called by both engines' drivers and nets |
+| 55 | a vector net's own `delay3` picks rise/fall/off from the whole value | IEEE 1364-2005 §6.1.3 (declaration assignment: unambiguous); a net delay on a vector: VD-119 (new), the same whole-value rule | `Delay.continuous(from: Int.Bit, value)`, called by both engines' drivers and nets |
 | 56 | a generate block's variables are declared in its scope, per iteration, with §6.2.1 initializers | §12.4.1/§12.4.2 scopes, §12.5 names | `elab.generate`'s `.block` arm; `root.initVars` shared with module variables |
 | 58 | digital `$abstime`, `$ln1p`, `$expm1` run; the other digital-Yes names VerA does not run are E0829 | VAMS §9.2 tables, §9.10, §9.14 | `compile.vams_digital_unrun`; `time.secondsAt` for both engines |
 | 63 | an unparenthesized `delay3` is one `delay_value`; a range after a net's delay is E0207 | A.2.1.3, A.2.2.3 | `parser/net.zig parseDelays` (as `stmt.zig parseDelay` already did) |
@@ -58,10 +58,10 @@ not say "this run reports an error and keeps going"; a reject `.v` with an
 | 1 | one rule, one place, both engines | AGENTS §4 "fix at the root" | pass | table above |
 | 2 | refusal by clause with a named code and a legal neighbour | AGENTS §2, §4 | pass | E0829, E0207, E1157 fixtures and their neighbours |
 | 3 | no new `else =>` over a boundary enum | AGENTS §4 | pass | `SysFn` additions fall in existing `else` prongs whose reasons still hold |
-| 4 | fixture right before the compiler changes | AGENTS §6 | pass | each header derives its values; #55's net-delay case is a reading (VD-117), #65 changes `audit_readmem_address_range_rejected.v`'s pinned text only |
+| 4 | fixture right before the compiler changes | AGENTS §6 | pass | each header derives its values; #55's net-delay case is a reading (VD-119), #65 changes `audit_readmem_address_range_rejected.v`'s pinned text only |
 
 ## Accepted exceptions
 
-None. Open for the user: VD-117's choice (whole value, against a per-bit
+None. Open for the user: VD-119's choice (whole value, against a per-bit
 reading of §6.1.3's last paragraph) and a declaration assignment's delay
-still elaborated as the net's (VD-117 "VerA today").
+still elaborated as the net's (VD-119 "VerA today").

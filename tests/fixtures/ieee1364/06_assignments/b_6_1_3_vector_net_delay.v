@@ -5,7 +5,7 @@
 // assignment", whose "rising and falling delays shall not be applied to the
 // individual bits" (nd). A net delay (nn: `wire [7:0] #(3,5) nn;` and a
 // separate `assign`) takes the same whole-value rule by VerA's reading
-// (specification/Vague_Decisions.md VD-117). Before #55 both chose from
+// (specification/Vague_Decisions.md VD-119). Before #55 both chose from
 // bit 0 of the new value.
 // a = 1 at t=0, 2 at t=10, 0 at t=20; delays rise 3, fall 5:
 //   t=10  1 -> 2: nonzero to nonzero, rising 3 -> every view moves at 13
