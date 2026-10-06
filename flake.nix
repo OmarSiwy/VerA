@@ -102,6 +102,7 @@
           zig,
           version,
           source,
+          contract,
         }:
         stdenvNoCC.mkDerivation {
           pname = "vera";
@@ -112,6 +113,8 @@
           dontStrip = true;
           installPhase = ''
             install -Dm755 vera $out/bin/vera
+            # The tarball is the binary alone; the ABI file is the tag's.
+            install -Dm644 ${fetchurl { inherit (contract) url sha256; }} $out/share/vera/contract.zig
             ${wrapZig zig}
           '';
           meta = {
@@ -146,6 +149,7 @@
               inherit version;
               zig = zigs.${s.zig};
               source = s.${system};
+              inherit (s) contract;
             }
           ) (lib.filterAttrs (_: s: s ? ${system}) sources);
         in
@@ -160,8 +164,10 @@
       smoke =
         pkgs: vera:
         pkgs.runCommand "vera-smoke-${vera.version}" { nativeBuildInputs = [ vera ]; } ''
-          export HOME=$TMPDIR ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache
+          # What README "Install with Nix" tells a derivation to set: no $HOME.
+          export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
           vera --help > /dev/null
+          test -s ${vera}/share/vera/contract.zig
           cat > r.va <<'EOF'
           module r(p, n);
             inout p, n;
@@ -240,16 +246,17 @@
         };
 
         # The tools VerA's results are checked against, by name.
-        referenceTools = available [
-          pkgs.iverilog # IEEE 1364 simulation reference (ivtest, sv-tests)
-          pkgs.verilator # lint / parse reference
-          pkgs.yosys # parse / elaborate reference
-          pkgs.ngspice # OSDI host: VerA's .osdi vs OpenVAF's, same deck
-          pkgs.xyce # second analog simulator
-          pkgs.gnucap # third opinion for disagreements
-          pkgs.python3 # harness scripts
-        ]
-        ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
+        referenceTools =
+          available [
+            pkgs.iverilog # IEEE 1364 simulation reference (ivtest, sv-tests)
+            pkgs.verilator # lint / parse reference
+            pkgs.yosys # parse / elaborate reference
+            pkgs.ngspice # OSDI host: VerA's .osdi vs OpenVAF's, same deck
+            pkgs.xyce # second analog simulator
+            pkgs.gnucap # third opinion for disagreements
+            pkgs.python3 # harness scripts
+          ]
+          ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
 
         gpuLibPath = pkgs.lib.makeLibraryPath (
           [

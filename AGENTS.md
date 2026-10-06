@@ -135,14 +135,16 @@ new gap fails, and so does a fixed one until you delete its line. Only the
 sweep and the audit-tool self-tests report without gating.
 
 **Nix.** `flake.nix` exports `packages.<system>.default` (`vera`, built from
-this tree in ReleaseFast with `-Dcpu=baseline`), one package per release
-binary (`."1.0.0"`, `latest`), `overlays.default` (`pkgs.vera`,
-`pkgs.veraPackages.<version>`), `apps.default`, `checks` (each package plus a
-resistor through `vera --check` in the sandbox) and `formatter` (nixfmt). Every
-package is wrapped with the Zig its generated code targets; `vera` reads
-nothing else at run time (the contract and `sim` tree are embedded,
-`sim_sources`). `sources.json` (version -> system -> url, sha256, plus `zig`)
-is written only by `tools/update-sources.py` from the releases and their
+this tree in ReleaseFast with `-Dcpu=baseline`, as `publish.yaml` builds the
+release), one package per release binary (`."1.0.0"`, `latest`),
+`overlays.default` (`pkgs.vera`, `pkgs.veraPackages.<version>`),
+`apps.default`, `checks` (each package plus a resistor through `vera --check`
+in the sandbox) and `formatter` (`nix fmt`), on x86_64/aarch64 Linux and
+Darwin (x86_64-darwin imports nixpkgs 26.05). Every package is wrapped with
+the Zig its generated code targets and installs its own
+`share/vera/contract.zig`; `vera` reads nothing else at run time (the
+contract and the `sim` tree are embedded, `sim_sources`). `sources.json` is
+written only by `tools/update-sources.py` from the releases and their
 `SHA256SUMS`; `publish.yaml`'s `sources` job reruns it and commits to main
 after each release. Do not edit it by hand.
 
