@@ -1339,6 +1339,16 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **Measure impact**: A: +1 fixture (`ieee1364/06_assignments/b_6_1_3_vector_net_delay.v`, declaration assignment and net delay beside `assign #(3,5)`). B: 6.1.3 gains a positive case.
 - **Status**: DONE (#55).
 
+### VD-120: How wide `%d` of a real operand prints
+- **Source**: bug hunt 2026-10-17, finding clauses-15 (suspect): the digital engine prints `$display("%d", 7 / 2.0)` as 19 spaces and `4`; iverilog prints `4`.
+- **Rule**: IEEE 1364-2005 17.1.1.3: an expression argument is sized automatically, by the largest value the expression can take (a 12-bit expression gets four decimal columns); a zero after `%` overrides it. 4.8.2: a real converts to an integer by rounding, half away from zero; 5.5.1: a real converted by type coercion is signed. 17.8: `$rtoi` returns an `integer`. VAMS 9.4.3 Table 9-22 says only "display in decimal format".
+- **Why vague**: a real has no bit width, and no clause gives the integer a real becomes under `%d` a size (4.8.2 converts on assignment, where the target sets it). So no clause fixes the "largest possible value" 17.1.1.3 sizes the field by.
+- **Options**: (a) minimal width, as if `%0d` (iverilog); (b) 11 columns, the conversion as a 32-bit `integer`, as `$rtoi` returns; (c) 20 columns, the width of the signed 64-bit integer VerA converts to.
+- **Decision**: `DECIDED:` (c), VerA's behaviour, kept. The digital engine reads a real in any integral context as a 64-bit signed integer (`evaluate.eval`), so every real within ±2^63 converts exactly and one beyond it is x; 17.1.1.3 then sizes that operand as it sizes every other one, and the widest value it can hold, -9223372036854775808, takes 20 columns. (b) would size the field for a value the conversion does not produce (a real above 2^31 converts past 32 bits); (a) drops 17.1.1.3 for one operand type. `%0d` is the clause's own escape. Revisit if the user prefers (a).
+- **VerA today**: `src/sim/digital/display.zig` `walk` hands the radix conversions `evaluate.eval(.., 0)`, which gives a real `.{ .width = 64, .signed = true }`; `lib/kernels/fmt.zig` `autoWidth` sizes it. The analog context prints `%d` of a real as it prints `%d` of an integer (`lib/backend/cg_display.zig` `appendConv`, minimal width today): that half is #61's to settle, and a real reaches it at the 64 bits this entry uses. No change.
+- **Measure impact**: A: +1 fixture (`ieee1364/17_system_tasks/b_17_1_1_3_decimal_of_real_width.v`, with `%0d` and a `$rtoi` contrast). B: none (17.1.1.3 already has positive evidence).
+- **Status**: DONE 2026-10-17 (no issue: the clauses leave the width open and VerA's choice is consistent with its conversion).
+
 ## 6. Implementation-defined choices
 
 A fixture here tests VerA's choice, not the clause. A tool that chooses
