@@ -194,6 +194,20 @@ jobs:
       - name: Build every artifact for ${{ matrix.target }}
         run: zig build build-all -Dtarget=${{ matrix.target }}
 
+  # The flake (AGENTS.md "Nix"): the source package, its smoke check (a
+  # resistor through `vera --check` in the sandbox) and the latest release
+  # binary's, all built by `nix flake check`.
+  nix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: nix flake check
+        run: nix flake check -L
+      - name: nix build .#default
+        run: nix build -L .#default
+
   # The gate, run where the cross job can only compile.
   native:
     runs-on: ${{ matrix.os }}

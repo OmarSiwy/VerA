@@ -56,3 +56,28 @@ jobs:
           files: |
             vera-*.tar.gz
             SHA256SUMS
+
+  # sources.json is what `nix build '.#"<version>"'` installs, so the release
+  # just uploaded is added to it on main. Committed, not opened as a PR: the
+  # file is derived mechanically from the assets and SHA256SUMS the job above
+  # verified and uploaded, so there is nothing to review, and a PR opened with
+  # GITHUB_TOKEN runs no workflows anyway. A GITHUB_TOKEN push triggers no
+  # workflow either, so this cannot loop.
+  sources:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Regenerate sources.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/update-sources.py
+      - name: Commit to main
+        run: |
+          git diff --quiet sources.json && exit 0
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "nix: sources.json for ${GITHUB_REF_NAME}" -- sources.json
+          git push origin HEAD:main

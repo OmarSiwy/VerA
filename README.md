@@ -26,6 +26,42 @@ Binary at `zig-out/bin/vera`, and the device/host ABI your host compiles
 against at `zig-out/share/vera/contract.zig` (`--prefix DIR` installs both under
 `DIR`).
 
+### Install with Nix
+
+The flake builds `vera` from source and wraps it with the Zig 0.17.0 it
+spawns to build devices, so it runs from any directory with no checkout:
+
+```sh
+nix run github:OmarSiwy/VerA -- --emit-so model.va    # from source
+nix profile install github:OmarSiwy/VerA
+nix profile install 'github:OmarSiwy/VerA#"1.0.0"'    # a release binary, pinned
+```
+
+`packages.<system>."<version>"` (and `latest`) install the binary attached to
+that GitHub release, listed in `sources.json`. As a flake input:
+
+```nix
+{
+  inputs.vera.url = "github:OmarSiwy/VerA";
+  outputs = { nixpkgs, vera, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs { inherit system; overlays = [ vera.overlays.default ]; };
+    in {
+      # the package: .default from source, ."1.0.0" or .latest a release binary
+      packages.${system}.vera = vera.packages.${system}.default;
+      # the overlay: pkgs.vera, pkgs.veraPackages."1.0.0", pkgs.veraPackages.latest
+      devShells.${system}.default = pkgs.mkShell { packages = [ pkgs.vera ]; };
+    };
+}
+```
+
+Systems: x86_64-linux, aarch64-linux, aarch64-darwin. An Intel Mac uses the
+overlay on nixpkgs 26.05 (nixpkgs-unstable dropped x86_64-darwin).
+
+If you took VerA through the EDA-Packaged flake, `github:OmarSiwy/VerA` is now
+the same package without the aggregator; its `vera` output follows this one.
+
 ## Use
 
 ```sh

@@ -16,13 +16,172 @@
       flake-utils,
       zig-overlay,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    let
+      lib = nixpkgs.lib;
+
+      # The release binaries, by version (tools/update-sources.py writes it;
+      # publish.yaml reruns it after every release).
+      sources = lib.importJSON ./sources.json;
+      latest = lib.last (lib.sort lib.versionOlder (lib.attrNames sources));
+
+      # `vera` builds every device by spawning `zig` on code it generated for
+      # one Zig release, so it is wrapped with that Zig first on PATH. It reads
+      # nothing else at run time: the contract and the `sim` tree are embedded
+      # (build.zig `sim_sources`) and written under the work directory.
+      wrapZig = zig: ''
+        wrapProgram $out/bin/vera --prefix PATH : ${zig}/bin
+      '';
+
+      # From source. ReleaseFast, what publish.yaml ships: the compiler is a
+      # batch tool whose safety checks the test suites already exercise in
+      # Debug, and the source and binary packages should be the same program.
+      fromSource =
+        {
+          lib,
+          stdenv,
+          makeWrapper,
+          zig,
+          # `zig build -j`: parallel build steps. 2 keeps a build in a few GB;
+          # `.override { zigJobs = 8; }` on a machine with the memory for it.
+          zigJobs ? 2,
+        }:
+        stdenv.mkDerivation {
+          pname = "vera";
+          version = "${latest}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
+          # Only what `zig build install` reads: docs/ and tests/ are 33 MB
+          # that would rebuild the package on every fixture edit.
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./build.zig
+              ./build.zig.zon
+              ./lib
+              ./src
+              ./tools
+            ];
+          };
+          nativeBuildInputs = [
+            zig
+            makeWrapper
+          ];
+          dontConfigure = true;
+          dontBuild = true;
+          # -Dcpu=baseline: the default is the build machine's CPU, and a
+          # substituted binary must run on any CPU of the system.
+          installPhase = ''
+            runHook preInstall
+            # The environment, not --global-cache-dir: the build runner's own
+            # children read it, and $HOME does not exist in the sandbox.
+            export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-cache
+            zig build install -j${toString zigJobs} \
+              -Doptimize=ReleaseFast -Dcpu=baseline --prefix "$out"
+            ${wrapZig zig}
+            runHook postInstall
+          '';
+          meta = {
+            description = "Verilog-AMS compiler: Verilog-A to Zig device code";
+            homepage = "https://github.com/OmarSiwy/VerA";
+            license = lib.licenses.asl20;
+            mainProgram = "vera";
+          };
+        };
+
+      # A release binary (sources.json). Statically linked on Linux, so
+      # nothing to patch; not stripped, so the Darwin ad-hoc signature holds.
+      fromRelease =
+        {
+          lib,
+          stdenvNoCC,
+          fetchurl,
+          makeWrapper,
+          zig,
+          version,
+          source,
+        }:
+        stdenvNoCC.mkDerivation {
+          pname = "vera";
+          inherit version;
+          src = fetchurl { inherit (source) url sha256; };
+          sourceRoot = ".";
+          nativeBuildInputs = [ makeWrapper ];
+          dontStrip = true;
+          installPhase = ''
+            install -Dm755 vera $out/bin/vera
+            ${wrapZig zig}
+          '';
+          meta = {
+            description = "Verilog-AMS compiler: Verilog-A to Zig device code (release binary)";
+            homepage = "https://github.com/OmarSiwy/VerA";
+            license = lib.licenses.asl20;
+            sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
+            mainProgram = "vera";
+          };
+        };
+
+      # pkgs -> { vera; veraPackages.<version> and .latest }, for the
+      # overlay and for `packages`.
+      veraFor =
+        pkgs:
+        let
+          system = pkgs.stdenv.hostPlatform.system;
+          # zig-overlay's packages, built from `pkgs` rather than its own
+          # nixpkgs, so the overlay works on whatever nixpkgs the consumer has.
+          zigs = import "${zig-overlay}/default.nix" {
+            inherit pkgs system;
+            nixpkgs = pkgs.path;
+          };
+          releases = lib.mapAttrs (
+            version: s:
+            pkgs.callPackage fromRelease {
+              inherit version;
+              zig = zigs.${s.zig};
+              source = s.${system};
+            }
+          ) (lib.filterAttrs (_: s: s ? ${system}) sources);
+        in
+        {
+          vera = pkgs.callPackage fromSource { zig = zigs."0.17.0"; };
+          veraPackages =
+            releases // lib.optionalAttrs (releases ? ${latest}) { latest = releases.${latest}; };
+        };
+
+      # `vera --help` runs, and a resistor goes through codegen and through
+      # `zig` type-checking it against the contract, offline in the sandbox.
+      smoke =
+        pkgs: vera:
+        pkgs.runCommand "vera-smoke-${vera.version}" { nativeBuildInputs = [ vera ]; } ''
+          export HOME=$TMPDIR ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache
+          vera --help > /dev/null
+          cat > r.va <<'EOF'
+          module r(p, n);
+            inout p, n;
+            electrical p, n;
+            parameter real R = 1k;
+            analog I(p, n) <+ V(p, n) / R;
+          endmodule
+          EOF
+          vera --emit-zig r.va > r.zig
+          grep -q . r.zig
+          vera --check r.va
+          touch $out
+        '';
+    in
+    {
+      overlays.default = final: _prev: veraFor final;
+    }
+    # nixpkgs-unstable dropped x86_64-darwin (26.11), so this flake's own
+    # outputs cannot import it there. An Intel Mac takes VerA through
+    # `overlays.default` on nixpkgs 26.05, whose `veraPackages` still carry
+    # the x86_64-macos release binary.
+    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
       system:
       let
         pkgs = import nixpkgs {
           inherit system;
           config.allowUnfree = true;
         };
+
+        built = veraFor pkgs;
 
         zig = zig-overlay.packages.${system}."0.17.0";
         commonInputs = [
@@ -53,7 +212,10 @@
             hash = "sha256-sSt7FybRA+GMJYjDofkfhHXPA9+KO94U2Rl5fSIeMRA=";
           };
           nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-          buildInputs = [ pkgs.llvmPackages_18.libllvm pkgs.stdenv.cc.cc.lib ];
+          buildInputs = [
+            pkgs.llvmPackages_18.libllvm
+            pkgs.stdenv.cc.cc.lib
+          ];
           installPhase = ''
             install -Dm755 bin/openvaf-r $out/bin/openvaf-r
             ln -s openvaf-r $out/bin/openvaf
@@ -69,7 +231,8 @@
           pkgs.xyce # second analog simulator
           pkgs.gnucap # third opinion for disagreements
           pkgs.python3 # harness scripts
-        ] ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
+        ]
+        ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
 
         gpuLibPath = pkgs.lib.makeLibraryPath (
           [
@@ -110,40 +273,27 @@
           LD_LIBRARY_PATH = gpuLibPath;
         });
 
-        packages.default = pkgs.stdenv.mkDerivation {
-          pname = "vera";
-          version = "1.0.0";
-          src = ./.;
-
-          nativeBuildInputs = [
-            zig
-          ];
-
-          dontConfigure = true;
-
-          buildPhase = ''
-            runHook preBuild
-
-            zig build \
-              -Doptimize=ReleaseSafe \
-              --cache-dir .zig-cache \
-              --global-cache-dir "$TMPDIR/zig-global-cache"
-
-            runHook postBuild
-          '';
-
-          installPhase = ''
-            runHook preInstall
-
-            zig build install \
-              -Doptimize=ReleaseSafe \
-              --prefix "$out" \
-              --cache-dir .zig-cache \
-              --global-cache-dir "$TMPDIR/zig-global-cache"
-
-            runHook postInstall
-          '';
+        packages = built.veraPackages // {
+          default = built.vera;
+          vera = built.vera;
         };
+
+        apps.default = {
+          type = "app";
+          program = lib.getExe built.vera;
+          meta.description = "Run vera, built from this tree";
+        };
+
+        checks = {
+          vera = built.vera;
+          smoke = smoke pkgs built.vera;
+        }
+        // lib.optionalAttrs (built.veraPackages ? latest) {
+          release = built.veraPackages.latest;
+          release-smoke = smoke pkgs built.veraPackages.latest;
+        };
+
+        formatter = pkgs.nixfmt;
       }
     );
 }
