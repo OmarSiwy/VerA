@@ -490,6 +490,8 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             if (self.unit.primitive) {
                 n.str = elab_names.primitiveAccess(self, n.str, n.lhs);
             } else {
+                try elab_names.checkTypedPort(self, n.str, x.lhs(e), n.main_tok);
+                try elab_names.checkTypedPort(self, n.str, x.rhs(e), n.main_tok);
                 const a = try elab_names.localAccess(self, n.str, x.lhs(e), n.lhs, n.main_tok);
                 n.str = a.name;
                 local_only = a.local_only;

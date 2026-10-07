@@ -1,7 +1,7 @@
 //! Hierarchical names: an instance path and a local name → the flat, injective
 //! name the lowered design uses; module and paramset lookup; access-function
 //! respelling across a port join; constant folding of instance bounds.
-//! LRM §3.6.1.2, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.6.1, §6.6.2, §6.6.3, §6.7, §7.4,
+//! LRM §3.6.1.2, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.5.2.1, §6.6.1, §6.6.2, §6.6.3, §6.7, §7.4,
 //! E.3.2, E.3.3.
 
 const std = @import("std");
@@ -583,6 +583,30 @@ pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net:
     return .{ .name = name };
 }
 
+/// §6.5.2.1 "If the type of a port is not declared, the port can only be
+/// used in a structural description. (It can be passed to instances of
+/// modules, but cannot be accessed in a behavioral description.)" Reports
+/// E0337 when `net`, a terminal of the access `access` as the child wrote
+/// it, is a BOUND port of this unit with no local discipline (#74). After
+/// the join lowering sees only the parent's net, which discipline
+/// resolution (§7.4) may have given a discipline, so the child's own
+/// declaration is judged here. An unconnected port is an internal net with
+/// its own (missing) discipline, which lowering's `checkAccessMatch`
+/// reports; Table E.1 primitives are `primitiveAccess`'s, not this.
+///
+/// ponytail: a plain identifier only; a vector port element (`c[0]`) or a
+/// named branch over the port is still judged by the joined net.
+pub fn checkTypedPort(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, tok: u32) Error!void {
+    std.debug.assert(!self.unit.primitive);
+    const name = netRefName(self, net) orelse return;
+    if (!(self.unit.connected.get(name) orelse return)) return;
+    if (self.unit.port_disc.contains(name)) return;
+    const file = self.ctx.file;
+    try self.err(tok, .E0337, "`{s}` is a port of `{s}` with no discipline, so `{s}` names nothing on it (§6.5.2.1: an untyped port is structural only); declare one, e.g. `electrical {s};`", .{
+        file.str(name), if (self.unit.module) |m| file.str(m.name) else self.unit.path, file.str(access), file.str(name),
+    });
+}
+
 /// `localAccess`'s answer: the spelling, and whether only the child's
 /// declaration can judge it.
 const LocalAccess = struct { name: Ast.StrId, local_only: bool = false };
@@ -803,6 +827,42 @@ test flatReference {
     // §6.2.1 "priority to the local scope": an instance named like the top keeps its part.
     const shadow: Ast.ModuleDecl = .{ .name = top, .ports = &.{}, .instances = &.{.{ .module = top, .name = top }} };
     try std.testing.expectEqualStrings("top.x", try flatReference(&file, a, &shadow, try hierIdent(&file, a, &.{ "top", "x" })));
+}
+
+test checkTypedPort {
+    // §6.5.2.1: an untyped port "can be passed to instances of modules, but
+    // cannot be accessed in a behavioral description" (#74). The top's net is
+    // `ca`, so the joined node has a discipline; the child's port does not.
+    const src =
+        \\nature nv; units = "V"; access = V; abstol = 1u; endnature
+        \\nature ni; units = "A"; access = I; abstol = 1p; endnature
+        \\discipline ca; potential nv; flow ni; enddiscipline
+        \\module top(p); inout p; ca p; mid u(p); endmodule
+        \\module mid(c); inout c; {s} endmodule
+        \\module leaf(c); inout c; ca c; analog I(c) <+ V(c); endmodule
+    ;
+    const cases = [_]struct { mid: []const u8, bad: bool }{
+        // Probed and contributed with no local discipline: E0337, as at the top.
+        .{ .mid = "analog I(c) <+ V(c);", .bad = true },
+        // The second terminal of an access is the same port.
+        .{ .mid = "ca q; analog I(q, c) <+ V(q);", .bad = true },
+        // Legal neighbours: the child declares the discipline, or passes the
+        // port only to an instance (structural, §3.6.2.4; §7.4 resolves it).
+        .{ .mid = "ca c; analog I(c) <+ V(c);", .bad = false },
+        .{ .mid = "leaf l(c);", .bad = false },
+    };
+    for (cases) |c| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(src, .{c.mid}));
+        if (c.bad) {
+            try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+            try std.testing.expect(fixture.hasCode(&f.bag, .E0337));
+        } else {
+            _ = try elaborate.elaborate(f.ctx());
+            try std.testing.expect(!fixture.hasCode(&f.bag, .E0337));
+        }
+    }
 }
 
 test findModule {

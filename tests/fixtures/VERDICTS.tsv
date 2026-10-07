@@ -1720,6 +1720,8 @@ pass	ch06_hierarchy/typed_ports.va
 pass	ch06_hierarchy/unnamed_generate_block_external_names.va
 pass	ch06_hierarchy/unnamed_generate_instance_reference_rejected.va
 pass	ch06_hierarchy/unnamed_generate_reference_from_within.va
+pass	ch06_hierarchy/untyped_child_port_behavioral_use_rejected.va
+pass	ch06_hierarchy/untyped_child_port_passed_to_an_instance.va
 pass	ch06_hierarchy/untyped_port_behavioral_use_rejected.va
 pass	ch06_hierarchy/vector_port_past_256_unknowns.va
 pass	ch06_hierarchy/vector_ports.va
