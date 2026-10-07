@@ -857,12 +857,15 @@ test "readmem validates high token characters beyond destination width" {
     try std.testing.expectEqual(@as(?i64, 17), bin.asInt());
 }
 
-fn expectMemoryLoad(data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, fails: bool) !void {
-    return expectMemoryLoadTask("$readmemh", data, bounds, expected, warnings, fails);
+/// `terminated`: a file address falls outside the task's range, so §17.2.9's
+/// "an error message is issued, and the load operation is terminated": E1157,
+/// the words before it stay loaded and the run goes on to print them (#65).
+fn expectMemoryLoad(data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, terminated: bool) !void {
+    return expectMemoryLoadTask("$readmemh", data, bounds, expected, warnings, terminated);
 }
 
-fn expectMemoryLoadTask(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, fails: bool) !void {
-    return expectMemoryLoadDiagnostic(task, data, bounds, expected, warnings, if (fails) "memory file address is outside the requested load range" else null);
+fn expectMemoryLoadTask(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, terminated: bool) !void {
+    return expectMemoryLoadDiagnostic(task, data, bounds, expected, warnings, if (terminated) "is outside the load range" else null);
 }
 
 fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, failure_phrase: ?[]const u8) !void {
@@ -881,7 +884,11 @@ fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []cons
     var output = std.Io.Writer.Allocating.init(a);
     const result = run(a, source, .{ .io = std.testing.io, .file_name = file_name }, &bag, &output.writer);
     if (failure_phrase) |phrase| {
-        try std.testing.expectError(error.DigitalFailed, result);
+        // A refusal ends the run (DigitalFailed); §17.2.9's terminated load
+        // issues its error and the run goes on. `expected` tells them apart:
+        // only a run that went on prints the memory.
+        result catch |e| if (e != error.DigitalFailed) return e;
+        try std.testing.expect(bag.failed());
         var messages = std.Io.Writer.Allocating.init(a);
         try diag.render(&bag, &messages.writer, .{});
         try std.testing.expect(std.mem.find(u8, messages.written(), phrase) != null);
@@ -934,8 +941,11 @@ test "readmem addresses suppress count warning and relocate after range end" {
     try expectMemoryLoad("@1 11", ",0,3", "aa 11 cc dd\n", 0, false);
     try expectMemoryLoad("11 22 33 44 55 @2 66", ",0,3", "11 22 66 44\n", 0, false);
     try expectMemoryLoad("11 22 33 44 @2 66 77", ",3,0", "44 77 66 11\n", 0, false);
-    try expectMemoryLoad("11 22 @0", ",1,2", "", 0, true);
-    try expectMemoryLoad("@3 11", ",2,1", "", 0, true);
+    // §17.2.9 (#65): an address outside the task's range ends the load, not
+    // the run. 11 -> mem[1], 22 -> mem[2], then @0 is outside 1..2.
+    try expectMemoryLoad("11 22 @0", ",1,2", "aa 11 22 dd\n", 0, true);
+    // @3 is outside 2..1 before any word: nothing loads.
+    try expectMemoryLoad("@3 11", ",2,1", "aa bb cc dd\n", 0, true);
 }
 
 test "readmem start-only defaults to highest address and stays upward" {
@@ -944,8 +954,12 @@ test "readmem start-only defaults to highest address and stays upward" {
     try expectMemoryLoad("11 22 33", ",2", "aa bb 11 22\n", 1, false);
     try expectMemoryLoad("11", ",3", "aa bb cc 11\n", 0, false);
     try expectMemoryLoad("@3 11 @2 22 33", ",2", "aa bb 22 33\n", 0, false);
-    try expectMemoryLoad("@1 11", ",2", "", 0, true);
-    try expectMemoryLoad("11 22 @4", ",2", "", 0, true);
+    // §17.2.9 (#65): start alone makes the range 2..3, the memory's highest
+    // address; an address outside it ends the load, not the run. @1 comes
+    // before any word: nothing loads.
+    try expectMemoryLoad("@1 11", ",2", "aa bb cc dd\n", 0, true);
+    // 11 -> mem[2], 22 -> mem[3], then @4 is outside 2..3.
+    try expectMemoryLoad("11 22 @4", ",2", "aa bb 11 22\n", 0, true);
 }
 
 test "readmem formfeeds delimit words and addresses without adding words" {
