@@ -2133,7 +2133,10 @@ test "§17.8 and §17.11.2 conversions and math functions take their own argumen
     try expectRejected("module m; real r; initial r = $itor(1.5); endmodule", "$rtoi and $realtobits convert a real");
     try expectRejected("module m; real r; initial r = $pow(2.0); endmodule", "wrong number of arguments to a §17.11.2");
     try expectRejected("module m; integer i; initial i = $time(1); endmodule", "$time and $stime take no arguments");
-    try expectRejected("module m; real r; initial r = $realtime(1); endmodule", "$realtime takes no arguments");
+    // §17.7.3 `$realtime` and VAMS §9.10 `$abstime` (#58) take no arguments:
+    // one check, one message.
+    try expectRejected("module m; real r; initial r = $realtime(1); endmodule", "$realtime and $abstime take no arguments");
+    try expectRejected("module m; real r; initial r = $abstime(1); endmodule", "$realtime and $abstime take no arguments");
     try expectRejected("module m; integer i; initial i = $clog2(); endmodule", "$clog2 takes exactly one argument");
     try expectRejected("module m; integer i; initial i = $clog2(2.0); endmodule", "§17.11.1");
 }
