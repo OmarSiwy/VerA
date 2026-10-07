@@ -14,10 +14,13 @@
 //
 // Every check is gated by $abstime as an OPERAND rather than a branch, so each
 // is a real restriction on the points it covers and vacuously true elsewhere:
-// the first bites at t = 0 and 1ns, the second at t = 3ns and 4ns. The gap at
-// t = 2ns is left alone on purpose — §4.5.2 lets the history advance on the
-// accepted step, so whether the crossing is visible in the same step that
-// created it is not something the LRM fixes.
+// the first bites at t = 0 and 1ns, the second at t = 2ns, 3ns and 4ns.
+// Corrected 2026-10-18 (#54): t = 2ns used to be skipped, citing "§4.5.2 lets
+// the history advance on the accepted step". §4.5.2 is about tolerances and
+// says nothing about history; §4.5 says an operator's "output is a function of
+// both the input and the internal state", and at t = 2ns the input HAS crossed
+// ("when a signal expression last crossed zero"), so the crossing is reported
+// at the point that creates it (last_crossing_in_creating_step.va).
 //
 // 4.5.10 admits three direction indicators, +1, -1 and 0. This file queries
 // +1 only; the other two are 146_last_crossing_directions.va, split off because
@@ -41,7 +44,7 @@ module ch04_last_crossing(p, n);
         `CHECKI("negative until the input has actually crossed",
                 (crossing_time < 0.0) || ($abstime > 1.5e-9), 1);
         `CHECKI("the reported rising crossing lies inside (1ns, 2ns)",
-                ($abstime < 2.5e-9) ||
+                ($abstime < 1.5e-9) ||
                 ((crossing_time > 1e-9) && (crossing_time < 2e-9)), 1);
 
         I(p, n) <+ crossing_time;

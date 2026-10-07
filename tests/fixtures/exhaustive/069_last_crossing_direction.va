@@ -8,8 +8,11 @@
 // away from the operator's zero-initialised history — under the old kernel that
 // alone set `t_last = 0`, which is what points 1 and 2 below pin. The genuine
 // rising crossing happens midway between t = 1n and t = 2n, so the reported
-// time is 1n + 0.5*1n = 1.5n, and it only becomes visible at t = 3n (§4.5.2:
-// the history advances on the ACCEPTED step, not during the solve).
+// time is 1n + 0.5*1n = 1.5n, visible from t = 2n, the point whose input has
+// crossed. Corrected 2026-10-18 (#54): this used to want -1 at t = 2n and
+// 1.5n only from t = 3n, citing "§4.5.2: the history advances on the ACCEPTED
+// step". §4.5.2 is about tolerances; §4.5.10 returns the time the expression
+// "last crossed zero", and at t = 2n it has (last_crossing_in_creating_step.va).
 //
 //! bias V(n) = 0
 //! wave V(in) = -1, -1, 1, 1
@@ -22,12 +25,12 @@ module ex069_last_crossing_direction(in, n);
   electrical in, n;
   analog begin
     // RELATIONAL because the answer CHANGES at a time point: -1 ("no crossing
-    // seen") on the first three steps, then 1.5n once the rising crossing has
-    // been accepted. Both branches of the want are digits derived above; the
+    // seen") at t = 0 and 1n, then 1.5n from the point whose input has
+    // crossed. Both branches of the want are digits derived above; the
     // ternary only picks which of them applies at this point, so nothing on
     // the want side comes from the operator under test.
     `CHECKEQ("+1 ignores the falling crossing and reports the rising one",
-             last_crossing(V(in, n), 1), ($abstime < 2.5n) ? -1.0 : 1.5n, 1e-18);
+             last_crossing(V(in, n), 1), ($abstime < 1.5n) ? -1.0 : 1.5n, 1e-18);
     // Row-INVARIANT and literal, so it does not lean on the ternary above: the
     // regressed kernel answered `0` — the falling crossing off the zero-init
     // history — and 0 is never the right answer at any of the four points.

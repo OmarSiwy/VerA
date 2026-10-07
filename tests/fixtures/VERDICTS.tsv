@@ -1127,6 +1127,7 @@ pass	ch04_expressions/laplace_transcendental_coefficient.va
 pass	ch04_expressions/laplace_zp_dynamic_pole_sampled.va
 pass	ch04_expressions/laplace_zp_parameter_roots_ac.va
 pass	ch04_expressions/laplace_zp_parameter_roots_step.va
+pass	ch04_expressions/last_crossing_in_creating_step.va
 pass	ch04_expressions/ln1p_domain_rejected.va
 pass	ch04_expressions/lrm_4_6_4_3.va
 pass	ch04_expressions/lrm_4_6_4_5.va

@@ -172,6 +172,16 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
     });
 }
 
+/// Returns the §4.5.10 crossing time inside the step ending at `sim.t`: the
+/// zero of the line through (`sim.t - sim.dt`, `__prev`) and (`sim.t`, `in`),
+/// the "linear interpolation" §4.5.10 names. `eval` answers with it at the
+/// point where `crossTest` holds and `updateState` latches it there, one
+/// spelling for both, so the accepted point and every later one read the
+/// same bits.
+pub fn lastCrossTime(self: *Gen, n: []const u8, in: []const u8) Error![]const u8 {
+    return self.arena.print("(sim.t - sim.dt) + inst.{0s}__prev / (inst.{0s}__prev - {1s}) * sim.dt", .{ n, in });
+}
+
 /// Returns the §5.10.3 enable test for `cross`, `above` or `timer` ("If
 /// enable argument is specified and it is zero, then <op>() is inactive"), or
 /// `true` when absent. The enable is a live expression; `UnitPlan` gives it
@@ -1348,7 +1358,18 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             });
             try opClose(self);
         },
-        .last_crossing => try self.b("S.con(inst.{s}__t_last)", .{n}),
+        // §4.5.10 "the simulation time when a signal expression last crossed
+        // zero": §4.5's output "is a function of both the input and the
+        // internal state", so a crossing between the last accepted point and
+        // this one is already the last crossing here, the point where §5.10.3
+        // `cross` on the same expression fires. Otherwise the latched one;
+        // `sim.dt > 0` is `updateState`'s seeding rule.
+        .last_crossing => {
+            const v = try self.arena.print("({s}).val()", .{in0});
+            try self.b("S.con(if (sim.dt > 0.0 and ({s})) {s} else inst.{s}__t_last)", .{
+                try crossTest(self, n, args, v), try lastCrossTime(self, n, v), n,
+            });
+        },
         // §5.10.3 the event is decided here, at the point being evaluated;
         // `updateState` only advances `__prev`/`__next`. §5.10.3.1 "will not
         // generate events for non-transient analyses ... it can only generate

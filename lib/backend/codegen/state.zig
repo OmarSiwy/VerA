@@ -487,15 +487,14 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // 0.0, a value the signal never had, so the DC point (dt = 0)
             // only seeds the history. Otherwise a signal at -1 V would read
             // as a crossing at t = 0, not the "negative value" §4.5.10
-            // requires before the first real crossing.
+            // requires before the first real crossing. The time is
+            // `lastCrossTime`, the value `eval` already answered with at this
+            // point, so the latch never moves it by a rounding.
             .last_crossing => try self.w(
-                \\        if (dt > 0.0 and ({1s})) {{
-                \\            const f = inst.{0s}__prev / (inst.{0s}__prev - in);
-                \\            inst.{0s}__t_last = state.t_prev + f * dt;
-                \\        }}
+                \\        if (dt > 0.0 and ({1s})) inst.{0s}__t_last = {2s};
                 \\        inst.{0s}__prev = in;
                 \\
-            , .{ n, try gen_call.crossTest(self, n, args, "in") }),
+            , .{ n, try gen_call.crossTest(self, n, args, "in"), try gen_call.lastCrossTime(self, n, "in") }),
             // §5.10.3 only the history moves here; `eval` raises the event,
             // so nothing is observed one timepoint late. `enable` gates the
             // event, not the record, so a re-enabled operator never compares

@@ -48,12 +48,13 @@ pub fn acDynamic(k: OpKind) bool {
 /// `cross` and `timer` compare the current input (`timer`: its `start_time`)
 /// against `__prev` in `eval` (§5.10.3). `zi` needs it for the §4.5.12 static
 /// branch. `absdelay` needs it for the §4.5.7 DC pass-through and for a delay
-/// shorter than the accepted step. §4.5.10 `last_crossing` answers from the
-/// crossing it latched, and the §9.17 requests evaluate their own argument.
+/// shorter than the accepted step. §4.5.10 `last_crossing` compares it as
+/// `cross` does, to report a crossing inside the step being evaluated, and the
+/// §9.17 requests evaluate their own argument.
 pub fn needsInput(k: OpKind) bool {
     return switch (k) {
-        .idt_hold, .idtmod, .absdelay, .transition, .slew, .laplace, .zi, .cross, .above, .timer => true,
-        .none, .last_crossing, .bound_step, .discontinuity => false,
+        .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => true,
+        .none, .bound_step, .discontinuity => false,
     };
 }
 
@@ -71,11 +72,12 @@ pub fn enableArg(k: OpKind) ?u8 {
 }
 
 test needsInput {
-    // §4.5.10 `last_crossing` answers from the crossing it latched; §5.10.3.1
-    // `cross` compares the current input against the previous one.
-    try std.testing.expect(!needsInput(.last_crossing));
+    // §4.5.10 `last_crossing` and §5.10.3.1 `cross` compare the current input
+    // against the previous one; §9.17.2 `$bound_step` evaluates its own.
+    try std.testing.expect(needsInput(.last_crossing));
     try std.testing.expect(needsInput(.cross));
     try std.testing.expect(needsInput(.absdelay));
+    try std.testing.expect(!needsInput(.bound_step));
 }
 
 test enableArg {
