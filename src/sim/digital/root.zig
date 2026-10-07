@@ -1896,10 +1896,10 @@ test "an error raised once elaboration finished, between runUntil calls too, is 
     _ = try r.runUntil(1);
     // What a VPI host raises between two `runUntil` calls (`vpi/run.zig`
     // `timeSteps`'s callback-pass cap), and after the last one.
-    _ = r.fail(0, "between", .{});
+    try std.testing.expectEqual(error.DigitalFailed, r.fail(0, "between", .{}));
     try std.testing.expectEqual(diag.Stage.run, bag.at(bag.count() - 1).stage);
     _ = try r.runUntil(std.math.maxInt(Tick));
-    _ = r.fail(0, "after", .{});
+    try std.testing.expectEqual(error.DigitalFailed, r.fail(0, "after", .{}));
     try std.testing.expectEqual(diag.Stage.run, bag.at(bag.count() - 1).stage);
     // The summary counts the elaboration's errors only, not the two the run
     // raised.

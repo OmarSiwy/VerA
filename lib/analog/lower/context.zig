@@ -130,8 +130,8 @@ fn constantExpr(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: A
             return false;
         },
         .sys_call => {
-            const name = file.str(ex.strOf(e));
-            if (!std.mem.eql(u8, name, "$rtoi") and !std.mem.eql(u8, name, "$itor") and !std.mem.eql(u8, name, "$clog2")) return false;
+            const callee = Mir.Callee.fromName(file.str(ex.strOf(e)));
+            if (callee != .@"$rtoi" and callee != .@"$itor" and callee != .@"$clog2") return false;
         },
         .unary, .binary, .ternary, .builtin_call => {},
         else => return false, // else: a variable, net, call or access is a value only a run computes
