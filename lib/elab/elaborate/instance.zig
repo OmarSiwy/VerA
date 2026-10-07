@@ -5,7 +5,7 @@
 //! ports (§6.2.2), applies the overrides (§6.3, §6.4), names every
 //! declaration (§6.7) and clones the body (`clone.zig`); the walk keeps its
 //! levels on a heap stack, so any finite depth is walked.
-//! LRM §3.6.2, §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.5, §6.5.7.1,
+//! LRM §3.6.2, §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.2.2, §6.5.5, §6.5.7.1,
 //! §6.6, §6.7.1, §7.1, §7.8.4, §9.15, §9.19, A.4.1, A.5.4, Annex E.3.2;
 //! IEEE 1364-2005 §5.2.1, §12.3.3, §12.3.6, §19.9.
 
@@ -1078,6 +1078,21 @@ pub fn declares(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
     return false;
 }
 
+/// §6.5.2.2 "Each port shall be declared as input, output, or inout
+/// (bidirectional), in addition to any other declaration" (E0376), in every
+/// user module, instantiated or not, once per compilation. A null port
+/// (A.1.3, `nullPortName`'s tab-led name) names no net, so it has nothing
+/// to declare.
+pub fn checkPortDirections(self: *Flatten) Error!void {
+    const file = self.ctx.file;
+    for (file.userModules()) |*m| for (m.ports) |p| {
+        if (p.direction != .unspecified) continue;
+        const name = file.str(p.name);
+        if (name.len > 0 and name[0] == '\t') continue;
+        try self.err(p.main_tok, .E0376, "port `{s}` of module `{s}` is not declared `input`, `output` or `inout`", .{ name, file.str(m.name) });
+    };
+}
+
 /// §6.5 "Ports provide a means of interconnecting instances of modules. If a
 /// module A instantiates module B, the ports of module B are associated with
 /// either the ports or the internal nets of module A." A VARIABLE of A is
@@ -1185,6 +1200,32 @@ test declares {
     try std.testing.expect(declares(m, fixture.id(&f.file, "p").?));
     try std.testing.expect(declares(m, fixture.id(&f.file, "w").?));
     try std.testing.expect(!declares(m, fixture.id(&f.file, "v").?));
+}
+
+test checkPortDirections {
+    // §6.5.2.2: `c` has a discipline and no direction (#73). `kid` is never
+    // instantiated, and is still checked.
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad,
+        \\discipline ca; domain continuous; enddiscipline
+        \\module top(p); inout p; ca p; endmodule
+        \\module kid(c); ca c; endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0376));
+
+    // The legal neighbour declares the direction; a null port (A.1.3) names
+    // no net and so has no direction to declare.
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good,
+        \\discipline ca; domain continuous; enddiscipline
+        \\module top(p, ); inout p; ca p; endmodule
+        \\module kid(c); inout c; ca c; endmodule
+    );
+    _ = try elaborate.elaborate(good.ctx());
+    try std.testing.expect(!fixture.hasCode(&good.bag, .E0376));
 }
 
 test substIdent {

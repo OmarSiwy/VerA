@@ -9,7 +9,8 @@
 //!
 //!     alias.checkSource           §3.4.7 alias reads, before anything folds
 //!     gen_instances, pickTop      §6.6 table, §6.2.2 the root
-//!     names / resolve checks      E.3.3, §7.7, A.2.1.3, §7.4.2 (every module)
+//!     names / resolve checks      E.3.3, §7.7, A.2.1.3, §6.5.2.2, §7.4.2 (every
+//!                                 module)
 //!     run: seed the top           its own declarations, unrenamed
 //!       instance.walkInstances    per level: override.collectDefparams,
 //!                                 resolve.collectOoc, insert.plan, then per
@@ -343,6 +344,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // not skip a misspelled connect module or discipline in one.
     try elab_resolve.checkConnectRules(&f);
     try elab_resolve.checkNetDisciplines(&f); // A.2.1.3, every module: see there
+    try elab_instance.checkPortDirections(&f); // §6.5.2.2, every module
     // §7.4.2 "the real-value nets shall obey the rules imposed by 3.7": the
     // same structural check the digital runner makes (E0918/E0919).
     try @import("frontend").wreal.check(ctx.file, ctx.tok_starts, ctx.bag);

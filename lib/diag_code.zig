@@ -242,6 +242,7 @@ pub const Code = enum(u16) {
     E0373,
     E0374,
     E0375,
+    E0376,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -3051,6 +3052,24 @@ fn infoOf(c: Code) Info {
             \\so an incompatible override would rename the quantity they read.
             \\Override only an undeclared net, or one whose discipline the new
             \\one is compatible with.
+            ,
+        },
+        .E0376 => .{
+            .title = "port has no direction declaration",
+            .lrm = "6.5.2.2",
+            .explain =
+            \\LRM 6.5.2.2: "Each port shall be declared as input, output, or
+            \\inout (bidirectional), in addition to any other declaration (e.g.,
+            \\discipline, reg, or wire)." 6.2 says the same of the list of
+            \\ports: its identifiers "shall be declared in input, output, and
+            \\inout statements within the module definition".
+            \\
+            \\    module m(c); electrical c; ... endmodule             // error
+            \\    module m(c); inout c; electrical c; ... endmodule    // ok
+            \\
+            \\A discipline declaration is not a direction. Every module of the
+            \\compilation is checked, instantiated or not. The digital engine
+            \\(`--run` of a `.v` design) reports the same omission as E1100.
             ,
         },
         .E0342 => .{
