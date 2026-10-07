@@ -1886,12 +1886,16 @@ test "elaborate + runUntil step the engine one bounded horizon at a time" {
 test "an error raised once elaboration finished, between runUntil calls too, is the run's (#72)" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var bag = diag.Bag.init(arena.allocator());
     var output = std.Io.Writer.Allocating.init(arena.allocator());
-    // An elaboration failure is still a compile error.
-    try std.testing.expectError(error.DigitalFailed, elaborate(arena.allocator(), "module m; initial disable nope; endmodule\n", .{}, &bag, &output.writer));
-    try std.testing.expectEqual(diag.Stage.lower, bag.at(bag.count() - 1).stage);
-    const compile_errs = bag.err_count;
+    // An elaboration failure is still a compile error. It has its own bag:
+    // `elaborate` refuses to start on a bag that has already failed.
+    var compile_bag = diag.Bag.init(arena.allocator());
+    try std.testing.expectError(error.DigitalFailed, elaborate(arena.allocator(), "module m; initial disable nope; endmodule\n", .{}, &compile_bag, &output.writer));
+    try std.testing.expectEqual(diag.Stage.lower, compile_bag.at(compile_bag.count() - 1).stage);
+    var text = std.Io.Writer.Allocating.init(arena.allocator());
+    try diag.render(&compile_bag, &text.writer, .{});
+    try std.testing.expect(std.mem.find(u8, text.written(), "could not compile due to") != null);
+    var bag = diag.Bag.init(arena.allocator());
     var r = try elaborate(arena.allocator(), "module m; reg a; initial #5 a = 1; endmodule\n", .{}, &bag, &output.writer);
     _ = try r.runUntil(1);
     // What a VPI host raises between two `runUntil` calls (`vpi/run.zig`
@@ -1901,12 +1905,13 @@ test "an error raised once elaboration finished, between runUntil calls too, is 
     _ = try r.runUntil(std.math.maxInt(Tick));
     try std.testing.expectEqual(error.DigitalFailed, r.fail(0, "after", .{}));
     try std.testing.expectEqual(diag.Stage.run, bag.at(bag.count() - 1).stage);
-    // The summary counts the elaboration's errors only, not the two the run
-    // raised.
-    var text = std.Io.Writer.Allocating.init(arena.allocator());
-    try diag.render(&bag, &text.writer, .{});
-    const want = try std.fmt.allocPrint(arena.allocator(), "could not compile due to {d} previous error(s)", .{compile_errs});
-    try std.testing.expect(std.mem.find(u8, text.written(), want) != null);
+    // The run's two errors are no compile failure. A bag holding both kinds
+    // counts the compile errors only: lib/diag/test.zig's "render: a
+    // run-time error is no compile failure (#72)".
+    var run_text = std.Io.Writer.Allocating.init(arena.allocator());
+    try diag.render(&bag, &run_text.writer, .{});
+    try std.testing.expect(bag.failed());
+    try std.testing.expect(std.mem.find(u8, run_text.written(), "could not compile") == null);
 }
 
 test "IEEE 1364 §5.2.1 a bit-select names its bit against the declared range" {
