@@ -5,6 +5,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 ## Unreleased
 
 - Fix: §4.5.10 `last_crossing()` reports a crossing at the point that creates it (V(p) - 0.25 rising from -0.25 at 0 to 0.75 at 1n reads 0.25n at 1n, not -1), in every host; a device using it emits a different `eval` (#54).
+- Fix: a `.v` `--emit-exe` executable that embeds the interpreter (a design not made native) exits 1 after a `$readmem` load §17.2.9 terminated (E1157), as `vera --run` does; it exited 0 (#65).
 - The fixture suite and `zig build golden` run at most 8 fixture builds at once by default (`-j` overrides): sizing by total memory let two suites on one host run it out of memory.
 - Fix: a child module's port with a direction and no discipline that the child's analog code probes or contributes (`inout c; analog I(c) <+ V(c);`) is E0337, as it is in a top module, even when the parent's net is `electrical`; passing such a port only to an instance stays legal (§6.5.2.1) (#74).
 - Fix: a `.va` module port with no `input`, `output` or `inout` declaration (`module m(c); electrical c; ...`) is refused with the new E0376, citing §6.5.2.2, in every module of the compilation; it compiled before (#73).

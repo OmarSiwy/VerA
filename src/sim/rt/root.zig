@@ -63,7 +63,9 @@ fn interpretDeep(init: std.process.Init, opts: digital.Options, source: []const 
     var bag: diag.Bag = .init(arena);
     var run_opts = opts;
     run_opts.io = io;
-    const code: u8 = if (digital.run(arena, source, run_opts, &bag, &stdout.interface)) 0 else |e| blk: {
+    // An error that did not end the run (§17.2.9's terminated load, E1157)
+    // still fails it, as in `vera --run` (`cli/digital.zig`, #65).
+    const code: u8 = if (digital.run(arena, source, run_opts, &bag, &stdout.interface)) @intFromBool(bag.failed()) else |e| blk: {
         if (e != error.DigitalFailed) stderr.interface.print("error: digital execution failed: {t}\n", .{e}) catch {};
         break :blk 1;
     };
