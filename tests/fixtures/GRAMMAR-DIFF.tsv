@@ -1,5 +1,5 @@
 # Where the Annex A recognizer and VerA's parse-level acceptance disagree:
-# specification/TESTING.md L5c, written by `tools/conformance.py grammar diff`.
+# Written by `tools/conformance.py grammar diff`.
 # source: fixture (as committed), mutant (one token deleted, duplicated or
 # swapped), generated (a sentence derived from the grammar for one alternative).
 # earley: accept | refuse at >>token<<; `(needs a chapter box)` marks an

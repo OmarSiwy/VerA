@@ -1,4 +1,4 @@
-# specification/TESTING.md L13, written by `tools/conformance.py mutate`.
+# Written by `tools/conformance.py mutate`.
 file	sha	line	op	outcome	killed_by
 lib/backend/cg_display.zig	3ea26233	816	and->or	survived	
 lib/backend/cg_display.zig	3ea26233	586	true->false	killed	unit:

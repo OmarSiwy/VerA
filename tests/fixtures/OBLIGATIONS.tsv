@@ -1,4 +1,4 @@
-# The AMS LRM's normative sentences: the requirement ledger, specification/TESTING.md §3.2.
+# The AMS LRM's normative sentences: the requirement ledger.
 # Rows are extracted by `tools/conformance.py obligations --update`; a reader
 # classifies `pol`, `kind` and `oracle` and adds `declar.` rows (ordinal >= 1000,
 # hash `manual`) for rules stated without a modal verb. A changed hash means the

@@ -8,7 +8,7 @@
 # list is uploaded as an artifact, diff names, not counts.
 #
 # Only the sweep and the audit-tool self-tests report without gating. Also
-# gating (specification/TESTING.md §3.6): `zig build test` (which runs the canaries),
+# gating: `zig build test` (which runs the canaries),
 # the build-step inventory, the requirement ledger against the LRM text, the
 # sentence cites against the ledger, and the verdict RATCHET: every fixture's
 # verdict must equal the committed tests/fixtures/VERDICTS.tsv, so a
@@ -59,7 +59,7 @@ jobs:
         run: python3 tools/conformance.py obligations
 
       # A sentence cite whose fixture polarity contradicts its row cannot be
-      # evidence, and would inflate the metric (specification/TESTING.md §3.3).
+      # evidence, and would inflate the metric.
       - name: Sentence cites agree with the ledger (gate)
         run: python3 tools/conformance.py lint-cites
 

@@ -1,4 +1,4 @@
-//! L3 `ref4` (specification/TESTING.md §5): a per-bit four-state evaluator written from
+//! L3 `ref4`: a per-bit four-state evaluator written from
 //! IEEE 1364-2005 §5's tables, and the tests that hold `integer.zig`'s
 //! `Literal` operations to it. In: operands as `V` (one `B` per bit, a width,
 //! a signedness); out: the `V` or `B` the clause defines. It shares no code

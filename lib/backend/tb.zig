@@ -193,7 +193,7 @@ pub const Directives = struct {
     /// `//! lrm <section>`, one per line: the clauses this fixture pins. No
     /// verdict depends on it; failure reports and `--coverage` read it.
     /// `<section>:<n>` pins the n-th normative sentence of the clause, a row
-    /// of `tests/fixtures/OBLIGATIONS.tsv` (specification/TESTING.md §3.2).
+    /// of `tests/fixtures/OBLIGATIONS.tsv`.
     lrm: []const []const u8 = &.{},
     /// `//! xfail <reason>`: the fixture states an LRM requirement VerA does
     /// not meet yet. With `reject`, VerA wrongly accepts the construct;
@@ -211,7 +211,7 @@ pub const Directives = struct {
     /// so `contract`'s conformance checks run on the device and this host
     /// (`vera --validate-contract`; the fixture suite always sets it).
     validate_contract: bool = false,
-    /// Not a directive: the suite's `--certify` (specification/TESTING.md L4). The
+    /// Not a directive: the suite's `--certify`. The
     /// runner checks every Jacobian entry against a central difference at
     /// each point (`fdCheck`), a proved-finite device at random points
     /// (`finiteCheck`), and the revert path at each accepted point

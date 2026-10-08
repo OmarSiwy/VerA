@@ -94,8 +94,8 @@ builds a host step by step.
 ## Conformance
 
 Every fixture under `tests/fixtures/` names the LRM clause or sentence it
-tests. `tools/conformance.py` measures the evidence for each normative sentence
-([`specification/TESTING.md`](specification/TESTING.md)); the numbers are in
+tests. `tools/conformance.py` measures the evidence for each normative sentence;
+the numbers are in
 [`CHANGELOG.md`](CHANGELOG.md) and the [live report](https://omarsiwy.github.io/VerA/report/).
 
 ## Contributing

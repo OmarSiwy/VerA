@@ -1,4 +1,4 @@
-# Every alternative of every Syntax box: the R3 denominator, specification/TESTING.md §3.1.
+# Every alternative of every Syntax box: the grammar-coverage denominator.
 # Written by `tools/conformance.py grammar extract`; never edit by hand.
 # Terminals (bold in the LRM) are quoted; plain-type punctuation is bare.
 # note: empty for Annex A; a chapter row says how it relates to Annex A.

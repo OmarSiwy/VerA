@@ -689,7 +689,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
 fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directives) Error!void {
     try out.appendSlice(arena, tb_runner_text.runner_head);
     try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
-    try out.print(arena, "/// The switch of `fdCheck`, `finiteCheck` and `stateCheck`: the suite's `--certify` (specification/TESTING.md L4).\nconst fd_certify = {};\n", .{d.certify});
+    try out.print(arena, "/// The switch of `fdCheck`, `finiteCheck` and `stateCheck`: the suite's `--certify`.\nconst fd_certify = {};\n", .{d.certify});
     try out.print(arena, "/// `finiteCheck`'s claim: every contribution unit was proved finite.\nconst finite_proved = {};\n", .{d.finite_proved});
     try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     // §9.15 `$simparam$str("analysis_name")`: this testbench's one analysis.

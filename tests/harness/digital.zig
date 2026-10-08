@@ -61,7 +61,7 @@ pub fn caseSelected(has_golden: bool, source: []const u8) bool {
 /// Match a normal digital diagnostic exit, not a signal, successful program,
 /// empty/bare reject, or unrelated failure. Every declared pattern must match.
 /// `//! reject-only` also requires every `error[` line to match some pattern,
-/// as the analog judge does (specification/TESTING.md §3.3 c).
+/// as the analog judge does.
 pub fn rejectionMatches(source: []const u8, exit_code: u8, stderr: []const u8) bool {
     if (exit_code != 1 or std.mem.indexOf(u8, stderr, "error[") == null) return false;
     var patterns: [32][]const u8 = undefined;
