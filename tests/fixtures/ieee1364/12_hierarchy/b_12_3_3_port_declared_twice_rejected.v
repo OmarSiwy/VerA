@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 12.3.3
 //! reject E0218
 //! reject port redeclared in the module body
+//! neighbour b_12_3_3_port_signed_inheritance.v
 module m(aport);
   input aport;
   input aport;

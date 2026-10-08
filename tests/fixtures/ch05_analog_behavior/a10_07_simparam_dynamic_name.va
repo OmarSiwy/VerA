@@ -61,6 +61,7 @@
 // `""`, and the comparison reads 0.
 //
 //! lrm 9.15
+//! lrm 9.15:4
 //! analysis dc
 //! bias V(p) = 0.5, V(n) = 0.0
 `include "check.vh"

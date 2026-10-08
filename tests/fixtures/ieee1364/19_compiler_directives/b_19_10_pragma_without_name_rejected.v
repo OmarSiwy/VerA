@@ -11,6 +11,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 19.10
 //! reject requires a pragma name
+//! neighbour pragma_unrecognized_no_effect.v
 `pragma
 module b_19_10_pragma_without_name_rejected;
   initial $display("accepted");

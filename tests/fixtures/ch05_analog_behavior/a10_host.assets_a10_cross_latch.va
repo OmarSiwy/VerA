@@ -53,6 +53,7 @@
 // resulting waveform would no longer say WHEN the event happened.
 //
 //! lrm 5.10.3.1
+//! lrm 5.10.3.1:5
 //! analysis tran
 //! time 0, 1u, 2u, 3u, 4u
 //! wave V(vin) = 0.0, 0.25, 0.75, 1.0, 1.0

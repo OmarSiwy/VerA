@@ -4,6 +4,7 @@
 // the unused second destination retains its initialized sentinel 73.
 // A conflicting first literal has no matched/assigned items and returns zero.
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:4
 // SCAN-EXCESS-001 implemented: lowering guards each destination by count.
 //! checks 4
 `include "check.vh"

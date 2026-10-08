@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.1
 //! reject E0207
 //! reject unexpected token: found `#`
+//! neighbour b_7_1_instance_list_shared_spec.v
 module b_7_1_per_instance_delay_rejected;
   reg a, b;
   wire o1, o2;

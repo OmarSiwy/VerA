@@ -20,7 +20,9 @@
 // operator, including one about the wrong argument.
 //
 //! lrm 4.5.6
-//! reject E0504
+//! lrm 4.5.6:1
+//! reject-only E0504
+//! neighbour 18_ddx.va
 module ch04_ddx_two_node_probe_rejected(p, n);
     inout p, n;
     electrical p, n;

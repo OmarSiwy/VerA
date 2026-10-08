@@ -69,9 +69,11 @@
 // E.3.3 also requires a shadowing warning, pinned by W0951 below.
 //
 //! lrm E.3.3
+//! lrm E.3.3:3
 //! warn W0951
 //! lrm E.2
 //! lrm 6.7.1
+//! lrm 6.7.1:1
 //! bias V(in) = 1.0, V(gnd) = 0.0
 //! solve
 //! spice .SUBCKT RDIV IN OUT GND

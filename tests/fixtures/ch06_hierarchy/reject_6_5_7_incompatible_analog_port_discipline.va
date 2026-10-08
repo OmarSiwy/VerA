@@ -12,7 +12,8 @@
 // `thermal` and is connected to `a`, of discipline `electrical`".
 //
 //! lrm 6.5.7
-//! reject E0355
+//! lrm 6.5.7:1
+//! reject-only E0355
 `include "disciplines.vams"
 module ch6_thermal_child(p);
   inout p;

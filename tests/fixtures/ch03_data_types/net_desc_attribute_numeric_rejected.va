@@ -14,7 +14,10 @@
 //
 //! lrm 3.6.3.1
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:1
+//! lrm 2.9.2:2
+//! reject-only E0358
+//! neighbour lrm_3_6_3_1.va
 module ch3_net_desc_attribute_numeric(p, n);
     inout p, n;
     electrical p, n;

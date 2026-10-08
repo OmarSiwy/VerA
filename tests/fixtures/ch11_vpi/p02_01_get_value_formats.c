@@ -73,9 +73,14 @@
  * same fact read two ways and is why both are asserted.
  *
  * p02_design.bit1 is a scalar `reg` holding 1'b1: vpiScalarVal -> vpi1,
- * vpiBinStrVal -> "1", vpiIntVal -> 1, and vpiObjTypeVal -> vpiScalarVal
- * (12.16 spells this "vpiScalar"; Annex G's format constant is vpiScalarVal
- * and they are the same thing — see tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4).
+ * vpiBinStrVal -> "1", vpiIntVal -> 1. vpiObjTypeVal on it rewrites the format
+ * to EITHER of the two 12.16 names for a scalar: "For a scalar, either
+ * vpiScalar or vpiStrength" (Annex G's format constants vpiScalarVal and
+ * vpiStrengthVal — see tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4). The
+ * choice is the routine's, so both are accepted, and the value is vpi1 read
+ * through whichever member that format names (value.scalar, or the logic of
+ * value.strength[0]). (Reconciler, 2026-10-08: an earlier revision demanded
+ * vpiScalarVal alone, which a routine taking 12.16's other branch would fail.)
  *
  * WHEN. All of the above are assigned by an `initial` block, so they are only
  * true AFTER the time-0 queue has run. 12.31.2: "cbReadOnlySynch ... Callback
@@ -93,6 +98,23 @@
 //! lrm 12.31.2
 //! lrm 12.33.2
 //! inherited IEEE 1364-2005 27.14
+//! lrm 12.2:2
+//! lrm 12.5:1
+//! lrm 12.12:1
+//! lrm 12.12:3
+//! lrm 12.16:1
+//! lrm 12.16:2
+//! lrm 12.16:3
+//! lrm 12.16:5
+//! lrm 12.16:6
+//! lrm 12.16:7
+//! lrm 12.16:8
+//! lrm 12.16:9
+//! lrm 12.21:1
+//! lrm 12.21:2
+//! lrm 12.33.2:1
+//! lrm 12.33.2:2
+//! lrm 12.33.2:4
 
 #include "p02_check.h"
 
@@ -214,9 +236,13 @@ static int read_values(p_cb_data cb_data)
 
   v.format = vpiObjTypeVal;
   vpi_get_value(bit1, &v);
-  CHECK(v.format == vpiScalarVal,
-        "vpiObjTypeVal on a scalar must become vpiScalarVal, got %d", (int)v.format);
-  CHECK(v.value.scalar == vpi1, "and must carry vpi1");
+  CHECK(v.format == vpiScalarVal || v.format == vpiStrengthVal,
+        "vpiObjTypeVal on a scalar must become vpiScalarVal or vpiStrengthVal, got %d",
+        (int)v.format);
+  CHECK((v.format == vpiScalarVal && v.value.scalar == vpi1) ||
+            (v.format == vpiStrengthVal && v.value.strength != NULL &&
+             v.value.strength[0].logic == vpi1),
+        "and must carry vpi1");
 
   p02_done("01_get_value_formats");
   return 0;

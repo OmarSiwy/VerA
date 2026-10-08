@@ -25,7 +25,8 @@
 //
 //! lrm 3.4.2
 //! lrm C.8
-//! reject E0361
+//! lrm 3.4.2:2
+//! reject-only E0361
 module ch3_range_target_upper(p, n);
     inout p, n;
     electrical p, n;

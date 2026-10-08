@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 4.3.1
 //! reject E1100
 //! reject a constant expression is required here
+//! neighbour b_4_3_1_vector_ranges.v
 module b_4_3_1_variable_range_bound_rejected;
   integer n;
   reg [n:0] v;

@@ -17,7 +17,8 @@
 //
 //! lrm D.1
 //! lrm 4.4
-//! reject E0501
+//! lrm 4.4:5
+//! reject-only E0501
 `include "disciplines.vams"
 module annex_d_unbound_nature_access(p);
   inout p;

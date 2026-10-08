@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 7.14
 //! reject E0210
 //! reject expected ')'
+//! neighbour d03_08_trireg_charge_decay.v
 module b_7_14_four_net_delays_rejected;
   wire #(1,2,3,4) w;
   initial $finish(0);

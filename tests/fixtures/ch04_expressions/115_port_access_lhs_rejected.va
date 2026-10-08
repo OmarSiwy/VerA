@@ -17,7 +17,9 @@
 //
 //! lrm 4.4
 //! lrm 5.4.3
-//! reject E0407
+//! lrm 5.4.3:1
+//! reject-only E0407
+//! neighbour 34_port_access.va
 module ch04_port_access_lhs_rejected(p);
     inout p;
     electrical p;

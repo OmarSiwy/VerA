@@ -24,7 +24,10 @@
 // same construct: the parent contributes a POTENTIAL to a branch the child also
 // potential-sources, so §5.6.1.2's accumulation applies and 0.5 + 1.8 = 2.3 is
 // well defined. The two files differ in one access function, and a fix for
-// either has to keep the other's verdict.
+// either has to keep the other's verdict. So 08 is the `//! neighbour`.
+// (Reconciler, 2026-10-08: the neighbour line named value_retention.va, which
+// has no hierarchical contribution and so cannot show this refusal is about the
+// switch and not about contributing hierarchically.)
 //
 // WHAT USED TO HAPPEN: accepted silently. The parent's flow contribution
 // converted the child's branch and the design solved with `x[drv.x] = 0` — no
@@ -34,8 +37,10 @@
 // clause's own phrase, "changes the branch into a switch branch".
 //
 //! lrm 5.6.8.2
+//! lrm 5.6.8.2:1
 //! lrm 5.6.5
-//! reject E0439
+//! reject-only E0439
+//! neighbour a02_08_hierarchical_named_branch_accumulates.va
 module a02_hier_switch_branch(g);
   inout g;
   electrical g;

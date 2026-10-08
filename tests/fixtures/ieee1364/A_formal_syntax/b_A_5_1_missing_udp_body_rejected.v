@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.5.1
 //! reject E0207
 //! reject a udp_body is a `table
+//! neighbour b_A_5_1_udp_declarations.v
 primitive b_A_5_1_empty (y, a);
   output y;
   input a;

@@ -535,8 +535,7 @@ pub const LocalAccess = struct { name: Ast.StrId, local_only: bool = false };
 ///
 /// ponytail: a named branch (`I(br)`) is not in `disc_of`, so it is left
 /// unscaled; the upgrade is a branch → net map here. Rules 3 and 4 (noise
-/// power) are not applied; `mfactor_flow_noise.va` and
-/// `mfactor_potential_noise.va` pin the unscaled top-level case only.
+/// power) are `mfactorNoise`'s.
 pub fn mfactorScale(
     self: *Flatten,
     value: Ast.ExprId,
@@ -557,6 +556,29 @@ pub fn mfactorScale(
         .rhs = self.unit.hier.get(.mfactor),
         .extra = @backingInt(op),
     });
+}
+
+/// Returns noise call `call` scaled for §6.3.6's rules 3 and 4: "Contributions
+/// to a branch flow quantity using the noise functions (white_noise,
+/// flicker_noise, noise_table) shall have the noise power multiplied by
+/// $mfactor", and a potential's "divided by $mfactor". A noise function's
+/// value is an amplitude, so the call becomes `call / $mfactor ** 0.5`: on a
+/// flow, rule 1's factor (`mfactorScale`) makes the amplitude sqrt(m) and the
+/// power m; a potential, which rule 1 leaves alone, gets power 1/m. §4.6.3's
+/// `ac_stim` is a stimulus, not noise, and keeps rule 1 alone. The top's
+/// $mfactor stays with the host, as in `mfactorScale`.
+///
+/// ponytail: a noise source on a named branch gets 1/m, since rule 1 misses
+/// that branch (`mfactorScale`'s note); the same branch → net map fixes both.
+pub fn mfactorNoise(self: *Flatten, call: Ast.ExprId) Error!Ast.ExprId {
+    const m = self.unit.hier.get(.mfactor);
+    if (m == .none) return call;
+    const x = &self.ctx.file.exprs;
+    if (std.mem.eql(u8, self.ctx.file.str(x.strOf(call)), "ac_stim")) return call;
+    const tok = x.mainTok(call);
+    const arena = self.ctx.arena;
+    const root = try x.add(arena, .{ .tag = .binary, .main_tok = tok, .lhs = m, .rhs = try x.addReal(arena, tok, 0.5), .extra = @backingInt(Ast.BinaryOp.pow) });
+    return x.add(arena, .{ .tag = .binary, .main_tok = tok, .lhs = call, .rhs = root, .extra = @backingInt(Ast.BinaryOp.div) });
 }
 
 /// Folds a §6.2.2 instance array bound, written in the current unit's local

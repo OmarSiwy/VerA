@@ -23,6 +23,11 @@
 //
 //! lrm C.8
 //! lrm 6.5.3
+//! lrm 6.5.3:1
+//! lrm 6.5
+//! lrm 6.5:1000
+//! lrm 7.4.2
+//! lrm 7.4.2:2
 //! solve
 `include "check.vh"
 module annex_c_real_value_port_accepted(out);

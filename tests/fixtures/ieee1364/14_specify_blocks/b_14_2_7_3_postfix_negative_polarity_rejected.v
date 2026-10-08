@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 14.2.7.3
 //! reject E0208
 //! reject expected an identifier: found `-`
+//! neighbour b_14_2_7_polarity.v
 `timescale 1ns/1ns
 module b_14_2_7_3_postfix_negative_polarity_rejected(s, q);
   input s;

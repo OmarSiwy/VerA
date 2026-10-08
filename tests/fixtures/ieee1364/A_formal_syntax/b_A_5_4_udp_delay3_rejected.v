@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 A.5.4
 //! reject E1100
 //! reject at most two delays
+//! neighbour b_A_5_4_udp_instances.v
 primitive b_A_5_4_buf (y, a);
   output y;
   input a;

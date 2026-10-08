@@ -17,6 +17,7 @@
 //
 //! lrm 6.7.1
 //! lrm 5.5.5
+//! lrm 6.7.1:1
 //! bias V(p) = 0.625, V(n) = 0.0
 `include "check.vh"
 module ch6_obp2_top(p, n);

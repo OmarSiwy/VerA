@@ -10,6 +10,7 @@
 // both operands are non-zero, while the bit-wise 4 & 2 is 0 (0100 & 0010).
 //
 //! lrm 4.2.8
+//! lrm 4.2.8:1000
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_logical_and(p, n);

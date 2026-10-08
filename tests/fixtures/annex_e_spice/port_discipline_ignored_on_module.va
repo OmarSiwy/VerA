@@ -36,6 +36,7 @@
 // 1.25 - 0.0 = 1.25, a dyadic rational and exact in binary64, hence CHECKX.
 //
 //! lrm E.3.2.1
+//! lrm E.3.2.1:4
 //! lrm 2.9
 //! bias V(p) = 1.25, V(n) = 0.0
 `include "check.vh"

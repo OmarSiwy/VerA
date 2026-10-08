@@ -19,7 +19,7 @@
 //
 //! lrm 10.1
 //! lrm 3.6.5
-//! reject E0367
+//! reject-only E0367
 `default_nettype none
 module ch10_default_nettype_none_rejects_an_undeclared_probe(p);
     inout p;

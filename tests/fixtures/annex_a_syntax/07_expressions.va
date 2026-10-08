@@ -19,6 +19,11 @@
 //! lrm 3.4.4
 //! lrm 4.2.2
 //! lrm 4.2.12
+//! lrm 4.2.2:1000
+//! lrm A.8.1
+//! lrm A.8.1:1000
+//! lrm A.8.3
+//! lrm A.8.3:1000
 //! print none
 `include "check.vh"
 module annex_a_expressions(p, n);

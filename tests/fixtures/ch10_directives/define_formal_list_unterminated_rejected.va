@@ -8,7 +8,7 @@
 //
 //! lrm 10.4
 //! inherited IEEE 1364-2005 19.3.1
-//! reject E0111
+//! reject-only E0111
 `define SQ(x
 module ch10_define_formal_list_unterminated(p, n);
   inout p, n; electrical p, n;

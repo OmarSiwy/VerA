@@ -32,7 +32,10 @@
 // V(p) and the factor multiplies an addend, not the current.
 //
 //! lrm 6.3.6
-//! reject E0912
+//! lrm 6.3.6:7
+//! reject-only E0912
+//! neighbour mfactor.va
+//! neighbour mfactor_conditional_only.va
 module badres(a, b);
   inout a, b;
   electrical a, b;

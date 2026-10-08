@@ -19,6 +19,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4.3
 //! reject referenced in the same way
+//! neighbour b_14_2_4_3_edge_state_dependent_paths.v
 `timescale 1ns/1ns
 module b_14_2_4_3_inconsistent_port_reference_rejected(clk, reset, data, q);
   input clk, reset, data;

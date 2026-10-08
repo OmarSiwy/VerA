@@ -9,6 +9,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.5
 //! reject same number of bits
+//! neighbour b_14_2_5_full_parallel_paths.v
 `timescale 1ns/1ns
 module b_14_2_5_parallel_width_mismatch_rejected(in1, nib);
   input [7:0] in1;

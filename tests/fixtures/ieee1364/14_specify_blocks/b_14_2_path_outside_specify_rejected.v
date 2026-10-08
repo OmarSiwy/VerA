@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 14.2
 //! reject E0240
 //! reject not a module item
+//! neighbour b_14_2_module_paths.v
 `timescale 1ns/1ns
 module b_14_2_path_outside_specify_rejected(a, q);
   input a;

@@ -35,16 +35,28 @@
 // process is still Table 9-24's truncate.
 //
 // The count is taken by §9.5.4.1 `$fgets`, which returns 0 at EOF; ten tries
-// bound the loop far above the three lines that can exist. Asserted at both
-// time points of each analysis, where the count must not change.
+// bound the loop far above the three lines that can exist.
+//
+// ASSERTED AT t = 1e-3 ONLY, the second point of each analysis. §9.5.9: "If a
+// file is being written to during an iterative solve, then the file write
+// operations shall not be performed unless the iteration is accepted." The
+// `@(initial_step)` write runs inside the t = 0 solve, so a read in that SAME
+// evaluation cannot see it yet: the t = 0 count is k-1 lines plus whatever an
+// implementation does with the "w" open's truncation before acceptance, which
+// no clause fixes. By t = 1e-3 the t = 0 point has been accepted and its line
+// written, so the count is k. One check per analysis: three in all.
+// (Reconciler, 2026-10-08: an earlier revision also asserted k at t = 0.)
 //
 //! lrm 9.5.1.1
+//! lrm 9.5.1.1:1
 //! lrm 9.3
 //! lrm 9.5.1
 //! lrm 9.5.4.1
+//! lrm 9.5.9
 //! bias V(n) = 0
 //! sweep V(p) = 1, 2, 3
 //! time 0, 1e-3
+//! checks 3
 `include "check.vh"
 module ch09_write_mode_reopen_appends_across_analyses(p, n);
   inout p, n; electrical p, n;
@@ -63,8 +75,9 @@ module ch09_write_mode_reopen_appends_across_analyses(p, n);
       if (code > 0) lines = lines + 1;
     end
     $fclose(rfd);
-    `CHECKX("§9.5.1.1 analysis k's \"w\" reopen appends: k lines after analysis k (lines - k)",
-            lines - V(p), 0.0);
+    if ($abstime > 0.0)
+      `CHECKX("§9.5.1.1 analysis k's \"w\" reopen appends: k lines after analysis k (lines - k)",
+              lines - V(p), 0.0);
     I(p, n) <+ V(p, n);
   end
 endmodule

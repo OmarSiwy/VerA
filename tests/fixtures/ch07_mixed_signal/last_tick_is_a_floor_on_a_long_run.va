@@ -21,6 +21,7 @@
 // analog kernel sees the digital future.
 //
 //! lrm 7.3.6.5
+//! lrm 7.3.6.5:1
 //! analysis tran
 //! time 0.6000000006, 0.600000001
 `timescale 1ns/1ns

@@ -33,6 +33,8 @@
 // none of it depends on run order.
 //
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:5
+//! lrm 9.5.4.2:1
 `include "check.vh"
 module ch09_sscanf_conversion_rules(p, n);
   inout p, n; electrical p, n;

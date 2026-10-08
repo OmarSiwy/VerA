@@ -10,7 +10,8 @@
 //
 //! lrm 3.6.3
 //! lrm 3.6.2.3
-//! reject E0501
+//! reject-only E0501
+//! neighbour 31_domainless_discipline.va
 discipline ch3_domainless_beh;
 enddiscipline
 

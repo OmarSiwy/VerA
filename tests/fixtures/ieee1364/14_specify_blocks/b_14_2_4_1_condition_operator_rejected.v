@@ -14,6 +14,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4.1
 //! reject condition
+//! neighbour b_14_2_4_state_dependent_paths.v
 `timescale 1ns/1ns
 module b_14_2_4_1_condition_operator_rejected(a, b, y);
   input a, b;

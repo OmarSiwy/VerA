@@ -2,6 +2,7 @@
 // Count 4097 must not be substituted by 4096. The Erlang product's infinity
 // is the reference algorithm's underflow result, not a finite approximation.
 //! lrm 9.13.3
+//! lrm 9.13.3:1000
 `include "check.vh"
 module ch09_rng_reference_large_count(p, n);
   inout p, n; electrical p, n;

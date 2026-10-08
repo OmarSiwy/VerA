@@ -4,7 +4,8 @@
 // implementation limit, not invalid-source clause coverage.
 // Legal neighbors: timer_effectful_file_leaf.va and the emitted host's
 // timer_body_precomputed_controls.va evaluate the effect once into a value.
-//! reject E0528
+//! reject-only E0528
+//! neighbour timer_effectful_file_leaf.va
 module timer_changed_effectful_file_function_input_rejected(p);
   inout p; electrical p;
   analog function real effect;

@@ -27,7 +27,10 @@
 //
 //! lrm C.5
 //! lrm 4.2.1
-//! reject E0322
+//! lrm 4.2.1:1
+//! reject-only E0322
+//! neighbour 10_case_equality_accepted.va
+//! neighbour 17_case_inequality.va
 module annex_c_real_operand_bitwise_rejected(p, n);
     inout p, n;
     electrical p, n;

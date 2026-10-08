@@ -3,6 +3,7 @@
 // The runtime defaults fixture overrides w and recomputes a dependent local
 // parameter legally; it never assigns the local parameter directly.
 //! lrm 3.4.5
+//! lrm 3.4.5:1000
 //! reject E0911
 module ps_outer_local_top(p);
   inout p; electrical p;

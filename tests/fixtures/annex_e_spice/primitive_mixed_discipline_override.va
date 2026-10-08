@@ -46,6 +46,9 @@
 //! lrm E.3
 //! lrm 2.6.2
 //! lrm 6.7.1
+//! lrm 6.7.1:1
+//! lrm E.3.2:1000
+//! lrm E.3.2.1:2
 //! bias V(n1) = 0.145, V(gnd_e) = 0.0, shaft1 = 100.0, gnd_rot = 0.0
 `include "check.vh"
 module annex_e_primitive_mixed_discipline(n1, gnd_e, shaft1, gnd_rot);

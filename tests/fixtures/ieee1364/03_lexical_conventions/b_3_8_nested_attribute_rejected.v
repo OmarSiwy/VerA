@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 3.8
 //! reject E0357
 //! reject the value contains an attribute instance
+//! neighbour b_3_8_1_examples.v
 module b_3_8_nested_attribute_rejected;
   (* a = 1 + (* b *) 2 *) reg r;
   initial $display("unreachable");

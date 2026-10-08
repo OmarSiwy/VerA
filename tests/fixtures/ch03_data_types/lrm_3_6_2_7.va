@@ -20,6 +20,7 @@
 //! lrm 3.6.2.7
 //! bias V(p) = 1.0
 //! lrm A.1.7
+//! lrm 3.6.2.7:1000
 `include "check.vh"
 
 nature ch3267_voltage;

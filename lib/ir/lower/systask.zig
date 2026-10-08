@@ -68,6 +68,10 @@ pub const State = struct {
     /// its final read is `out.reject_iteration`, and `out.uses.reject_iteration`
     /// says it exists.
     reject_iteration_place: ?Ssa.Place = null,
+    /// §9.7.3 `$error` inside `analog initial`: an integer place seeded 0 in
+    /// `.entry` and set 1 at each such call, and the first call's token.
+    /// `haltAfterInitError` reads it after the block. Null: no such call.
+    init_error: ?struct { place: Ssa.Place, tok: u32 } = null,
 };
 /// One §9.4/§9.7 task whose `call` is minted at the END of the analog block —
 /// every unconditional display-family statement takes this route (see
@@ -147,7 +151,17 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // argument. In statement position the count is dropped, the write is not.
     if (try lowerFileRead(self, tok, name, args)) |_| return;
     if (try lowerKernelCtl(self, tok, name, args)) return; // §9.17
+    if (c == .@"$fatal" and try badFinishNumber(self, args)) return;
     if (c == .@"$fatal" or c == .@"$error") try lowerStatus(self, tok, c == .@"$fatal", args);
+    if (c == .@"$error" and self.in_analog_initial) {
+        const ie = self.systask_state.init_error orelse blk: {
+            const p = self.builder.newPlace();
+            try self.builder.writeVariable(p, .entry, .zero);
+            self.systask_state.init_error = .{ .place = p, .tok = tok };
+            break :blk self.systask_state.init_error.?;
+        };
+        try self.builder.writeVariable(ie.place, self.cur, .one);
+    }
     // §9.4.1 `$monitor` and its §9.5.2 file twin: registered HERE, reported at
     // the end of every accepted step from then on — see `armMonitor`.
     const mon: ?Mir.Value = if (c == .@"$monitor" or c == .@"$fmonitor") try armMonitor(self, name) else null;
@@ -327,6 +341,49 @@ fn kernelCtlPlace(self: *Lower, slot: *?Ssa.Place) Oom!Ssa.Place {
     try self.builder.writeVariable(p, .entry, .f_inf);
     slot.* = p;
     return p;
+}
+
+/// §9.7.3: "If $error is executed within an analog initial block, then the
+/// message is issued and the initialization continues. However, the
+/// simulation shall not proceed past initialization." Called after an
+/// `analog initial` block: when one of its `$error` calls ran, a synthetic
+/// `$fatal(1, …)` ends the run there, after the block's own prints and before
+/// any of the analog block's. Status 1: a run an error ended (`$fatal`'s floor).
+pub fn haltAfterInitError(self: *Lower) Oom!void {
+    const ie = self.systask_state.init_error orelse return;
+    const hit = try self.builder.readVariable(ie.place, self.cur);
+    const then_b = try self.mir.addBlock(self.arena);
+    const join = try self.mir.addBlock(self.arena);
+    try self.branchTo(hit, then_b, join, false);
+    self.cur = then_b;
+    self.cond_depth += 1;
+    defer self.cond_depth -= 1;
+    const v = try self.call("$fatal", &.{
+        try self.mir.addIntConst(self.arena, 1),
+        try self.mir.addStrConst(self.arena, "an $error in analog initial: the simulation does not proceed past initialization"),
+    });
+    try chainCondDisplay(self, v);
+    try self.out.displays.append(self.arena, .{ .val = v, .name = "$fatal", .tok = ie.tok, .conditional = true });
+    try self.gotoBlock(join);
+    try self.builder.sealBlock(join);
+    self.cur = join;
+}
+
+/// §9.7.3 Syntax 9-7 `finish_number ::= 0 | 1 | 2`: reports E0824 and returns
+/// true when `$fatal`'s first argument is a number that is not one of the
+/// three. A string first argument is a message with the number omitted
+/// (`cg_display.emitDisplayTask` keeps its text), not a finish_number.
+fn badFinishNumber(self: *Lower, args: []const Ast.ExprId) Oom!bool {
+    if (args.len == 0 or args[0] == .none) return false;
+    const cv = lower_constfold.constEval(self, args[0]);
+    if (cv) |v| switch (v) {
+        .str => return false,
+        .int => |n| if (n >= 0 and n <= 2) return false,
+        .real => |x| if (x == 0 or x == 1 or x == 2) return false,
+    };
+    if (cv == null and try lower_sysfunc.outputLiteral(self, args[0]) != null) return false;
+    try self.err(self.file.exprs.mainTok(args[0]), .E0824, "`$fatal`'s finish_number shall be 0, 1 or 2", .{});
+    return true;
 }
 
 /// §9.7.3 `$fatal`/`$error` as a STATUS for a device, which cannot print or
@@ -739,6 +796,28 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
+    // §9.5.3: "$sformat always interprets its second argument, and only its
+    // second argument, as a format string. This format argument can be a
+    // static string ... or can be a string variable whose content is
+    // interpreted as the format string." A literal is translated at compile
+    // time; anything else is formatted at run time (`$sformat$rt`).
+    if (std.mem.eql(u8, name, "$sformat") and args.len > 1 and args[1] != .none and
+        try lower_sysfunc.outputLiteral(self, args[1]) == null and
+        (if (lower_constfold.constEval(self, args[1])) |cv| cv != .str else true))
+    {
+        const f = try lower_expr.lowerExpr(self, args[1]);
+        if (f.ty != .string) {
+            try self.err(self.file.exprs.mainTok(args[1]), .E0813, "`$sformat`'s format_string is a string, and this one is {s}", .{@tagName(f.ty)});
+            return;
+        }
+        try vals.append(self.arena, f.v);
+        for (args[2..]) |a| {
+            if (a == .none) continue;
+            try vals.append(self.arena, (try lower_sysfunc.lowerFormatArg(self, a)).v);
+        }
+        self.out.uses.insert(.str_tasks);
+        return lower_stmt.writeLvalue(self, slot, try self.call("$sformat$rt", vals.items));
+    }
     var live: std.ArrayList(Ast.ExprId) = .empty;
     defer live.deinit(self.arena);
     var tys: std.ArrayList(Ty) = .empty;
@@ -775,7 +854,15 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
         try self.err(tok, .E0813, "$sscanf needs a string to read and a format string", .{});
         return self.mir.addIntConst(self.arena, 0);
     }
-    const src = (try lower_expr.lowerExpr(self, args[0])).v;
+    const src_tv = try lower_expr.lowerExpr(self, args[0]);
+    // §9.5.4.2: "$sscanf reads from the string str (which shall be a string
+    // variable, string parameter, or string literal)". A number has no
+    // characters to scan.
+    if (src_tv.ty != .string) {
+        try self.err(self.file.exprs.mainTok(args[0]), .E0813, "`$sscanf` reads from a string variable, string parameter or string literal, and this one is {s}", .{@tagName(src_tv.ty)});
+        return self.mir.addIntConst(self.arena, 0);
+    }
+    const src = src_tv.v;
     const fmt = (try lower_expr.lowerExpr(self, args[1])).v;
     // Only a literal format can be checked, and only a literal one is worth
     // checking: a conversion code the scanner does not implement would consume

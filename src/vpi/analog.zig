@@ -28,6 +28,7 @@ pub const Lib = struct {
     systf: *const fn (?HostCall) callconv(.c) void,
     n_systf: *const fn () callconv(.c) usize,
     systf_name: *const fn (usize, *usize) callconv(.c) [*]const u8,
+    systf_tok: *const fn (usize) callconv(.c) u32,
 };
 
 /// The C function the library forwards `contract.SystfHost.call` to.
@@ -80,6 +81,11 @@ var have_solution = false;
 var open_step = false;
 /// §12.36 vpiRejectTransientStep was called on the open step.
 var reject_step = false;
+/// A solution is attempted and not yet accepted, first one included: the one
+/// §12.36 vpiTransientFailConverge keeps iterating.
+var awaiting = false;
+/// §12.36 vpiTransientFailConverge was called on the awaiting solution.
+var fail_converge = false;
 
 /// §12.36 vpiRejectTransientStep: "cause the current analog simulation time
 /// point to be rejected". The walk backs up as for an acbConvergenceTest
@@ -91,30 +97,51 @@ pub fn rejectStep() bool {
     return true;
 }
 
+/// §12.36 vpiTransientFailConverge: "cause the current analog simulation to
+/// continue iterating for a (valid) solution". The walk solves the same time
+/// again from the solution it has, with no backup and no acceptance between.
+/// False when no solution is awaiting acceptance.
+pub fn failConverge() bool {
+    if (current == null or !awaiting) return false;
+    fail_converge = true;
+    return true;
+}
+
 const gpa = std.heap.smp_allocator;
 
 /// Binds the loaded library and reads its row table and system-function call
 /// names. Precondition: a design is open (`root.design`).
 pub fn attach(l: Lib) error{OutOfMemory}!void {
     lib = l;
-    // The library names its calls, not their sites, so a name with two call
-    // objects cannot say which is running: it binds to none and is refused
-    // when called rather than handed to the wrong one.
+    // The library names each call by its name and source token, and the
+    // model's call objects carry the token they were built from (both parsed
+    // the same source). A pair two objects share (one call in a module
+    // instantiated twice) binds to none and is refused when called rather
+    // than handed to the wrong one.
     const n_calls = l.n_systf();
     call_obj = try gpa.alloc(?u32, n_calls);
-    // Each analog call name's object, or null when two objects call it: one
-    // pass over the rows, not one per name.
-    var by_name: std.StringHashMapUnmanaged(?u32) = .empty;
-    defer by_name.deinit(gpa);
+    const Site = struct { name: []const u8, tok: u32 };
+    const SiteCtx = struct {
+        pub fn hash(_: @This(), s: Site) u64 {
+            return std.hash.Wyhash.hash(s.tok, s.name);
+        }
+        pub fn eql(_: @This(), a: Site, b: Site) bool {
+            return a.tok == b.tok and std.mem.eql(u8, a.name, b.name);
+        }
+    };
+    // Each analog call site's object, or null when two objects share it: one
+    // pass over the rows, not one per call.
+    var by_site: std.HashMapUnmanaged(Site, ?u32, SiteCtx, std.hash_map.default_max_load_percentage) = .empty;
+    defer by_site.deinit(gpa);
     for (root.design.?.objects, 0..) |o, i| {
         if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
-        const g = try by_name.getOrPut(gpa, o.name);
+        const g = try by_site.getOrPut(gpa, .{ .name = o.name, .tok = o.src_tok });
         g.value_ptr.* = if (g.found_existing) null else @intCast(i);
     }
     for (call_obj, 0..) |*c, k| {
         var len: usize = 0;
         const name = l.systf_name(k, &len)[0..len];
-        c.* = by_name.get(name) orelse null;
+        c.* = by_site.get(.{ .name = name, .tok = l.systf_tok(k) }) orelse null;
     }
     if (n_calls != 0) l.systf(deviceCall);
     const n = l.n_rows();
@@ -189,7 +216,8 @@ pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted };
 /// forced time; each tentative solution passes acbConvergenceTest before it is
 /// accepted, and a rejection (or §12.36 vpiRejectTransientStep) halves the step from the last accepted point.
 /// `op` is one DC solution, first and last at once. A rejected solution
-/// leaves no history. `BackupExhausted`: 60 rejections of one step.
+/// leaves no history. §12.36 vpiTransientFailConverge solves the same time
+/// again. `BackupExhausted`: 60 rejections or re-solves of one step.
 pub fn run(a: Analysis) Error!void {
     const l = lib orelse return error.NoLibrary;
     l.open(kindOrdinal(a.kind));
@@ -201,10 +229,16 @@ pub fn run(a: Analysis) Error!void {
     defer current = null;
     t_accepted = a.start;
     const last0 = a.kind == .op or a.stop <= a.start;
-    try attempt(l, a.start, 0, true, last0);
     // The first solution has no earlier time to back up to; §12.31.3's
-    // rejection is honoured from the next one on.
-    _ = callback.convergenceRejected();
+    // rejection is honoured from the next one on. §12.36's
+    // vpiTransientFailConverge needs none, so it is honoured here too.
+    var first_tries: u32 = 0;
+    while (true) : (first_tries += 1) {
+        if (first_tries == 60) return error.BackupExhausted;
+        try attempt(l, a.start, 0, true, last0);
+        _ = callback.convergenceRejected();
+        if (!fail_converge) break;
+    }
     accept(l, true, last0);
     if (last0) return;
 
@@ -220,10 +254,12 @@ pub fn run(a: Analysis) Error!void {
         while (true) : (tries += 1) {
             if (tries == 60) return error.BackupExhausted;
             try attempt(l, target, target - t_accepted, false, sameTime(target, a.stop));
-            if (!(callback.convergenceRejected() or reject_step)) break;
+            const rejected = callback.convergenceRejected() or reject_step;
+            if (!(rejected or fail_converge)) break;
             // "backup to an earlier time": half the step, from the same
-            // accepted solution.
-            target = t_accepted + (target - t_accepted) / 2;
+            // accepted solution. A vpiTransientFailConverge alone keeps
+            // the time and iterates again.
+            if (rejected) target = t_accepted + (target - t_accepted) / 2;
         }
         accept(l, false, sameTime(target, a.stop));
     }
@@ -234,13 +270,16 @@ fn attempt(l: Lib, t: f64, dt: f64, first: bool, last: bool) Error!void {
     delta = dt;
     have_solution = true;
     open_step = !first;
+    awaiting = true;
     reject_step = false;
+    fail_converge = false;
     vals_fresh = false;
     _ = l.solve(t, dt, first, last);
 }
 
 fn accept(l: Lib, first: bool, last: bool) void {
     open_step = false;
+    awaiting = false;
     // Row values are the accepted solution's, read before history moves.
     refreshRows(l);
     l.accept();
@@ -503,7 +542,7 @@ fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv
     @memset(partials[0..n], 0);
     const at = if (k < call_obj.len) call_obj[k] else null;
     const obj = at orelse {
-        root.fail("AMBIGUOUS", "an analog system function called from more than one site is not told apart by this host", .{});
+        root.fail("AMBIGUOUS", "this analog system function call is not one call object of the design (a module instantiated twice shares its calls' source)", .{});
         return 0;
     };
     const d = &root.design.?;

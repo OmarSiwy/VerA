@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 8 8.1.1
 //! reject E1100
 //! reject exactly one output
+//! neighbour b_8_1_1_header_forms.v
 primitive two_out(q1, q2, a);
   output q1, q2;
   input a;

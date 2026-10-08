@@ -3,7 +3,9 @@
 // expression spelling. 07_parameter_alias.va supplies the legal neighbour:
 // its host binds the alias and equations read the original parameter.
 //! lrm 3.4.7
-//! reject E0373
+//! lrm 3.4.7:3
+//! reject-only E0373
+//! neighbour 07_parameter_alias.va
 module aliasparam_equation(p);
   inout p; electrical p;
   parameter real gain=1;

@@ -7,7 +7,7 @@
 // /dev/zero is a file every POSIX host has and that never ends, so it stands in
 // for a file past any bound without committing one to the tree.
 //
-//! reject E1013
+//! reject-only E1013
 module table_model_file_over_16mib_rejected(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ $table_model(V(p,n), "/dev/zero", "1L");

@@ -11,7 +11,8 @@
 //
 //! lrm 10.4
 //! inherited IEEE 1364-2005 19.3.1
-//! reject E0116
+//! reject-only E0116
+//! neighbour 05_define_function.va
 `define SQ(x) ((x)*(x))
 module ch10_function_macro_used_without_arguments(p, n);
   inout p, n; electrical p, n;

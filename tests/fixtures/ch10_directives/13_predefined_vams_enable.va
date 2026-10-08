@@ -9,6 +9,7 @@
 // potential is then 1.0*0.5 = 0.5 rather than 1.0.
 //
 //! lrm 10.5
+//! lrm 10.5:1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch10_predefined_vams_enable(p, n);

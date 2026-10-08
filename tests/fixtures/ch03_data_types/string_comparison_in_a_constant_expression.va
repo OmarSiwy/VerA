@@ -29,6 +29,8 @@
 //
 //! lrm 3.4.6
 //! lrm 5.9.3
+//! lrm 3.4.6:2
+//! lrm 5.9.3:1000
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch3_string_const_compare(p, n);

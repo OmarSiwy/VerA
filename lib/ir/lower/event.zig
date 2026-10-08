@@ -161,7 +161,7 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 try self.err(self.file.exprs.mainTok(e), .E0513, "", .{});
                 return null;
             }
-            try checkEventArgBounds(self, e, name); // §5.10.3.1-§5.10.3.3
+            if (!try checkEventArgBounds(self, e, name)) return null; // §5.10.3.1-§5.10.3.3
             var args: std.ArrayList(Mir.Value) = .empty;
             defer args.deinit(self.arena);
             var captured: TimerCapture = .empty;
@@ -211,8 +211,26 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
 /// Checks §5.10.3's monitored-event arguments (E0517), in both analog and
 /// digital event controls. Numeric bounds apply only to folded operands;
 /// cross()'s dependencies between omitted slots are structural.
-pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
+pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!bool {
     const args = self.file.exprs.args(e);
+    // §5.10.3: a monitored event names what it monitors. A required slot
+    // left empty (`cross()`, `timer(, 1n)`, `absdelta(V(a))`) is refused
+    // here, before lowering reads the argument that is not there; A.6.5's
+    // permission to omit covers only the optional slots.
+    var complete = true;
+    for (requiredSlots(name), 0..) |slot, i| if (i >= args.len or args[i] == .none) {
+        try self.err(self.file.exprs.mainTok(e), .E0517, "`{s}()` requires its {s} argument", .{ name, slot });
+        complete = false;
+    };
+    if (!complete) return false;
+    // "enable ... shall evaluate to an integer" (§5.10.3.1-§5.10.3.3); only a
+    // folded non-integral value is refused. absdelta's is checked below.
+    if (enableSlot(name)) |k| if (k < args.len and args[k] != .none) {
+        if (lower_constfold.foldExpr(self, args[k], false)) |c| {
+            if (c != .str and c.asReal() != @round(c.asReal()))
+                try self.err(self.file.exprs.mainTok(args[k]), .E0517, "`{s}()` enable shall evaluate to an integer, got {d}", .{ name, c.asReal() });
+        }
+    };
     if (std.mem.eql(u8, name, "absdelta")) {
         // §5.10.3.4: delta and both tolerances "shall be non-negative";
         // enable "shall evaluate to an integer". These are analog_expression
@@ -231,17 +249,17 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
                     try self.err(self.file.exprs.mainTok(args[4]), .E0517, "`absdelta()` enable shall evaluate to an integer, got {d}", .{c.asReal()});
             }
         }
-        return;
+        return true;
     }
     const is_cross = std.mem.eql(u8, name, "cross");
     if (std.mem.eql(u8, name, "timer")) {
-        if (args.len < 3 or args[2] == .none) return;
-        const c = lower_constfold.constEval(self, args[2]) orelse return;
-        if (c == .str or c.asReal() >= 0) return;
+        if (args.len < 3 or args[2] == .none) return true;
+        const c = lower_constfold.constEval(self, args[2]) orelse return true;
+        if (c == .str or c.asReal() >= 0) return true;
         try self.err(self.file.exprs.mainTok(args[2]), .E0517, "`timer()` time_tol shall be non-negative, got {d}", .{c.asReal()});
-        return;
+        return true;
     }
-    if (!is_cross and !std.mem.eql(u8, name, "above")) return;
+    if (!is_cross and !std.mem.eql(u8, name, "above")) return true;
     // §5.10.3.2 above() has no direction: its tolerances start one slot earlier.
     const dir: ?usize = if (is_cross) 1 else null;
     const tol_first: usize = if (is_cross) 2 else 1;
@@ -257,7 +275,7 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
     };
 
     var tol_given = false;
-    for (tol_first..@min(tol_first + 2, args.len)) |i| {
+    for (tol_first..@max(tol_first, @min(tol_first + 2, args.len))) |i| {
         if (args[i] == .none) continue;
         tol_given = true;
         const c = lower_constfold.constEval(self, args[i]) orelse continue;
@@ -292,6 +310,23 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
         b.help("specify time_tol before expr_tol, or omit both tolerances", .{});
         try b.emit();
     }
+    return true;
+}
+
+/// The argument slots a §5.10.3 monitored event requires, in order.
+fn requiredSlots(name: []const u8) []const []const u8 {
+    if (std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above")) return &.{"expr"};
+    if (std.mem.eql(u8, name, "timer")) return &.{"start_time"};
+    if (std.mem.eql(u8, name, "absdelta")) return &.{ "expr", "delta" };
+    return &.{};
+}
+
+/// The enable slot of cross (§5.10.3.1), above (§5.10.3.2) and timer
+/// (§5.10.3.3); absdelta's is checked with its bounds.
+fn enableSlot(name: []const u8) ?usize {
+    if (std.mem.eql(u8, name, "cross")) return 4;
+    if (std.mem.eql(u8, name, "above") or std.mem.eql(u8, name, "timer")) return 3;
+    return null;
 }
 
 // ---- §5.10.3.3 timer capture, while the arguments lower --------------------

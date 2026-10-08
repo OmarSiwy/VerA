@@ -18,6 +18,8 @@
 //                         want 1 here, a hard `ok=0`.
 //
 //! lrm 9.7.2
+//! lrm 9.7
+//! lrm 9.7:1000
 //! sweep V(p) = 1.0, 2.0
 `include "check.vh"
 module ch09_stop_terminates(p, n);

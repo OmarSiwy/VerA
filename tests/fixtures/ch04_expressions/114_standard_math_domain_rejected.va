@@ -21,8 +21,14 @@
 //
 //! lrm 4.3.1
 //! lrm 4.3.2
-//! reject E0602
+//! lrm 4.3.2:2
+//! reject-only E0602
 //! reject E0604
+//! neighbour 10_standard_math_traditional.va
+//! neighbour 65_sqrt.va
+//! neighbour 67_ln.va
+//! neighbour 68_log10.va
+//! neighbour 85_pow.va
 module ch04_standard_math_domain_rejected(p, n);
     inout p, n;
     electrical p, n;

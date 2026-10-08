@@ -8,6 +8,7 @@
 // module, so there is a value to read back: `scale` still holds its §3.4
 // default of 2.5, and the module still conducts through it.
 //! lrm 2.9
+//! lrm 2.9:4
 `include "check.vh"
 (* desc = "first", desc = "last" *)
 module ch02_duplicate_attributes(p, n);

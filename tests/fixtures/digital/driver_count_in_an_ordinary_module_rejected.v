@@ -9,6 +9,7 @@
 // the call has no result to print and the design is refused.
 // digital-runner: reject
 //! lrm 9.22
+//! lrm 9.22:1000
 //! reject E0818
 //! reject can only be called from connect modules
 module driver_count_in_an_ordinary_module_rejected;

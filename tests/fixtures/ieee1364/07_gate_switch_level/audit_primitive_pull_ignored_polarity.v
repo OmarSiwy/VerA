@@ -1,6 +1,8 @@
 // IEEE1364-2005 §7.8 ignores strength0 on pullup. The first pullup drives
 // strong1 against pull0=>1; the second drives weak1 against pull0=>0.
 // Opposite-polarity annotations must not affect either result.
+//! lrm A.3.2
+//! lrm A.3.2:1000
 //! inherited IEEE 1364-2005 7.8 7.10.1
 `timescale 1ns/1ns
 module audit_primitive_pull_ignored_polarity;

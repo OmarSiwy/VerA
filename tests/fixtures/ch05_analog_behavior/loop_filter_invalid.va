@@ -13,7 +13,10 @@
 // moves during the solve. The code is what is pinned.
 //
 //! lrm 5.9
-//! reject E0514
+//! lrm 5.9:1
+//! reject-only E0514
+//! neighbour for_loop.va
+//! neighbour for_zero_iterations.va
 module ch5_loop_filter(p);
   inout p; electrical p; integer i; real x;
   analog begin

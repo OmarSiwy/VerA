@@ -9,6 +9,7 @@
 // digital-runner: reject
 //! reject E1100
 //! reject larger than the 4194304 bytes VerA reads
+//! neighbour audit_readmem_address_restart.v
 module b_17_2_9_readmem_file_over_4mib_rejected;
   reg [7:0] mem [0:3];
   initial begin

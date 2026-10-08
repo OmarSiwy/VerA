@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 13.3.1.2
 //! reject more than one default
 //! reject E0243
+//! neighbour audit_config_default_liblist.v
 config cfg;
   design work.top;
   default liblist work;

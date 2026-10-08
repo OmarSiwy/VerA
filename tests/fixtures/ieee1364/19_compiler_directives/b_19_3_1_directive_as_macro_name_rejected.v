@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 19.3.1
 //! reject E0143
 //! reject a compiler directive cannot be a macro name
+//! neighbour b_19_3_1_text_macros.v
 `define include 1
 module b_19_3_1_directive_as_macro_name_rejected;
   initial $display("accepted");

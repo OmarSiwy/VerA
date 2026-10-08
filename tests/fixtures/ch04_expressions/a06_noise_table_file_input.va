@@ -97,6 +97,10 @@
 // line and is stated as one.
 //
 //! lrm 4.6.4.3
+//! lrm 4.6.4.3:1
+//! lrm 4.6.4.3:2
+//! lrm 4.6.4.3:3
+//! lrm 4.6.4.3:4
 //! lrm 4.5.6
 //! noise table(p,n)#0 name=file-input interp=linear points=1.0:1.65758e-23,10.0:3.31516e-23,100.0:6.63632e-23,1000.0:1.326064e-22,10000.0:2.652128e-22,100000.0:5.304256e-22,1000000.0:1.060851e-21
 //! analysis noise

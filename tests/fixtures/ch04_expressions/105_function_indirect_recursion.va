@@ -5,7 +5,8 @@
 // it: the rule constrains the declarations, not the reachable calls.
 //
 //! lrm 4.7.3
-//! reject E0510
+//! lrm 4.7.3:2
+//! reject-only E0510
 module ch04_function_indirect_recursion(p, n);
     inout p, n;
     electrical p, n;

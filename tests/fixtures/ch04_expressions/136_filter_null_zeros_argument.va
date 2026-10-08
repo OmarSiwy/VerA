@@ -33,7 +33,9 @@
 // argument is an abbreviation for, and the case CHECKEQ exists for.
 //
 //! lrm 4.5.11
+//! lrm 4.5.11:1
 //! lrm 4.5.12
+//! lrm 4.5.12:1
 //! analysis dc
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0

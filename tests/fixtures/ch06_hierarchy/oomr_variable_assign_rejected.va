@@ -12,8 +12,10 @@
 // bullet said from the other side.
 //
 //! lrm 6.7.1
+//! lrm 6.7.1:4
 //! lrm 5.7
-//! reject E0316
+//! lrm 5.7:3
+//! reject-only E0316
 `include "disciplines.vams"
 module ch6_oomr_variable_assign(p);
   inout p; electrical p;

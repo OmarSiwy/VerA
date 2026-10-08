@@ -17,6 +17,7 @@
 //   t=5   "cleared 0000 0000"
 //
 //! lrm A.6.5
+//! lrm A.6.5:1000
 //! timescale 1ns/1ps
 //! inherited IEEE 1364-2005 9.7.5
 `timescale 1ns/1ps

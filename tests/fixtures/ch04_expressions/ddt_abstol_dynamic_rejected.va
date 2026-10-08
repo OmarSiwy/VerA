@@ -13,7 +13,8 @@
 //
 //! lrm 4.5.3
 //! lrm 4.5.14
-//! reject E0515
+//! reject-only E0515
+//! neighbour ddt_output_abstol.va
 module ch04_ddt_abstol_dynamic(a, b);
     inout a, b;
     electrical a, b;

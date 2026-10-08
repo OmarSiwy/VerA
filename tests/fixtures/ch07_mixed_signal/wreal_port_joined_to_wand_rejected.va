@@ -23,8 +23,11 @@
 // where the two modules are a mixed design VerA elaborates itself.
 //
 //! lrm 7.4.2
+//! lrm 7.4.2:1
+//! lrm 7.4.2:2
 //! lrm 3.7
-//! reject E0919
+//! reject-only E0919
+//! neighbour analog_event_variable_drives_wreal_assign.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch742_wreal_child(o);

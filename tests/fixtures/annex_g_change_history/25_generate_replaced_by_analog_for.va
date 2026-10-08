@@ -42,6 +42,11 @@
 //! lrm G.2.3
 //! lrm 5.9.3
 //! lrm A.6.8
+//! lrm 5.9.2
+//! lrm 5.9.2:1
+//! lrm 5.9.3:1000
+//! lrm A.4.2
+//! lrm A.4.2:1000
 //! bias V(in) = 0.7, V(gnd_ref) = 0.0
 //! solve
 `include "check.vh"

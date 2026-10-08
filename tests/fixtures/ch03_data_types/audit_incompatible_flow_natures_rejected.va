@@ -4,7 +4,9 @@
 // flow has units "s", unlike Current's "A", and shares no base nature with it.
 //! lrm 3.11
 //! lrm 3.11.1
-//! reject E0355
+//! lrm 3.11:1
+//! lrm 3.11.1:2
+//! reject-only E0355
 nature audit_other_flow;
   units="s"; access=OtherFlow; abstol=1p;
 endnature

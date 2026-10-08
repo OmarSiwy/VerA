@@ -10,7 +10,9 @@
 // 28_user_function.va, so demanding the diagnostic here loses nothing.
 //
 //! lrm 4.7.1
-//! reject formal argument
+//! lrm 4.7.1:3
+//! reject-only formal argument
+//! neighbour 28_user_function.va
 module ch4_fn_noargs(p);
   inout p;
   electrical p;

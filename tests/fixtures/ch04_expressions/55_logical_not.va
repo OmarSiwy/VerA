@@ -8,6 +8,7 @@
 // because 5 is non-zero, whereas `~5` is -6 in 2's complement (3.2).
 //
 //! lrm 4.2.8
+//! lrm 4.2.8:1000
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_logical_not(p, n);

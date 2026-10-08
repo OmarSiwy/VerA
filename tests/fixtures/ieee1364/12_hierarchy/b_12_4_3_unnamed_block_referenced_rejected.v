@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 12.4.3 12.5
 //! reject E1100
 //! reject undeclared instance in a hierarchical reference
+//! neighbour b_12_5_hierarchical_path_names.v
 module b_12_4_3_unnamed_block_referenced_rejected;
   if (1) begin
     reg a;

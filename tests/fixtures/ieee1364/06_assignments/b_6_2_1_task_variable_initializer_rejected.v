@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 6.2.1
 //! reject E1100
 //! reject initialized task or function variable
+//! neighbour b_6_2_1_examples.v
 module b_6_2_1_task_variable_initializer_rejected;
   task show;
     reg [3:0] a = 4'h4;

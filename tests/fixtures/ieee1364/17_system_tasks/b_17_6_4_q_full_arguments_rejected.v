@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 17.6.4
 //! reject E1100
 //! reject $q_full takes (q_id, status)
+//! neighbour b_17_6_4_q_full.v
 `timescale 1 ns / 1 ns
 module b_17_6_4_q_full_arguments_rejected;
   integer status, job, info, v;

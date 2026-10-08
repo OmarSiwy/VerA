@@ -3,7 +3,8 @@
 // has real TYPE; folding must not round it and bypass the operand check.
 // Legal constant defaults are in clog2_unsigned_width.va.
 //! lrm 9.14
-//! reject E0892
+//! reject-only E0892
+//! neighbour clog2_unsigned_width.va
 module reject_clog2_real_default;
   parameter integer bad = $clog2(8.0);
   analog begin

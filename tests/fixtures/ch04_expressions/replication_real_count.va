@@ -31,6 +31,7 @@
 //
 //! lrm 4.2.1
 //! lrm 4.2.1.1
+//! lrm 4.2.1.1:1
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_replication_real_count(p);

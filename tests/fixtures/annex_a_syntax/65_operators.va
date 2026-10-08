@@ -57,6 +57,9 @@
 //! lrm A.8.6
 //! lrm 4.2.10
 //! lrm 4.2.11
+//! lrm 4.2
+//! lrm 4.2:1000
+//! lrm A.8.6:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_operators(p, n);

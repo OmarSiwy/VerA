@@ -55,8 +55,10 @@
 // diagnostic oracle rather than accepting any unrelated unsupported feature.
 //
 //! lrm A.5.3
-//! reject combinational
+//! lrm A.5.3:1000
+//! reject-only combinational
 //! reject edge
+//! neighbour audit_udp_comb_level.v
 //! inherited IEEE 1364-2005 A.5.3
 `timescale 1ns/1ns
 

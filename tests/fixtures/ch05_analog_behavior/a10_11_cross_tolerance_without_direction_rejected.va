@@ -35,7 +35,8 @@
 // refactor away from being an accepted default.
 //
 //! lrm 5.10.3.1
-//! reject direction
+//! lrm 5.10.3.1:4
+//! reject-only direction
 module a10_cross_tol_without_dir(p);
   inout p;
   electrical p;

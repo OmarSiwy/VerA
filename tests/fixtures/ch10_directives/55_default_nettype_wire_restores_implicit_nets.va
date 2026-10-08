@@ -21,6 +21,10 @@
 //
 //! lrm 10.1
 //! lrm 3.6.5
+//! lrm 2.8.4
+//! lrm 2.8.4:2
+//! lrm 3.6.5:1000
+//! lrm 10.1:1000
 //! bias V(p) = 1.5
 `include "check.vh"
 `default_nettype none

@@ -12,6 +12,8 @@
 // analog-operator exceptions, x/z conditions, or runtime error suppression.
 //! lrm 4.2.3
 //! lrm 4.2.12
+//! lrm 4.2.3:2
+//! lrm 4.2.3:4
 //! bias V(p) = 0.75, V(n) = 0.25
 //! checks 14
 `include "check.vh"

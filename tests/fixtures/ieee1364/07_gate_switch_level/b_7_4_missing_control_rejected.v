@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 7.4
 //! reject E0209
 //! reject an enable gate takes an output, a data input and an enable
+//! neighbour b_7_1_1_every_primitive.v
 module b_7_4_missing_control_rejected;
   reg a;
   wire o;

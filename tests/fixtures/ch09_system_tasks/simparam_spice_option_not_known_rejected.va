@@ -10,8 +10,9 @@
 // The legal neighbour is simparam_newton_tolerances_host_written.va: the same
 // bare call on a published name compiles and returns the host's value.
 //! lrm 9.15
-//! reject E0811
+//! reject-only E0811
 //! reject simulation parameter is not known
+//! neighbour simparam_newton_tolerances_host_written.va
 module ch09_simparam_spice_option_not_known_rejected(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ $simparam("chgtol") * V(p,n);

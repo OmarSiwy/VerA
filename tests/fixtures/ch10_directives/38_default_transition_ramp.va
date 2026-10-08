@@ -48,6 +48,7 @@
 // leaves bound 2 failing; that residue is a §4.5.8 bug, not a §10.3 one.
 //
 //! lrm 10.3
+//! lrm 10.3:1000
 //! bias V(n) = 0
 //! wave V(in) = 0, 1
 //! time 0, 1n, 2n, 3n, 4n

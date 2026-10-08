@@ -89,9 +89,17 @@
 // its first event control; the derivation is unchanged.
 //
 //! lrm 7.8.6
+//! lrm 7.8.6:1
 //! lrm 9.20
+//! lrm 9.20:11
+//! lrm 9.20:12
 //! lrm 7.7.3
 //! lrm 6.7.1
+//! lrm 6.5.7
+//! lrm 6.5.7:2
+//! lrm 6.7.1:1
+//! lrm 7.7.3:1000
+//! lrm 9.20:6
 //! solve
 `include "check.vh"
 

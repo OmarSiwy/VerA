@@ -17,8 +17,10 @@
 //
 //! lrm 9.17
 //! lrm 9.2
+//! lrm 9.2:1000
 //! reject E0821
 //! reject `$bound_step` in an always block
+//! neighbour 216_kernel_control_tasks_together.va
 `include "disciplines.vams"
 module ch09_kernel_control_in_digital_context(p, n);
   inout p, n; electrical p, n;

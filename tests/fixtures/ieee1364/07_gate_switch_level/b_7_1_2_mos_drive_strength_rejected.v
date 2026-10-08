@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.1.2
 //! reject E0208
 //! reject expected an identifier: found strong1
+//! neighbour b_7_1_instance_list_shared_spec.v
 module b_7_1_2_mos_drive_strength_rejected;
   reg d, g;
   wire o;

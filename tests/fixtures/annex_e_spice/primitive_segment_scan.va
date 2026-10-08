@@ -41,10 +41,16 @@
 // with, and `Theta` compiling at all is the scan's evidence.
 //
 //! lrm E.3.2.2
+//! lrm E.3.2.2:1
+//! lrm E.3.2.2:2
+//! lrm E.3.2.2:3
 //! lrm E.3.2
 //! lrm E.3.2.1
 //! lrm 3.8
 //! lrm 6.7.1
+//! lrm 6.5.7.2
+//! lrm 6.5.7.2:1000
+//! lrm 6.7.1:1
 //! bias s1 = 2.0, s2 = 0.0
 `include "check.vh"
 module annex_e_primitive_segment_scan;

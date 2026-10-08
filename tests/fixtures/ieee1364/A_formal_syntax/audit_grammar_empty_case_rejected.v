@@ -4,6 +4,7 @@
 //! inherited IEEE 1364-2005 A.6.7
 //! reject E1100
 //! reject a case statement requires at least one item
+//! neighbour audit_grammar_nullable_statement.v
 module audit_grammar_empty_case_rejected;
   initial begin
     case (1) endcase

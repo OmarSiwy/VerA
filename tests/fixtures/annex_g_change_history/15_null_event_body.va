@@ -21,6 +21,8 @@
 //! lrm A.6.4
 //! lrm A.6.5
 //! lrm 5.10.2
+//! lrm A.6.4:1000
+//! lrm A.6.5:1000
 //! analysis dc
 //! print none
 `include "check.vh"

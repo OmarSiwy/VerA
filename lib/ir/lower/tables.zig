@@ -57,7 +57,8 @@ pub const ParamInfo = struct {
     folded: ?Const = null,
     /// §3.2/§3.4/§6.6 a shape parameter: its value was folded into a shape (an
     /// array or vector bound, a replication count, a genvar loop bound, a
-    /// generate scheme), which the device fixes at compile time. Codegen's `checkShape` refuses a card that moves it.
+    /// generate scheme, the condition over a §5.6.7 indirect contribution),
+    /// which the device fixes at compile time. Codegen's `checkShape` refuses a card that moves it.
     /// Set by `lower_constfold.shapeEval`.
     shape: bool = false,
 };

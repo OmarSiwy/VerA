@@ -15,6 +15,7 @@
 // half.
 //
 //! lrm 3.7
+//! lrm 3.7:2
 //! lrm C.4
 //! bias V(p) = 0.5
 `include "check.vh"

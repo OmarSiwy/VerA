@@ -3,6 +3,8 @@
 // ungetc pushes Z without modifying the file; rewind cancels another pushed
 // Z, exposing A again. Seeking -1 from EOF reaches the final newline.
 // EOF is detected by the following failed read, not merely reaching its offset.
+//! lrm 9.5.5
+//! lrm 9.5.5:2
 //! inherited IEEE 1364-2005 17.2.1 17.2.4.1 17.2.5 17.2.8
 //! data audit_file_ab.txt
 module audit_file_read_position;

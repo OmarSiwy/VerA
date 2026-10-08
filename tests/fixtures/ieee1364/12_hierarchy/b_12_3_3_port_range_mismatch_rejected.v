@@ -6,9 +6,12 @@
 // a is declared input [7:0] and then wire [3:0]. Legal neighbour:
 // b_12_3_3_port_signed_inheritance.v (input [7:0] b; wire signed [7:0] b).
 // digital-runner: reject
+//! lrm 6.5.2.2
+//! lrm 6.5.2.2:2
 //! inherited IEEE 1364-2005 12.3.3
 //! reject E1100
 //! reject range differs from its port declaration
+//! neighbour b_12_3_3_port_signed_inheritance.v
 module m(a, y);
   input [7:0] a;
   wire [3:0] a;

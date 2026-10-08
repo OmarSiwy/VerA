@@ -41,6 +41,10 @@
 // of roots instead of coefficients, reads 1 there.
 //
 //! lrm 4.5.11
+//! lrm 4.5.11.1
+//! lrm 4.5.11.1:1
+//! lrm 4.5.11.2
+//! lrm 4.5.11.2:1
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0
 `include "check.vh"

@@ -85,11 +85,15 @@
 // below therefore gets its own net, sharing only the common return.
 //
 //! lrm E.3
+//! lrm E.3:1
+//! lrm E.3:2
 //! lrm E.1.2
+//! lrm E.1.2:1
 //! lrm E.2
 //! lrm E.2.2.3
 //! lrm 4.6.1
 //! lrm 6.7.1
+//! lrm 6.7.1:1
 //! analysis tran
 //! time 1.0
 `include "check.vh"

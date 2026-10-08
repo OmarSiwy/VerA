@@ -29,6 +29,10 @@ export fn main(argc: c_int, argv: [*]const [*:0]const u8) c_int {
     }
     // §12.17: the invocation a vpi_get_vlog_info() reports is this one.
     vpi.setInvocation(argc, @ptrCast(@constCast(argv)));
+    // §12.26's log file: the application's name with `.log`, in the cwd.
+    var log_buf: [256]u8 = undefined;
+    const app_name = std.fs.path.basename(std.mem.span(argv[0]));
+    vpi.setLogFile(std.mem.print(&log_buf, "{s}.log", .{app_name}) catch "vera.log") catch {};
     const code = host(if (argc > 1) std.mem.span(argv[1]) else null, if (argc > 2) std.mem.span(argv[2]) else null) catch |e| {
         std.debug.print("vpi_host: {t}\n", .{e});
         return 1;
@@ -83,6 +87,9 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const analyses = if (app) |c| try readAnalyses(arena, io, c) else &.{};
+    // §12.33.2 the registrations come before the device is built: a call's
+    // type is its function's sysfunctype (§12.32.1), which compiling needs.
+    vpi.runStartupRoutines();
     var loaded: ?DynLib = null;
     defer if (loaded) |*l| l.close();
     if (analyses.len != 0) {
@@ -98,7 +105,7 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
             },
         });
         defer threaded.deinit();
-        const lib_path = buildAnalogLib(gpa, arena, threaded.io(), path, std.fs.path.stem(app.?), source, &.{ dir, up }) catch |e| {
+        const lib_path = buildAnalogLib(gpa, arena, threaded.io(), path, std.fs.path.stem(app.?), source, &.{ dir, up }, try vpi.systf.intAnalogNames(arena)) catch |e| {
             std.debug.print("vpi_host: `{s}` has no analog library: {t}\n", .{ path, e });
             return 1;
         };
@@ -107,7 +114,6 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     }
     defer if (loaded != null) vpi.analog_run.detach();
 
-    vpi.runStartupRoutines();
     vpi.callback.endOfCompile();
     if (analyses.len == 0) return 0;
     vpi.callback.startOfSimulation();
@@ -161,13 +167,14 @@ fn spiceNumber(w: []const u8) !f64 {
 /// (`vpi_contribs`) and the display tasks real, into the build's work root.
 /// Built under the APPLICATION's name: several applications run one design
 /// at once under `zig build`, and two compilers writing one directory race.
-fn buildAnalogLib(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, path: []const u8, app_stem: []const u8, source: []const u8, include: []const []const u8) ![]const u8 {
+fn buildAnalogLib(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, path: []const u8, app_stem: []const u8, source: []const u8, include: []const []const u8, int_systfs: []const []const u8) ![]const u8 {
     var bag = vera.diag.Bag.init(arena);
     var res = vera.compileSourceOpts(gpa, source, .build, .{
         .file_name = path,
         .include_dirs = include,
         .display = .emit,
         .vpi_contribs = true,
+        .int_systfs = int_systfs,
         .diags = &bag,
     }) catch |e| {
         try vera.diag.render(&bag, stderrWriter(), .{});

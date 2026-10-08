@@ -4,6 +4,7 @@
 //! inherited IEEE 1364-2005 13.3.1.2 13.3.1.6
 //! reject E0207
 //! reject a default pairs with `liblist`
+//! neighbour audit_config_default_liblist.v
 config config_invalid;
   design config_host;
   default use config_host;

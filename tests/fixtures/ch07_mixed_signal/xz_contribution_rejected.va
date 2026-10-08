@@ -18,8 +18,9 @@
 // contribution is the other lvalue the example marks, and had none.
 //
 //! lrm 7.3.2
+//! lrm 7.3.2:2
 //! lrm C.3
-//! reject E0130
+//! reject-only E0130
 module ch7_xz_contribution(p);
   inout p; electrical p;
   analog V(p) <+ 1'bz;

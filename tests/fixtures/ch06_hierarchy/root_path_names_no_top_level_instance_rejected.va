@@ -26,8 +26,10 @@
 //
 //! lrm 6.2.1
 //! lrm 6.7
-//! reject E0901
+//! lrm 6.2.1:1000
+//! reject-only E0901
 //! reject names nothing in the elaborated design
+//! neighbour root_reference_unsupported.va
 module ch6_root_noinst_top(p, n);
   inout p, n; electrical p, n;
   ch6_root_noinst_mid mid(p, n);

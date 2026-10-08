@@ -20,6 +20,7 @@
 // 20.0 * 0.5 = 10.0.
 //
 //! lrm 6.4.2
+//! lrm 6.4.2:7
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch6_tb_user(p, n);

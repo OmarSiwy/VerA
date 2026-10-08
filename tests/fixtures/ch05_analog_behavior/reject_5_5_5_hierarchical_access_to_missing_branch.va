@@ -14,7 +14,9 @@
 // the top module's name, is hierarchical_named_branch_access.va.
 //
 //! lrm 5.5.5
-//! reject E0901
+//! lrm 5.5.5:1
+//! reject-only E0901
+//! neighbour hierarchical_named_branch_access.va
 `include "disciplines.vams"
 module ch5_hier_src();
   electrical x, y;

@@ -3,6 +3,8 @@
 // Inputs remain untouched x; no input transition requests a table update.
 //! lrm A.5.3
 //! lrm A.5.4
+//! lrm A.5.3:1000
+//! lrm A.5.4:1000
 //! inherited IEEE 1364-2005 8.5
 `timescale 1ns/1ns
 primitive audit_initial_udp(q, clock, data);

@@ -18,6 +18,7 @@
 // everything cannot pass on that alone.
 //
 //! lrm 4.2.14
+//! lrm 4.2.14:1000
 `include "check.vh"
 module ch04_assignment_pattern_replication(p, n);
     inout p, n;

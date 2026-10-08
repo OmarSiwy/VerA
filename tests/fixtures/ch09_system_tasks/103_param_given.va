@@ -6,6 +6,7 @@
 `include "check.vh"
 
 //! lrm 9.19
+//! lrm 9.19:4
 //! param gain = 2.0
 //! bias V(p) = 0.5
 

@@ -24,6 +24,7 @@
 // caught here rather than only by inference from the first line.
 //
 //! lrm 8.2
+//! lrm 8.2:1
 `include "check.vh"
 module ch8_decl_assign_order(p);
   inout p; electrical p;

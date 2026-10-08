@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 17.10.1
 //! reject E1100
 //! reject nonreal
+//! neighbour b_17_10_1_plusargs_variable_query.v
 `timescale 1 ns / 1 ns
 module b_17_10_1_test_plusargs_real_rejected;
   real q;

@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 18.3.1
 //! reject E1100
 //! reject module
+//! neighbour b_18_3_2_dumpports_control_tasks.v
 `timescale 1ns/1ns
 module b_18_3_1_dumpports_variable_scope_rejected_dev(a, y);
   input a;

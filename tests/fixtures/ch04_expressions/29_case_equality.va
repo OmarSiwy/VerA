@@ -16,7 +16,9 @@
 // 4.2.6 here would have demanded a diagnostic the clause forbids.
 //
 //! lrm 4.2.1
-//! reject E0369
+//! lrm 4.2.1:1
+//! reject-only E0369
+//! neighbour ../annex_c_analog_subset/10_case_equality_accepted.va
 module ch04_case_equality(p, n);
     inout p, n;
     electrical p, n;

@@ -16,7 +16,7 @@
 // E0236 is VerA's code for this rule.
 //
 //! lrm 10.1
-//! reject E0236
+//! reject-only E0236
 `include "disciplines.vams"
 module ch10_resetall_inside_a_module_rejected(p, n);
   inout p, n; electrical p, n;

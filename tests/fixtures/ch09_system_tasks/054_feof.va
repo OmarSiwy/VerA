@@ -21,6 +21,7 @@
 // rule exists to catch.
 //
 //! lrm 9.5.8
+//! lrm 9.5.8:1000
 `include "check.vh"
 module ch09_atomic_feof(p, n);
   inout p, n; electrical p, n;

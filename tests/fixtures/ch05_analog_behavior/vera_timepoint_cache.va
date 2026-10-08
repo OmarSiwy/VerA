@@ -32,6 +32,7 @@
 // change from point to point, so the hand derivation above is asserted with
 // CHECKEQ against its own formula in $abstime rather than as digits.
 //! lrm 2.9
+//! lrm 2.9:3
 //! analysis tran
 //! time 0, 0.5, 1, 1.5, 2
 //! checks 20

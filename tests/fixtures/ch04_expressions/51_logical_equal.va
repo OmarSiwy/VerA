@@ -6,6 +6,7 @@
 // comparisons below straddle the rule: one succeeds (1), one fails (0).
 //
 //! lrm 4.2.7
+//! lrm 4.2.7:1
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_logical_equal(p, n);

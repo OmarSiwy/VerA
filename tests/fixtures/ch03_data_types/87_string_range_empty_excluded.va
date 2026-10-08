@@ -1,5 +1,6 @@
 //! lrm 3.4.2
-//! reject E0361
+//! lrm 3.4.2:2
+//! reject-only E0361
 module string_range_empty_target(p);
     inout p;
     electrical p;

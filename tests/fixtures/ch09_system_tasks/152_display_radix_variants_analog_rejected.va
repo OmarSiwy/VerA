@@ -33,8 +33,15 @@
 //
 //! lrm 9.2
 //! lrm 9.4.1
-//! reject analog context
+//! lrm 9.2
+//! lrm 9.2:1000
+//! reject-only analog context
 //! reject E0806
+//! neighbour 01_display_strobe.va
+//! neighbour 02_display_display.va
+//! neighbour 03_display_write.va
+//! neighbour 04_display_monitor.va
+//! neighbour 05_display_debug.va
 module ch09_display_radix_variants_analog_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

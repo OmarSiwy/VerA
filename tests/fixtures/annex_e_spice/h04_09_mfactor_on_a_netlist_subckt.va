@@ -33,10 +33,27 @@
 //
 // §6.3.6 multiplies that contribution by the resolved $mfactor of 4:
 //
-//     I(x1.a, x1.b) = 4 * 1.0e-3 = 4.0e-3 A
+//     flow into x1 at port a = 4 * 1.0e-3 = 4.0e-3 A
 //
 // which is the same current four such subcircuits in parallel would draw, which
-// is what E.4.1 says M means. `#(.$mfactor(4))` is A.4.1's own spelling for the
+// is what E.4.1 says M means.
+//
+// HOW THE FLOW IS READ (reconciler, 2026-10-08). An earlier revision read
+// `I(x1.a, x1.b)`. §5.5.4 makes that a NEW unnamed branch in THIS module between
+// the hierarchical nets — a flow probe, i.e. a short across the biased a/b pair —
+// and not x1's resistor, so its digits were the harness's, not E.4.1's. The
+// current x1 draws is read two ways that the LRM defines:
+//   - `I(<x1.a>)`: §5.4.3's port access on a hierarchical port (A.8.9
+//     analog_port_reference; §6.7.1 "flow access for ... port branches can be
+//     done hierarchically"): the flow into instance x1 through its port a.
+//   - `I(<a>)`: the flow into THIS module through its port a. Nothing but x1
+//     touches a, so Kirchhoff at a gives the same 4.0e-3 A, read in a module
+//     whose own $mfactor is 1 (§6.3.6's divide-on-probe rule is for probes in
+//     the scaled instance's own analog block, and this is not one).
+// The control x2 sits alone on c the same way: 1.0e-3 A both ways. `//! solve`
+// frees the port-flow unknowns so Kirchhoff, not the harness, sets them; the
+// three biased nets are each driven by the testbench, so the biased point is a
+// solution of this circuit. `#(.$mfactor(4))` is A.4.1's own spelling for the
 // override (§6.3.6 prints `module_b #(.$mfactor(2)) B1(p,n);`).
 //
 // WHAT VerA DOES TODAY, MEASURED. The equivalent written entirely in Verilog-AMS
@@ -53,7 +70,11 @@
 //! lrm 6.3.6
 //! lrm 9.18
 //! lrm 6.7.1
+//! lrm 6.7.1:1
+//! lrm E.4.1:1000
 //! bias V(a) = 1.0, V(b) = 0.0, V(c) = 1.0
+//! solve
+//! checks 4
 //! spice .SUBCKT RUNIT A B
 //! spice R1 A B 1K
 //! spice .ENDS RUNIT
@@ -67,10 +88,14 @@ module h04_subckt_mfactor(a, b, c);
   // parent's, which at the top of this hierarchy is 1.0.
   rUnit x2(c, b);
   analog begin
-    `CHECKR("one unscaled copy is Table E.1's I = V/r = 1.0/1000",
-            I(x2.a, x2.b), 1.0e-3, 1e-14);
+    `CHECKR("one unscaled copy is Table E.1's I = V/r = 1.0/1000 (flow into x2.a)",
+            I(<x2.a>), 1.0e-3, 1e-12);
+    `CHECKR("and the same current enters this module at c, which only x2 touches",
+            I(<c>), 1.0e-3, 1e-12);
     // E.4.1's "a specified number of copies in parallel": four of them.
-    `CHECKR("6.3.6 scales the subcircuit's flow by $mfactor: 4 * 1.0/1000",
-            I(x1.a, x1.b), 4.0e-3, 1e-14);
+    `CHECKR("6.3.6 scales the subcircuit's flow by $mfactor: 4 * 1.0/1000 (flow into x1.a)",
+            I(<x1.a>), 4.0e-3, 1e-12);
+    `CHECKR("and the same current enters this module at a, which only x1 touches",
+            I(<a>), 4.0e-3, 1e-12);
   end
 endmodule

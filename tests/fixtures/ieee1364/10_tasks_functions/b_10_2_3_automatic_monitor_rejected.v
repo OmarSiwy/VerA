@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 10.2.3
 //! reject E1100
 //! reject automatic
+//! neighbour b_10_2_3_task_storage_per_instance.v
 module b_10_2_3_automatic_monitor_rejected;
   task automatic t;
     reg [7:0] v;

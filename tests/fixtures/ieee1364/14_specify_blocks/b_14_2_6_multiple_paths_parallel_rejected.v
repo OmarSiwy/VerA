@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 14.2.6
 //! reject E0207
 //! reject a parallel path
+//! neighbour b_14_2_module_paths.v
 `timescale 1ns/1ns
 module b_14_2_6_multiple_paths_parallel_rejected(a, b, c, q1, q2);
   input a, b, c;

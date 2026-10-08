@@ -6,7 +6,8 @@
 // E0529 names that. The legal neighbour, `(* vera_timepoint = 1 *)`, is in
 // vera_timepoint_cache.va.
 //! lrm 2.9
-//! reject E0529
+//! reject-only E0529
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_parameter(p, n);
   inout p, n; electrical p, n;
   parameter integer cache = 1;

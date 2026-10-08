@@ -48,6 +48,26 @@
 // inout formal. Everything else in this suite is a pure function of the
 // operating point and is unaffected.
 
+`ifdef VERA_PERTURB
+// `zig build benchmark -- --perturb[=d]` (docs/TESTING.md L2b) defines
+// VERA_PERTURB to d and asks whether each check can FAIL: every want is moved
+// by a relative d (by d itself at zero; by one for CHECKI), so a check that
+// still prints ok=1 cannot see an error of that size in its own expectation.
+// No `abs`: under `begin_keywords "1364-2005" there is none, and CHECKX and
+// CHECKI must still expand there (ch10_directives/16_begin_keywords_verilog.va).
+`define VERA_PW(WANT) (((WANT) == 0) ? (`VERA_PERTURB) : (WANT) * (1 + (`VERA_PERTURB)))
+`define CHECK(NAME, GOT, WANT, TOL) \
+  $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), (abs((GOT) - `VERA_PW(WANT)) <= (TOL)))
+`define CHECKR(NAME, GOT, WANT, RTOL) \
+  $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), \
+          (abs((GOT) - `VERA_PW(WANT)) <= (RTOL) * (abs(`VERA_PW(WANT)) + 1e-30)))
+`define CHECKX(NAME, GOT, WANT) \
+  $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), ((GOT) == `VERA_PW(WANT)))
+`define CHECKI(NAME, GOT, WANT) \
+  $strobe("%s got=%d want=%d ok=%d", NAME, GOT, (WANT) + 1, ((GOT) == (WANT) + 1))
+`define CHECKEQ(NAME, GOT, WANT, TOL) \
+  $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), (abs((GOT) - `VERA_PW(WANT)) <= (TOL)))
+`else
 // Absolute tolerance. Use for values near or at zero.
 `define CHECK(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, WANT, (abs((GOT) - (WANT)) <= (TOL)))
@@ -84,5 +104,6 @@
 // literal to write; if you can write the digits, write the digits.
 `define CHECKEQ(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, WANT, (abs((GOT) - (WANT)) <= (TOL)))
+`endif
 
 `endif

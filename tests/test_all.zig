@@ -18,6 +18,14 @@ pub const vpi = @import("vpi");
 
 /// The stage-boundary exhaustiveness guard.
 pub const exhaustive = @import("exhaustive.zig");
+/// The in-process fuzz targets (docs/TESTING.md L6), replayed with seeded
+/// inputs by zrunner's `fuzz`.
+pub const fuzz_targets = @import("fuzz.zig");
+/// L10 allocation-failure injection over `compileSourceOpts`.
+pub const oom = @import("oom.zig");
+/// `contract.gm` against f128 references (docs/TESTING.md L3). Here and not
+/// in `contract`, which is one file by contract and imports none.
+pub const ulp = @import("ulp.zig");
 
 test {
     std.testing.refAllDecls(@This());

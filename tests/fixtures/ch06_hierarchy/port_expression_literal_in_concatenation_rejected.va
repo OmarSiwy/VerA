@@ -27,8 +27,10 @@
 // literal it refused.
 //
 //! lrm 6.5.1
-//! reject E0208
+//! lrm 6.5.1:1
+//! reject-only E0208
 //! reject 1'b0
+//! neighbour ../annex_a_syntax/42_concatenated_port.va
 module ch6_port_literal_member({a, 1'b0}, n);
   inout a, n;
   electrical a, n;

@@ -30,6 +30,7 @@
 // Every value is an integer, so CHECKI (exact) throughout.
 //
 //! lrm 4.2
+//! lrm 4.2:1000
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_table_4_1_every_operator(p, n);

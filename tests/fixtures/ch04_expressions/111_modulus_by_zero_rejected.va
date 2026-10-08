@@ -14,7 +14,9 @@
 // 45_modulo.va covers the legal `% 2.0` case with digits.
 //
 //! lrm 4.2.4
-//! reject E0601
+//! lrm 4.2.4:1
+//! reject-only E0601
+//! neighbour 45_modulo.va
 module ch04_modulus_by_zero_rejected(p, n);
     inout p, n;
     electrical p, n;

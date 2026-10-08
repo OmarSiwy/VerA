@@ -45,6 +45,8 @@
 // assertion carries the verdict through the solver as well as the transcript.
 //
 //! lrm 10.5
+//! lrm 10.5:4
+//! lrm 10.5:3
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 `ifdef __VERA__

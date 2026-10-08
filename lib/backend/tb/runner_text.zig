@@ -633,6 +633,7 @@ pub const runner_body =
     \\
     \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) ?f64 {
     \\    acceptCheck(model, inst, x, state);
+    \\    stateCheck(model, inst, x, state);
     \\    const q0 = q_prev;
     \\    commitCharge(model, inst, x);
     \\    const r = stepAdvance(model, inst, x, state, solved);
@@ -742,6 +743,8 @@ pub const runner_body =
     \\    narrowCheck(x, model, inst);
     \\    sparseCheck(x, model, inst);
     \\    constCheck(x, model, inst);
+    \\    fdCheck(x, model, inst);
+    \\    finiteCheck(n, model, inst);
     \\
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.
@@ -770,6 +773,166 @@ pub const runner_body =
     \\            }
     \\        }
     \\    }
+    \\}
+    \\
+    \\/// The derivative gate (docs/TESTING.md L4a), on under the suite's
+    \\/// `--certify` (`fd_certify`): every Jacobian entry, as a host stamps it
+    \\/// (`withConst`), against a central difference of the value-only `eval`
+    \\/// and `q`. h = cbrt(eps)*max(|x|,1) makes the difference's truncation
+    \\/// error about eps^(2/3), so 1e-5 relative has margin and still sees a
+    \\/// wrong term. Where the forward and backward slopes disagree by more than
+    \\/// curvature explains, a kink or a branch sits inside +-h and nothing there
+    \\/// is smooth enough to difference: that lane is counted as skipped, never
+    \\/// judged. Silent on success but for one census line.
+    \\fn fdCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (!fd_certify) return;
+    \\    // In a small-signal analysis the rows carry the §4.6.3/§4.6.4 excitations,
+    \\    // which are sources and not part of the residual being linearized.
+    \\    if (sim_state.kind == .ac or sim_state.kind == .noise) return;
+    \\    var tally: [3]usize = .{ 0, 0, 0 }; // compared, skipped, failed
+    \\    const ad = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
+    \\    fdRows("res", false, x, model, inst, &ad, &tally);
+    \\    if (comptime @hasDecl(D, "q")) {
+    \\        const aq = withConst(Dual, qRowsOf(Dual, x, model, inst), model, true);
+    \\        fdRows("q", true, x, model, inst, &aq, &tally);
+    \\    }
+    \\    std.debug.print("  fd_check: {d} compared, {d} skipped, {d} failed\n", .{ tally[0], tally[1], tally[2] });
+    \\    if (tally[2] != 0) std.process.exit(1);
+    \\}
+    \\fn fdEval(react: bool, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) [n_u]f64 {
+    \\    var copy = inst.*; // a `mutable_eval` device writes its instance
+    \\    var out: [n_u]f64 = @splat(0.0);
+    \\    if (react) {
+    \\        if (comptime @hasDecl(D, "q")) for (&out, qRowsOf(Val, x, model, &copy)) |*o, e| {
+    \\            o.* = e.v;
+    \\        };
+    \\    } else {
+    \\        const r: [n_u]Val = D.eval(Val, x, model, &copy, sim_state);
+    \\        for (&out, r) |*o, e| o.* = e.v;
+    \\    }
+    \\    return out;
+    \\}
+    \\fn fdRows(what: []const u8, react: bool, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D), ad: *const [n_u]Dual, tally: *[3]usize) void {
+    \\    const eps = std.math.floatEps(f64);
+    \\    const r0 = fdEval(react, x, model, inst);
+    \\    for (0..n_u) |j| {
+    \\        const h = std.math.cbrt(eps) * @max(@abs(x[j]), 1.0);
+    \\        var xp = x.*;
+    \\        xp[j] += h;
+    \\        var xm = x.*;
+    \\        xm[j] -= h;
+    \\        const rp = fdEval(react, &xp, model, inst);
+    \\        const rm = fdEval(react, &xm, model, inst);
+    \\        for (0..n_u) |i| {
+    \\            const a = ad[i].d[j];
+    \\            if (!std.math.isFinite(a) or !std.math.isFinite(rp[i]) or !std.math.isFinite(rm[i]) or !std.math.isFinite(r0[i])) {
+    \\                tally[1] += 1;
+    \\                continue;
+    \\            }
+    \\            const fwd = (rp[i] - r0[i]) / h;
+    \\            const bwd = (r0[i] - rm[i]) / h;
+    \\            const round = 64.0 * eps * (@abs(rp[i]) + @abs(rm[i]) + @abs(r0[i])) / h;
+    \\            if (@abs(fwd - bwd) > 1e-3 * (@abs(fwd) + @abs(bwd)) + round) {
+    \\                tally[1] += 1;
+    \\                continue;
+    \\            }
+    \\            tally[0] += 1;
+    \\            const fd = 0.5 * (fwd + bwd);
+    \\            if (@abs(fd - a) <= 1e-5 * @max(@abs(fd), @abs(a)) + round) continue;
+    \\            tally[2] += 1;
+    \\            std.debug.print("fd_check FAIL: d {s}[{s}]/d x[{s}]: jacobian {e} vs central difference {e} (h={e})\n", .{ what, u_names[i], u_names[j], a, fd, h });
+    \\        }
+    \\    }
+    \\}
+    \\
+    \\/// The prover-soundness gate (docs/TESTING.md L4b), on under `--certify`
+    \\/// for a device whose every contribution unit the prover rated
+    \\/// `.optimized` (`finite_proved`): its rows are finite doubles for any
+    \\/// finite unknowns and in-range card (`proof.FloatMode`'s rules). So `eval`
+    \\/// and `q` on this point's card and instance, at random unknowns, must
+    \\/// return finite rows; a NaN or an inf is a prover bug. The testbench's
+    \\/// card, not `D.Model{}`: without `//! param` it is the defaults, and with
+    \\/// one a default may be an error the card overrides (§6.3.4, a dependent
+    \\/// default `11 % zero_divisor`). Rule 3 there assumes `+ - * /` do not
+    \\/// overflow at device magnitudes, so each unknown is drawn log-uniform in
+    \\/// magnitude over 10^finite_decades, either sign; one time in eight
+    \\/// exactly 0 (the divisor a prover must not miss) and one in eight at the
+    \\/// bound, where overflow lives. Seeded by the point, so a failure reruns.
+    \\/// Silent on success but for one census line.
+    \\/// ponytail: one fixed bound (1 kV, 1 kA); thread `--unknown-bound=` here
+    \\/// once the suite compiles with one.
+    \\const finite_decades = [2]f64{ -6.0, 3.0 };
+    \\const finite_samples = 64;
+    \\fn finiteCheck(n: usize, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (!fd_certify or !finite_proved) return;
+    \\    var prng = std.Random.DefaultPrng.init(0x4c34b +% n);
+    \\    const r = prng.random();
+    \\    for (0..finite_samples) |k| {
+    \\        var x: [n_u]f64 = undefined;
+    \\        for (&x) |*e| {
+    \\            const sign: f64 = if (r.boolean()) 1.0 else -1.0;
+    \\            e.* = switch (r.uintLessThan(u8, 8)) {
+    \\                0 => 0.0,
+    \\                1 => sign * std.math.pow(f64, 10.0, finite_decades[1]),
+    \\                else => sign * std.math.pow(f64, 10.0, finite_decades[0] + (finite_decades[1] - finite_decades[0]) * r.float(f64)),
+    \\            };
+    \\        }
+    \\        const res = fdEval(false, &x, model, inst);
+    \\        const qq = fdEval(true, &x, model, inst);
+    \\        for (0..n_u) |i| {
+    \\            if (std.math.isFinite(res[i]) and std.math.isFinite(qq[i])) continue;
+    \\            std.debug.print("finite_check FAIL: point {d} sample {d}: res[{s}] = {e}, q[{s}] = {e}, but every unit was proved finite; x =", .{ n, k, u_names[i], res[i], u_names[i], qq[i] });
+    \\            for (x, 0..) |v, j| std.debug.print(" {s}={e}", .{ u_names[j], v });
+    \\            std.debug.print("\n", .{});
+    \\            std.process.exit(1);
+    \\        }
+    \\    }
+    \\    std.debug.print("  finite_check: {d} samples finite\n", .{finite_samples});
+    \\}
+    \\
+    \\/// The state-machine gate (docs/TESTING.md L4c), on under `--certify` for
+    \\/// a device with `stateCtl`: a host's reject path at each accepted point,
+    \\/// on copies. Commit the working state (the last accepted point, as a host
+    \\/// does before it may revert), try `updateState` at this point, then
+    \\/// `stateCtl(.revert)`: every `Instance` and `State` field must be back to
+    \\/// the bit, and `eval` must answer as it did before the attempt. Exempt:
+    \\/// the §5.6.1.2 staging twins `wb__k`/`wq__k`, which `updateState` writes
+    \\/// and only `.commit` reads, so a host stages them again before the next
+    \\/// commit (`codegen/instance.zig` `emitStateTwins`). Silent on success but
+    \\/// for one census line.
+    \\fn stateCheck(model: *const D.Model, inst: *const D.Instance, x: *const [n_u]f64, state: *const State) void {
+    \\    if (comptime State == void or !@hasDecl(D, "stateCtl")) return;
+    \\    if (!fd_certify) return;
+    \\    var ic = inst.*;
+    \\    var sc = state.*;
+    \\    _ = D.stateCtl(model, &ic, &sc, .commit);
+    \\    const inst0 = ic;
+    \\    const state0 = sc;
+    \\    const before = fdEval(false, x, model, &ic);
+    \\    _ = D.updateState(Val, model, &ic, x.*, &sc, sim_state);
+    \\    _ = D.stateCtl(model, &ic, &sc, .revert);
+    \\    const fields = stateFields("Instance", D.Instance, &inst0, &ic) + stateFields("State", State, &state0, &sc);
+    \\    const after = fdEval(false, x, model, &ic);
+    \\    for (0..n_u) |i| {
+    \\        if (@as(u64, @bitCast(before[i])) == @as(u64, @bitCast(after[i])) or (before[i] != before[i] and after[i] != after[i])) continue;
+    \\        std.debug.print("state_check FAIL: res[{s}] is {e} before updateState and {e} after its revert\n", .{ u_names[i], before[i], after[i] });
+    \\        std.process.exit(1);
+    \\    }
+    \\    std.debug.print("  state_check: {d} fields restored\n", .{fields});
+    \\}
+    \\fn stateFields(what: []const u8, comptime T: type, want: *const T, got: *const T) usize {
+    \\    const names = @typeInfo(T).@"struct".field_names;
+    \\    @setEvalBranchQuota(1000 + 100 * names.len);
+    \\    var bad = false;
+    \\    inline for (names) |name| {
+    \\        const staged = comptime std.mem.startsWith(u8, name, "wb__") or std.mem.startsWith(u8, name, "wq__");
+    \\        if (!staged and !std.mem.eql(u8, std.mem.asBytes(&@field(want.*, name)), std.mem.asBytes(&@field(got.*, name)))) {
+    \\            std.debug.print("state_check FAIL: {s}.{s} is {any} after updateState and stateCtl(.revert), {any} before\n", .{ what, name, @field(got.*, name), @field(want.*, name) });
+    \\            bad = true;
+    \\        }
+    \\    }
+    \\    if (bad) std.process.exit(1);
+    \\    return names.len;
     \\}
     \\
     \\fn allZero(v: [n_u]f64) bool {
@@ -914,7 +1077,18 @@ pub const runner_body =
     \\                    a[i][j] = 0.0;
     \\                };
     \\            }
-    \\            for (a[i]) |e| scale = @max(scale, @abs(e));
+    \\            // Row equilibration: each row is divided by its largest entry,
+    \\            // which leaves dx unchanged. Without it one row's 1/dt (a §4.5.3
+    \\            // `ddt` unknown's row, -2e8 at dt = 5 ns) sets `scale`, and a
+    \\            // pivot of 1 in a row of order 1 falls under `eps`, so that
+    \\            // unknown silently holds its guess.
+    \\            var m: f64 = 0.0;
+    \\            for (a[i]) |e| m = @max(m, @abs(e));
+    \\            if (m > 0.0) {
+    \\                for (&a[i]) |*e| e.* /= m;
+    \\                b[i] /= m;
+    \\                scale = 1.0;
+    \\            }
     \\        }
     \\        var dx: [n_u]f64 = undefined;
     \\        var solved: [n_u]bool = undefined;
@@ -1042,6 +1216,11 @@ pub const vpi_lib_body =
     \\    if (comptime n_systf == 0) unreachable;
     \\    len.* = D.systf_calls[k].name.len;
     \\    return D.systf_calls[k].name.ptr;
+    \\}
+    \\/// `systf_calls[k].tok`: which source call position k is.
+    \\export fn vera_vpi_systf_tok(k: usize) callconv(.c) u32 {
+    \\    if (comptime n_systf == 0) unreachable;
+    \\    return D.systf_calls[k].tok;
     \\}
     \\
     \\/// A `//! wave` value between the declared times, as the mixed runner

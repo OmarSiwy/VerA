@@ -12,7 +12,7 @@
 // connects 3".
 //
 //! lrm 6.5.4
-//! reject E0906
+//! reject-only E0906
 `include "disciplines.vams"
 module ch6_ord_child(a, b);
   inout a, b;

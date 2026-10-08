@@ -6,6 +6,7 @@
 // instantiates nothing, so neither instance exists and the status is 0.
 //
 //! lrm 9.20
+//! lrm 9.20:10
 `include "check.vh"
 
 module ch09_atomic_analog_port_alias(p, n);

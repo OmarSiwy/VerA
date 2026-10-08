@@ -15,9 +15,11 @@
 // This second sentence had no fixture anywhere in the suite.
 //
 //! lrm A.10
+//! lrm A.10:4
 //! lrm 2.8.1
 //! lrm 2.8.3
-//! reject E0314
+//! lrm 2.8.3:2
+//! reject-only E0314
 module annex_a_escaped_system(p); inout p; electrical p; real x;
 analog begin x = \$vt ; I(p) <+ x * V(p); end
 endmodule

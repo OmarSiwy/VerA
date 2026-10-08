@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 10.4.5
 //! reject E1100
 //! reject hierarchical
+//! neighbour b_10_4_5_constant_function_clogb2.v
 module b_10_4_5_constant_function_hierarchical_rejected;
   reg [7:0] q;
   function integer g;

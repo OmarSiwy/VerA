@@ -27,7 +27,7 @@
 // message happened to contain.
 //
 //! lrm 10.3
-//! reject E0129
+//! reject-only E0129
 `default_transition
 module ch10_default_transition_requires_an_operand(p, n);
   inout p, n; electrical p, n;

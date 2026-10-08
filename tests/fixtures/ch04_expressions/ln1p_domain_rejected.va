@@ -9,7 +9,9 @@
 //
 //! lrm 4.3.1
 //! lrm 4.3.2
-//! reject E0603
+//! lrm 4.3.2:2
+//! reject-only E0603
+//! neighbour 33_ln1p_expm1.va
 `include "disciplines.vams"
 module ch04_ln1p_domain(p, n);
   inout p, n; electrical p, n;

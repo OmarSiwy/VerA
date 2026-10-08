@@ -8,7 +8,7 @@
 // context available is outside what this fixture claims.
 //! lrm C.3
 //! lrm 2.6.1
-//! reject E0130
+//! reject-only E0130
 module ch02_xz_integer_rejected;
     integer value;
     analog value = 4'b01xz;

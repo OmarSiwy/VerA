@@ -10,7 +10,10 @@
 //
 //! lrm 4.3.1
 //! lrm 4.3.2
-//! reject E0609
+//! lrm 4.3.2:2
+//! reject-only E0609
+//! neighbour 158_pow_even_exponent_accepted.va
+//! neighbour 158_pow_negative_base_runtime_exponent.va
 `include "disciplines.vams"
 module ch04_pow_negative_base_fractional_exponent(p, n);
   inout p, n; electrical p, n;

@@ -21,8 +21,11 @@
 //
 //! lrm 9.18
 //! lrm 6.3.6
-//! reject E0890
+//! lrm 9.18:1000
+//! reject-only E0890
 //! reject Table 9-29 allows only $mfactor > 0
+//! neighbour 097_mfactor.va
+//! neighbour ../ch06_hierarchy/mfactor.va
 `include "disciplines.vams"
 module ch09_mfactor_zero_top(p, n);
   inout p, n; electrical p, n;

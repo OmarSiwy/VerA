@@ -14,6 +14,7 @@
 // as claiming it is.
 //
 //! lrm 9.18
+//! lrm 9.18:1000
 `include "check.vh"
 module ch09_atomic_hflip(p, n);
   inout p, n; electrical p, n;

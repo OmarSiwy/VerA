@@ -12,6 +12,7 @@
 //
 //! lrm 4.2.9
 //! lrm 4.2.11
+//! lrm 4.2.9:1
 `include "check.vh"
 module dependent_control_shift_mixed_folded(p);
   inout p; electrical p;

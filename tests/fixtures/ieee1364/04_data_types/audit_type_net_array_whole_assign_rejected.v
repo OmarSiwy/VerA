@@ -5,6 +5,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 4.9
 //! reject an unpacked array reference requires an element index
+//! neighbour audit_type_net_array.v
 `timescale 1ns/1ns
 module audit_type_net_array_whole_assign_rejected;
   wire [3:0] w [0:1];

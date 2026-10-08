@@ -7,7 +7,8 @@
 // scratch. E0538 names it. The legal neighbour, `= "uninit"`, is in
 // vera_scratch_uninit_tape.va.
 //! lrm 2.9
-//! reject E0538
+//! reject-only E0538
+//! neighbour vera_scratch_uninit_tape.va
 module reject_vera_scratch_unknown_string(p, n);
   inout p, n; electrical p, n;
   integer k;

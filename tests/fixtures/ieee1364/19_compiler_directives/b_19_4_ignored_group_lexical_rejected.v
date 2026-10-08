@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 19.4
 //! reject E0138
 //! reject a string literal may not span lines
+//! neighbour b_19_4_conditional_compilation.v
 `ifdef never_defined
   initial $display("unterminated);
 `endif

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 19.3.1
 //! reject E0118
 //! reject recursive macro expansion
+//! neighbour b_19_3_1_text_macros.v
 `define ping (1 + `pong)
 `define pong (2 + `ping)
 module b_19_3_1_recursive_macro_rejected;

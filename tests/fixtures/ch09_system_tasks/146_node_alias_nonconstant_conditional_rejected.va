@@ -22,7 +22,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.20
-//! reject inside conditional
+//! lrm 9.20:9
+//! reject-only inside conditional
 //! reject E0812
 module ch09_node_alias_nonconstant_conditional_rejected(p, n);
   inout p, n; electrical p, n;

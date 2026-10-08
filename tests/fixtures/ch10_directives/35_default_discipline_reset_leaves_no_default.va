@@ -36,7 +36,8 @@
 //! lrm 10.2
 //! lrm 7.4
 //! lrm 3.6.1
-//! reject E0337
+//! lrm 10.2:1000
+//! reject-only E0337
 `default_discipline electrical
 `default_discipline
 module ch10_default_discipline_reset_leaves_no_default(p, n);

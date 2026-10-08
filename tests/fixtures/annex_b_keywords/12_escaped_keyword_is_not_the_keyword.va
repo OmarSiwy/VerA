@@ -17,10 +17,13 @@
 // usual way of getting §2.8.1 wrong — accepts this source and fails here.
 //
 //! lrm B
+//! lrm B:1
 //! lrm 2.8.1
 //! lrm 2.8.2
-//! reject E0240
+//! lrm 2.8.2:1000
+//! reject-only E0240
 //! reject analog
+//! neighbour 01_escaped_keyword.va
 module annex_b_escaped_keyword_is_not_the_keyword(p, n);
     inout p, n;
     electrical p, n;

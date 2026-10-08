@@ -27,6 +27,7 @@
 // kernel and names the divergence.
 //
 //! lrm 4.5.8
+//! lrm 4.5.8:2
 //! bias V(p) = 1.0
 //! bias V(n) = 0
 //! print none

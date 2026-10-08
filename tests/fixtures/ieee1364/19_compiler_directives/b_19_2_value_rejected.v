@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 19.2
 //! reject E0140
 //! reject `default_nettype takes one net type
+//! neighbour b_19_2_none_all_declared.v
 `default_nettype reg
 module b_19_2_value_rejected;
   initial $display("accepted");

@@ -29,6 +29,7 @@
 //
 //! lrm 3.3
 //! lrm 3.4
+//! lrm 3.4:3
 //! param N = 3
 //! bias V(p) = 1.0
 `include "check.vh"

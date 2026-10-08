@@ -29,8 +29,12 @@
 // Both families appear because 132/133 pinned them separately, for the same
 // reason: a compiler could plausibly police one and not the other.
 //
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 9.13.1
 //! lrm 9.13.2
+//! lrm 9.13.2:4
+//! lrm 6.4.1
+//! lrm 6.4.1:4
 `include "check.vh"
 module ch09_ts_user(p, n);
   inout p, n; electrical p, n;
@@ -38,6 +42,7 @@ module ch09_ts_user(p, n);
 endmodule
 
 paramset ch09_ts_bin ch09_ts_base;
+  parameter real unused_item = 0;
   .ka = $arandom(7, "global");
   .kb = $arandom(7, "instance");
   .kc = $arandom(7);

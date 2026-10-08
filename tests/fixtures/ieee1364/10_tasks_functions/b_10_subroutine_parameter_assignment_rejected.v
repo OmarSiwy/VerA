@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 4.10 4.10.2
 //! reject E1100
 //! reject a parameter is a constant; it cannot be assigned
+//! neighbour b_10_automatic_subroutine_parameters.v
 module b_10_subroutine_parameter_assignment_rejected;
   task automatic update;
     localparam step = 3;

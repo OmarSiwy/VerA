@@ -14,6 +14,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4.4
 //! reject ifnone
+//! neighbour b_14_2_4_4_ifnone.v
 `timescale 1ns/1ns
 module b_14_2_4_4_ifnone_with_unconditional_rejected(a, b, out);
   input a, b;

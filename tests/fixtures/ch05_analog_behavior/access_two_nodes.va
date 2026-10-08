@@ -4,6 +4,7 @@
 // naming the nets the other way round reverses the branch, giving -0.65 V.
 //
 //! lrm 5.4.1
+//! lrm 5.4.1:1000
 //! bias V(p) = 0.9, V(n) = 0.25
 `include "check.vh"
 module ch5_access_two(p, n);

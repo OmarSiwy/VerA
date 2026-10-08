@@ -7,6 +7,7 @@
 // Legal neighbour: 32_vector_nets.va.
 //
 //! reject E1015
+//! neighbour 32_vector_nets.va
 module vector_net_over_65535_elements_rejected(a);
   inout a; electrical a;
   electrical [0:70000] b;

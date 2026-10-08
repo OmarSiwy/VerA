@@ -9,6 +9,9 @@
 //! lrm A.1.3
 //! lrm A.4.1
 //! lrm 6.3.3
+//! lrm 6.3.3:2
+//! lrm A.1.3:1000
+//! lrm A.4.1:1000
 //! bias V(x) = 1
 //! bias V(y) = 1
 //! bias V(z) = 1

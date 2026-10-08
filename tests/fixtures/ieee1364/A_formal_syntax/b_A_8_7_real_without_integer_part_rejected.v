@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.8.7
 //! reject E0209
 //! reject expected an expression: found `.`
+//! neighbour b_A_8_7_numbers.v
 module b_A_8_7_real_without_integer_part_rejected;
   real x;
   initial begin

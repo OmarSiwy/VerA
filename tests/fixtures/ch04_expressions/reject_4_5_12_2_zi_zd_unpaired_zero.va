@@ -8,7 +8,8 @@
 // and T = 1u is positive. The only error is the unpaired complex zero.
 //
 //! lrm 4.5.12.2
-//! reject no conjugate partner
+//! lrm 4.5.12.2:2
+//! reject-only no conjugate partner
 `include "disciplines.vams"
 module ch4_zi_zd_unpaired_zero(p, n);
   inout p, n;

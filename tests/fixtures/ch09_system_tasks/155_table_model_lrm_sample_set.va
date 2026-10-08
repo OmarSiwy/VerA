@@ -57,6 +57,9 @@
 //
 //! lrm 9.21
 //! lrm 9.21.5
+//! lrm 9.21.5:1
+//! lrm 9.21:2
+//! lrm 9.21:3
 `include "check.vh"
 module ch09_table_model_lrm_sample_set(p, n);
   inout p, n; electrical p, n;

@@ -28,7 +28,11 @@
 // wide_unsigned_compare_extends_each_operand_folded.va is the folded twin.
 //
 //! lrm 4.2.9
+//! lrm 4.2.9:2
+//! lrm 4.2.9:4
 //! lrm 4.2.11
+//! lrm 4.2.9:1
+//! lrm 4.2.9:3
 `include "check.vh"
 module ch04_wide_unsigned_compare(p);
   inout p; electrical p;

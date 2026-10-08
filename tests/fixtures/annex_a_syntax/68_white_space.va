@@ -44,6 +44,10 @@
 //! lrm A.9
 //! lrm A.9.4
 //! lrm 2.3
+//! lrm 2.3:1
+//! lrm 2.3:2
+//! lrm 2.3:3
+//! lrm A.9.4:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module	annex_a_white_space	(p	,	n);

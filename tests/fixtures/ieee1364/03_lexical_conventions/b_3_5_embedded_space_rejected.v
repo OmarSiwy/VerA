@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 3.5
 //! reject E0207
 //! reject unexpected token
+//! neighbour b_3_5_number_forms.v
 module b_3_5_embedded_space_rejected;
   reg [7:0] v;
   initial begin

@@ -8,6 +8,7 @@
 // leave the LRM 3.2 initial 0.0 as well. Only honouring both gives 1.0.
 //
 //! lrm 5.10.2
+//! lrm 5.10.2:1000
 //! analysis dc
 `include "check.vh"
 module ch5_initial_final_analysis_lists(p);

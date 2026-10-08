@@ -12,7 +12,10 @@
 // violating 2.8.3, and would fail here.
 //! lrm 2.8.3
 //! lrm 2.8.1
-//! reject E0314
+//! lrm 2.8.3:2
+//! lrm A.10
+//! lrm A.10:4
+//! reject-only E0314
 module ch02_escaped_system_identifier_rejected;
     real value;
     analog value = \$vt ;

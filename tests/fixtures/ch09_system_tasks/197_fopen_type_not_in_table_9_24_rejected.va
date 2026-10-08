@@ -16,7 +16,7 @@
 // VerA reports E0889 "$fopen type is not one of Table 9-24's forms".
 //
 //! lrm 9.5.1
-//! reject E0889
+//! reject-only E0889
 `include "disciplines.vams"
 module ch09_fopen_type_not_in_table(p, n);
   inout p, n; electrical p, n;

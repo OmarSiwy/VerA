@@ -4,6 +4,7 @@
 // This fixture demonstrates all four return mechanisms working correctly.
 //
 //! lrm 4.7.2
+//! lrm 4.7.2:1000
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_function_return_four_ways(p, n);

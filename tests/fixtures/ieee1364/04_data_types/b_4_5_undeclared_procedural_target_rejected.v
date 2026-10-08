@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 4.5
 //! reject E1100
 //! reject undeclared digital variable
+//! neighbour b_4_5_implicit_nets.v
 module b_4_5_undeclared_procedural_target_rejected;
   initial begin
     undeclared_r = 1;

@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 8.6
 //! reject E1100
 //! reject two delays
+//! neighbour b_8_6_two_delays.v
 `timescale 1ns/1ns
 primitive inv(q, a);
   output q;

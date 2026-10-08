@@ -6,9 +6,12 @@
 // inner's definition is written inside outer's. Legal neighbour:
 // b_12_1_2_ffnand_instances.v (ffnand defined alongside, then instantiated).
 // digital-runner: reject
+//! lrm 6.1
+//! lrm 6.1:1000
 //! inherited IEEE 1364-2005 12.1.2
 //! reject E0240
 //! reject not a module item
+//! neighbour b_12_1_2_ffnand_instances.v
 module b_12_1_2_nested_module_definition_rejected;
   module inner;
   endmodule

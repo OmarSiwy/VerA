@@ -20,7 +20,7 @@
 // only thing under test is the directive.
 //
 //! lrm 10.1
-//! reject E0140
+//! reject-only E0140
 `default_nettype reg
 module ch10_default_nettype_value_grammar(p, n);
     inout p, n;

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.9.1
 //! reject E0208
 //! reject expected an identifier: found 1
+//! neighbour b_A_9_1_attributes.v
 module b_A_9_1_attribute_name_not_identifier_rejected;
   (* 1 = 2 *) wire w;
   initial $display("unreachable");

@@ -17,8 +17,9 @@
 //
 //! lrm 9.14
 //! lrm 4.3.1
-//! reject E0506
+//! reject-only E0506
 //! reject `$pow()` takes 2
+//! neighbour 087_pow.va
 `include "disciplines.vams"
 module ch09_math_system_function_arity(p, n);
   inout p, n; electrical p, n;

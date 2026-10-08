@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 17.3.1
 //! reject E1100
 //! reject undeclared instance in a hierarchical reference
+//! neighbour b_17_3_1_printtimescale_named_module.v
 `timescale 1 ns / 1 ns
 module b_17_3_1_printtimescale_unknown_scope_rejected;
   initial $printtimescale(nosuch.c1);

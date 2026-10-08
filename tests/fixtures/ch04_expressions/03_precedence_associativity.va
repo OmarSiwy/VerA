@@ -42,6 +42,9 @@
 // 30_concatenation.va.
 //
 //! lrm 4.2.2
+//! lrm 4.2.2:1000
+//! lrm 4.2.3
+//! lrm 4.2.3:1
 `include "check.vh"
 module ch04_precedence_associativity(p, n);
     inout p, n;

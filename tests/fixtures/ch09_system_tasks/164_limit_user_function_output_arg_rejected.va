@@ -17,7 +17,9 @@
 // diagnostic's note.
 //
 //! lrm 9.17.3
-//! reject E0814
+//! lrm 9.17.3:8
+//! reject-only E0814
+//! neighbour 156_limit_user_function.va
 module ch09_limit_user_function_output_arg_rejected(p, n);
   inout p, n; electrical p, n;
   real limited;

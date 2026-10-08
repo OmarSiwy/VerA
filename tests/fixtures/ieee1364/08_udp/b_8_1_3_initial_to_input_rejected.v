@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 8.1.3 8.5
 //! reject E1100
 //! reject output
+//! neighbour b_8_1_3_initial_values.v
 `timescale 1ns/1ns
 primitive input_init(q, g, d);
   output q;

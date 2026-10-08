@@ -13,7 +13,7 @@
 // the reject substrings pin exactly it.
 //
 //! lrm 6.2.2
-//! reject E0906
+//! reject-only E0906
 //! reject connected twice
 module ch6_dup_conn_parent(p, n);
   inout p, n; electrical p, n;

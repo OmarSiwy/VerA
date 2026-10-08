@@ -15,6 +15,7 @@
 // written).
 //
 //! lrm 4.1
+//! lrm 4.1:1000
 //! reject E0363
 module ch04_constant_expression_reads_a_probe(p, n);
     inout p, n;

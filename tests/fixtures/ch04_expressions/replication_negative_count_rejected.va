@@ -6,7 +6,9 @@
 // The legal replications are 31_replication.va and audit_replication_zero_effect.va.
 //
 //! lrm 4.2.13
-//! reject E0327
+//! reject-only E0327
+//! neighbour 31_replication.va
+//! neighbour audit_replication_zero_effect.va
 `include "disciplines.vams"
 module ch04_replication_negative_count(p, n);
   inout p, n; electrical p, n;

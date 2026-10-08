@@ -22,7 +22,7 @@
 // is `%s %g %g %d` over string/real/real/integer.)
 //
 //! lrm 9.4.3
-//! reject E0819
+//! reject-only E0819
 module ch09_format_conversion_type_mismatch(p, n);
     inout p, n;
     electrical p, n;

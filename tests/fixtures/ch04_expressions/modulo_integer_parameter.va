@@ -6,6 +6,7 @@
 // a model-card default out of the procedural runtime-error effect chain.
 //! lrm 4.2.4
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param divisor=4
 //! param overridden=5
 //! checks 3

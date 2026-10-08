@@ -26,6 +26,7 @@
 // module is legal on both halves of the clause.
 //
 //! lrm 7.3.2.1
+//! lrm 7.3.2.1:1
 //! lrm 7.2.2
 //! bias V(p) = 0.5
 `include "check.vh"

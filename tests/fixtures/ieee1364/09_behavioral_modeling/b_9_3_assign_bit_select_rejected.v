@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 9.3
 //! reject E1100
 //! reject names one whole variable or net
+//! neighbour audit_assignment_assign_deassign.v
 module b_9_3_assign_bit_select_rejected;
   reg [3:0] r;
   initial assign r[0] = 1'b1;

@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 8.1.1
 //! reject E0208
 //! reject found `[`
+//! neighbour b_8_1_definition_placement.v
 primitive vec_in(q, a);
   output q;
   input [1:0] a;

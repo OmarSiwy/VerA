@@ -5,7 +5,7 @@
 // computed from it (`tVto`), but no solution exists yet: it may never read a
 // probe or anything computed from one. E0527 names that.
 //! lrm 9.17.3
-//! reject E0527
+//! reject-only E0527
 module reject_limit_seed_reads_solution(p, n);
   inout p, n; electrical p, n, a;
   parameter real vt = 0.025, vcrit = 0.6;

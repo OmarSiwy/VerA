@@ -15,7 +15,7 @@
 // bare arm for it would be satisfied by their diagnostics. It is censused in
 // 22_shadowed_spellings.va, which explains the mechanism.
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject bufif0
 //! reject bufif1
 //! reject cmos

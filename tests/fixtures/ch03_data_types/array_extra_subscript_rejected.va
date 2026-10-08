@@ -18,7 +18,8 @@
 //! lrm 3.2
 //! lrm A.8.5
 //! inherited IEEE 1364-2005 5.2.2
-//! reject E0356
+//! reject-only E0356
+//! neighbour ../ch04_expressions/a01_01_partial_slice_assignment.va
 `include "disciplines.vams"
 module ch3_array_extra_subscript(p, n);
   inout p, n; electrical p, n;

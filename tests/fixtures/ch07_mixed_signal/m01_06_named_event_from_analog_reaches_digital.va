@@ -88,7 +88,10 @@
 //
 //! lrm 5.10.4
 //! lrm 7.3.6.1
+//! lrm 7.3.6.1:1
 //! lrm 5.10.3.3
+//! lrm 8.4.3.2
+//! lrm 8.4.3.2:1
 //! analysis tran
 //! time 0, 10n, 20n, 30n
 `timescale 1ns/1ns

@@ -14,6 +14,10 @@
 //
 //! lrm 6.3
 //! lrm 6.2.2
+//! lrm 6.3.2
+//! lrm 6.3.2:1
+//! lrm 6.3.5
+//! lrm 6.3.5:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch6_parent_ordered(p, n);

@@ -28,9 +28,11 @@
 // requiring a diagnostic for it would be requiring one that can never fire.
 //
 //! lrm 4.3.2
-//! reject E0605
+//! lrm 4.3.2:2
+//! reject-only E0605
 //! reject E0606
 //! reject E0607
+//! neighbour 12_transcendental_math.va
 module ch04_transcendental_domain_rejected(p, n);
     inout p, n;
     electrical p, n;

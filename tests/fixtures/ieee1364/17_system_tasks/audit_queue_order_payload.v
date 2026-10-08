@@ -3,6 +3,7 @@
 // FIFO returns13 then27; LIFO returns27 then13. Payload must stay with job.
 // Every successful task overwrites status with0; no default-zero assumption.
 //! lrm 9.9
+//! lrm 9.9:1000
 //! inherited IEEE 1364-2005 17.6.1,17.6.2,17.6.3
 //! expect stdout audit_queue_order_payload.expected.txt
 module audit_queue_order_payload;

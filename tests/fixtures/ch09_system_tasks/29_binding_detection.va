@@ -11,6 +11,9 @@
 // so $port_connected(p) is 1.
 //
 //! lrm 9.19
+//! lrm 9.19:1
+//! lrm 9.19:4
+//! lrm 9.19:6
 //! param gain = 2.0
 //! bias V(p) = 0.5
 `include "check.vh"

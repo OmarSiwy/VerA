@@ -1,5 +1,7 @@
 // §§3.2, 5.8, 5.9: invalid array reads in untaken paths are never evaluated.
 //! lrm 5.8
+//! lrm 5.8.1
+//! lrm 5.8.1:3
 `include "check.vh"
 module ch03_dynamic_multidim_guards(p);
     inout p;

@@ -19,6 +19,7 @@
 // -0.0 passes both.)
 //
 //! lrm 9.18
+//! lrm 9.18:1000
 `include "check.vh"
 module ch09_atomic_angle(p, n);
   inout p, n; electrical p, n;

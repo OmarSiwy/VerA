@@ -12,7 +12,7 @@
 // of this file is 226_limit_pnjlim_internal_node_honoured.
 //
 //! lrm 9.17.3
-//! reject E0891
+//! reject-only E0891
 //! reject second argument is neither a string nor an analog function
 module ch09_limit_numeric_algorithm_rejected(p, n);
   inout p, n; electrical p, n, a;

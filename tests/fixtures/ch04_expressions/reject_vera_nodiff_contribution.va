@@ -4,7 +4,7 @@
 // contribution it would stop the whole branch: the residual keeps its value and
 // Newton gets no Jacobian for it, so it could never move the branch. E0526.
 //! lrm 2.9
-//! reject E0526
+//! reject-only E0526
 module reject_vera_nodiff_contribution(p, n);
   inout p, n; electrical p, n;
   analog begin

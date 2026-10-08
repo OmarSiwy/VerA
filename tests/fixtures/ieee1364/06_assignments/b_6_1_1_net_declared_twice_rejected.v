@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 6.1.1
 //! reject E1100
 //! reject duplicate digital variable
+//! neighbour b_6_1_2_select_bus.v
 module b_6_1_1_net_declared_twice_rejected;
   reg a, b;
   wire w = a;

@@ -14,6 +14,7 @@
 //
 //! lrm 6.7.1
 //! lrm 5.5.2
+//! lrm 6.7.1:1
 //! bias V(b[1]) = 0.75, V(b[0]) = 0.25
 `include "check.vh"
 module ch6_hier_vec_child(v);

@@ -10,6 +10,7 @@
 //
 //! lrm 10.4
 //! lrm 2.8.1
+//! lrm 2.8.1:1
 //! bias V(p) = 0.5
 `define ID(x) x
 `include "check.vh"

@@ -50,6 +50,8 @@
 //! lrm A.8.6
 //! lrm 4.2.6
 //! lrm 7.3.2
+//! lrm 4.2.6:1000
+//! lrm A.8.6:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_case_equality(p, n);

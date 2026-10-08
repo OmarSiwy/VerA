@@ -11,7 +11,8 @@
 // Replacing `V(p, n)` with `1`, or with a parameter, makes the file legal.
 //
 //! lrm 3.5
-//! reject E0419
+//! lrm 3.5:1000
+//! reject-only E0419
 module ch3_genvar_nonstatic_loop_control(p, n);
     inout p, n;
     electrical p, n;

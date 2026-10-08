@@ -15,7 +15,9 @@
 //
 //! lrm 3.13.1
 //! lrm 3.6.1
-//! reject E0336
+//! lrm 3.6.1:2
+//! lrm 3.13.1:1000
+//! reject-only E0336
 nature ch3_collision; units="V"; access=CollisionV; abstol=1u; endnature
 discipline ch3_collision; domain continuous; enddiscipline
 module ch3_collision_user; endmodule

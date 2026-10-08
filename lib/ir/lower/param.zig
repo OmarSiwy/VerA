@@ -451,9 +451,9 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
         b.help("write the list as an assignment pattern: `'{{ ... }}`", .{});
         try b.emit();
     }
-    const elems = try lower_shape.flattenPattern(self, decl.default, dims);
+    const elems = try lower_shape.flattenPattern(self, decl.default, dims, false);
 
-    try lower_var.declareArray(self, name, .{ .dims = dims, .ty = astTy(ty) });
+    try lower_var.declareArray(self, name, .{ .dims = dims, .ty = astTy(ty), .param = true });
     var sub: [lower_shape.max_stack_dims]i64 = undefined;
     const idx = try lower_shape.subscriptBuf(self, &sub, dims.len);
     for (elems, 0..) |elem, k| {

@@ -24,8 +24,10 @@
 // 29_attribute_default_and_multiple.va, and 53_attribute_value_not_constant.va
 // is the other half of the same sentence pair.
 //! lrm 2.9
+//! lrm 2.9:5
 //! lrm 2.9.1
-//! reject E0357
+//! reject-only E0357
+//! neighbour 29_attribute_default_and_multiple.va
 module ch2_nested_attr(p);
     inout p;
     electrical p;

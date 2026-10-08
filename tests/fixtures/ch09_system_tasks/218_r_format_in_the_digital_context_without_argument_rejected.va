@@ -18,9 +18,13 @@
 //
 //! lrm 9.4.7
 //! lrm 9.4.3
+//! lrm 9.4.3:1
 //! lrm 9.4
-//! reject E0810
+//! lrm 9.4.1
+//! lrm 9.4.1:2
+//! reject-only E0810
 //! reject 1 consuming format specifiers but 0 arguments follow it
+//! neighbour 217_r_format_in_the_digital_context.va
 `include "disciplines.vams"
 module ch09_r_format_digital_without_argument(p, n);
   inout p, n; electrical p, n;

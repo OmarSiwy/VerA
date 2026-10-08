@@ -15,6 +15,7 @@
 // than the probe would move the root.
 //
 //! lrm 9.17.3
+//! lrm 9.17.3:2
 //! warn W0853
 //! warn it is under an `if`
 //! solve

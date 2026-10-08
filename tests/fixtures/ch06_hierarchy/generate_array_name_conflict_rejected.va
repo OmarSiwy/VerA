@@ -25,7 +25,9 @@
 //
 //! lrm 6.6.1
 //! lrm 6.8
-//! reject E0230
+//! lrm 6.6.1:5
+//! lrm 6.8:1
+//! reject-only E0230
 module ch6_generate_array_name_conflict(p);
   inout p; electrical p;
   real g;

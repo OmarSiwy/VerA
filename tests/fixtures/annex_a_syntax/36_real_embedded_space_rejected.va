@@ -12,7 +12,12 @@
 //! lrm A.10
 //! lrm A.8.7
 //! lrm 2.6.2
-//! reject E0207
+//! lrm 2.6
+//! lrm 2.6:1
+//! lrm A.8.7:1000
+//! lrm A.10:1
+//! reject-only E0207
+//! neighbour ../ch02_lexical/36_based_number_digit_whitespace.va
 module annex_a_real_embedded_space(p); inout p; electrical p; real x;
 analog begin x = 1.5 e3; I(p) <+ x * V(p); end
 endmodule

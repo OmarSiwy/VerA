@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 4.3.1
 //! reject E1100
 //! reject constant integer expression
+//! neighbour b_4_3_1_vector_ranges.v
 module b_4_3_1_real_range_bound_rejected;
   reg [3.5:0] v;
   initial $display("%b", v);

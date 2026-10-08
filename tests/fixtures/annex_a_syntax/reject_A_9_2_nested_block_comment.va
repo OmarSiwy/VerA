@@ -11,7 +11,9 @@
 //
 //! lrm A.9.2
 //! lrm 2.4
-//! reject E0209
+//! lrm 2.4:3
+//! lrm A.9.2:1000
+//! reject-only E0209
 `include "disciplines.vams"
 module annex_a_nested_comment(p, n);
   inout p, n;

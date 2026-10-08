@@ -9,6 +9,7 @@
 // VerA reports E0207 "unexpected token: found k".
 //
 //! lrm A.6.7
+//! lrm A.6.7:1000
 //! reject E0207
 `include "disciplines.vams"
 module annex_a_case_no_parens(p, n);

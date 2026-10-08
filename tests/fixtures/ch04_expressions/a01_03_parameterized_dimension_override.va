@@ -67,7 +67,10 @@
 // override (`#(.N(5))`) was always folded at elaboration (ch06 h01_11).
 //
 //! lrm 3.2
+//! lrm 3.2:1
+//! lrm 3.2:2
 //! lrm 3.4
+//! lrm 3.4:3
 //! param N = 5
 //! bias V(p) = 0.5
 //! print none

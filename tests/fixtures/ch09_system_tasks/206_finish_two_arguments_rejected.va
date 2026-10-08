@@ -14,8 +14,10 @@
 // "wrong number of arguments to a system task or function".
 //
 //! lrm 9.7.1
-//! reject E0887
+//! reject-only E0887
 //! reject `$finish` takes at most 1 argument, got 2
+//! neighbour 055_finish.va
+//! neighbour 12_finish_stop.va
 `include "disciplines.vams"
 module ch09_finish_two_arguments(p, n);
   inout p, n; electrical p, n;

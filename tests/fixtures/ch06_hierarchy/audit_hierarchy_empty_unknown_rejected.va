@@ -1,7 +1,8 @@
 // AMS6.3.3: an optional expression does not permit an unknown name.
 // The positive empty_named_semantics fixture uses declared names.
 //! lrm 6.3.3
-//! reject E0907
+//! lrm 6.3.3:1
+//! reject-only E0907
 module audit_hierarchy_empty_unknown_rejected(p);
   inout p; electrical p;
   audit_empty_unknown_leaf #(.absent()) u(p);

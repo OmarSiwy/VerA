@@ -12,7 +12,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.17.2
-//! reject E0803
+//! lrm 9.17.2:1
+//! reject-only E0803
 module ch09_bound_step_negative_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

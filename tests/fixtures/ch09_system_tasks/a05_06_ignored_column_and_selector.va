@@ -72,8 +72,11 @@
 // the comparisons are exact.
 //
 //! lrm 9.21.1
+//! lrm 9.21.1:6
 //! lrm 9.21.2
 //! lrm 9.21.3
+//! lrm 9.21.1:5
+//! lrm 9.21.3:1000
 `include "check.vh"
 module a05_ignored_column_and_selector(p, n);
   inout p, n; electrical p, n;

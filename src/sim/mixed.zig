@@ -40,7 +40,8 @@ pub const Options = struct {
 ///
 /// Analog to digital: a `cross`/`above` in a digital event control is
 /// checked against every tentative solution, and a step that jumps a
-/// crossing is cut back to within its `time_tol` (§7.3.5, §5.10.3.1); the
+/// crossing is cut back to within its `time_tol` and `expr_tol` (§7.3.5,
+/// §5.10.3.1); the
 /// event is delivered at the nearest tick, never before the current digital
 /// time (§7.3.6.1, §8.4.3.3); a probe reads the solution interpolated at the
 /// promoted digital time (§7.3.6.3).
@@ -91,10 +92,17 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 continue;
             }
             const above = mon.kind == .above;
-            // §5.10.3.1 cross(expr, dir, time_tol, ...); §5.10.3.2 above(expr, time_tol, ...).
+            // §5.10.3.1 cross(expr, dir, time_tol, expr_tol, ...);
+            // §5.10.3.2 above(expr, time_tol, expr_tol, ...).
             const dir = if (above) 1.0 else (try dig.monitorArg(j, 1)) orelse 0.0;
             const tol = (try dig.monitorArg(j, if (above) 1 else 2)) orelse 0.0;
-            m.* = .{ .kind = .{ .crossing = .{ .dir = dir, .tol = if (tol > 0) tol else @min(default_time_tol, opts.tick / 2), .enable = if (above) 3 else 4 } } };
+            const etol = (try dig.monitorArg(j, if (above) 2 else 3)) orelse 0.0;
+            m.* = .{ .kind = .{ .crossing = .{
+                .dir = dir,
+                .tol = if (tol > 0) tol else @min(default_time_tol, opts.tick / 2),
+                .etol = if (etol > 0) etol else std.math.inf(f64),
+                .enable = if (above) 3 else 4,
+            } } };
         }
     }
     for (opts.times, 0..) |target, i| {
@@ -172,10 +180,10 @@ const default_expr_tol = 1e-12;
 const Mon = struct {
     v0: f64 = 0,
     kind: union(enum) {
-        /// §5.10.3.1 cross / §5.10.3.2 above: the direction, the time
-        /// tolerance, and the argument index of `enable`, whose zero makes the
-        /// event inactive.
-        crossing: struct { dir: f64, tol: f64, enable: u8 },
+        /// §5.10.3.1 cross / §5.10.3.2 above: the direction, the time and
+        /// expression tolerances (`etol` inf when absent), and the argument
+        /// index of `enable`, whose zero makes the event inactive.
+        crossing: struct { dir: f64, tol: f64, etol: f64, enable: u8 },
         /// §5.10.3.3 the latest absolute grid and its pending event. A digital
         /// body can change controls at this point after the event was already
         /// delivered; consumed prevents that change from delivering it twice.
@@ -515,7 +523,8 @@ fn State(comptime A: type) type {
             // Secant cuts: a linear crossing is found by the first. A curve the
             // secant only creeps toward is halved instead after `max_secant`,
             // which closes on any sign change, so every crossing is cut to
-            // within its time_tol.
+            // within its time_tol, and its expr_tol: "both tolerances shall be
+            // satisfied at the crossing" (§5.10.3.1).
             var cuts: u32 = 0;
             while (true) : (cuts += 1) {
                 var cut: ?f64 = null;
@@ -528,7 +537,15 @@ fn State(comptime A: type) type {
                     const v1 = try s.monValue(j);
                     if (!crosses(c.dir, m.v0, v1)) continue;
                     const tc = base + m.v0 / (m.v0 - v1) * (s.acc.? - base);
-                    if (s.acc.? - tc > c.tol) cut = @min(cut orelse tc + c.tol / 2, tc + c.tol / 2);
+                    const late = s.acc.? - tc;
+                    // ponytail: expr_tol stops binding within a few ulps of
+                    // tc, where a jump in the expression can never meet it.
+                    const off = @abs(v1) > c.etol and late > 4 * std.math.floatEps(f64) * @abs(tc);
+                    if (late > c.tol or off) {
+                        const slope = @abs(v1 - m.v0) / (s.acc.? - base);
+                        const at = tc + @min(c.tol, c.etol / slope) / 2;
+                        cut = @min(cut orelse at, at);
+                    }
                 }
                 const c = cut orelse break;
                 try s.solve(if (cuts < max_secant) c else base + (s.acc.? - base) / 2);

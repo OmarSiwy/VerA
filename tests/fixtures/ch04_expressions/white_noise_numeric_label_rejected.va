@@ -13,7 +13,9 @@
 // when this fixture was written); a06_noise_source_name.va runs that form.
 //
 //! lrm 4.6.4.1
-//! reject E0573
+//! lrm 4.6.4.1:1000
+//! reject-only E0573
+//! neighbour a06_noise_source_name.va
 module ch04_white_noise_numeric_label(a, b);
     inout a, b;
     electrical a, b;

@@ -10,8 +10,16 @@
 // carve-out being exercised), and an event body is not a conditional statement.
 //
 // This fixture used to assert the opposite — that the illegal form COMPILES.
+//
+// Its legal neighbour is rc_88_operator_outside_event.va: this module with the
+// ddt moved out of the event body. (Reconciler, 2026-10-08: the neighbour was
+// 119, the if/case carve-out, which has no event body and so could not show
+// that this refusal is about the operator INSIDE one.)
 //! lrm 4.5.15
-//! reject E0514
+//! lrm 4.5.15:2
+//! lrm 4.5.15:3
+//! reject-only E0514
+//! neighbour rc_88_operator_outside_event.va
 // §5.10.3.1: `cross()` "maintains its internal state and has the same
 // restrictions as analog operators" — an event body runs only when the event
 // fires, so `ddt` inside one misses every other step. Rejected as E0514.

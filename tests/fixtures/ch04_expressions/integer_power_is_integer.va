@@ -45,6 +45,7 @@
 //! lrm 4.2.1.3
 //! lrm 4.2.4
 //! lrm 3.2
+//! lrm 4.2.1.3:1000
 //! inherited IEEE 1364-2005 5.1.5
 //! bias V(p) = 0.0
 `include "check.vh"

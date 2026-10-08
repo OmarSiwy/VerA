@@ -1,6 +1,7 @@
 // Dependent conversions and integer arithmetic follow final host-written values.
 //! lrm 3.4.1
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param source = 4294967303.0
 `include "check.vh"
 module integer_parameter_precision_real_dependents_host;

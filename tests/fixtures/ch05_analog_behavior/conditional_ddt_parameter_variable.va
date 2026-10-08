@@ -30,7 +30,9 @@
 //   the branch current is 1e-3, which `i` records.
 //
 //! lrm 4.5.15
+//! lrm 4.5.15:1
 //! lrm 5.8.1
+//! lrm 5.8.1:4
 //! bias V(p) = 1.0, V(n) = 0.0
 `include "check.vh"
 module ch05_conditional_ddt_parameter_variable(p, n);

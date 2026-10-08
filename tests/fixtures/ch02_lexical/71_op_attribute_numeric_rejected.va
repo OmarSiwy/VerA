@@ -2,7 +2,8 @@
 // Integer 1 is neither string. This is independent of 52's invalid string
 // "maybe": accepting numeric truth values also violates the stated domain.
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:3
+//! reject-only E0358
 module ch02_op_attribute_numeric_rejected(p, n);
     inout p, n;
     electrical p, n;

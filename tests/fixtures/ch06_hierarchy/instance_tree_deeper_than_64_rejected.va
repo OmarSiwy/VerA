@@ -6,7 +6,8 @@
 // E1018, which names the limit. instance_tree_64_levels.va is the legal
 // neighbour at the limit.
 //
-//! reject E1018
+//! reject-only E1018
+//! neighbour instance_tree_64_levels.va
 module d0(p, n);
   inout p, n; electrical p, n;
   d1 u(p, n);

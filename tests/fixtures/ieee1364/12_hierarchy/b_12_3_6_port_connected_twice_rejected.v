@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 12.3.6
 //! reject E1100
 //! reject connected twice
+//! neighbour b_12_3_2_explicit_port_names.v
 module m(a, y);
   input a;
   output y;

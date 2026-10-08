@@ -583,11 +583,12 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
     const sgn: u8 = if (neg) '-' else if (flags & zc_plus != 0) '+' else if (flags & zc_space != 0) ' ' else 0;
     // C: an infinity or a NaN takes the sign flags and the width, but never the
     // zero fill — "for a, A, e, E, f, F, g, and G conversions ... the 0 flag is
-    // ignored" once the result is not a number.
+    // ignored" once the result is not a number. A NaN is "[-]nan" (7.21.6.1p8):
+    // its sign bit prints, and '+'/' ' apply as to any signed conversion.
     var special = false;
     if (zstd.math.isNan(v) or zstd.math.isInf(v)) {
         special = true;
-        if (!zstd.math.isNan(v) and sgn != 0) o.put(sgn);
+        if (sgn != 0) o.put(sgn);
         if (zstd.math.isNan(v)) o.str(if (upper) "NAN" else "nan") else o.str(if (upper) "INF" else "inf");
     } else if (c == 'r') {
         if (sgn != 0) o.put(sgn);
@@ -655,6 +656,163 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
     zstd.mem.copyBackwards(u8, o.b[keep + pad .. width], o.b[keep..o.n]);
     @memset(o.b[keep .. keep + pad], if (flags & zc_zero != 0 and !special) '0' else ' ');
     return o.b[0..width];
+}
+
+// ---- §9.5.3 a format_string known only at run time ------------------------
+
+/// §9.5.3: "$sformat always interprets its second argument, and only its
+/// second argument, as a format string. This format argument can be a static
+/// string ... or can be a string variable whose content is interpreted as the
+/// format string." A literal is translated at compile time
+/// (`cg_display.translateFormat`); a variable's content is known only here, so
+/// this walks it with the same §9.4.3 conversions over `args`, a tuple of
+/// `i64`, `f64` and `[]const u8` in source order. `scope` is what `%m` prints
+/// (and `%l` after "work.", as the compile-time path does).
+///
+/// "If not enough arguments are supplied for the format specifiers or too
+/// many are supplied, then the application shall issue a warning and continue
+/// execution": a specifier with no argument left prints nothing, a surplus
+/// argument is not printed, and either draws one warning on stderr. Returns the
+/// text, in `buf`; an overrun is E1011 (`zSOver`).
+///
+/// ponytail: a radix conversion shows the 64-bit pattern (no §17.1.1.3
+/// automatic width, which needs the operand's declared width); an unknown
+/// letter is copied through with a warning. Thread the widths in if a model
+/// formats a sized vector through a variable format.
+pub fn zSFormatRt(buf: []u8, fmt: []const u8, scope: []const u8, args: anytype) []u8 {
+    var o: ZRtOut = .{ .b = buf };
+    var next: usize = 0;
+    var short = false;
+    var i: usize = 0;
+    while (i < fmt.len) {
+        const c = fmt[i];
+        i += 1;
+        if (c != '%' or i >= fmt.len) {
+            o.put(c);
+            continue;
+        }
+        if (fmt[i] == '%') {
+            o.put('%');
+            i += 1;
+            continue;
+        }
+        const at = i - 1;
+        var flags: u8 = 0;
+        while (i < fmt.len) : (i += 1) switch (fmt[i]) {
+            '-' => flags |= zc_left,
+            '+' => flags |= zc_plus,
+            ' ' => flags |= zc_space,
+            '0' => flags |= zc_zero,
+            else => break,
+        };
+        var width: usize = 0;
+        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) width = @min(width * 10 + (fmt[i] - '0'), 4096);
+        var prec: i64 = -1;
+        if (i < fmt.len and fmt[i] == '.') {
+            i += 1;
+            prec = 0;
+            while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) prec = @min(prec * 10 + (fmt[i] - '0'), 4096);
+        }
+        if (i >= fmt.len) {
+            o.str(fmt[at..]);
+            break;
+        }
+        const conv = fmt[i];
+        i += 1;
+        var tmp: [4096 + 512]u8 = undefined;
+        switch (conv | 0x20) {
+            'm' => zRtField(&o, scope, flags, width),
+            'l' => zRtField(&o, zstd.fmt.bufPrint(&tmp, "work.{s}", .{scope}) catch zSOver(), flags, width),
+            'd', 'h', 'x', 'o', 'b', 'c', 's', 'e', 'f', 'g', 'r' => {
+                if (next >= args.len) {
+                    short = true;
+                    continue;
+                }
+                inline for (args, 0..) |a, k| if (k == next) zRtConv(&o, &tmp, a, conv, flags, width, prec);
+                next += 1;
+            },
+            else => {
+                zstd.debug.print("warning: $sformat: LRM 9.4.3: `{s}` is not a format specification; copied as text\n", .{fmt[at..i]});
+                o.str(fmt[at..i]);
+            },
+        }
+    }
+    if (short or next < args.len)
+        zstd.debug.print("warning: $sformat: LRM 9.5.3: the format string \"{s}\" has {s} specifications than its {d} argument(s)\n", .{ fmt, if (short) "more" else "fewer", args.len });
+    return o.b[0..o.n];
+}
+
+/// `zSFormatRt`'s output: `ZCOut`, but an overrun is E1011 rather than a cut.
+const ZRtOut = struct {
+    b: []u8,
+    n: usize = 0,
+    fn put(self: *ZRtOut, c: u8) void {
+        if (self.n >= self.b.len) zSOver();
+        self.b[self.n] = c;
+        self.n += 1;
+    }
+    fn str(self: *ZRtOut, s: []const u8) void {
+        for (s) |c| self.put(c);
+    }
+};
+
+/// `text` in a field of `width`, space-padded on the side '-' does not pick.
+fn zRtField(o: *ZRtOut, text: []const u8, flags: u8, width: usize) void {
+    const pad = width -| text.len;
+    if (flags & zc_left == 0) for (0..pad) |_| o.put(' ');
+    o.str(text);
+    if (flags & zc_left != 0) for (0..pad) |_| o.put(' ');
+}
+
+/// One argument through one §9.4.3 conversion: a real conversion is `zCReal`;
+/// an integer one takes §4.2.1.1's rounding of a real and §2.7's value of a
+/// string; `%s` of a number is its bytes (§9.4.5).
+fn zRtConv(o: *ZRtOut, tmp: []u8, a: anytype, conv: u8, flags: u8, width: usize, prec: i64) void {
+    const T = @TypeOf(a);
+    const int: i64 = if (T == i64) a else if (T == f64) zstd.math.lossyCast(i64, @round(a)) else blk: {
+        var acc: u64 = 0;
+        for (a[a.len - @min(a.len, 8) ..]) |ch| acc = acc << 8 | ch;
+        break :blk @bitCast(acc);
+    };
+    switch (conv | 0x20) {
+        'e', 'f', 'g', 'r' => o.str(zCReal(tmp, if (T == f64) a else @floatFromInt(int), conv, flags, width, prec)),
+        'c' => zRtField(o, &.{@as(u8, @truncate(@as(u64, @bitCast(int))))}, flags, width),
+        's' => if (T == []const u8) zRtField(o, a, flags, width) else {
+            var be: [8]u8 = undefined;
+            zstd.mem.writeInt(u64, &be, @bitCast(int), .big);
+            zRtField(o, zstd.mem.trimStart(u8, &be, &.{0}), flags, width);
+        },
+        'd' => {
+            // C 7.21.6.1: the sign leads the field, '0' fills between it and
+            // the digits, '-' pads on the right.
+            const sign: []const u8 = if (int < 0) "-" else if (flags & zc_plus != 0) "+" else if (flags & zc_space != 0) " " else "";
+            const digits = zstd.fmt.bufPrint(tmp, "{d}", .{@abs(int)}) catch unreachable;
+            const pad = width -| (sign.len + digits.len);
+            if (flags & (zc_zero | zc_left) == zc_zero) {
+                o.str(sign);
+                for (0..pad) |_| o.put('0');
+                o.str(digits);
+            } else {
+                if (flags & zc_left == 0) for (0..pad) |_| o.put(' ');
+                o.str(sign);
+                o.str(digits);
+                if (flags & zc_left != 0) for (0..pad) |_| o.put(' ');
+            }
+        },
+        else => { // else: the radices %h %x %o %b, the only letters `zSFormatRt` passes besides the arms above
+            const u: u64 = @bitCast(int);
+            const digits = switch (conv | 0x20) {
+                'o' => zstd.fmt.bufPrint(tmp, "{o}", .{u}),
+                'b' => zstd.fmt.bufPrint(tmp, "{b}", .{u}),
+                else => zstd.fmt.bufPrint(tmp, "{x}", .{u}), // else: %h and %x
+            } catch unreachable;
+            const pad = width -| digits.len;
+            if (flags & (zc_zero | zc_left) == zc_zero) {
+                for (0..pad) |_| o.put('0');
+                o.str(digits);
+            } else zRtField(o, digits, flags, width);
+        },
+    }
 }
 
 // ---- §9.4.1 the $monitor mechanism ----------------------------------------

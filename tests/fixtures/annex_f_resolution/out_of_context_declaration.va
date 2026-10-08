@@ -33,8 +33,13 @@
 // three exact in binary, so `CHECKX` is the honest macro.
 //
 //! lrm F.2.1
+//! lrm F.2.1:2
 //! lrm F.2.2
+//! lrm F.2.2:3
 //! lrm 3.10
+//! lrm 3.6.2
+//! lrm 3.6.2:4
+//! lrm 3.10:1
 //! bias a = 0.75, b = 0.25
 `include "check.vh"
 nature annex_f_x_pot;

@@ -13,7 +13,10 @@
 //
 //! lrm 3.2.1
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:1
+//! lrm 2.9.2:2
+//! reject-only E0358
+//! neighbour lrm_3_2_1.va
 module ch3_output_variable_units_numeric(p, n);
     inout p, n;
     electrical p, n;

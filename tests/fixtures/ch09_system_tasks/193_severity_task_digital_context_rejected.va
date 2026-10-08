@@ -42,7 +42,9 @@
 //! lrm 9.2
 //! lrm 9.7
 //! lrm 9.7.3
-//! reject E0821
+//! lrm 9.2:1000
+//! lrm 9.7:1000
+//! reject-only E0821
 module ch09_severity_task_digital_context_rejected(p, n);
   inout p, n; electrical p, n;
   initial begin

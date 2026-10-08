@@ -39,6 +39,7 @@
 // `]` so the key cannot collide with a generated element spelling.
 //
 //! lrm 2.8.1
+//! lrm 2.8.1:1
 //! lrm 3.6.3
 //! analysis dc
 //! solve

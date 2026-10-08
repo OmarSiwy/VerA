@@ -12,6 +12,8 @@
 // 10_tasks_functions/b_10_1_task_function_distinctions.v (tasks with names
 // of their own).
 // digital-runner: reject
+//! lrm 6.8
+//! lrm 6.8:2
 //! inherited IEEE 1364-2005 4.11
 //! reject duplicate
 module b_4_11_task_named_like_variable_rejected;

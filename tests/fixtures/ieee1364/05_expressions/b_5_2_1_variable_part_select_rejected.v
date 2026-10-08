@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 5.2.1
 //! reject E1100
 //! reject a constant expression is required here
+//! neighbour b_5_2_1_bit_part_select_addressing.v
 module b_5_2_1_variable_part_select_rejected;
   reg [7:0] v;
   integer i;

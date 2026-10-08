@@ -58,6 +58,8 @@
 //   exactly what HEAD does today.
 //
 //! lrm 9.21
+//! lrm 9.21:6
+//! lrm 9.21:7
 //! lrm 9.21.1
 //! exit 1
 //! sweep V(p) = 1.0, 5.0

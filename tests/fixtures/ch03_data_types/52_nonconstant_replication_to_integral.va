@@ -25,7 +25,8 @@
 // an integral type", reached because Table 3-3 makes this replication a string.
 //
 //! lrm 3.3
-//! reject E0354
+//! reject-only E0354
+//! neighbour 28_string_replication.va
 module ch3_nonconstant_replication_to_integral(p, n);
     inout p, n;
     electrical p, n;

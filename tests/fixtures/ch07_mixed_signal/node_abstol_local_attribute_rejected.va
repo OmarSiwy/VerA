@@ -4,7 +4,9 @@
 // lrm_7_2_4.va: its bound child reads p.potential.abstol; this child instead
 // reads the forbidden p.potential.access and must receive E0359.
 //! lrm 5.5.3
-//! reject E0359
+//! lrm 5.5.3:1
+//! reject-only E0359
+//! neighbour lrm_7_2_4.va
 nature local_attribute_voltage : Voltage;
   abstol = 1n;
 endnature

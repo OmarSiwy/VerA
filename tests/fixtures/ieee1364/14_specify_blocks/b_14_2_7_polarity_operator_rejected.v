@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 14.2.7
 //! reject E0207
 //! reject `=>` or `*>`
+//! neighbour b_14_2_7_polarity.v
 `timescale 1ns/1ns
 module b_14_2_7_polarity_operator_rejected(In1, q);
   input In1;

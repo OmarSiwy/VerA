@@ -18,7 +18,7 @@
 //
 //! lrm C.16
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject connect
 module annex_c_reserved_spelling_30;
     real connect;

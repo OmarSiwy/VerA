@@ -66,6 +66,14 @@
 //! lrm E.1.1
 //! lrm E.1.2
 //! lrm 6.7.1
+//! lrm 6.2.2
+//! lrm 6.2.2:2
+//! lrm 6.5.4
+//! lrm 6.5.4:1
+//! lrm 6.7.1:1
+//! lrm E.1.1:1000
+//! lrm E.2:3
+//! lrm E.2.1:1
 //! bias V(out) = 1.0, V(gnd) = 0.25
 //! spice .SUBCKT ECPOSC (OUT GND)
 //! spice VA VCC GND 5

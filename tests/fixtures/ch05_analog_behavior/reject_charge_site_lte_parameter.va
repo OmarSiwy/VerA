@@ -5,7 +5,7 @@
 // one bool per charge site, `contract.QStamp`) that exists before any model
 // card does, so the value must fold without one. E0523 names that.
 //! lrm 2.9
-//! reject E0523
+//! reject-only E0523
 module reject_charge_site_lte_parameter(p, n);
   inout p, n; electrical p, n;
   parameter integer check = 0;

@@ -57,6 +57,8 @@
 //
 //! lrm G.1
 //! lrm 4.5.8
+//! lrm 4.5.8:1
+//! lrm 4.5.8:2
 //! analysis tran
 //! time 0, 1n, 3n
 //! wave V(in) = 1, 0, 0

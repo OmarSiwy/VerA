@@ -15,9 +15,11 @@
 // properly typed formal, where 28_user_function.va pins it.
 //
 //! lrm 4.7.1
-//! reject formal
+//! lrm 4.7.1:3
+//! reject-only formal
 //! reject data type
 //! reject E0225
+//! neighbour 28_user_function.va
 module ch4_fn_untyped(p);
   inout p;
   electrical p;

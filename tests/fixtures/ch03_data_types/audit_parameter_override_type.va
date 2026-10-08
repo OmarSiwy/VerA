@@ -6,6 +6,10 @@
 // overrides, not numeric host bindings, so the source retains each value's type.
 //! lrm 3.4.1
 //! lrm 6.3
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! checks 4
 `include "check.vh"
 module parameter_override_type_child;

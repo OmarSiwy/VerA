@@ -14,7 +14,9 @@
 //
 //! lrm 3.6.2
 //! lrm A.1.7
-//! reject E0213
+//! lrm 3.6.2:1
+//! lrm A.1.7:1000
+//! reject-only E0213
 `include "disciplines.vams"
 discipline ch3_unbound_item
   potential Voltage;

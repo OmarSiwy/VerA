@@ -5,6 +5,7 @@
 // that a signal traverses the hierarchy unchanged.
 //
 //! lrm 1.3
+//! lrm 1.3:1000
 //! bias V(top_in) = 1.0, V(top_out) = 0.0
 `include "check.vh"
 

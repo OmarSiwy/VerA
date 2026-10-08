@@ -10,9 +10,12 @@
 // b_12_4_2_direct_nesting_and_recursion.v (every u1 inside one directly nested
 // construct).
 // digital-runner: reject
+//! lrm 6.6.2
+//! lrm 6.6.2:2
 //! inherited IEEE 1364-2005 12.4.2 12.7
 //! reject E0230
 //! reject a generate block name collides with another declaration
+//! neighbour b_12_4_2_direct_nesting_and_recursion.v
 module b_12_4_2_block_name_in_two_constructs_rejected;
   parameter p = 0;
   if (p) begin : u1

@@ -21,6 +21,8 @@
 //   t=3 top.u3 libc.c1.
 // digital-runner: --libmap a11/lib.map
 // digital-runner: files a11/cells/a.v a11/cells/b.v a11/cells/c1.v
+//! lrm A.1.1
+//! lrm A.1.1:1000
 //! inherited IEEE 1364-2005 A.1.1
 `timescale 1ns/1ns
 module top;

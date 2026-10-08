@@ -393,11 +393,30 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
     // provides (`lower_expr.caseEquality`); anywhere else it stays E0130. Every
     // module, not only a mixed one: the clause's own `a2d` has no discrete block
     // and reads its input net with `dnet === 1'bx`.
+    //
+    // §6.6.1 a genvar loop's initialization and iteration values are folded at
+    // elaboration, never executed, so an x/z literal there is not E0130's: it
+    // is §6.6.1's own error ("any bit of the genvar is set to x or z", E0486,
+    // `control.tryUnrollFor`).
     const Cmp = struct {
         file: *const Ast.SourceFile,
         marks: []bool,
+        genvars: []const Ast.StrId,
         fn lit(w: @This(), e: Ast.ExprId) void {
             if (e != .none and w.file.exprs.tag(e) == .logic_literal) w.marks[@backingInt(e)] = true;
+        }
+        fn lits(w: @This(), e: Ast.ExprId) void {
+            if (e == .none) return;
+            w.lit(e);
+            var buf: [3]Ast.ExprId = undefined;
+            for (w.file.exprs.children(e, &buf)) |c| w.lits(c);
+        }
+        fn genvarAssign(w: @This(), s: Ast.StmtId) ?Ast.ExprId {
+            if (s == .none or w.file.stmt(s) != .assign) return null;
+            const a = w.file.stmt(s).assign;
+            if (w.file.exprs.tag(a.target) != .ident) return null;
+            for (w.genvars) |g| if (g == w.file.exprs.strOf(a.target)) return a.value;
+            return null;
         }
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
             if (e == .none) return;
@@ -413,7 +432,13 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
             if (s == .none) return;
             switch (w.file.stmt(s)) {
                 .case_stmt => |c| for (c.arms) |arm| for (arm.labels) |l| w.lit(l),
-                else => {}, // else: only a case statement has labels
+                .for_stmt => |f| if (w.genvarAssign(f.init)) |init| {
+                    w.lits(init);
+                    // The iteration of a genvar loop: whichever name it
+                    // assigns, it is folded (or refused as E0419) like init.
+                    if (f.step != .none and w.file.stmt(f.step) == .assign) w.lits(w.file.stmt(f.step).assign.value);
+                },
+                else => {}, // else: only a case statement has labels, a genvar loop a folded scheme
             }
             try w.file.stmtEdges(s, w);
         }
@@ -423,7 +448,7 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
         // A task (A.2.7) runs only on the kernel, in any module: the analog
         // backend never executes its body.
         for (m.tasks) |t| w.stmt(t.body) catch unreachable;
-        for (m.analog) |blk| (Cmp{ .file = file, .marks = marks }).stmt(blk.body) catch unreachable;
+        for (m.analog) |blk| (Cmp{ .file = file, .marks = marks, .genvars = m.genvars }).stmt(blk.body) catch unreachable;
         if (!isMixed(file, m)) continue;
         for (m.discrete) |blk| w.stmt(blk.body) catch unreachable;
         for (m.assigns) |a| for ([_]Ast.ExprId{ a.target, a.value, a.delay.rise, a.delay.fall, a.delay.off }) |e|
@@ -973,6 +998,12 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
         if (tag == .filter_call) try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where});
         if (tag == .sys_call and lower_sysfunc.isAnalogOnlySysFunc(self.file.str(ex.strOf(e))))
             try self.err(ex.mainTok(e), .E0821, "`{s}` in {s}", .{ self.file.str(ex.strOf(e)), ctx.where });
+        // §5.10: "The usage of initial_step and final_step analog events are
+        // not allowed in the digital context."
+        if (tag == .event_initial_step or tag == .event_final_step)
+            try self.err(ex.mainTok(e), .E0708, "`{s}` in {s}, the digital context", .{
+                if (tag == .event_initial_step) "initial_step" else "final_step", ctx.where,
+            });
         // What the mixed-signal kernel cannot do yet, named by the clause that
         // asks for it. Both are legal Verilog-AMS (§7.3.3/§7.3.5).
         // `cross`/`above` are monitored (§7.3.5) and `V(a)`/`V(a, b)` probed
@@ -983,7 +1014,6 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
                 if (!std.mem.eql(u8, name, "cross") and !std.mem.eql(u8, name, "above") and !std.mem.eql(u8, name, "absdelta"))
                     try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross(), above() and absdelta()", .{ name, ctx.where });
             },
-            .event_initial_step, .event_final_step => try self.err(ex.mainTok(e), .E0437, "a §5.10.2 analog event in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross(), above() and absdelta()", .{ctx.where}),
             .branch_access => if (!std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or ex.tag(ex.lhs(e)) != .ident or
                 (ex.rhs(e) != .none and ex.tag(ex.rhs(e)) != .ident))
                 try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),
@@ -997,7 +1027,7 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
         // a call from the continuous context, so §7.3.7's first sentence
         // (E0436) applies to a digital function there.
         if (tag == .event_function) {
-            try lower_event.checkEventArgBounds(self, e, self.file.str(ex.strOf(e)));
+            _ = try lower_event.checkEventArgBounds(self, e, self.file.str(ex.strOf(e)));
             for (ex.args(e)) |a| try digitalCallsIn(self, a);
         }
         // §7.3.3 "All probes which are legal in a continuous context of a

@@ -15,7 +15,9 @@
 //
 //! lrm A.2.2.1
 //! lrm A.2.1.2
-//! reject E0208
+//! lrm A.2.1.2:1000
+//! lrm A.2.2.1:1000
+//! reject-only E0208
 `include "disciplines.vams"
 module annex_a_output_real(p, n, r);
   inout p, n;

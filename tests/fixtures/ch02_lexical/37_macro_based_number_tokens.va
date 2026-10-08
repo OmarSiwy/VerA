@@ -7,6 +7,7 @@
 // from `DIGITS; after §10.3 text substitution the three tokens are 8, 'h, A5.
 // 0xA5 = 10*16 + 5 = 165.
 //! lrm 2.6.1
+//! lrm 2.6.1:3
 //! lrm 10.3
 `include "check.vh"
 `define BASE 'h

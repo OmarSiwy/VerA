@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 4.8.1
 //! reject E1100
 //! reject posedge
+//! neighbour b_4_7_reg_holds_between_assignments.v
 module b_4_8_1_posedge_real_rejected;
   real r;
   always @(posedge r) $display("edge");

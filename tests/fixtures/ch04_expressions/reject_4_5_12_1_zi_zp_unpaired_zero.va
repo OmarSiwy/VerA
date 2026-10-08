@@ -8,7 +8,8 @@
 // sampling period. The only error is the unpaired complex zero.
 //
 //! lrm 4.5.12.1
-//! reject no conjugate partner
+//! lrm 4.5.12.1:2
+//! reject-only no conjugate partner
 `include "disciplines.vams"
 module ch4_zi_zp_unpaired_zero(p, n);
   inout p, n;

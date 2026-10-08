@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 13.3.1.1
 //! reject E1100
 //! reject undeclared module in instantiation
+//! neighbour b_13_1_1_config_named_like_module.v
 config cfg;
   design work.cfg;
 endconfig

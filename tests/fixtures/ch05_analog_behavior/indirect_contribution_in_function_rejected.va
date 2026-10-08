@@ -13,7 +13,9 @@
 //
 //! lrm 4.7.1
 //! lrm 5.6.7
-//! reject E0410
+//! lrm 4.7.1:3
+//! reject-only E0410
+//! neighbour indirect_contribution.va
 `include "disciplines.vams"
 module ch5_indirect_contribution_in_function(p, n);
   inout p, n; electrical p, n;

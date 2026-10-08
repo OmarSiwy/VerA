@@ -11,7 +11,9 @@
 // 07_parameter_alias.va is the legal side, with the alias naming nothing else.
 //
 //! lrm 3.4.7
-//! reject E0331
+//! lrm 3.4.7:3
+//! reject-only E0331
+//! neighbour 07_parameter_alias.va
 module ch3_alias_identifier_collision(p, n);
     inout p, n;
     electrical p, n;

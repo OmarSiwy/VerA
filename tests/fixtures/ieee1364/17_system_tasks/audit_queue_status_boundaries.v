@@ -3,6 +3,7 @@
 // ->5, duplicateID->6, undefinedID->2. Never inspect unspecified result/payload
 // values after failed queries. Memory exhaustion status7 needs a host seam.
 //! lrm 9.9
+//! lrm 9.9:1000
 //! inherited IEEE 1364-2005 17.6.6
 //! expect stdout audit_queue_status_boundaries.expected.txt
 module audit_queue_status_boundaries;

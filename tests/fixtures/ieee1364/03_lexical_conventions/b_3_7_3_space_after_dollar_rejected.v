@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 3.7.3
 //! reject E0209
 //! reject found invalid token
+//! neighbour b_3_7_3_system_task_forms.v
 module b_3_7_3_space_after_dollar_rejected;
   initial $ display("x");
 endmodule

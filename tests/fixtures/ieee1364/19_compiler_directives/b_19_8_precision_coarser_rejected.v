@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 19.8
 //! reject E0142
 //! reject the time precision is coarser than the time unit
+//! neighbour b_19_8_units_and_precision.v
 `timescale 1 ns / 10 ns
 module b_19_8_precision_coarser_rejected;
   initial $display("accepted");

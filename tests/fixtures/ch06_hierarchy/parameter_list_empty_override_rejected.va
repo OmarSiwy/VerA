@@ -2,7 +2,9 @@
 // named assignment. Empty #() differs from omitting the list or writing .a(),
 // both of which are exercised by parameter_list_forms.va.
 //! lrm A.4.1
-//! reject E0246
+//! lrm A.4.1:1000
+//! reject-only E0246
+//! neighbour parameter_list_forms.va
 module parameter_list_empty_leaf(p);
   inout p; electrical p;
   parameter real a=3;

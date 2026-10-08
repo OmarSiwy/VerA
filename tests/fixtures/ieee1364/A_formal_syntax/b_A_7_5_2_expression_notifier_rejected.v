@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.7.5.2
 //! reject E0207
 //! reject names a variable (A.7.5.2 notifier ::= variable_identifier)
+//! neighbour b_A_7_5_system_timing_checks.v
 module b_A_7_5_2_expression_notifier_rejected (clk, d, y);
   input clk, d;
   output y;

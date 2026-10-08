@@ -10,7 +10,10 @@
 // this rule, and it replaces the phase label pinned before the code existed.
 //
 //! lrm 5.8.3
-//! reject E0427
+//! lrm 5.8.3:2
+//! reject-only E0427
+//! neighbour case_default_only.va
+//! neighbour case_statement.va
 module ch5_case_duplicate_default(p);
   inout p; electrical p; integer s; real x;
   analog begin

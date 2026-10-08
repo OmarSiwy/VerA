@@ -2,7 +2,9 @@
 // size. This declaration has three elements but the replacement has only two.
 // h01_11_dependent_range_and_array_override.va supplies the legal resizing case.
 //! lrm 3.4.4
-//! reject E0921
+//! lrm 3.4.4:1
+//! lrm 3.4.4:3
+//! reject-only E0921
 module short_array_target;
   parameter real coefficients[0:2] = '{1.0, 2.0, 3.0};
   analog begin end

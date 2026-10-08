@@ -224,8 +224,9 @@ pub fn read(o: *const Obj, v: *Value, st: *Store) void {
         .real => vpiRealVal,
         .str => vpiStringVal,
         // §12.16: "For an integer, vpiIntVal ... For a scalar, ... vpiScalar
-        // ... For a vector, vpiVectorVal". An integer PARAMETER is an integer.
-        .bits => |b| if (o.kind == .integer or o.value != null) vpiIntVal else if (b.width == 1) vpiScalarVal else vpiVectorVal,
+        // ... For a time variable, vpiTimeVal with vpiSimTime For a vector,
+        // vpiVectorVal". An integer PARAMETER is an integer.
+        .bits => |b| if (o.kind == .integer or o.value != null) vpiIntVal else if (o.kind == .time_var) vpiTimeVal else if (b.width == 1) vpiScalarVal else vpiVectorVal,
     };
     formatInto(src, v, st) catch {
         root.fail("NOMEM", "vpi_get_value: out of memory", .{});
@@ -687,9 +688,12 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         return null;
     };
     // §12.30 "system function calls": the returned value of the analog call
-    // calltf is running for (§12.32.3 "Set returned value to held value").
-    if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (value_p) |pv| if (pv.format == vpiRealVal) {
-        if (@import("analog.zig").putResult(o, pv.value.real)) return null;
+    // calltf is running for (§12.32.3 "Set returned value to held value"),
+    // as a real or an integer (§12.32.1: a vpiIntFunc returns an integer,
+    // which the device was compiled to take as one).
+    if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (value_p) |pv| if (pv.format == vpiRealVal or pv.format == vpiIntVal) {
+        const r: f64 = if (pv.format == vpiRealVal) pv.value.real else @floatFromInt(pv.value.integer);
+        if (@import("analog.zig").putResult(o, r)) return null;
     };
     // IEEE 1364-2005 §27.32: "Calling vpi_put_value() on an object of type
     // vpiNamedEvent shall cause the named event to toggle", and value_p may
@@ -719,6 +723,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         if (selected) |at| exec.trigger(r, at) catch return engineFail();
         return null;
     }
+    if (o.kind == .code and o.vtype == root.code.vpiUdp) return putUdp(o, value_p, mode);
     const at = o.slot.get() orelse {
         root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
         return null;
@@ -813,6 +818,51 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
             return null;
         },
     }
+}
+
+/// §12.30 a put onto a UDP instance: "Sequential UDPs shall be set to the
+/// indicated value with no delay regardless of any delay on the primitive
+/// instance", so the instance's own delay is skipped. A combinational UDP
+/// holds no state to set (§11.6.13 NOTE 2 limits puts to sequential ones),
+/// an instance array has one state per element, and a put delayed by time_p
+/// would need an event of its own: each is refused.
+fn putUdp(o: *const Obj, value_p: ?*const Value, mode: c_int) vpiHandle {
+    const r = run.attached() orelse return engineFail();
+    const scope = root.design.?.scopes[o.owner.get().?].engine;
+    var found: ?u32 = null;
+    for (r.drivers, 0..) |drv, k| if (drv.tok == o.src_tok and drv.scope == scope and drv.source == .udp) {
+        if (found != null) {
+            root.fail("NOPUT", "vpi_put_value: `{s}` is an instance array; put onto one element", .{o.full});
+            return null;
+        }
+        found = @intCast(k);
+    };
+    const at = found orelse return engineFail();
+    if (!r.drivers[at].source.udp.sequential) {
+        root.fail("NOPUT", "vpi_put_value: `{s}` is a combinational UDP, and only a sequential UDP takes a put", .{o.full});
+        return null;
+    }
+    if (mode != vpiNoDelay) {
+        root.fail("NOPUT", "vpi_put_value: a sequential UDP is set with vpiNoDelay; a delayed put onto one is not implemented", .{});
+        return null;
+    }
+    const v = value_p orelse {
+        root.fail("BADVALUE", "vpi_put_value: value_p is NULL", .{});
+        return null;
+    };
+    var planes: [2]u64 = undefined;
+    toPlanes(v, 1, &planes) catch |e| {
+        if (e == error.OutOfMemory) return oom();
+        return null;
+    };
+    // §8.1.4: a UDP's output is 0, 1 or x; z is not one of them.
+    const bit: Int.Bit = switch ((planes[0] & 1) | (planes[1] & 1) << 1) {
+        0 => .zero,
+        1 => .one,
+        else => .x,
+    };
+    r.vpiPutUdp(at, bit) catch return engineFail();
+    return null;
 }
 
 fn oom() vpiHandle {

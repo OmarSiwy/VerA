@@ -14,7 +14,7 @@
 //
 //! lrm 5.11
 //! lrm 5.9.3
-//! reject E0440
+//! reject-only E0440
 module ch5_jump_in_analog_for(p);
   inout p; electrical p; genvar k; real x;
   analog begin

@@ -28,6 +28,8 @@
 // biased — it no longer has a matrix position of its own to bias.
 //
 //! lrm 9.20
+//! lrm 9.20:11
+//! lrm 9.20:10
 //! bias V(a) = 5.0, V(g) = 0.0
 `include "check.vh"
 

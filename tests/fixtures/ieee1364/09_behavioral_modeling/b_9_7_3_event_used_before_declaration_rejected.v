@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 9.7.3
 //! reject E1100
 //! reject named event
+//! neighbour d04_03_named_event_digital.v
 module b_9_7_3_event_used_before_declaration_rejected;
   initial @ev $display("fired");
   event ev;

@@ -26,8 +26,9 @@
 //
 //! lrm 9.21.3
 //! lrm 9.21.2
-//! reject E0815
+//! reject-only E0815
 //! reject dependent selector 3 names no dependent column
+//! neighbour a05_07_file_multiple_dependents.va
 `include "disciplines.vams"
 module ch09_table_model_example_selector_beyond_columns(p, n);
   inout p, n; electrical p, n;

@@ -557,6 +557,12 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.err(ex.mainTok(e), .E0530, "the noise function `{s}` (§4.6.4)", .{name});
         return poison;
     }
+    // A.8.2 analog_small_signal_function_call brackets only trailing optional
+    // arguments; no form has an `_or_null` slot, so an empty one has no meaning.
+    for (ex.args(e)) |a| if (a == .none) {
+        try self.err(ex.mainTok(e), .E0505, "`{s}()` (A.8.2 gives the small-signal functions no empty slot)", .{name});
+        return poison;
+    };
     // A.8.2 `ac_stim ( [ " analysis_identifier " [ , analog_expression ...`:
     // the quotation marks are in the production, so the analysis name is a
     // string literal.

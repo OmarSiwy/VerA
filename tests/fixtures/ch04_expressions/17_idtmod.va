@@ -37,6 +37,10 @@
 // (docs/Vague_Decisions.md VD-058).
 //
 //! lrm 4.5.5
+//! lrm 4.5.5:3
+//! lrm 4.5.5:4
+//! lrm 4.5.5:5
+//! lrm 4.5.5:6
 //! analysis tran
 //! time 0, 1n, 2n, 3n, 4n, 5n
 //! print none

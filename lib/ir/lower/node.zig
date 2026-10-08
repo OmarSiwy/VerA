@@ -110,7 +110,7 @@ pub fn declareNets(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                     self.file.exprs.tag(n.init) != .assign_pattern)
                     &.{}
                 else
-                    try lower_shape.flattenPattern(self, n.init, &.{lower_shape.Bounds{ .lo = 0, .hi = r.size() - 1 }});
+                    try lower_shape.flattenPattern(self, n.init, &.{lower_shape.Bounds{ .lo = 0, .hi = r.size() - 1 }}, true);
                 for (0..r.size()) |k| {
                     const idx = try internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), strOrEmpty(self, n.discipline));
                     if (k < seeds.len and seeds[k] != .none)
@@ -188,9 +188,18 @@ pub fn bindPortConnections(self: *Lower) Oom!void {
     // §6.5.7.1 a vector port bound to a concatenated net expression: element k
     // of the port IS net `elems[k]`, so its key names that net's node.
     for (self.port_concats) |pc| {
-        const r = (try foldDim(self, pc.range, pc.main_tok)) orelse continue;
+        // §6.5.5 a scalar port on one bit of a net (`.v(bus[1])`) is that bit.
+        const range = pc.range orelse {
+            if (pc.elems.len != 1) {
+                try self.err(pc.main_tok, .E0906, "the connection is {d} nets wide and the port it connects is scalar", .{pc.elems.len});
+                continue;
+            }
+            try self.node_voltages.put(self.arena, pc.name, try internNode(self, pc.elems[0], ""));
+            continue;
+        };
+        const r = (try foldDim(self, range, pc.main_tok)) orelse continue;
         if (r.size() != pc.elems.len) {
-            try self.err(pc.main_tok, .E0906, "the concatenation is {d} nets wide and the port it connects is {d}", .{ pc.elems.len, r.size() });
+            try self.err(pc.main_tok, .E0906, "the connection is {d} nets wide and the port it connects is {d}", .{ pc.elems.len, r.size() });
             continue;
         }
         for (pc.elems, 0..) |el, k| {

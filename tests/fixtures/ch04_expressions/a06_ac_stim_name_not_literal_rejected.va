@@ -31,7 +31,9 @@
 //
 //! lrm 4.6.3
 //! lrm A.8.2
-//! reject E0521
+//! lrm A.8.2:1000
+//! reject-only E0521
+//! neighbour a06_ac_stim_dynamic_magnitude.va
 module a06_ac_stim_name_not_literal_rejected(p, n);
     inout p, n;
     electrical p, n;

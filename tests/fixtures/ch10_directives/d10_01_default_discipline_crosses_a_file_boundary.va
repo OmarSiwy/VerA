@@ -36,6 +36,8 @@
 //
 //! lrm 10.2
 //! lrm 10.1
+//! lrm 10.1:1000
+//! lrm 10.2:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "d10_default_discipline.vh"
 `include "check.vh"

@@ -352,6 +352,7 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$ferror",
         .@"$feof",
         .@"$sformat",
+        .@"$sformat$rt",
         .@"$sscanf",
         .@"$limit",
         .@"$table_model",
@@ -797,6 +798,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // args...)`: lowering made it the right-hand side of an assignment to
         // the destination. The text goes into this call site's scratch row.
         .@"$sformat" => return cg_display.emitStringFormat(self, args, @backingInt(inst)),
+        .@"$sformat$rt" => return cg_display.emitStringFormatRt(self, args, @backingInt(inst)),
         // §3.3 Table 3-3 a string built while the device runs, into this call
         // site's own scratch row, keyed like `$sformat`'s.
         .@"$str$cat" => {
@@ -966,9 +968,9 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
 /// zero to the value (§12.22.1's `derivtf`).
 fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
     const k = for (self.systf_names.items, 0..) |n, i| {
-        if (std.mem.eql(u8, n, name)) break i;
+        if (n.tok == self.call_tok and std.mem.eql(u8, n.name, name)) break i;
     } else blk: {
-        try self.systf_names.append(self.arena, name);
+        try self.systf_names.append(self.arena, .{ .name = name, .tok = self.call_tok });
         break :blk self.systf_names.items.len - 1;
     };
     // Reads `inst`, so `emitUnit` keeps the parameter named.
@@ -1001,19 +1003,20 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     try self.b("        break :zs{d} zsr;\n    }}", .{label});
 }
 
-/// Writes `systf_calls`, the `$name`s this device leaves to a VPI
-/// application. Call after every unit is emitted: `emitCall` fills the set.
+/// Writes `systf_calls`, the `$name` calls this device leaves to a VPI
+/// application, one per source call. Call after every unit is emitted:
+/// `emitCall` fills the set.
 pub fn emitSystfTable(self: *Gen) Error!void {
     if (self.systf_names.items.len == 0) return;
     try self.w(
         \\/// §2.8.3 `$name`s this device leaves to a VPI application
-        \\/// (§12.32 `vpi_register_analog_systf`). Position k is the `k` the
-        \\/// device passes to `Instance.systf.?.call`. A host linking this
-        \\/// device shall bind them — see `contract.validateHost`.
+        \\/// (§12.32 `vpi_register_analog_systf`), one per call site. Position k
+        \\/// is the `k` the device passes to `Instance.systf.?.call`. A host
+        \\/// linking this device shall bind them — see `contract.validateHost`.
         \\pub const systf_calls = [_]contract.Systf{{
         \\
     , .{});
-    for (self.systf_names.items) |n| try self.w("    .{{ .name = \"{s}\" }},\n", .{n});
+    for (self.systf_names.items) |n| try self.w("    .{{ .name = \"{s}\", .tok = {d} }},\n", .{ n.name, n.tok });
     try self.w("}};\n\n", .{});
 }
 

@@ -18,6 +18,7 @@
 // parent pins n = 0 and leaves p to the device, so V(p) = 0.75 exactly.
 //
 //! lrm 6.9.4
+//! lrm 6.9.4:1
 //! bias V(n) = 0.0
 //! solve
 `include "check.vh"

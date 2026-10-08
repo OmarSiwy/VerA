@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 10.4.4
 //! reject E1100
 //! reject event trigger
+//! neighbour b_10_4_4_factorial.v
 module b_10_4_4_function_event_trigger_rejected;
   reg x;
   event e;

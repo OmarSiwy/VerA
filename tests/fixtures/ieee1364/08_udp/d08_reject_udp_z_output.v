@@ -42,8 +42,10 @@
 // rule and the offending output symbol rather than a phrase of the message.
 //
 //! lrm A.5.3
-//! reject E0233
+//! lrm A.5.3:1000
+//! reject-only E0233
 //! reject `z` is not a UDP output symbol
+//! neighbour d08_udp_comb.v
 //! inherited IEEE 1364-2005 8.1.4 8.1.5
 `timescale 1ns/1ns
 

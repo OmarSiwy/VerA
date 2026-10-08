@@ -44,6 +44,8 @@
 //
 //! lrm 5.6.7.1
 //! lrm 5.6.7
+//! lrm 5.6.7:1
+//! lrm 5.6.7.1:1000
 //! solve
 `include "check.vh"
 module ch5_multiple_indirect(x, y, z);

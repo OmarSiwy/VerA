@@ -19,7 +19,8 @@
 // number as "digits then any trailing alphanumerics" would pass 49 and fail
 // here, so neither file subsumes the other.
 //! lrm 2.6.1
-//! reject E0133
+//! lrm 2.6.1:2
+//! reject-only E0133
 module ch02_hex_without_base_rejected;
     integer value;
     analog value = 4af;

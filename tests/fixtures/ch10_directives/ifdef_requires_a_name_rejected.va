@@ -7,7 +7,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
-//! reject E0104
+//! reject-only E0104
 `ifdef
 `endif
 module ch10_ifdef_requires_a_name(p, n);

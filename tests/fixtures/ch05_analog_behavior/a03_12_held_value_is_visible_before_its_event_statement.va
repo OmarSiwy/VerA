@@ -53,6 +53,7 @@
 // declaration, which is a different dominating point than the entry block.
 //
 //! lrm 5.3
+//! lrm 5.3:1
 //! lrm 5.10
 //! lrm 5.10.3.3
 //! analysis tran

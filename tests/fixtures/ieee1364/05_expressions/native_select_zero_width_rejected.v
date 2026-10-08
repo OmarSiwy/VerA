@@ -5,6 +5,7 @@
 // digital-runner: reject
 //! reject E1100
 //! reject an indexed part-select's width is a positive constant
+//! neighbour native_indexed_selects.v
 module native_select_zero_width_rejected;
   reg [7:0] v;
   initial $display("%b", v[0 +: 0]);

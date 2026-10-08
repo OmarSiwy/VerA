@@ -13,7 +13,9 @@
 //
 //! lrm 4.4
 //! lrm 9.4.1
-//! reject E0315
+//! reject-only E0315
+//! neighbour 29_binding_detection.va
+//! neighbour 30_node_alias_calls.va
 module ch09_net_name_display_argument(p, n);
     inout p, n;
     electrical p, n;

@@ -2,7 +2,8 @@
 // expression must use the original gain, although the instance may override
 // it through alternate. aliasparam_source_bindings.va is that legal neighbour.
 //! lrm 3.4.7
-//! reject E0373
+//! reject-only E0373
+//! neighbour aliasparam_source_bindings.va
 module aliasparam_ps_top;
   aliasparam_bad_ps #(.alternate(3)) child();
 endmodule

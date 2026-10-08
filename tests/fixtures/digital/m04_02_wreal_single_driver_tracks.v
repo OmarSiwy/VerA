@@ -23,6 +23,7 @@
 // precision; a separate discriminator is required for that claim.
 //
 //! lrm 3.7
+//! lrm 3.7:1
 //! timescale 1ns/1ns
 //
 // HAND DERIVATION — `assign w = src;` and `assign z = src * gain;`

@@ -6,6 +6,7 @@
 // evidence for these flags; the source connection lists determine them.
 // The second child leaves inner explicitly blank by name, giving zero.
 //! lrm 9.19
+//! lrm 9.19:6
 //! checks 3
 `include "check.vh"
 module audit_binding_unused_parent_port;

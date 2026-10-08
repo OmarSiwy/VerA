@@ -8,8 +8,9 @@
 //
 // Legal neighbour: string_replication_4096_bytes.va.
 //
-//! reject E1011
+//! reject-only E1011
 //! reject the replication makes 5000 copies of 1 bytes
+//! neighbour string_replication_4096_bytes.va
 module string_replication_over_4096_bytes_rejected(p, n);
   inout p, n; electrical p, n;
   string s;

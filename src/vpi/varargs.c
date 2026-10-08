@@ -21,7 +21,7 @@ PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...) {
   if (vera_vpi_refused(0)) return -1;
   va_list ap;
   va_start(ap, format);
-  int r = vera_vpi_emit(1, format, &ap);
+  int r = vera_vpi_emit(1 | 4, format, &ap);
   va_end(ap);
   return r;
 }
@@ -41,7 +41,7 @@ PLI_INT32 vpi_vprintf(PLI_BYTE8 *format, va_list ap) {
   if (vera_vpi_refused(2)) return -1;
   va_list cp;
   va_copy(cp, ap);
-  int r = vera_vpi_emit(1, format, &cp);
+  int r = vera_vpi_emit(1 | 4, format, &cp);
   va_end(cp);
   return r;
 }

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 19.3.1
 //! reject E0117
 //! reject macro argument count mismatch
+//! neighbour b_19_3_1_text_macros.v
 `define add(a,b) ((a)+(b))
 module b_19_3_1_argument_count_rejected;
   initial $display("%0d", `add(1));

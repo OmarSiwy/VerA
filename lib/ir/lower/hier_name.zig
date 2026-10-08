@@ -409,6 +409,16 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const path = try std.mem.concat(self.arena, u8, &.{
             callerParentPath(self), inst.?, &[_]u8{Elaborate.sep}, param.?,
         });
+        // §6.4.3 "If a paramset output variable has the same name as a module
+        // output variable, the paramset's value is reported for instances
+        // using the paramset": first, and the nearest link's (last) wins.
+        var k = self.ps_outputs.len;
+        while (k > 0) {
+            k -= 1;
+            if (!std.mem.eql(u8, self.ps_outputs[k].report, path)) continue;
+            const slot = self.vars.get(self.ps_outputs[k].flat) orelse break;
+            return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
+        }
         if (self.param_index.get(path)) |pi|
             return .{ .v = self.param_values.items[pi], .ty = astTy(self.out.params.items[pi].ty) };
         // §9.16: "$simprobe() queries the simulator for an output variable named

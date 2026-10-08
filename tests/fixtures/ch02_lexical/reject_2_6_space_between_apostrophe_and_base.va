@@ -12,7 +12,10 @@
 // VerA refuses it as E0131 "expected a numeric base after the apostrophe".
 //
 //! lrm 2.6
-//! reject E0131
+//! lrm 2.6:1
+//! lrm 2.6.1
+//! lrm 2.6.1:7
+//! reject-only E0131
 `include "disciplines.vams"
 module ch2_space_in_base(p, n);
   inout p, n;

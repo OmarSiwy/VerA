@@ -1,7 +1,8 @@
 // Skipping evaluation does not relax a call's static signature or scope.
 //! lrm 4.2.3
 //! lrm 9.13.2
-//! reject E0816
+//! lrm 9.13.2:3
+//! reject-only E0816
 //! reject seed argument shall be an integer
 module ch09_rng_skipped_seed(p,n);
   inout p,n; electrical p,n;

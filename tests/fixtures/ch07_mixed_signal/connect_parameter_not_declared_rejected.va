@@ -25,7 +25,10 @@
 // module is an ordinary resistor.
 //
 //! lrm 7.7.3
-//! reject is not a parameter of connect module
+//! lrm 7.7.3:1000
+//! reject-only is not a parameter of connect module
+//! neighbour connect_parameter_accepted.va
+//! neighbour m03_06_connect_rule_parameter_is_applied.va
 `include "disciplines.vams"
 connectmodule ch7_a2d_np(a, d);
   input a;

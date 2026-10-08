@@ -20,7 +20,7 @@
 // number of arguments to a system task or function".
 //
 //! lrm 9.5.6
-//! reject E0887
+//! reject-only E0887
 //! reject `$fflush` takes at most 1 argument, got 2
 `include "disciplines.vams"
 module ch09_fflush_two_descriptors(p, n);

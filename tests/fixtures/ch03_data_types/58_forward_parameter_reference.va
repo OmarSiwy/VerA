@@ -11,7 +11,8 @@
 // and never checks declaration order.
 //
 //! lrm 3.4
-//! reject E0314
+//! lrm 3.4:1
+//! reject-only E0314
 module ch3_forward_parameter_reference(p, n);
     inout p, n;
     electrical p, n;

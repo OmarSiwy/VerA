@@ -10,7 +10,8 @@
 // violated by something that IS an access function call.
 //
 //! lrm 4.5.6
-//! reject E0504
+//! lrm 4.5.6:1
+//! reject-only E0504
 module ch04_ddx_nonprobe_argument_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 12.3.2 12.3.6
 //! reject E1100
 //! reject no such port
+//! neighbour b_12_3_2_explicit_port_names.v
 module complex_ports ({c,d}, .e(f));
   input [1:0] c, d;
   output [3:0] f;

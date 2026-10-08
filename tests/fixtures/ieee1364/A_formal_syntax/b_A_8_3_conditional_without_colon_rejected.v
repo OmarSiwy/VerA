@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 A.8.3
 //! reject E0207
 //! reject unexpected token: found `)`
+//! neighbour b_A_8_3_expressions.v
 module b_A_8_3_conditional_without_colon_rejected;
   reg a, b, c;
   initial begin

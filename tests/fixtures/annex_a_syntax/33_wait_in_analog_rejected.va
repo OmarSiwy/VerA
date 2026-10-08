@@ -15,7 +15,8 @@
 //! lrm A.6.4
 //! lrm A.6.5
 //! lrm 5.2
-//! reject E0255
+//! lrm A.6.4:1000
+//! reject-only E0255
 module annex_a_wait_in_analog(p); inout p; electrical p; real x;
 analog begin x = 0.0; wait (V(p) > 1.0) x = 1.0; I(p) <+ x * V(p); end
 endmodule

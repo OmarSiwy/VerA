@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.2.1.2
 //! reject E0207
 //! reject gives a variable type to `output` only
+//! neighbour b_A_2_1_2_port_declarations.v
 module b_A_2_1_2_input_reg_rejected (a);
   input reg a;
   initial $display("unreachable");

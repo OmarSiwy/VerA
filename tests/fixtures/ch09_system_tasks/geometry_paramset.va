@@ -11,6 +11,9 @@
 //! lrm 6.3.6
 //! lrm 6.4.1
 //! lrm 9.18
+//! lrm 6.3.6:1
+//! lrm 6.3.6:2
+//! lrm 9.18:1000
 //! checks 8
 `include "check.vh"
 module geometry_paramset_top;

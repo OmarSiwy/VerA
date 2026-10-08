@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 A.8.1
 //! reject E0207
 //! reject unexpected token: found a
+//! neighbour b_A_8_1_concatenations.v
 module b_A_8_1_replication_without_braces_rejected;
   reg [1:0] a;
   initial begin

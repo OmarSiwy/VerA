@@ -27,8 +27,9 @@
 //! `aliasparams`); `defparams` and `paramset_defparams` are `override.zig`'s;
 //! `nets`, `disc_of`, `segs`, `port_resolved`, `ooc` and
 //! `signal_disciplines` are `resolve.zig`'s (`addNet` is the only net
-//! append); `inserts` is `insert.zig`'s; `selection_params` is
-//! `paramset.zig`'s; `attribute_disciplines`, `pending_attributes` and
+//! append); `inserts` is `insert.zig`'s; `selection_params` and
+//! `ps_outputs` are `paramset.zig`'s (which also appends paramset
+//! variables to `vars`); `attribute_disciplines`, `pending_attributes` and
 //! `expression_aliases` are written by `clone.zig` during the clone and
 //! settled by `resolve.resolveMultiCandidates`. `unit` is not a table but the
 //! namespace in force: `inlineInstance` pushes and pops it, and a pass that
@@ -126,7 +127,8 @@ pub const Design = struct {
     inserts: []const Inserted = &.{},
     /// §6.5.7.1 "a vector port can be connected to a vector net or
     /// concatenated net expression of the matching width". One entry per port
-    /// connected to a concatenation: the child's vector, renamed to a flat
+    /// connected to a concatenation or to §6.5.5's scalar member or sub-range
+    /// of a net (`.v(bus[1])`, `.w(bus[3:2])`): the child's port, renamed to a flat
     /// name of its own, whose element k (declaration order, msb first per IEEE
     /// 1364 §12.3.9.2) is the parent net `elems[k]`. Lowering interns no node for it: each element
     /// aliases its net's node (`Lower.lowerModule`).
@@ -151,6 +153,11 @@ pub const Design = struct {
     /// available for instances using the paramset." The flat names of those
     /// variables, for §9.16's `$simprobe` to treat as unresolvable.
     ps_hidden: []const []const u8 = &.{},
+    /// §6.4.3 "Integer or real variables in the paramset declared with
+    /// descriptions are considered output variables", and "the paramset's
+    /// value is reported for instances using the paramset": one row per such
+    /// variable of a paramset instance, for §9.16's `$simprobe`.
+    ps_outputs: []const PsOutput = &.{},
     /// §6.3.1/§6.4 defparams encountered below a paramset instance, with the
     /// generate condition that decides whether that hierarchy exists. Lowering
     /// judges them after the final parameter values (including --param) exist.
@@ -161,6 +168,11 @@ pub const Design = struct {
     /// §9.18 Table 9-29 domains to check at card time (`SystemCheck`).
     system_checks: []const SystemCheck = &.{},
 };
+
+/// One `Design.ps_outputs` row: the name an instance reports the variable
+/// under (`path ++ name`) and the flat variable holding it (`path ++
+/// paramset ++ sep ++ name`, beside the paramset's parameters).
+pub const PsOutput = struct { report: []const u8, flat: []const u8 };
 
 /// A defparam is forbidden only in an instantiated paramset hierarchy:
 /// §6.6.2 leaves an unselected generate arm out of the model. Flattening keeps
@@ -183,14 +195,15 @@ pub const PortWidth = struct {
 /// One hierarchical net segment attached to the flattened signal `net`.
 pub const SignalDiscipline = struct { net: []const u8, discipline: []const u8 };
 
-/// One `Design.port_concats` row: a vector port bound to a concatenation of
-/// parent nets (LRM §6.5.7.1).
+/// One `Design.port_concats` row: a port bound bit by bit to parent nets, a
+/// concatenation (LRM §6.5.7.1) or a bit- or part-select (§6.5.5).
 pub const PortConcat = struct {
     /// The port's flat name.
     name: []const u8,
     /// The child's declared range, cloned into the flat namespace so a
-    /// parameter in it folds against the instance's own overrides.
-    range: Ast.Dim,
+    /// parameter in it folds against the instance's own overrides. Null for
+    /// a scalar port bound to one bit (§6.5.5 `.v(bus[1])`).
+    range: ?Ast.Dim,
     elems: []const []const u8,
     main_tok: u32,
 };
@@ -452,6 +465,8 @@ pub const Flatten = struct {
     unit_paths: std.ArrayList(UnitPath) = .empty,
     /// `Design.ps_hidden`, as the walk finds them.
     ps_hidden: std.ArrayList([]const u8) = .empty,
+    /// `Design.ps_outputs`, as `paramset.paramsetOverrides` declares them.
+    ps_outputs: std.ArrayList(PsOutput) = .empty,
     /// `Design.paramset_defparams`, before generate schemes have final values.
     paramset_defparams: std.ArrayList(ParamsetDefparam) = .empty,
     /// `Design.selection_params`: flat parameters a §6.4.2 overload choice
@@ -545,8 +560,10 @@ pub const Flatten = struct {
     /// it declares, the same key shape as `defparams`.
     /// "Apply all out-of-context node and signal declarations. For example,
     /// electrical top.middle.bottom.sig; overrides any discipline which may be
-    /// declared for sig in the module where sig was declared."
-    ooc: std.StringHashMapUnmanaged(Ast.StrId) = .empty,
+    /// declared for sig in the module where sig was declared." With the
+    /// declaration's token, for §3.6.2's compatibility diagnostic
+    /// (`resolve.checkOocOverrides`).
+    ooc: std.StringHashMapUnmanaged(struct { disc: Ast.StrId, tok: u32 }) = .empty,
     /// §3.6.3.2's nodeset on an out-of-context declaration
     /// (`electrical u.w = 2.75;`), in `collectOoc` order (top-down), with the
     /// initializer cloned in the declaring module's namespace. Applied after
@@ -627,6 +644,12 @@ pub const Flatten = struct {
         /// §6.3.1 the nearest paramset instance above or at this unit. A
         /// descendant module inherits it even when instantiated by module name.
         paramset_instance: ?[]const u8 = null,
+        /// The module this unit is an instance of, and the unit that
+        /// instantiated it (null at the top). IEEE 1364-2005 12.6/12.7's
+        /// upward search walks them (`clone.upward`). Null `module` is a
+        /// scope that is not a module instance (a paramset body).
+        module: ?*const Ast.ModuleDecl = null,
+        up: ?*const Unit = null,
     };
 
     /// Returns `m`'s §6.6 generate-block instances. Asserts `m` is a row of
@@ -697,6 +720,7 @@ pub const Flatten = struct {
             .decl = top,
         });
 
+        self.unit.module = top;
         var stack: [max_depth + 1]Ast.StrId = undefined;
         stack[0] = top.name;
         try elab_instance.walkInstances(self, top, "", &stack, 0);
@@ -749,6 +773,7 @@ pub const Flatten = struct {
             .attribute_disciplines = self.attribute_disciplines,
             .local_accesses = self.local_accesses,
             .ps_hidden = self.ps_hidden.items,
+            .ps_outputs = self.ps_outputs.items,
             .paramset_defparams = self.paramset_defparams.items,
             .selection_params = self.selection_params.items,
             .system_checks = self.system_checks.items,
@@ -907,7 +932,7 @@ test "a module instantiating itself is E0905, not a stack overflow" {
     try std.testing.expectEqual(diag.Code.E0905, f.bag.at(0).code);
 }
 
-test "§6.6 an if-generate's instances are elaborated under their arm's scheme; a loop generate's are E0235" {
+test "§6.6 an if-generate's instances are elaborated under their arm's scheme; a loop generate's once per iteration; a case generate's are E0235" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer f.deinit();
     try parse(&f,
@@ -925,12 +950,26 @@ test "§6.6 an if-generate's instances are elaborated under their arm's scheme; 
     defer g.deinit();
     try parse(&g,
         \\module top(p); inout p; electrical p; genvar i;
-        \\  generate for (i = 0; i < 2; i = i + 1) begin leaf a(p); end endgenerate
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : blk leaf a(p); end endgenerate
         \\endmodule
         \\module leaf(q); inout q; electrical q; analog I(q) <+ V(q); endmodule
     );
-    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
-    try std.testing.expectEqual(diag.Code.E0235, g.bag.at(0).code);
+    // §6.6.1: one generate block instance per genvar value, `blk[i]`.
+    const dg = try elaborate(g.ctx());
+    try std.testing.expectEqual(@as(usize, 3), dg.units.len);
+    try std.testing.expectEqualStrings("blk[0].a.", dg.units[1].path);
+    try std.testing.expectEqualStrings("blk[1].a.", dg.units[2].path);
+
+    var h: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer h.deinit();
+    try parse(&h,
+        \\module top(p); inout p; electrical p;
+        \\  generate case (1) 1: begin leaf a(p); end endcase endgenerate
+        \\endmodule
+        \\module leaf(q); inout q; electrical q; analog I(q) <+ V(q); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(h.ctx()));
+    try std.testing.expectEqual(diag.Code.E0235, h.bag.at(0).code);
 }
 
 test "§6.3.6 a scaled instance's flow contribution is multiplied, its flow probe divided" {

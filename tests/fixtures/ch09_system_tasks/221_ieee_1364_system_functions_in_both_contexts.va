@@ -28,6 +28,9 @@
 //! lrm 9.1
 //! lrm 9.11
 //! lrm 9.14
+//! lrm 9.1:1000
+//! lrm 9.11:1000
+//! lrm 9.14:1
 `include "check.vh"
 module ch09_ieee_1364_system_functions_in_both_contexts(p, n);
   inout p, n; electrical p, n;

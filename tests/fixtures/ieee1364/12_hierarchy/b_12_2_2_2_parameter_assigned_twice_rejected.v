@@ -4,9 +4,12 @@
 // size is assigned twice in one parameter value assignment. Legal neighbour:
 // b_12_2_2_parameter_assignment_forms.v (#(.size(10),.delay(15))).
 // digital-runner: reject
+//! lrm 6.3.3
+//! lrm 6.3.3:3
 //! inherited IEEE 1364-2005 12.2.2.2
 //! reject E1100
 //! reject assigned twice
+//! neighbour b_12_2_2_parameter_assignment_forms.v
 module vdff;
   parameter size=5, delay=1;
   initial $display("%0d %0d", size, delay);

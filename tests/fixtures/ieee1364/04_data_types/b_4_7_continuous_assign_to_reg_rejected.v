@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 4.7 6.1
 //! reject E1100
 //! reject a continuous assignment can only drive a net
+//! neighbour b_4_7_reg_holds_between_assignments.v
 module b_4_7_continuous_assign_to_reg_rejected;
   reg r;
   assign r = 1'b1;

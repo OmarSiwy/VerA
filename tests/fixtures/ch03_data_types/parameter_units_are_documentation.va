@@ -19,6 +19,7 @@
 //         declaration is legal and vb is its plain value 0.5.
 //
 //! lrm 3.4.3
+//! lrm 3.4.3:1
 //! param res = 250
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

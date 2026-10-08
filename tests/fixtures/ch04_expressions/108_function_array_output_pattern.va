@@ -24,6 +24,7 @@
 // FAILED the fixture. The requirement is now stated the way the LRM states it.
 //
 //! lrm 4.7.2.3
+//! lrm 4.7.2.3:2
 //! bias V(p) = 0.75
 `include "check.vh"
 module ch4_fn_array_out(p);

@@ -23,6 +23,8 @@
 // solution of the device's own equations, not a harness write.
 //
 //! lrm 4.5.4
+//! lrm 4.5.4:1
+//! lrm 4.5.4:3
 //! bias V(i) = 0.75
 //! solve
 //! print none

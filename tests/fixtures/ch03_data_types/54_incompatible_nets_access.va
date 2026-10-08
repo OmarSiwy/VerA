@@ -28,8 +28,11 @@
 // Incompatibility Rule diagnostic, rather than any failed compilation phase.
 //
 //! lrm 3.11
+//! lrm 3.11:1
 //! lrm 3.11.1
-//! reject E0355
+//! lrm 3.11.1:2
+//! reject-only E0355
+//! neighbour 76_nature_compatibility_rules.va
 discipline ch3_rot_i;
     potential Angle;
     flow Current;

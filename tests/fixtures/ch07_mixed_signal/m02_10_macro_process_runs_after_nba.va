@@ -44,9 +44,13 @@
 // are exact in binary and the D2A selects an operand, so the tolerance is CHECKX's.
 //
 //! lrm 8.5.1
+//! lrm 8.5.1:3
+//! lrm 8.5.1:4
 //! lrm 8.5.3.7
 //! lrm 8.5
 //! lrm 8.4.7
+//! lrm 8.4.7:1
+//! lrm 8.5:2
 //! analysis tran
 //! time 0, 2n, 4n, 6n, 8n
 `timescale 1ns/1ns

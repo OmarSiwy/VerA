@@ -14,7 +14,8 @@
 // context: contributed from an always block", which names this rule.
 //
 //! lrm 1.2
-//! reject E0435
+//! lrm 1.2:1000
+//! reject-only E0435
 `include "disciplines.vams"
 module ch1_contribution_from_always(p, n, clk);
   inout p, n;

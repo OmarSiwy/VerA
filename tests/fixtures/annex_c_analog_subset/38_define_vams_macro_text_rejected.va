@@ -14,7 +14,9 @@
 //
 //! lrm C.12
 //! lrm 10.4
-//! reject E0139
+//! lrm 10.4:1
+//! reject-only E0139
+//! neighbour 37_compiler_directives.va
 `define MY_ENABLE __VAMS_ENABLE__
 module annex_c_define_vams_macro_text_rejected(p, n);
     inout p, n;

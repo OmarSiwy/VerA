@@ -13,6 +13,7 @@
 // except hiding an ulp-level regression.
 //
 //! lrm 1.3.2
+//! lrm 1.3.2:1000
 //! bias V(p) = 1.0, V(mid) = 0.25, V(n) = -0.5
 `include "check.vh"
 module ch01_series_potentials(p, mid, n);

@@ -12,7 +12,10 @@
 // §5.9.3 analog `for` (analog_genvar_loop.va).
 //
 //! lrm 5.5.2
-//! reject E0352
+//! lrm 5.5.2:1
+//! reject-only E0352
+//! neighbour analog_genvar_loop.va
+//! neighbour vector_access.va
 `include "disciplines.vams"
 module ch5_vector_net_index_not_constant(p, n);
   inout p, n; electrical p, n;

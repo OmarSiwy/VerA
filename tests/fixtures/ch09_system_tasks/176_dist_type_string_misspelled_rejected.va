@@ -15,8 +15,9 @@
 // about its value — which is why the pinned substring quotes the grammar
 // rather than the scope sentence.
 //
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 9.13.2
-//! reject E0816
+//! reject-only E0816
 //! reject shall be "global" or "instance"
 module ch09_ts_bad_user(p, n);
   inout p, n; electrical p, n;
@@ -24,6 +25,7 @@ module ch09_ts_bad_user(p, n);
 endmodule
 
 paramset ch09_ts_bad_bin ch09_ts_bad_base;
+  parameter real unused_item = 0;
   .k = $rdist_normal(7, 0.0, 1.0, "local");
 endparamset
 

@@ -6,7 +6,8 @@
 // the event outside the statement, is vera_timepoint_cache.va's
 // `@(timer(0, 1.0)) k = k + 1;`.
 //! lrm 2.9
-//! reject an event control (§5.10)
+//! reject-only an event control (§5.10)
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_event(p, n);
   inout p, n; electrical p, n;
   integer k;

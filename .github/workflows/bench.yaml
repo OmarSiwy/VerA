@@ -7,7 +7,13 @@
 # AGENTS.md §0 rule 3 still holds for reading a failure: the FAIL/XFAIL name
 # list is uploaded as an artifact, diff names, not counts.
 #
-# Only the sweep and the audit-tool self-tests report without gating.
+# Only the sweep and the audit-tool self-tests report without gating. Also
+# gating (docs/TESTING.md §3.6): `zig build test` (which runs the canaries),
+# the build-step inventory, the requirement ledger against the LRM text, the
+# sentence cites against the ledger, and the verdict RATCHET: every fixture's
+# verdict must equal the committed tests/fixtures/VERDICTS.tsv, so a
+# regression fails by name and an improvement is committed by name
+# (`tools/conformance.py ratchet --update`).
 name: bench
 
 on:
@@ -46,6 +52,17 @@ jobs:
           zig build test --summary all 2>&1 | tee /tmp/unit.txt
           exit "${PIPESTATUS[0]}"
 
+      - name: Build-step inventory (gate)
+        run: python3 tools/conformance.py steps
+
+      - name: Requirement ledger matches the LRM text (gate)
+        run: python3 tools/conformance.py obligations
+
+      # A sentence cite whose fixture polarity contradicts its row cannot be
+      # evidence, and would inflate the metric (docs/TESTING.md §3.3).
+      - name: Sentence cites agree with the ledger (gate)
+        run: python3 tools/conformance.py lint-cites
+
       # Verdict prose (`FAIL <path>: why`) goes to stderr and the TSV tables go
       # to stdout, so both streams are merged into one log — conformance.py
       # parses the TSV and the name list below comes from the prose.
@@ -57,10 +74,15 @@ jobs:
         run: |
           cmd=$(zig build benchmark -- --strict zzz-none 2>&1 | grep '^failed command:' | sed 's/^failed command: //')
           read -r suite vera _ <<< "$cmd"
-          "$suite" "$vera" --strict > /tmp/strict.out 2> /tmp/strict.err || true
+          "$suite" "$vera" --strict --verdicts=/tmp/verdicts.tsv > /tmp/strict.out 2> /tmp/strict.err || true
           cat /tmp/strict.out /tmp/strict.err > /tmp/strict.txt
           awk -F'\t' '/^pass\tfail\tunasserted\txfail/ { getline; f = $2; u = $3; n++ }
             END { print "fail=" f, "unasserted=" u; exit !(n > 0 && f == 0 && u == 0) }' /tmp/strict.out
+
+      # Membership, not counts: the run's verdicts against the committed list.
+      - name: Verdict ratchet (gate)
+        if: always()
+        run: python3 tools/conformance.py ratchet --verdicts=/tmp/verdicts.tsv
 
       # Measures C and B: the inventories exit 0 either way; their one-way and
       # uncited clauses are gated by name below.
@@ -173,6 +195,7 @@ jobs:
             /tmp/spice.txt
             /tmp/sweep.txt
             /tmp/source-audit.txt
+            /tmp/verdicts.tsv
 
   # The external analog suites (tools/external_analog.py): VerA's
   # `--emit-osdi` libraries in ngspice against hand-derived values,

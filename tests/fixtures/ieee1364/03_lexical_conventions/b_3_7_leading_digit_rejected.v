@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 3.7
 //! reject E0208
 //! reject expected an identifier
+//! neighbour b_3_7_identifier_examples.v
 module b_3_7_leading_digit_rejected;
   reg 1abc;
   initial $display("unreachable");

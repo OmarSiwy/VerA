@@ -15,7 +15,8 @@
 // contribution breaks the solver.
 //
 //! lrm 4.5.12
-//! reject shall not be directly assigned to a branch
+//! lrm 4.5.12:3
+//! reject-only shall not be directly assigned to a branch
 //! reject E0518
 module ch04_z_filter_zero_transition_branch_rejected(p, n);
     inout p, n;

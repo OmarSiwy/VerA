@@ -20,7 +20,9 @@
 //! lrm C.7
 //! lrm A.6.3
 //! lrm A.6.5
-//! reject E0255
+//! lrm A.6.4
+//! lrm A.6.4:1000
+//! reject-only E0255
 //! reject E0249
 //! reject fork
 //! reject join

@@ -16,6 +16,7 @@
 //! inherited IEEE 1364-2005 A.1.2
 //! reject E0232
 //! reject `include` is a library_description
+//! neighbour audit_config_binding_display.v
 include "other.map";
 module top;
   initial $display("top");

@@ -3,6 +3,7 @@
 // must accept such declarations without error and make their values accessible.
 //
 //! lrm 3.2.1
+//! lrm 3.2.1:1
 //! lrm 3.2
 `include "check.vh"
 module ch03_output_variables(p, n);

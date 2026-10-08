@@ -54,6 +54,9 @@
 //
 //! lrm 9.21.2
 //! lrm 9.21.4
+//! lrm 9.21.4:1
+//! lrm 9.21
+//! lrm 9.21:9
 `include "check.vh"
 module a05_cubic_spline_natural_ends(p, n);
   inout p, n; electrical p, n;

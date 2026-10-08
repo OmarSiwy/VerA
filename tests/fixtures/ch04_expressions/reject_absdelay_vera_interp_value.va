@@ -2,7 +2,7 @@
 // interpolation order: 1 (the clause's linear) or 2 (quadratic). 3 names
 // neither, and E0524 says so rather than picking one.
 //! lrm 2.9
-//! reject E0524
+//! reject-only E0524
 module reject_absdelay_vera_interp_value(p, n);
   inout p, n; electrical p, n;
   real y;

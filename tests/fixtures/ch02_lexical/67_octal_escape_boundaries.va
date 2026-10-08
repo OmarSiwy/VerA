@@ -8,6 +8,7 @@
 // No claim is made about \400: Table 2-2 permits an implementation to reject
 // an escape above \377. These checks do not depend on that optional choice.
 //! lrm 2.7
+//! lrm 2.7:2
 `include "check.vh"
 module ch02_octal_escape_boundaries(p, n);
     inout p, n;

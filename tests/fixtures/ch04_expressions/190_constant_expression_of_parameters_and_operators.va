@@ -29,6 +29,7 @@
 // Every value is an integer or dyadic, so every check is exact.
 //
 //! lrm 4.1
+//! lrm 4.1:1000
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_constant_expression_of_parameters_and_operators(p);

@@ -12,7 +12,8 @@
 // an access function".
 //
 //! lrm 6.4.1
-//! reject access function
+//! lrm 6.4.1:1
+//! reject-only access function
 `include "disciplines.vams"
 module ch6_ps_access_res(p, n);
   inout p, n;

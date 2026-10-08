@@ -17,9 +17,11 @@
 // suite has to be readable by any of them.
 //
 //! lrm 4.7.3
+//! lrm 4.7.3:2
 //! reject scale
 //! reject analog
 //! reject E0430
+//! neighbour 28_user_function.va
 module ch04_function_called_outside_analog_rejected(p, n);
     inout p, n;
     electrical p, n;

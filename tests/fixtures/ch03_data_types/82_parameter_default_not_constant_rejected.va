@@ -19,7 +19,10 @@
 //
 //! lrm 3.4
 //! lrm A.2.4
-//! reject E0363
+//! lrm 3.4:1
+//! lrm A.2.4:1000
+//! reject-only E0363
+//! neighbour 81_parameter_default_over_parameter.va
 module ch03_parameter_default_not_constant(p, n);
     inout p, n;
     electrical p, n;

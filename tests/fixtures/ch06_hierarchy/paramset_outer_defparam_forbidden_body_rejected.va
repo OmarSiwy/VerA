@@ -4,7 +4,8 @@
 // selected paramset hierarchy. The precedence fixture selects legal bodies.
 //! lrm 6.3.1
 //! lrm 6.4
-//! reject E0926
+//! lrm 6.3.1:2
+//! reject-only E0926
 module ps_outer_forbidden_top(p);
   inout p; electrical p;
   ps_outer_forbidden_card #(.k(0)) u(p);

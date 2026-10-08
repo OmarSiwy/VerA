@@ -28,9 +28,11 @@
 // VerA reports E0904 "instance names no module".
 //
 //! lrm E.2.1
+//! lrm E.2.1:1
 //! lrm E.3.3
-//! reject E0904
+//! reject-only E0904
 //! reject `SUB`
+//! neighbour spice_case_lookup.va
 `include "disciplines.vams"
 module e21_case_fallback_top(p, n);
   inout p, n; electrical p, n;

@@ -35,7 +35,7 @@
 //
 //! lrm 4.2.1.1
 //! lrm 3.2
-//! reject E0368
+//! reject-only E0368
 `include "check.vh"
 module h01_nonfinite(p, n);
   inout p, n; electrical p, n;

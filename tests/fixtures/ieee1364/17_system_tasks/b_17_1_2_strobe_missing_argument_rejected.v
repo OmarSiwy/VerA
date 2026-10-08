@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 17.1.2
 //! reject E1100
 //! reject missing display argument
+//! neighbour b_17_1_2_strobe_end_of_step.v
 module b_17_1_2_strobe_missing_argument_rejected;
   reg [7:0] a;
   initial begin

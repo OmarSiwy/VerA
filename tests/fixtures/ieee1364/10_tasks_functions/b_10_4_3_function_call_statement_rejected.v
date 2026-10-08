@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 10.4.3
 //! reject E1100
 //! reject a function is called in an expression, not enabled
+//! neighbour b_10_4_3_function_call_operand.v
 module b_10_4_3_function_call_statement_rejected;
   function f;
     input a;

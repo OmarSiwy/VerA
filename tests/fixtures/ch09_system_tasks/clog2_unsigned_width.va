@@ -15,6 +15,8 @@
 //! lrm 3.2
 //! lrm 6.3.4
 //! lrm 9.14
+//! lrm 6.3.4:1000
+//! lrm 9.14:1
 //! bias V(p) = -1, V(n) = 0
 //! param amount = -1
 //! checks 21

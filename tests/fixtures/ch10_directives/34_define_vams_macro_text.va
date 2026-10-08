@@ -22,7 +22,8 @@
 // note asked for: it says WHICH rule fired rather than how it was worded.
 //
 //! lrm 10.4
-//! reject E0139
+//! lrm 10.4:1
+//! reject-only E0139
 `define MY_ENABLE __VAMS_ENABLE__
 module ch10_define_vams_macro_text(p, n);
   inout p, n; electrical p, n;

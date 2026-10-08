@@ -71,7 +71,11 @@
 // it or a `ddx` with respect to it is refused (E0812), not routed.
 //
 //! lrm 9.20
+//! lrm 9.20:8
 //! lrm 5.2.1
+//! lrm 5.2.1:2
+//! lrm 9.20:10
+//! lrm 9.20:11
 //! bias V(g) = 0.0
 //! psweep sel = 0, 1
 //! solve

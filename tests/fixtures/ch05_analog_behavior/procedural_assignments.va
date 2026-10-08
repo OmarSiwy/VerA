@@ -7,6 +7,7 @@
 // 1.5 > 0, and the conditional's true arm is x itself.
 //
 //! lrm 5.7
+//! lrm 5.7:1
 //! bias V(p) = 0.75
 `include "check.vh"
 module ch5_proc_assign(p);

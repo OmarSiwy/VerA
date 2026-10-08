@@ -3,7 +3,9 @@
 // and placement are legal. event_bounds_mixed_legal.va supplies a non-negative
 // expr_tol and observes the monitor's initialization event.
 //! lrm 5.10.3.4
-//! reject E0517
+//! lrm 5.10.3.4:3
+//! reject-only E0517
+//! neighbour event_bounds_mixed_legal.va
 module event_bounds_absdelta_negative_expr_tol(p);
   inout p; electrical p;
   real sampled;

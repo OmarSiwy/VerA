@@ -3,14 +3,17 @@
 // ordinary-module instance levels below it, in an instance array element.
 // Both elements remain below the paramset and must be refused with E0926.
 // The legal neighbor runs ordinary defparam descendants outside a paramset.
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 6.3.1
 //! lrm 6.4
-//! reject E0926
+//! lrm 6.3.1:2
+//! reject-only E0926
 module ps_dp_deep_top(p);
   inout p; electrical p;
   ps_dp_deep_card u(p);
 endmodule
 paramset ps_dp_deep_card ps_dp_deep_wrapper;
+  parameter real unused_item = 0;
   .gain = 2.0;
 endparamset
 module ps_dp_deep_wrapper(p);

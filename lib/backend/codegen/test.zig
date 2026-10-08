@@ -2355,7 +2355,7 @@ test "codegen: §12.32.3 an unregistered system function is W0852 and a host cal
     // §2.8.3/§12.32: the name is exported for a host to bind, not answered
     // here with a substitute value.
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const systf_calls") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .name = \"$sampler\" }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .name = \"$sampler\", .tok = ") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "inst.systf.?") != null);
 }
 
@@ -2377,15 +2377,18 @@ test "codegen: a systf call reassembles the host's value and partials into one S
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
 
-    // Deduplicated by NAME, because that is what §12.32 registers: two calls to
-    // `$foo` are one table entry and one binding, and `$bar` is the second.
+    // One entry per CALL, not per name: §12.32.1 runs calltf for each
+    // invocation with `vpi_handle(vpiSysTfCall, NULL)` naming that call, so the
+    // host must be told which call is running. The two `$foo` calls are two
+    // entries (the application binds them by their shared name), `$bar` a third.
     const tbl = src[std.mem.indexOf(u8, src, "pub const systf_calls").?..];
-    try std.testing.expect(std.mem.indexOf(u8, tbl, ".{ .name = \"$foo\" }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, tbl, ".{ .name = \"$bar\" }") != null);
-    try std.testing.expect(std.mem.count(u8, tbl[0..std.mem.indexOf(u8, tbl, "};").?], ".name =") == 2);
-    // …and the indices the call sites pass follow the table, not the call order.
-    try std.testing.expect(std.mem.count(u8, src, "zsh.call(zsh.ctx, 0,") == 2);
-    try std.testing.expect(std.mem.count(u8, src, "zsh.call(zsh.ctx, 1,") == 1);
+    const rows = tbl[0..std.mem.indexOf(u8, tbl, "};").?];
+    try std.testing.expect(std.mem.count(u8, rows, ".{ .name = \"$foo\", .tok = ") == 2);
+    try std.testing.expect(std.mem.count(u8, rows, ".{ .name = \"$bar\", .tok = ") == 1);
+    try std.testing.expect(std.mem.count(u8, rows, ".name =") == 3);
+    // …and each call site passes its own index.
+    var buf: [32]u8 = undefined;
+    for (0..3) |k| try std.testing.expect(std.mem.count(u8, src, try std.mem.print(&buf, "zsh.call(zsh.ctx, {d},", .{k})) == 1);
 
     // The graft, spelled out. `.val()` feeds the host, `.addC(-...).scale(...)`
     // brings the partial back; dropping either half is the failure this pins.

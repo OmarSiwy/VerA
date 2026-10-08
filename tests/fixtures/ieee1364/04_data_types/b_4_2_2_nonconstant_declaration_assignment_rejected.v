@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 4.2.2
 //! reject E1100
 //! reject a constant expression is required here
+//! neighbour b_4_2_2_variable_initial_values.v
 module b_4_2_2_nonconstant_declaration_assignment_rejected;
   reg a;
   reg b = a;

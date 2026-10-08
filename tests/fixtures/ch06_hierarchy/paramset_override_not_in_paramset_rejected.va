@@ -11,7 +11,9 @@
 //
 //! lrm 6.4
 //! lrm 6.4.2
-//! reject E0911
+//! lrm 6.4.2:3
+//! reject-only E0911
+//! neighbour h01_04_paramset_overload_lrm_table.va
 `include "disciplines.vams"
 module ch6_narrow_user(p, n);
   inout p, n; electrical p, n;

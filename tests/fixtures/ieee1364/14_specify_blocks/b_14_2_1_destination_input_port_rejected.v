@@ -9,6 +9,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.1
 //! reject module path destination
+//! neighbour b_14_2_module_paths.v
 `timescale 1ns/1ns
 module b_14_2_1_destination_input_port_rejected(a, b, q);
   input a, b;

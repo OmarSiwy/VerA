@@ -4,7 +4,7 @@
 //! declarations, plans §7.8.4 connect modules, then per instance binds the
 //! ports (§6.2.2), applies the overrides (§6.3, §6.4), names every
 //! declaration (§6.7), clones the body (`clone.zig`) and recurses.
-//! LRM §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.5, §6.5.7.1,
+//! LRM §3.6.2, §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.5, §6.5.7.1,
 //! §6.6, §6.7.1, §7.1, §7.8.4, §9.15, §9.19, A.4.1, A.5.4, Annex E.3.2;
 //! IEEE 1364-2005 §12.3.3, §12.3.6, §19.9.
 
@@ -82,9 +82,9 @@ fn scoped(file: *Ast.SourceFile, arena: std.mem.Allocator, prefix: []const u8, i
 /// lowers each child's analog blocks under its gate. `checkGenScheme`
 /// marks the parameters as shape parameters, so a host card cannot change
 /// the arm selected by their final compile-time values.
-/// ponytail: if-generate only. A loop or case generate's instance is
-/// E0235 (`refuseGen`): the loop needs one renamed instance per
-/// iteration, the case an equality chain per arm.
+/// A loop generate's instances are `loopInstances`'s.
+/// ponytail: a case generate's instance is E0235 (`refuseGen`): it needs an
+/// equality chain per arm.
 /// `prefix` names the generate scopes enclosing `id` (`blockPrefix`);
 /// `locals` are their localparams, outermost first (`bindGenLocals`).
 fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, prefix: []const u8, locals: []const Ast.ParamDecl, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
@@ -110,7 +110,7 @@ fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, prefix: []cons
             try genInstances(self, s.then_s, try conj(self, gate, c, false), prefix, locals, out, gates);
             try genInstances(self, s.else_s, try conj(self, gate, c, true), prefix, locals, out, gates);
         },
-        .for_stmt => |s| try refuseGen(self, s.body),
+        .for_stmt => |s| try loopInstances(self, s.init, s.cond, s.step, s.body, gate, prefix, locals, out, gates),
         .case_stmt => |s| for (s.arms) |a| try refuseGen(self, a.body),
         else => {}, // else: no other statement holds a generate block
     }
@@ -170,6 +170,111 @@ fn bindGenLocals(self: *Flatten, e: Ast.ExprId, locals: []const Ast.ParamDecl) E
             n.extra = try x.addExprList(self.ctx.arena, args);
         },
         else => return e, // else: literals, dotted names and the analog-only forms name no block localparam a constant override can read
+    }
+    return x.add(self.ctx.arena, n);
+}
+
+/// §6.6.1 a loop generate's module instances, one set per iteration. The
+/// genvar is "an integer parameter" in each generate block instance, "the
+/// value of the index variable at the time the instance was elaborated", so
+/// each copy's overrides and connections read it as a literal, and the copy
+/// is named `blk[i].inst` (§6.6.1, §6.6.3) inside the enclosing scopes
+/// `prefix`. An override reads the localparams of those scopes and of the
+/// loop's block (`bindGenLocals`, before the genvar is bound, so a
+/// localparam computed from the genvar takes this iteration's value).
+/// §6.9.2's paramset selection then sees those values. The scheme folds in the module's names; one that does
+/// not fold, or runs past `max_iterations`, yields no instances here, and
+/// lowering's unroll of the same loop reports why (E0417-E0420, E0485, E0486).
+///
+/// ponytail: instances written directly in the loop's block only. One under
+/// a nested generate scheme or block is E0235; the upgrade is recursing
+/// through `genInstances` with the genvar bound.
+fn loopInstances(self: *Flatten, init: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId, gate: Ast.ExprId, prefix: []const u8, locals: []const Ast.ParamDecl, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
+    const file = self.ctx.file;
+    var all: std.ArrayList(Ast.Instance) = .empty;
+    try genInstanceList(file, body, self.ctx.arena, &all);
+    if (all.items.len == 0) return;
+    const blk = if (body != .none and file.stmt(body) == .block) file.stmt(body).block else return refuseGen(self, body);
+    if (blk.gen_name == .none) return refuseGen(self, body);
+    if (blk.instances.len != all.items.len) {
+        for (all.items[blk.instances.len..]) |inst| try self.err(inst.main_tok, .E0235, "a module instance under a generate scheme nested in a loop generate", .{});
+        return;
+    }
+    if (init == .none or step == .none or file.stmt(init) != .assign or file.stmt(step) != .assign) return;
+    const gv_e = file.stmt(init).assign.target;
+    if (file.exprs.tag(gv_e) != .ident) return;
+    const gv = file.exprs.strOf(gv_e);
+    const inner_locals = if (blk.params.len == 0) locals else try std.mem.concat(self.ctx.arena, Ast.ParamDecl, &.{ locals, blk.params });
+    var v = (try constGenvar(self, file.stmt(init).assign.value, gv, null)) orelse return;
+    var n: u32 = 0;
+    while (n < max_iterations) : (n += 1) {
+        const lit = try file.exprs.addInt(self.ctx.arena, file.exprs.mainTok(cond), v);
+        const c = elab_names.constValue(self, try substIdent(self, cond, gv, lit), true, null) orelse return;
+        if (!c.isTrue()) return;
+        for (blk.instances) |inst| {
+            var copy = inst;
+            copy.name = try file.intern(self.ctx.arena, try self.ctx.arena.print("{s}{s}[{d}]{c}{s}", .{ prefix, file.str(blk.gen_name), v, sep, file.str(inst.name) }));
+            const params = try self.ctx.arena.dupe(Ast.ParamOverride, inst.params);
+            for (params) |*o| o.value = try substIdent(self, try bindGenLocals(self, o.value, inner_locals), gv, lit);
+            copy.params = params;
+            const ports = try self.ctx.arena.dupe(Ast.PortConn, inst.ports);
+            for (ports) |*pc| pc.expr = try substIdent(self, pc.expr, gv, lit);
+            copy.ports = ports;
+            try out.append(self.ctx.arena, copy);
+            try gates.append(self.ctx.arena, gate);
+        }
+        v = (try constGenvar(self, file.stmt(step).assign.value, gv, lit)) orelse return;
+    }
+}
+
+/// Lowering's `max_unroll`: past it lowering refuses the loop (E0485/E0420).
+const max_iterations = 4096;
+
+/// A genvar assignment's value, folded in the module's names with the genvar
+/// at `at` (null for the initialization), or null when it is no integer.
+fn constGenvar(self: *Flatten, e: Ast.ExprId, gv: Ast.StrId, at: ?Ast.ExprId) Error!?i64 {
+    const bound = if (at) |lit| try substIdent(self, e, gv, lit) else e;
+    const c = elab_names.constValue(self, bound, true, null) orelse return null;
+    return if (c == .int) c.int else null;
+}
+
+/// `e` with every identifier `name` replaced by `with`; rows unchanged where
+/// nothing below them changed.
+fn substIdent(self: *Flatten, e: Ast.ExprId, name: Ast.StrId, with: Ast.ExprId) Error!Ast.ExprId {
+    if (e == .none) return e;
+    const x = &self.ctx.file.exprs;
+    var n = x.get(e);
+    switch (n.tag) {
+        .ident => return if (n.str == name) with else e,
+        .unary => {
+            n.lhs = try substIdent(self, x.lhs(e), name, with);
+            if (n.lhs == x.lhs(e)) return e;
+        },
+        .binary, .index, .range, .indexed_range, .multi_concat, .pattern_repl => {
+            n.lhs = try substIdent(self, x.lhs(e), name, with);
+            n.rhs = try substIdent(self, x.rhs(e), name, with);
+            if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e)) return e;
+        },
+        .ternary => {
+            const third = x.ternaryElse(e);
+            n.lhs = try substIdent(self, x.lhs(e), name, with);
+            n.rhs = try substIdent(self, x.rhs(e), name, with);
+            const t = try substIdent(self, third, name, with);
+            if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e) and t == third) return e;
+            n.extra = @backingInt(t);
+        },
+        .call, .sys_call, .builtin_call, .concat, .assign_pattern => {
+            const src = x.args(e);
+            const args = try self.ctx.arena.alloc(Ast.ExprId, src.len);
+            var changed = false;
+            for (src, args) |a, *o| {
+                o.* = try substIdent(self, a, name, with);
+                changed = changed or o.* != a;
+            }
+            if (!changed) return e;
+            n.extra = try x.addExprList(self.ctx.arena, args);
+        },
+        else => return e, // else: literals, dotted names and the analog-only forms hold no genvar an instance's override or connection reads
     }
     return x.add(self.ctx.arena, n);
 }
@@ -424,7 +529,13 @@ fn inlineInstance(
         .primitive = elab_names.isPrimitive(self, child),
         .gate = if (gate == .none) parent.gate else try conj(self, parent.gate, gate, false),
         .paramset_instance = if (ps != null) path[0 .. path.len - 1] else parent.paramset_instance,
+        .module = child,
+        .up = &parent,
     };
+
+    // §3.6.2 every out-of-context declaration naming a segment of this
+    // instance was collected above it; judge each once, before it is applied.
+    try elab_resolve.checkOocOverrides(self, child, path);
 
     // ---- §6.2.2 port connections ---------------------------------------
     // Resolved in the PARENT's namespace, which means through the parent's
@@ -436,27 +547,35 @@ fn inlineInstance(
     for (child.ports, 0..) |p, i| {
         const conn = connectionFor(inst, p, i);
         try unit.connected.put(self.ctx.arena, p.name, conn != null and conn.?.expr != .none);
-        // §6.5.7.1 a concatenated net expression: each operand a net of the
-        // parent, bound element by element once the child's range is known.
-        if (conn) |c| if (c.expr != .none and self.ctx.file.exprs.tag(c.expr) == .concat) {
-            const ops = self.ctx.file.exprs.args(c.expr);
-            const elems = try self.ctx.arena.alloc([]const u8, ops.len);
-            for (ops, elems) |o, *el| {
-                const n = elab_names.netRefName(self, o) orelse {
-                    try self.err(c.main_tok, .E0906, "a concatenation in a port connection must list scalar net references", .{});
+        // §6.5.7.1 a concatenated net expression, and §6.5.5's "scalar
+        // member, sub-range" of a parent net: each a list of the parent's net
+        // bits, bound element by element once the child's range is known.
+        if (conn) |c| if (c.expr != .none and switch (self.ctx.file.exprs.tag(c.expr)) {
+            .concat, .index => true,
+            else => false, // else: a whole net (joined below) or not a net expression (E0906 below)
+        }) {
+            var elems: std.ArrayList([]const u8) = .empty;
+            const is_concat = self.ctx.file.exprs.tag(c.expr) == .concat;
+            var ok = true;
+            if (is_concat) {
+                for (self.ctx.file.exprs.args(c.expr)) |o| if (!try netBits(self, &parent, o, &elems)) {
+                    ok = false;
                     break;
                 };
-                el.* = self.ctx.file.str(parent.rename.get(n) orelse n);
-            } else {
-                if (p.range == null and p.type_range == null) {
-                    try self.err(c.main_tok, .E0906, "a concatenation connects only a vector port, and `{s}` is scalar", .{self.ctx.file.str(p.name)});
-                    continue;
-                }
-                try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
-                const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
-                if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
-                concats.appendAssumeCapacity(.{ .port = p, .elems = elems, .tok = c.main_tok });
+            } else ok = try netBits(self, &parent, c.expr, &elems);
+            if (!ok) {
+                try self.err(c.main_tok, .E0906, "a port connection lists scalar nets, constant bit-selects and constant part-selects of nets", .{});
+                continue;
             }
+            const vector = p.range != null or p.type_range != null;
+            if (is_concat and !vector) {
+                try self.err(c.main_tok, .E0906, "a concatenation connects only a vector port, and `{s}` is scalar", .{self.ctx.file.str(p.name)});
+                continue;
+            }
+            try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
+            const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
+            if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
+            try concats.append(self.ctx.arena, .{ .port = p, .elems = elems.items, .tok = c.main_tok });
             continue;
         };
         const actual: ?Ast.StrId = if (conn) |c| elab_names.netRefName(self, c.expr) else null;
@@ -518,8 +637,9 @@ fn inlineInstance(
     // expression in the parent (`#(.gain(scale*2))`) and its NAME is a
     // parameter of the child.
     var over: std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId) = .empty;
+    var ps_stmts: std.ArrayList(Ast.StmtId) = .empty;
     if (ps) |p|
-        try elab_paramset.paramsetOverrides(self, inst, p, child, &parent, &over, &unit, path)
+        try elab_paramset.paramsetOverrides(self, inst, p, child, &parent, &over, &unit, path, &ps_stmts)
     else
         try elab_override.collectOverrides(self, inst, child, &parent, &over, &unit, path);
     // §6.4.3 an undescribed paramset variable hides the module's variable of
@@ -545,7 +665,7 @@ fn inlineInstance(
         const name = unit.rename.get(cc.port.name).?;
         try self.port_concats.append(self.ctx.arena, .{
             .name = self.ctx.file.str(name),
-            .range = (try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range)).?,
+            .range = try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range),
             .elems = cc.elems,
             .main_tok = cc.tok,
         });
@@ -613,22 +733,13 @@ fn inlineInstance(
         .path = path,
         .decl = child,
     });
-    for (child.analog) |blk| {
-        var body = try elab_clone.cloneStmt(self, blk.body);
-        // §6.6 an instance a generate scheme brings into existence behaves
-        // only while the scheme holds.
-        if (unit.gate != .none) body = try self.ctx.file.addStmt(self.ctx.arena, .{ .if_stmt = .{
-            .cond = unit.gate,
-            .then_s = body,
-            .else_s = .none,
-            .is_generate = false,
-        } }, blk.main_tok);
-        try self.analog.append(self.ctx.arena, .{
-            .is_initial = blk.is_initial,
-            .body = body,
-            .main_tok = blk.main_tok,
-            .unit = unit_id,
-        });
+    for (child.analog) |blk| try appendAnalog(self, &unit, unit_id, blk.is_initial, try elab_clone.cloneStmt(self, blk.body), blk.main_tok);
+    // §6.4.3 a paramset's statements, after the module's blocks: an output
+    // variable "may be computed from values of any output parameters of the
+    // module" (`.gm`), which those blocks compute.
+    if (ps_stmts.items.len != 0) {
+        const tok = ps.?.main_tok;
+        try appendAnalog(self, &unit, unit_id, false, try self.ctx.file.addStmt(self.ctx.arena, .{ .block = .{ .body = ps_stmts.items } }, tok), tok);
     }
     // ponytail: a gated child's discrete half has no scheme to run under.
     if (unit.gate != .none and child.discrete.len + child.assigns.len + child.gates.len + child.pulls.len + child.switches.len != 0)
@@ -672,6 +783,52 @@ fn inlineInstance(
     try walkInstances(self, child, path, stack, depth + 1);
 
     self.unit = parent;
+}
+
+/// Appends the parent net bits `e` names, MSB first, as flat element names:
+/// a scalar net `x` as `x`, §6.5.5's scalar member `bus[1]` as `bus[1]` and
+/// its sub-range `bus[3:2]` as `bus[3]`, `bus[2]` (IEEE 1364-2005 12.3.9.2
+/// pairs a port's bits left to right). The indices fold in the parent's
+/// names. Returns false for anything else: an indexed part-select, a
+/// non-constant index, or an expression that is not a net.
+///
+/// ponytail: a whole vector net inside a concatenation stays one name, as it
+/// did; its width is lowering's to know.
+fn netBits(self: *Flatten, parent: *const Unit, e: Ast.ExprId, out: *std.ArrayList([]const u8)) Error!bool {
+    const ex = &self.ctx.file.exprs;
+    const base = if (ex.tag(e) == .index) ex.lhs(e) else e;
+    const n = elab_names.netRefName(self, base) orelse return false;
+    const net = self.ctx.file.str(parent.rename.get(n) orelse n);
+    if (base == e) {
+        try out.append(self.ctx.arena, net);
+        return true;
+    }
+    const sel = ex.rhs(e);
+    // `constInt` folds in `self.unit`, which is still the parent here.
+    const msb = elab_names.constInt(self, if (ex.tag(sel) == .range) ex.lhs(sel) else sel) orelse return false;
+    const lsb = if (ex.tag(sel) == .range) elab_names.constInt(self, ex.rhs(sel)) orelse return false else msb;
+    var k: i128 = msb;
+    while (true) : (k += if (msb > lsb) -1 else 1) {
+        try out.append(self.ctx.arena, try self.ctx.arena.print("{s}[{d}]", .{ net, k }));
+        if (k == lsb) return true;
+    }
+}
+
+/// Appends one analog block of unit `unit_id`. §6.6 an instance a generate
+/// scheme brings into existence behaves only while the scheme holds.
+fn appendAnalog(self: *Flatten, unit: *const Unit, unit_id: u32, is_initial: bool, cloned: Ast.StmtId, tok: u32) Error!void {
+    const body = if (unit.gate == .none) cloned else try self.ctx.file.addStmt(self.ctx.arena, .{ .if_stmt = .{
+        .cond = unit.gate,
+        .then_s = cloned,
+        .else_s = .none,
+        .is_generate = false,
+    } }, tok);
+    try self.analog.append(self.ctx.arena, .{
+        .is_initial = is_initial,
+        .body = body,
+        .main_tok = tok,
+        .unit = unit_id,
+    });
 }
 
 // ponytail: binding needs only the connection list and port, not flattening state.

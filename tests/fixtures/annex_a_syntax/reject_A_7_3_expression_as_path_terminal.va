@@ -13,6 +13,7 @@
 // terminals with `=>` or `*>`".
 //
 //! lrm A.7.3
+//! lrm A.7.3:1000
 //! reject E0207
 //! reject connects its terminals with
 module annex_a_expression_path_terminal(o, a, b);

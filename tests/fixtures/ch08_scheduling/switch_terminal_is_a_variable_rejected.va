@@ -24,7 +24,9 @@
 //
 //! lrm 8.5.3.5
 //! lrm A.3.3
-//! reject E0483
+//! lrm A.3.3:1000
+//! reject-only E0483
+//! neighbour switch_network_resolved_as_a_whole.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch8535_tran_reg(p);

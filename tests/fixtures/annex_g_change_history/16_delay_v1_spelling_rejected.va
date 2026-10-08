@@ -17,7 +17,7 @@
 //
 //! lrm G.1
 //! lrm 4.5.7
-//! reject E0512
+//! reject-only E0512
 //! reject delay
 module annex_g_delay_v1_spelling(p, n);
   inout p, n; electrical p, n;

@@ -15,6 +15,7 @@
 // follows is the parser recovering from it.
 //
 //! lrm A.1.8
+//! lrm A.1.8:1000
 //! reject E0207
 `include "disciplines.vams"
 module annex_a_cr_top(p, n);

@@ -16,9 +16,11 @@
 // 40_function_return.va is the legal side, including the override rule.
 //
 //! lrm 4.7.2.2
-//! reject return
+//! lrm 4.7.2.2:2
+//! reject-only return
 //! reject expression
 //! reject E0227
+//! neighbour 40_function_return.va
 module ch04_function_bare_return_rejected(p, n);
     inout p, n;
     electrical p, n;

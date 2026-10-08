@@ -57,6 +57,8 @@
 // rows, not this file's.
 //
 //! lrm 9.22.6
+//! lrm 9.22.6:1
+//! lrm 9.22.6:2
 //! lrm 9.22
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

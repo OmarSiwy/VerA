@@ -21,9 +21,16 @@
 // says the rule applies to both languages. VerA answers E0407 "port access
 // function cannot be a contribution target"; the code is pinned.
 //
+// Legal neighbour: rc_34_port_access_read_accepted.va, this module with `I(<p>)`
+// read on the right instead of written on the left. (Reconciler, 2026-10-08: the
+// neighbour was 01_analog_only_device.va, which never uses a port access, so it
+// could not exclude a blanket refusal of `I(<p>)`.)
+//
 //! lrm C.6
 //! lrm 5.4.3
-//! reject E0407
+//! lrm 5.4.3:1
+//! reject-only E0407
+//! neighbour rc_34_port_access_read_accepted.va
 module annex_c_port_access_contribution_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -32,7 +32,8 @@
 //! lrm 10.2
 //! lrm 7.4
 //! lrm 3.6.1
-//! reject E0337
+//! lrm 10.2:1000
+//! reject-only E0337
 `default_discipline electrical
 `resetall
 module ch10_resetall_clears_default_discipline(p, n);

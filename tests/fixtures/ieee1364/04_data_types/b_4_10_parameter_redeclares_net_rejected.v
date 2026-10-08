@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 4.10
 //! reject E1100
 //! reject duplicate
+//! neighbour b_4_10_parameter_widths.v
 module b_4_10_parameter_redeclares_net_rejected;
   wire w;
   parameter w = 1;

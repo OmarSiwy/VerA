@@ -46,8 +46,12 @@
 // signed opcodes into §4.2.9's unsigned comparison.
 //
 //! lrm 4.2.9
+//! lrm 4.2.9:2
+//! lrm 4.2.9:3
+//! lrm 4.2.9:4
 //! lrm 4.2.5
 //! lrm 4.2.7
+//! lrm 4.2.9:1
 //! bias V(p) = 0.5
 `include "check.vh"
 module h01_mixed_sign(p, n);

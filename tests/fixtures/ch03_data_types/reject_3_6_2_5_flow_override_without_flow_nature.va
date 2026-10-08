@@ -16,7 +16,8 @@
 // nature".
 //
 //! lrm 3.6.2.5
-//! reject E0370
+//! lrm 3.6.2.5:1000
+//! reject-only E0370
 nature ch3_ovr_volt;
   units = "V";
   access = V;

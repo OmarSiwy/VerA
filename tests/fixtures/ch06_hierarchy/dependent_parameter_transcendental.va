@@ -23,6 +23,7 @@
 //   curved = exp(3.0)  = 20.085536923187668  (the double nearest e^3)
 //
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param a = 3.0
 `include "check.vh"
 module ch6_dependent_transcendental(p);

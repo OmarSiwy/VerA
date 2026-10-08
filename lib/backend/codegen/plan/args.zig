@@ -198,6 +198,7 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$finish",
         .@"$stop",
         .@"$sformat",
+        .@"$sformat$rt",
         .@"$sscanf",
         .@"$table_model",
         .@"$vera_reject_step",

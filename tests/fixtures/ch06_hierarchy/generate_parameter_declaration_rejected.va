@@ -31,7 +31,9 @@
 // leaves parameters out of on exactly the same terms.
 //
 //! lrm 6.6
-//! reject E0229
+//! lrm 6.6:1
+//! reject-only E0229
+//! neighbour generate_implicit_localparam.va
 module ch6_generate_parameter_declaration(p);
   inout p; electrical p;
   generate

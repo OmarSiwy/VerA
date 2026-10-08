@@ -9,7 +9,10 @@
 //
 //! lrm 4.2.13
 //! lrm A.8.1
-//! reject E0326
+//! lrm 4.2.13:1
+//! lrm A.8.1:1000
+//! reject-only E0326
+//! neighbour 30_concatenation.va
 `include "disciplines.vams"
 module ch04_concatenation_empty(p, n);
   inout p, n; electrical p, n;

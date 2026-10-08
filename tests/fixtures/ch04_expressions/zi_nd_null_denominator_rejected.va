@@ -15,7 +15,10 @@
 // (checked by hand when this fixture was written).
 //
 //! lrm 4.5.12.4
-//! reject E0505
+//! lrm 4.5.15
+//! lrm 4.5.15:4
+//! reject-only E0505
+//! neighbour 155_zi_dc_gains.va
 module ch04_zi_nd_null_denominator(in, n);
     inout in, n;
     electrical in, n;

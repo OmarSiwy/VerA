@@ -14,6 +14,7 @@
 // override taking effect is observable only through an instance, so it belongs
 // with the Clause 6 hierarchy fixtures, not here.
 //
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 6.4
 //! lrm C.8
 //! bias V(p) = 1.0, V(n) = 0.0
@@ -31,5 +32,6 @@ module ch03_paramset_target(p, n);
 endmodule
 
 paramset ch03_values ch03_paramset_target;
+    parameter real unused_item = 0;
     .gain = 2.0;
 endparamset

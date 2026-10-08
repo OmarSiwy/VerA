@@ -24,7 +24,9 @@
 // potential-half twin, E0355 on the Potential Incompatibility Rule.
 //
 //! lrm 1.3.3
-//! reject E0355
+//! lrm 3.11
+//! lrm 3.11:1
+//! reject-only E0355
 discipline ch1_volt_force;
     potential Voltage;
     flow Force;

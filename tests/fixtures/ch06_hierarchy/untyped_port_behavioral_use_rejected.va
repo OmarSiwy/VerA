@@ -20,7 +20,9 @@
 // VerA refuses it with E0337, "`q` has no discipline, so `V` names nothing on it".
 //
 //! lrm 6.5.2.1
-//! reject E0337
+//! lrm 6.5.2.1:1000
+//! reject-only E0337
+//! neighbour typed_ports.va
 module ch6_untyped_port_behavioral_use(p, q);
   inout p, q;
   electrical p;

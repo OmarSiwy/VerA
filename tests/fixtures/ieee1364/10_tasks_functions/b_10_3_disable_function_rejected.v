@@ -9,6 +9,7 @@
 //! reject E1100
 //! reject disable
 //! reject function
+//! neighbour b_10_3_disable_block_in_function.v
 module b_10_3_disable_function_rejected;
   reg x;
   function f;

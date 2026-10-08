@@ -3,7 +3,9 @@
 // port and nothing else.  (§4.4.2 gives the access function grammar; §5.4.3 is
 // where the prohibition itself is stated, so that is what is cited.)
 //! lrm 5.4.3
-//! reject E0507
+//! lrm 5.5.1
+//! lrm 5.5.1:4
+//! reject-only E0507
 //! reject potential access function
 module ch5_bad_port_potential(p);
   inout p; electrical p;

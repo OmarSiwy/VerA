@@ -24,7 +24,8 @@
 //
 //! lrm 9.17.3
 //! lrm E.3.4
-//! reject E0809
+//! reject-only E0809
+//! neighbour limit_pnj.va
 module annex_e_pnjlim_missing_args(p);
   inout p; electrical p; electrical mid; real limited;
   analog begin

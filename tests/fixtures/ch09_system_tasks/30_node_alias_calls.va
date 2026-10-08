@@ -25,6 +25,9 @@
 // been folded onto the hierarchical node instead.
 //
 //! lrm 9.20
+//! lrm 9.20:10
+//! lrm 9.20:12
+//! lrm 9.20:14
 //! bias V(local_node) = 0.4
 `include "check.vh"
 module ch09_node_alias_calls(p, n);

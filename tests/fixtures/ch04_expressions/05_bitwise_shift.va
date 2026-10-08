@@ -14,7 +14,8 @@
 // 8b1514d4); the two lines above are what the file actually pins.
 //
 //! lrm 4.2.11
-//! reject E0324
+//! lrm 4.2.11:1000
+//! reject-only E0324
 module ch04_bitwise_shift(p, n);
     inout p, n;
     electrical p, n;

@@ -475,6 +475,14 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
     return if (self.stmt_sites != null or self.stmt_hook != null) run(self, scratch_arena, start, true) else run(self, scratch_arena, start, false);
 }
 
+/// Reports the `assign`/`force` whose override process starts at `start` to
+/// `Run.done_hook`, once: when the process first writes the target, or when
+/// the override is undone or replaced before it ran.
+fn doneFlush(self: *Run, start: u32) Error!void {
+    const h = self.done_hook orelse return;
+    if (self.done_pending.fetchRemove(start)) |kv| try h(self, kv.value);
+}
+
 /// `execute`, which with `hooked` calls `Run.stmt_hook` before each
 /// instruction a statement starts at.
 fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime hooked: bool) Error!void {
@@ -747,18 +755,26 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     const range: @import("root.zig").PcRange = .{ .start = o.start, .end = o.end };
                     for (parts.items) |*p| {
                         if (!std.meta.eql(p.bits, bits)) continue;
+                        try doneFlush(self, p.range.start);
                         _ = try stopRange(self, p.range.start, p.range.end);
                         p.range = range;
                         break;
                     } else try parts.append(self.arena, .{ .bits = bits, .range = range });
                     _ = try enqueue(self, .{ .run_process = o.start }, null, false);
+                    if (self.done_hook != null and self.done_sites.contains(pc)) try self.done_pending.put(self.arena, o.start, pc);
                     pc += 1;
                     continue;
                 }
                 const layer = if (o.force) &entry.value_ptr.force else &entry.value_ptr.assign;
-                if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
+                if (layer.*) |old| {
+                    try doneFlush(self, old.start);
+                    _ = try stopRange(self, old.start, old.end);
+                }
                 layer.* = .{ .start = o.start, .end = o.end };
                 _ = try enqueue(self, .{ .run_process = o.start }, null, false);
+                // The host hears of it once the process has written the
+                // target (`doneFlush`).
+                if (self.done_hook != null and self.done_sites.contains(pc)) try self.done_pending.put(self.arena, o.start, pc);
                 pc += 1;
                 continue;
             },
@@ -780,16 +796,19 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     else
                         try waiters.store(self, o.slot, value.planes);
                 }
+                try doneFlush(self, pc);
                 pc += 1;
                 continue;
             },
             .override_off => |o| {
-                if (o.bits) |bits| {
-                    try waiters.releaseBits(self, o.slot, bits);
-                    pc += 1;
-                    continue;
+                // An override undone before its process ran was still executed.
+                if (self.overrides.get(o.slot)) |layers| {
+                    if (o.bits) |bits| {
+                        for (layers.parts.items) |p| if (std.meta.eql(p.bits, bits)) try doneFlush(self, p.range.start);
+                    } else if (if (o.force) layers.force else layers.assign) |layer| try doneFlush(self, layer.start);
                 }
-                try waiters.release(self, o.slot, o.force);
+                if (o.bits) |bits| try waiters.releaseBits(self, o.slot, bits) else try waiters.release(self, o.slot, o.force);
+                if (self.done_hook) |h| if (self.done_sites.contains(pc)) try h(self, pc);
                 pc += 1;
                 continue;
             },
@@ -855,6 +874,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             },
             .disable_block => |b| {
                 try disableRange(self, b.start, b.end);
+                if (self.done_hook) |h| if (self.done_sites.contains(pc)) try h(self, pc);
                 // IEEE1364 §10.3: self/ancestor disable resumes AFTER the
                 // target block, while a sibling disable continues here.
                 pc = if (pc >= b.start and pc < b.end) b.end else pc + 1;

@@ -7,6 +7,7 @@
 // empty < a < aa, a <= a, aa > a, aa >= aa, and a != aa. A sum of booleans
 // could hide compensating operator errors, so each has its own assertion.
 //! lrm 3.3
+//! lrm 3.3:2
 //! checks 7
 `include "check.vh"
 module audit_string_comparison_context(p, n);

@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 14.2.2
 //! reject E0207
 //! reject a parallel path
+//! neighbour b_14_2_module_paths.v
 `timescale 1ns/1ns
 module b_14_2_2_parallel_path_list_rejected(C, D, Q);
   input C, D;

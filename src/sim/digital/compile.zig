@@ -913,6 +913,13 @@ fn site(self: *Run, id: Ast.StmtId) Error!void {
     try sites.append(self.arena, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = position(self) });
 }
 
+/// Records statement `id`, compiled from `first` to the last instruction so
+/// far, for `Run.done_hook` (`Run.done_sites`).
+fn doneSite(self: *Run, id: Ast.StmtId, first: u32) Error!void {
+    if (self.stmt_sites == null) return;
+    try self.done_sites.put(self.arena, position(self) - 1, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = first });
+}
+
 /// Appends one instruction in the executing scope and returns its pc.
 /// Fails at 2^32 - 1 instructions. Invalidates pointers into `Run.code`.
 pub fn append(self: *Run, instruction: Instruction) Error!u32 {
@@ -963,7 +970,9 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         // A.6.5 `disable_statement`. The range is patched in once every
         // process exists (`Run.disables`).
         .disable => |s| {
+            const first = position(self);
             const at = try append(self, .{ .disable_block = .{ .start = 0, .end = 0 } });
+            try doneSite(self, id, first);
             try self.disables.append(self.arena, .{ .at = at, .name = .{ .scope = self.scope, .str = s.name }, .tok = tok });
         },
         .if_stmt => |s| {
@@ -1041,7 +1050,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (!have_default) self.code.items[dispatch].case_select.fallback = end;
             for (exits) |at| self.code.items[at].jump = end;
         },
-        .assign => |s| if (s.continuous != .none) try compileProcContinuous(self, s.target, s.value, s.continuous, tok) else {
+        .assign => |s| if (s.continuous != .none) {
+            const first = position(self);
+            try compileProcContinuous(self, s.target, s.value, s.continuous, tok);
+            try doneSite(self, id, first);
+        } else {
             // §10.4.4: "Functions shall not contain any time-controlled
             // statements" and "shall not have any nonblocking assignments".
             if (self.in_function and s.nonblocking) return self.fail(tok, "§10.4.4: a function body cannot contain a nonblocking assignment", .{});

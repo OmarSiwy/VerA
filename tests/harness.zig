@@ -131,6 +131,10 @@ pub const Config = struct {
     root: []const u8 = options.fixture_root,
     /// A plain substring over the whole path.
     filter: ?[]const u8 = null,
+    /// `--list=<file>`: only the fixtures named in it, one path under the
+    /// root per line (a mutation run judges a mutant by the fixtures that
+    /// cite the mutated file's clauses, `tools/conformance.py mutate`).
+    list: ?[]const u8 = null,
     strict: bool = false,
     coverage: bool = false,
     /// Worker threads, default one per core. `-j1` prints as it goes, which
@@ -148,6 +152,10 @@ pub const Config = struct {
     /// is skipped): the escape hatch, and the baseline a batched run is
     /// compared against.
     batch: bool = true,
+    /// `--verdicts=<file>`: one `<verdict>\t<path under the root>` row per
+    /// fixture, sorted, for `tools/conformance.py`'s ratchet and metric
+    /// (docs/TESTING.md §3.6, §3.7).
+    verdicts: ?[]const u8 = null,
 
     /// Returns the defaults, with `jobs` from `defaultJobs`.
     pub fn init() Config {
@@ -178,6 +186,17 @@ pub fn takeArg(cfg: *Config, a: []const u8) bool {
     else if (std.mem.eql(u8, a, "--no-batch")) cfg.batch = false //
     else if (std.mem.eql(u8, a, "--coverage")) cfg.coverage = true //
     else if (std.mem.startsWith(u8, a, "--fixture-root=")) cfg.root = a["--fixture-root=".len..] //
+    else if (std.mem.startsWith(u8, a, "--verdicts=")) cfg.verdicts = a["--verdicts=".len..] //
+    else if (std.mem.startsWith(u8, a, "--list=")) cfg.list = a["--list=".len..] //
+    else if (std.mem.eql(u8, a, "--certify")) certify = true //
+    else if (std.mem.eql(u8, a, "--probe-reject-only")) probe_reject_only = true //
+    else if (std.mem.eql(u8, a, "--perturb")) perturb = 1e-3 //
+    else if (std.mem.startsWith(u8, a, "--perturb=")) {
+        perturb = std.fmt.parseFloat(f64, a["--perturb=".len..]) catch {
+            std.debug.print("suite: not a number: {s}\n", .{a});
+            std.process.exit(2);
+        };
+    } //
     else if (std.mem.startsWith(u8, a, "--fixture-opt=")) {
         const name = a["--fixture-opt=".len..];
         cfg.fixture_opt = optimize_names.get(name) orelse {
@@ -310,7 +329,8 @@ pub fn run(
     var stderr = Io.File.stderr().writer(io, &stderr_buf);
     const w = &stderr.interface;
 
-    const fixtures = try collect(arena, io, cfg.root, cfg.filter);
+    var fixtures = try collect(arena, io, cfg.root, cfg.filter);
+    if (cfg.list) |path| fixtures = try keepListed(arena, io, path, cfg.root, fixtures);
     if (fixtures.len == 0) {
         try w.print("{s}: no fixtures under {s}\n", .{ compiler.name, cfg.root });
         try w.flush();
@@ -327,10 +347,12 @@ pub fn run(
 
     const strict = cfg.strict;
     var counts: Counts = .{};
+    const verdicts = try arena.alloc(Verdict, fixtures.len);
     if (cfg.jobs <= 1) {
         // Sequential: prints as it goes, showing the fixture a run is stuck on.
-        for (fixtures) |f| {
-            counts.add(try judge(gpa, io, arena, compiler, f, strict, w));
+        for (fixtures, verdicts) |f, *v| {
+            v.* = try judge(gpa, io, arena, compiler, f, strict, w);
+            counts.add(v.*);
             try w.flush();
         }
     } else {
@@ -356,19 +378,53 @@ pub fn run(
 
         // Emit in SLOT order, i.e. the sorted walk, whatever order the pool
         // finished in. This is the whole reason the workers buffer.
-        for (slots) |s| {
+        for (slots, verdicts) |s, *v| {
+            v.* = s.verdict;
             counts.add(s.verdict);
             try w.writeAll(s.output);
             gpa.free(s.output);
         }
         try w.flush();
     }
+    if (cfg.verdicts) |path| try writeVerdicts(io, path, cfg.root, fixtures, verdicts);
 
     try summarize(compiler, counts, fixtures.len, w);
     try w.flush();
     if (tally) |t| t.* = counts;
     return if (counts.failed == 0 and
         !(strict and (counts.unasserted != 0 or counts.xfail != 0))) 0 else 1;
+}
+
+/// `--list=`: the fixtures among `all` whose path under `root` is a line of
+/// the file at `path`.
+fn keepListed(arena: std.mem.Allocator, io: Io, path: []const u8, root: []const u8, all: []const Fixture) ![]const Fixture {
+    const text = try Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 22));
+    var wanted: std.StringHashMapUnmanaged(void) = .empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len != 0) try wanted.put(arena, line, {});
+    }
+    var kept: std.ArrayList(Fixture) = .empty;
+    for (all) |f| {
+        const rel = if (std.mem.startsWith(u8, f.path, root)) std.mem.trimStart(u8, f.path[root.len..], "/") else f.path;
+        if (wanted.contains(rel)) try kept.append(arena, f);
+    }
+    return kept.items;
+}
+
+/// `--verdicts=`: the run's verdicts as `<verdict>\t<path under root>` rows,
+/// in walk (path) order, so two runs diff by name (AGENTS.md §0 rule 3).
+fn writeVerdicts(io: Io, path: []const u8, root: []const u8, fixtures: []const Fixture, verdicts: []const Verdict) !void {
+    var file = try Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var fw = file.writer(io, &buf);
+    for (fixtures, verdicts) |f, v| {
+        const rel = if (std.mem.startsWith(u8, f.path, root)) std.mem.trimStart(u8, f.path[root.len..], "/") else f.path;
+        try fw.interface.print("{t}\t{s}\n", .{ v, rel });
+    }
+    try fw.interface.flush();
 }
 
 fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
@@ -572,6 +628,37 @@ fn decide(
     strict: bool,
     w: *Io.Writer,
 ) !Verdict {
+    // A perturbed run asks one question of a passing positive fixture: does
+    // each check fail when its want is wrong? A refusal has no want, and an
+    // xfail does not pass to begin with.
+    if (perturb != null and (d.reject.len != 0 or d.xfail != null)) return .pass;
+    if (probe_reject_only and (d.reject.len == 0 or d.reject_only or d.xfail != null)) return .pass;
+
+    // The other half of a refusal: each named neighbour is a collected
+    // positive fixture, so the pair shows a restriction and not a blanket
+    // refusal (AGENTS.md §2). Whether it passes is read from the same run's
+    // verdicts by `tools/conformance.py`.
+    for (d.neighbours) |n| {
+        const path = try std.fs.path.join(arena, &.{ f.dir(), n });
+        const text = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch {
+            try w.print("FAIL {s}: `//! neighbour {s}`: no such file\n", .{ f.path, n });
+            return .fail;
+        };
+        // A digital transcript case is judged by its golden, not by `tb`
+        // directives (`harness/digital.zig`), so only its polarity is read.
+        const refusing = if (std.mem.endsWith(u8, n, ".v"))
+            digital.negative(text) or std.mem.indexOf(u8, text, "//! reject") != null
+        else
+            (vera.tb.parse(arena, text) catch |err| {
+                try w.print("FAIL {s}: `//! neighbour {s}`: its directives do not parse: {t}\n", .{ f.path, n, err });
+                return .fail;
+            }).reject.len != 0;
+        if (refusing or !hasDirective(text)) {
+            try w.print("FAIL {s}: `//! neighbour {s}` is not a positive fixture\n", .{ f.path, n });
+            return .fail;
+        }
+    }
+
     // A malformed assertion is the fixture's defect in every compiler, and no
     // `//! xfail` excuses it. Checked before compiling; not on a `//! reject`
     // fixture, which never reaches a transcript.
@@ -631,6 +718,8 @@ fn decide(
                 );
                 return .fail;
             }
+            // The probe's verdict is its `ONLY-` line, which a pass would hide.
+            if (probe_reject_only) try w.writeAll(aw.written());
             return .pass;
         },
         .unmet => {
@@ -649,6 +738,25 @@ fn decide(
         },
     }
 }
+
+/// `--perturb[=δ]`: docs/TESTING.md L2b. Every fixture is compiled with
+/// `VERA_PERTURB` defined to δ, which makes `check.vh` move each want by a
+/// relative δ, and a check that still prints `ok=1` is LOOSE: it cannot see an
+/// error of that size. Null: an ordinary run. Set once by `takeArg`.
+pub var perturb: ?f64 = null;
+
+/// `--certify`: docs/TESTING.md L4. Every testbench also runs the derivative
+/// gate (`fdCheck`, L4a): each Jacobian entry against a central difference;
+/// the prover-soundness gate (`finiteCheck`, L4b): a proved-finite device's
+/// rows at random unknowns; and the state gate (`stateCheck`, L4c): revert
+/// after `updateState` restores every field. Set once by `takeArg`.
+pub var certify: bool = false;
+
+/// `--probe-reject-only`: judges each `//! reject` fixture as if it were
+/// `//! reject-only` and prints `ONLY-OK <path>` or `ONLY-NO <path>: <code>`,
+/// the worklist for promoting refusals that already refuse alone
+/// (`tools/conformance.py promote-reject-only`). Positive fixtures are not run.
+pub var probe_reject_only: bool = false;
 
 /// The `vera` executable, for the one fixture no in-process runner can judge:
 /// a `//! expect vcd` digital run, whose evidence is a FILE the run writes.

@@ -6,6 +6,7 @@
 // digital-runner: reject
 //! lrm 10.6
 //! reject E0208
+//! neighbour std_1364_ams_keywords_are_identifiers.v
 module std_1364_ams_keywords_reserved_by_default;
   reg [3:0] analog;
   initial $finish(0);

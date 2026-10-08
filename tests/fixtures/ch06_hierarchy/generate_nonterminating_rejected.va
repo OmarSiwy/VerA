@@ -28,7 +28,9 @@
 // non-terminating source, and this file is it.
 //
 //! lrm 6.6.1
-//! reject E0420
+//! lrm 6.6.1:7
+//! lrm 6.6.1:6
+//! reject-only E0420
 module ch6_generate_nonterminating(p);
   inout p; electrical p;
   genvar i;

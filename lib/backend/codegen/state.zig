@@ -196,14 +196,24 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     var dirty = false;
     for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_instance.dirtyTracked(self, h.array));
     const tp = self.lowered.timepoints.items.len != 0;
+    const restart = self.hist.items.len + self.core.prev_lo.len + self.core.acc_lo.len != 0;
     try self.w(
         \\}};
         \\
         \\/// Returns an instance's first `State`: once per instance before its
         \\/// first solve, and again to restart its history from the defaults.
+        \\/// §4.6.2 "Variables shall be re-initialized to zero ... at the start
+        \\/// of each new analysis": so does every field `updateState` advances.
         \\pub fn initState(_: *const Model, {s}: *Instance) State {{
         \\
-    , .{if (tp or dirty or gen_instance.hasStatus(self)) "inst" else "_"});
+    , .{if (tp or dirty or restart or gen_instance.hasStatus(self)) "inst" else "_"});
+    for (self.hist.items) |h| try self.w("    inst.{s} = z_inst0.{s};\n", .{ h, h });
+    for (0..self.core.prev_lo.len) |k| try self.w("    inst.pb__{d} = z_inst0.pb__{d};\n", .{ k, k });
+    for (0..self.core.acc_lo.len) |k| try self.w("    inst.pq__{d} = z_inst0.pq__{d};\n", .{ k, k });
+    // The §4.5.7 ring is not `hist` (only its head is), but a new analysis
+    // starts it empty too.
+    for (self.names.units, self.names.unit_names) |u, n| if (u.role == .analog_op and u.op == .absdelay)
+        try self.w("    inst.{0s}__t = z_inst0.{0s}__t;\n    inst.{0s}__v = z_inst0.{0s}__v;\n", .{n});
     if (tp) try self.w("    zTpDrop(inst);\n", .{});
     if (gen_instance.hasStatus(self)) try self.w(gen_instance.status_drop, .{});
     for (self.lowered.held_vars.items, self.names.held_names) |h, n| {

@@ -2,7 +2,8 @@
 // parameter value assignment. A source-level named override must therefore
 // be rejected; ignoring a testbench host binding does not test this rule.
 //! lrm 3.4.5
-//! reject E0907
+//! lrm 3.4.5:1000
+//! reject-only E0907
 module localparam_override_target;
   parameter real base = 2.0;
   localparam real derived = 2.0 * base;

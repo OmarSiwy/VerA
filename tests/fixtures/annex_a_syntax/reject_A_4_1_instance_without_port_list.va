@@ -23,7 +23,8 @@
 //
 //! lrm A.4
 //! lrm A.4.1
-//! reject module_instance
+//! lrm A.4.1:1000
+//! reject-only module_instance
 `include "disciplines.vams"
 module annex_a_noport_child();
   electrical a;

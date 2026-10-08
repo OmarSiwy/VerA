@@ -51,6 +51,8 @@
 //! lrm 7.8.6
 //! lrm 6.7.1
 //! lrm 6.2.1
+//! lrm 6.2.1:1000
+//! lrm 6.7.1:1
 //! bias V(p) = 0.75
 `include "check.vh"
 module ch7_host(p);

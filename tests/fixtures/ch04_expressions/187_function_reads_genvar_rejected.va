@@ -15,7 +15,8 @@
 //
 //! lrm 4.7.1
 //! lrm 3.5
-//! reject E0314
+//! lrm 4.7.1:3
+//! reject-only E0314
 //! reject `k`
 module ch04_function_reads_genvar_rejected(p, n);
     inout p, n;

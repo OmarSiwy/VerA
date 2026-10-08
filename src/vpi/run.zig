@@ -12,6 +12,7 @@ const handle = @import("handle.zig");
 const callback = @import("callback.zig");
 const analog = @import("analog.zig");
 const va = @import("va.zig");
+const code = @import("code.zig");
 
 /// `varargs.c`, for the tests below.
 extern fn vpi_sim_control(operation: c_int, ...) c_int;
@@ -34,6 +35,9 @@ pub fn now() u64 {
 pub fn attach(r: *digital.Run) void {
     engine = r;
     clock = r.scheduler.now;
+    // §12.31.1 cbForce/cbRelease/cbAssign/cbDeassign/cbDisable on design
+    // statements; a callback registered before elaboration counts too.
+    r.done_hook = callback.onDone;
 }
 
 /// Unbinds the engine and invalidates every time-queue handle.
@@ -193,8 +197,13 @@ pub export fn vpi_get_time(obj: vpiHandle, time_p: ?*Time) void {
         root.fail("BADTIME", "vpi_get_time: time_p is NULL", .{});
         return;
     };
+    // §12.15 analog time: the §12.9 value, in seconds whatever the object.
+    if (t.type == callback.vpiAnalogTime) {
+        t.real = analog.vpi_get_analog_time();
+        return;
+    }
     if (t.type != callback.vpiSimTime and t.type != callback.vpiScaledRealTime) {
-        root.fail("BADTIME", "vpi_get_time: time type {d} is neither vpiSimTime nor vpiScaledRealTime", .{t.type});
+        root.fail("BADTIME", "vpi_get_time: time type {d} is not vpiSimTime, vpiScaledRealTime or vpiAnalogTime", .{t.type});
         return;
     }
     if (obj == null) return fillTime(clock, null, t);
@@ -216,34 +225,60 @@ pub const vpiReset: c_int = 68;
 pub const vpiSetInteractiveScope: c_int = 69;
 /// VAMS §12.36 names it and gives no number; VerA allocates it (vpi_user.h).
 pub const vpiRejectTransientStep: c_int = 730;
+/// VAMS §12.36, likewise VerA's number.
+pub const vpiTransientFailConverge: c_int = 731;
 
 /// §12.36: returns 1 on success, 0 on failure.
 ///
 /// vpiFinish ends the run where it is: a callback sits between dispatches, so
 /// finishing now is "upon return of user function", and cbEndOfSimulation
 /// fires at the request's time. The diagnostic-level argument is ignored.
+/// vpiStop is "$stop ... upon return", and a VerA run has no interactive mode
+/// to suspend into, so its $stop ends the run as the analog one does
+/// (`cg_display.emitSimCtl`): vpiStop is vpiFinish here.
 ///
-/// ponytail: vpiStop, vpiReset and vpiSetInteractiveScope all need an
-/// interactive mode or a restartable run, and VerA's engine has neither, so
-/// they fail with vpiError rather than pretending.
+/// vpiSetInteractiveScope (one vpiHandle of the scope class) fires IEEE
+/// 1364-2005 §27.33.3's cbInteractiveScopeChange with the new scope.
+/// ponytail: the scope is not kept, because nothing here reads an
+/// interactive scope (no interactive mode, no $scope); keep it when one does.
+///
+/// ponytail: vpiReset needs a restartable run (time back to 0, every
+/// variable re-initialised), which VerA's engine does not have, so it fails
+/// with vpiError rather than pretending. Upgrade path: re-elaborate the run
+/// in place and re-fire cbStartOfSimulation.
 ///
 /// vpiRejectTransientStep (one double: the current timestep) rejects the
 /// analog solution being attempted (`analog.rejectStep`), and fails when none
-/// is. vpiTransientFailConverge is not answered: the walk's solver has no
-/// iteration an application can extend.
+/// is. vpiTransientFailConverge (no argument) solves the awaiting solution's
+/// time again (`analog.failConverge`), and fails when none is awaiting.
 ///
 /// The body of `varargs.c`'s vpi_sim_control and of vpi_control, the same
 /// routine under its IEEE 1364-2005 §27.3 name.
 export fn vera_vpi_control(operation: c_int, ap: *va.List) c_int {
     root.clearError();
     switch (operation) {
-        vpiFinish => {
-            _ = va.arg(ap, c_int); // the diagnostic level, as $finish(n)
+        vpiFinish, vpiStop => {
+            _ = va.arg(ap, c_int); // the diagnostic level, as $finish(n) / $stop(n)
             const r = engine orelse {
-                root.fail("NORUN", "vpi_sim_control(vpiFinish): no simulation is running", .{});
+                root.fail("NORUN", "vpi_sim_control({s}): no simulation is running", .{if (operation == vpiStop) "vpiStop" else "vpiFinish"});
                 return 0;
             };
             r.scheduler.finish();
+            return 1;
+        },
+        vpiSetInteractiveScope => {
+            const h = va.arg(ap, ?*anyopaque);
+            const o = root.asObj(h) orelse {
+                root.fail("BADHANDLE", "vpi_sim_control(vpiSetInteractiveScope): the argument is not a handle to an object", .{});
+                return 0;
+            };
+            const scope = o.kind == .module or (o.kind == .code and (o.vtype == code.vpiTask or o.vtype == code.vpiFunction or
+                o.vtype == code.vpiNamedBegin or o.vtype == code.vpiNamedFork or o.vtype == code.vpiGenScope));
+            if (!scope) {
+                root.fail("NOTSCOPE", "vpi_sim_control(vpiSetInteractiveScope): `{s}` is not a scope", .{o.full});
+                return 0;
+            }
+            callback.interactiveScopeChange(o);
             return 1;
         },
         vpiRejectTransientStep => {
@@ -252,8 +287,13 @@ export fn vera_vpi_control(operation: c_int, ap: *va.List) c_int {
             root.fail("NOSTEP", "vpi_sim_control(vpiRejectTransientStep): no analog solution after the first is awaiting acceptance", .{});
             return 0;
         },
-        vpiStop, vpiReset, vpiSetInteractiveScope => {
-            root.fail("NOCONTROL", "vpi_sim_control: operation {d} needs an interactive mode VerA does not have", .{operation});
+        vpiTransientFailConverge => {
+            if (analog.failConverge()) return 1;
+            root.fail("NOSTEP", "vpi_sim_control(vpiTransientFailConverge): no analog solution is awaiting acceptance", .{});
+            return 0;
+        },
+        vpiReset => {
+            root.fail("NOCONTROL", "vpi_sim_control(vpiReset): a reset needs a restartable run, which VerA's engine does not have", .{});
             return 0;
         },
         else => {
@@ -545,7 +585,11 @@ test "§12.36: vpiFinish from a callback ends the run at that time, and the desi
     // The design's `#3 $display("done")` at t=10 never ran.
     try std.testing.expectEqualStrings("", h.out.written());
 
-    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiStop, @as(c_int, 0)));
+    // §12.36 "must support" vpiStop: with no interactive mode it ends the run,
+    // as vpiFinish does. vpiReset needs a restart the engine cannot do.
+    try std.testing.expectEqual(@as(c_int, 1), vpi_sim_control(vpiStop, @as(c_int, 0)));
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiReset, @as(c_int, 0), @as(c_int, 0), @as(c_int, 1)));
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
     try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(12345));
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));

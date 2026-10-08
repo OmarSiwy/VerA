@@ -11,7 +11,8 @@
 // VerA reports E0207 "unexpected token: found `!`".
 //
 //! lrm A.8.6
-//! reject E0207
+//! lrm A.8.6:1000
+//! reject-only E0207
 `include "disciplines.vams"
 module annex_a_unary_as_binary(p, n);
   inout p, n;

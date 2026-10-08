@@ -8,6 +8,8 @@
 // a distinct time (parameter D), so no §11.4.2 order is assumed:
 //   t=1  "gate top.u1 work.gate"
 //   t=2  "gate top.u2 work.gate"
+//! lrm A.1.5
+//! lrm A.1.5:1000
 //! inherited IEEE 1364-2005 13.3.1.4 13.3.1.6
 `timescale 1ns/1ns
 config cfg;

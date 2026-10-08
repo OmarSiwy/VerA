@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 17.9.2
 //! reject E1100
 //! reject the seed argument shall be a reg, integer or time variable
+//! neighbour b_17_9_2_same_seed_same_value.v
 `timescale 1 ns / 1 ns
 module b_17_9_2_dist_seed_constant_rejected;
   integer r;

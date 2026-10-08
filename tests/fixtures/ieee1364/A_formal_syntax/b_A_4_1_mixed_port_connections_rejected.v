@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 A.4.1
 //! reject E1100
 //! reject mixes ordered and named port connections
+//! neighbour b_A_4_1_module_instantiation.v
 module b_A_4_1_leaf (x, y, s);
   input [3:0] x, y;
   output [3:0] s;

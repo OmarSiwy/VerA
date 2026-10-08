@@ -20,6 +20,7 @@
 //
 //! lrm 9.2
 //! lrm 9.7.3
+//! lrm 9.2:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch09_atomic_info(p, n);

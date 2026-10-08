@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 4.9.3 4.9.3.1.3
 //! reject E1100
 //! reject requires an element index
+//! neighbour b_4_9_3_1_3_vector_and_memory.v
 module b_4_9_3_1_3_memory_as_vector_rejected;
   reg mema [1:4];
   initial mema = 4'b1010;

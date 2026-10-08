@@ -4,6 +4,7 @@
 // For primitive shadowing the simulator "may issue a warning"; VerA
 // chooses silence.
 // The mandatory model/subcircuit warning has separate shadow_warning cases.
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm E.3.3
 //! nowarn
 //! bias V(p) = 1, V(n) = 0
@@ -15,6 +16,7 @@ module spice_paramset_primitive_shadow(p,n);
   analog `CHECKX("the paramset overrides the built-in primitive", I(p,n), 3.0);
 endmodule
 paramset resistor user_resistor;
+  parameter real unused_item = 0;
   .gain=3;
 endparamset
 module user_resistor(p,n);

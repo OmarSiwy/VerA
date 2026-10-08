@@ -20,7 +20,10 @@
 // generate_direct_nesting.va and generate_implicit_region_unsupported.va are that
 // side; a module variable is this one.
 //! lrm 6.6
-//! reject E0428
+//! lrm 6.6:2
+//! reject-only E0428
+//! neighbour generate_direct_nesting.va
+//! neighbour generate_implicit_region_unsupported.va
 module ch6_generate_nonconstant(p);
   inout p; electrical p; integer runtime_value;
   generate

@@ -17,6 +17,7 @@
 //
 //! lrm A.6
 //! lrm A.6.6
+//! lrm A.6.6:1000
 //! reject E0207
 `include "disciplines.vams"
 module annex_a_if_no_parens(p, n);

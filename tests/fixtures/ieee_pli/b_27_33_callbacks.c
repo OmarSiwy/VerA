@@ -152,6 +152,8 @@
  * ones at t=7 and t=11 do not.
  */
 
+//! lrm 12.31.1
+//! lrm 12.31.1:5
 //! inherited IEEE 1364-2005 26.2.1
 //! inherited IEEE 1364-2005 27.7
 //! inherited-reject IEEE 1364-2005 27.7

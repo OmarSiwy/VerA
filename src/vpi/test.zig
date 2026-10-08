@@ -531,6 +531,7 @@ test "a paramset instance is an instance of the module §6.4.2 selected, through
         \\  tag = 1.0;
         \\endparamset
         \\paramset mid leaf;
+        \\  parameter real unused_item = 0; // A.1.9: one item declaration at least
         \\  .j = 2.0;
         \\endparamset
         \\paramset pick nmod;
@@ -603,6 +604,7 @@ test "the scopes are elaboration's units, one for one" {
         \\  ps w(p, n);
         \\endmodule
         \\paramset ps sub;
+        \\  parameter real unused_item = 0; // A.1.9: one item declaration at least
         \\  .k = 2.0;
         \\endparamset
         \\module sub(a, b);

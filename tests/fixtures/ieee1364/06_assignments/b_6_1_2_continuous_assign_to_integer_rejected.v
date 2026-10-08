@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 6.1.2
 //! reject E1100
 //! reject a continuous assignment can only drive a net
+//! neighbour b_6_1_2_select_bus.v
 module b_6_1_2_continuous_assign_to_integer_rejected;
   integer i;
   assign i = 5;

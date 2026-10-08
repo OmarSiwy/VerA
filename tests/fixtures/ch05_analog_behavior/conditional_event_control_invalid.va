@@ -21,7 +21,9 @@
 // with the condition inside its body.
 //
 //! lrm 5.8.4
-//! reject E0707
+//! lrm 5.8.4:1000
+//! reject-only E0707
+//! neighbour event_cross_enable.va
 module ch5_conditional_event_control(p, c);
   inout p, c; electrical p, c; real x;
   analog begin

@@ -42,7 +42,7 @@
 // `connectrules` (31).
 //! lrm B
 //! lrm C.16
-//! reject E0208
+//! reject-only E0208
 //! reject connectmodule
 //! reject driver_update
 //! reject endconnectrules

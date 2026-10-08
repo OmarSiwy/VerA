@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 17.10.2
 //! reject E1100
 //! reject %t
+//! neighbour audit_value_plusargs_absent.v
 `timescale 1 ns / 1 ns
 module b_17_10_2_value_plusargs_format_rejected;
   integer r, v;

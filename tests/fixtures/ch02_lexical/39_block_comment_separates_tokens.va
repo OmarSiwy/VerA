@@ -1,6 +1,6 @@
 // §2.2 a comment is a token separator. If this fixture ever COMPILES again, the
 // preprocessor has gone back to welding `1` and `2` into the literal 12.
-//! reject E0207
+//! reject-only E0207
 //! reject expected `)`
 // §2.2: "Verilog-AMS HDL source text files shall be a stream of lexical
 // tokens", and the list that follows names `comment` as one of the seven token
@@ -15,6 +15,7 @@
 // Correct behaviour is a syntax error here: `1` and `2` are two adjacent
 // primaries, which no A.8.3 production derives.
 //! lrm 2.2
+//! lrm 2.2:1
 module ch2_comment_separator(p, n);
   inout p, n;
   electrical p, n;

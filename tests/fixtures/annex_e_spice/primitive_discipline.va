@@ -48,10 +48,13 @@
 // for an example the LRM prints.
 //
 //! lrm E.3.2.1
+//! lrm E.3.2.1:1
+//! lrm E.3.2.1:3
 //! lrm E.3.2
 //! lrm E.3
 //! lrm 2.9
 //! lrm 6.7.1
+//! lrm 6.7.1:1
 //! bias V(node1) = 1.0, V(node2) = 0.0, shaft1 = 2.0, shaft2 = 0.0
 `include "check.vh"
 module annex_e_primitive_discipline(node1, node2, shaft1, shaft2);

@@ -13,8 +13,10 @@
 // "x/z digit in a number literal" — which is where the operator decides it.
 //
 //! lrm 7.3.2
+//! lrm 7.3.2:2
 //! lrm C.3
-//! reject E0130
+//! reject-only E0130
+//! neighbour x_case_equality_input_net.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_xz_ordinary_equality(p);

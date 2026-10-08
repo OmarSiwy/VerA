@@ -4,7 +4,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
-//! reject E0124
+//! reject-only E0124
 `include ""
 `include "disciplines.vams"
 module ch10_include_file_name_empty(p, n);

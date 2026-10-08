@@ -5,7 +5,9 @@
 // elsewhere must not let a missing real check pass.
 // Legal neighbor: audit_modulus_sign_combinations.va uses divisor 2.0.
 //! lrm 4.2.4
-//! reject E0601
+//! lrm 4.2.4:1
+//! reject-only E0601
+//! neighbour audit_modulus_sign_combinations.va
 module audit_real_modulus_zero_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -4,6 +4,7 @@
 // TRUE, so the value is the integer 1. Above the boundary it is 0.
 //
 //! lrm 4.2.5
+//! lrm 4.2.5:1000
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_less_equal(p, n);

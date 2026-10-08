@@ -24,8 +24,10 @@
 //
 //! lrm 5.3
 //! lrm 5.3.1
+//! lrm 5.3.1:1000
 //! reject ParseError
 //! reject endmodule
+//! neighbour sequential_block.va
 module ch5_block_missing_end(p);
   inout p; electrical p;
   analog begin

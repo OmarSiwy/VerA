@@ -21,7 +21,9 @@
 //
 //! lrm 5.10.3
 //! lrm 5.10.3.3
-//! reject E0701
+//! lrm 5.10.3:1000
+//! reject-only E0701
+//! neighbour event_timer.va
 module ch5_timer_as_value(p);
   inout p; electrical p;
   real x;

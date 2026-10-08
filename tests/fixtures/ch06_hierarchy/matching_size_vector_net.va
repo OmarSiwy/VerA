@@ -26,6 +26,7 @@
 // scalar port bound to anything but `p` moves both.
 //
 //! lrm 6.5.7.1
+//! lrm 6.5.7.1:1
 //! bias V(p) = 0.125
 //! solve
 `include "check.vh"

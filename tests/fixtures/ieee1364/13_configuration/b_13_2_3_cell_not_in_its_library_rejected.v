@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 13.2.3
 //! reject E1100
 //! reject library `gateLib` holds no cell `top`
+//! neighbour b_13_5_2_cfg2_gate_first.v
 config cfg;
   design gateLib.top;
 endconfig

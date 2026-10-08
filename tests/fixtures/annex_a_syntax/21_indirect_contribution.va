@@ -30,6 +30,7 @@
 //! lrm 5.6.7
 //! lrm A.6.10
 //! lrm D.1
+//! lrm A.6.10:1000
 //! bias V(p) = 0.75
 //! print none
 //! solve

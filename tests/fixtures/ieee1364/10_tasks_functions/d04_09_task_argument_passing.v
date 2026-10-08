@@ -41,6 +41,9 @@
 //! lrm A.2.7
 //! lrm A.6.4
 //! lrm 1.1
+//! lrm A.2.7:1000
+//! lrm A.6.9
+//! lrm A.6.9:1000
 //! inherited IEEE 1364-2005 10.2.2
 module d04_task_argument_passing;
   reg [3:0] p, q, r;

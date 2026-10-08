@@ -8,7 +8,9 @@
 // so port_flow_probe.va reads the same access function and must keep compiling.
 //
 //! lrm 5.4.3
-//! reject E0407
+//! lrm 5.4.3:1
+//! reject-only E0407
+//! neighbour port_flow_probe.va
 module ch5_port_flow_contribution(p);
   inout p; electrical p;
   analog I(<p>) <+ 1m;

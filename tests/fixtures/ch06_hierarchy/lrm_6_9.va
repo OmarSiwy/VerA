@@ -43,6 +43,7 @@
 // biased ones forced.
 //
 //! lrm 6.9
+//! lrm 6.9:1000
 //! bias V(n1) = 0.25, V(n2) = 0.5, V(com) = 0.0
 //! solve
 //! print none

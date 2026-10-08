@@ -18,8 +18,10 @@
 // E0887 "wrong number of arguments to a system task or function".
 //
 //! lrm 9.12
-//! reject E0887
+//! reject-only E0887
 //! reject `$value$plusargs` takes 2 arguments, got 1
+//! neighbour 066_value_plusargs.va
+//! neighbour audit_plusargs_value_order.va
 `include "disciplines.vams"
 module ch09_value_plusargs_without_variable(p, n);
   inout p, n; electrical p, n;

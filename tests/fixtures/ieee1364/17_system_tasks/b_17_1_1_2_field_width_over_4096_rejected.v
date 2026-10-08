@@ -8,6 +8,7 @@
 // digital-runner: reject
 //! reject E1011
 //! reject a field width or precision here exceeds 4096
+//! neighbour b_17_1_1_2_real_precision_100.v
 module b_17_1_1_2_field_width_over_4096_rejected;
   integer x;
   initial begin

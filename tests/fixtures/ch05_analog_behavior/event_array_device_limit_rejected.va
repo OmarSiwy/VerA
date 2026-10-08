@@ -4,8 +4,9 @@
 // Legal implemented neighbor: named_event_unsupported.va uses scalar events;
 // digital array execution is pinned by b_9_7_3_event_arrays.v and the VPI
 // b_26_6_11_event_array application. No conformance clause is claimed here.
-//! reject E0235
+//! reject-only E0235
 //! reject a named event array in an analog device
+//! neighbour named_event_unsupported.va
 module event_array_device_limit_rejected;
   event ev [0:1];
   analog begin

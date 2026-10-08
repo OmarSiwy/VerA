@@ -20,9 +20,11 @@
 // pins WHICH argument slot had no default rather than only that one did not.
 //
 //! lrm 4.5.15
+//! lrm 4.5.15:4
 //! lrm 4.5.11
 //! lrm 4.5.12
-//! reject E0502
+//! reject-only E0502
+//! neighbour 136_filter_null_zeros_argument.va
 module ch04_operator_null_argument(p, n);
     inout p, n;
     electrical p, n;

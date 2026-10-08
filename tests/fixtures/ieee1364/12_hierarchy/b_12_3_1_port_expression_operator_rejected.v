@@ -7,9 +7,12 @@
 // one, or a concatenation of them, never an operator. Legal neighbour:
 // b_12_1_module_header_forms.v (b_12_1_plain(a, y)).
 // digital-runner: reject
+//! lrm 6.5.1
+//! lrm 6.5.1:1
 //! inherited IEEE 1364-2005 12.3.1
 //! reject E0207
 //! reject unexpected token: found `+`
+//! neighbour b_12_1_module_header_forms.v
 module m(a + b);
   input a, b;
 endmodule

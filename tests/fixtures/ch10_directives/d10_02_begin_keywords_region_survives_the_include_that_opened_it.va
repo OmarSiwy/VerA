@@ -41,6 +41,7 @@
 //
 //! lrm 10.6
 //! lrm 10.1
+//! lrm 10.1:1000
 //! bias V(sin) = 0.75, V(n) = 0.25
 `begin_keywords "VAMS-2023"
 `include "d10_keywords_1364_2005.vh"

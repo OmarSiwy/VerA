@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 A.7.4
 //! reject E0207
 //! reject a path delay lists 1, 2, 3, 6 or 12 values
+//! neighbour b_A_7_4_path_delays.v
 module b_A_7_4_four_path_delays_rejected (a, y);
   input a;
   output y;

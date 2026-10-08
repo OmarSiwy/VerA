@@ -9,6 +9,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 4.8
 //! reject E0208
+//! neighbour b_4_8_integer_time_real.v
 module b_4_8_real_range_rejected;
   real [3:0] r;
   initial $display("%f", r);

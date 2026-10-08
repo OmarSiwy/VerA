@@ -3,7 +3,8 @@
 // aliasparam_source_bindings.va legally overrides an alias on the child and
 // reads only its original parameter in that child's equations.
 //! lrm 3.4.7
-//! reject E0373
+//! reject-only E0373
+//! neighbour aliasparam_source_bindings.va
 module aliasparam_child_top(p);
   inout p; electrical p;
   aliasparam_child_bad #(.alternate(3)) child(p);

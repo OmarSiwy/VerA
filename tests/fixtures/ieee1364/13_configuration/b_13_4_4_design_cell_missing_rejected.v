@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 13.4.4 13.3.1.1
 //! reject E1100
 //! reject undeclared module in instantiation
+//! neighbour audit_config_design_select.v
 config cfg;
   design work.missing;
 endconfig

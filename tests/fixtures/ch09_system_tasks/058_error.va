@@ -20,6 +20,7 @@
 // unconditionally, and they are, with the assertion placed after the call.
 //
 //! lrm 9.7.3
+//! lrm 9.7.3:3
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch09_atomic_error(p, n);

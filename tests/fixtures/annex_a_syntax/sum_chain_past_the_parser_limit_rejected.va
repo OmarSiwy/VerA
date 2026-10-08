@@ -7,7 +7,8 @@
 //
 // Legal neighbour: long_sum_under_the_nesting_limit.va, 1000 terms.
 //
-//! reject E0241
+//! reject-only E0241
+//! neighbour long_sum_under_the_nesting_limit.va
 module sum_chain_past_the_parser_limit_rejected(p, n);
   inout p, n; electrical p, n;
   real r;

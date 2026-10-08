@@ -59,6 +59,7 @@
 //
 //! lrm 7.3.1
 //! lrm 7.3
+//! lrm 7.3:1000
 //! bias V(out) = 0
 `include "check.vh"
 module m01_onebit_dac(out);

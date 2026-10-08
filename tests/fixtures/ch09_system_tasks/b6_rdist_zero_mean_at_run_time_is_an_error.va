@@ -1,0 +1,34 @@
+// §9.13.2: "For the $rdist_exponential, $rdist_poisson, $rdist_chi_square,
+// $rdist_t, and $rdist_erlang functions, the arguments mean,
+// degree_of_freedom, and k_stage shall be greater than zero (0). Otherwise an
+// error shall be reported."
+//
+// 150_rdist_domain_rejected.va pins the compile-time case (a constant mean).
+// Syntax 9-9 makes the mean a `mean_expression`, so it can be a probe, and
+// then the value is only known at the point. Here mean = V(p,n):
+//
+//   point 0, V(p) = 1.0: mean 1.0 > 0, legal; the check prints ok=1.
+//   point 1, V(p) = 0.0: mean 0 is not greater than zero; the error is
+//     reported at that call and the run ends. Had it continued, the check
+//     would print 0.0 > 0.5 = 0 against want 1, ok=0.
+//
+// The status is the suite's for a run ended by a run-time error, 1 (a05_12's
+// `E` extrapolation, E0601's zero modulus).
+//
+//! lrm 9.13.2
+//! lrm 9.13.2:2
+//! exit 1
+//! sweep V(p) = 1.0, 0.0
+//! checks 1
+`include "check.vh"
+module b6_rdist_zero_mean_at_run_time_is_an_error(p, n);
+  inout p, n; electrical p, n;
+  integer seed;
+  real r;
+  analog begin
+    seed = 5;
+    `CHECKI("printed at the first point only: the second point's mean is 0", V(p, n) > 0.5, 1);
+    r = $rdist_exponential(seed, V(p, n));
+    I(p, n) <+ V(p, n) + 1e-9 * r;
+  end
+endmodule

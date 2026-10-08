@@ -11,6 +11,7 @@
 // The literal is compared as a real: 4294967297 < 2^53, so it is exact.
 //
 //! lrm 10.7
+//! lrm 10.7:2
 //! bias V(p) = 0
 //! print none
 `include "check.vh"

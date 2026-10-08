@@ -27,6 +27,7 @@
 //
 //! lrm A.2.7
 //! lrm 1.1
+//! lrm A.2.7:1000
 //! inherited IEEE 1364-2005 10.2.3
 module d04_task_static_lifetime;
   reg [3:0] a, b;

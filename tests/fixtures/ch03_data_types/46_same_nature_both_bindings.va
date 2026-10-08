@@ -15,7 +15,9 @@
 // before the code existed.
 //
 //! lrm 3.6.2.1
-//! reject E0338
+//! lrm 3.6.2.1:1
+//! reject-only E0338
+//! neighbour 11_discipline_declarations.va
 nature ch3_both_n; units="V"; access=Both; abstol=1u; endnature
 discipline ch3_both_d;
     domain continuous;

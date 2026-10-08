@@ -30,6 +30,7 @@
 //! lrm 7.3.6
 //! lrm 8.4.7
 //! lrm 7.3.6.5
+//! lrm 7.3.6:1000
 //! analysis tran
 //! time 2.4n, 2.5n, 2.6n
 `timescale 1ns/100ps

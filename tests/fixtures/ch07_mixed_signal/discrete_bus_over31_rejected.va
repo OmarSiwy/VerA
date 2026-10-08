@@ -19,8 +19,11 @@
 // use the same words cannot satisfy the file.
 //
 //! lrm 7.3.1
-//! reject bit grouping wider than 31 bits
+//! lrm 7.3.1:1
+//! reject-only bit grouping wider than 31 bits
 //! reject E0222
+//! neighbour discrete_bus_31.va
+//! neighbour discrete_bus_narrow.va
 module ch7_discrete_bus_over31(p);
   inout p; electrical p;
   reg [31:0] r;

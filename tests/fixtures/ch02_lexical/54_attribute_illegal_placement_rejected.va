@@ -21,7 +21,12 @@
 // parser that answers them by accepting `(*` wherever it appears will start
 // failing here, loudly, which is the point.
 //! lrm 2.9
-//! reject E0208
+//! lrm 2.9:2
+//! lrm 2.9.1
+//! lrm 2.9.1:1000
+//! reject-only E0208
+//! neighbour 21_operator_attribute.va
+//! neighbour 32_function_call_attribute.va
 module ch02_attribute_illegal_placement_rejected(p, n);
     inout p, n;
     electrical p, n;

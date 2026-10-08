@@ -21,6 +21,7 @@
 //! lrm 3.10
 //! lrm 3.6.2.2
 //! lrm 3.6.3
+//! lrm 3.10:1
 //! bias sig = 0.7
 `include "check.vh"
 nature annex_f_local_pot;

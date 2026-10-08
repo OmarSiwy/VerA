@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 3.5.2
 //! reject E0209
 //! reject found `.`
+//! neighbour b_3_5_2_real_constants.v
 module b_3_5_2_no_integer_digit_rejected;
   real r;
   initial begin

@@ -7,7 +7,10 @@
 // it matters: silently reading `1.3 u` as 1.3e-6 would be a six-decade error
 // that no value assertion elsewhere could catch.
 //! lrm 2.6.2
-//! reject E0207
+//! lrm A.10
+//! lrm A.10:1
+//! reject-only E0207
+//! neighbour 07_si_scale_factors.va
 module ch02_scale_factor_whitespace_rejected;
     real value;
     analog value = 1.3 u;

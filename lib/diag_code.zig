@@ -94,6 +94,7 @@ pub const Code = enum(u16) {
     // Lexical (LRM 2.7) — parser.zig's string-literal scan.
     E0148,
     W0149,
+    E0150,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -152,6 +153,7 @@ pub const Code = enum(u16) {
     E0257,
     E0258,
     E0296,
+    E0297,
     W0250,
     W0251,
     W0252,
@@ -232,6 +234,8 @@ pub const Code = enum(u16) {
     E0371,
     E0372,
     E0373,
+    E0374,
+    E0375,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -348,6 +352,7 @@ pub const Code = enum(u16) {
     E0705,
     E0706,
     E0707,
+    E0708,
     /// A monitored event under the fixed-grid testbench, which inserts no
     /// timepoint at a crossing or timer.
     W0750,
@@ -438,6 +443,7 @@ pub const Code = enum(u16) {
     E0820,
     E0821,
     E0822,
+    E0824,
     E0918,
     E0919,
     E0920,
@@ -456,6 +462,8 @@ pub const Code = enum(u16) {
     E0482,
     E0483,
     E0484,
+    E0485,
+    E0486,
     E0887,
     E0888,
     E0889,
@@ -466,6 +474,7 @@ pub const Code = enum(u16) {
     E0892,
     /// §9.14 an analog wide operand whose high bits the carrier erased.
     E0893,
+    E0894,
     /// §9.17.3 a `$limit` site the device does not honour: the probe is
     /// returned unchanged, which the clause permits.
     W0853,
@@ -1100,6 +1109,18 @@ fn infoOf(c: Code) Info {
             \\decrypts, so any `pragma protect is refused. Compile the cleartext
             \\source with the protect directives removed. Any other pragma name
             \\still has no effect.
+            ,
+        },
+        .E0150 => .{
+            .title = "macro expansion too large",
+            .lrm = "10.4",
+            .explain =
+            \\The macro bodies substituted over this compilation exceeded the
+            \\engine's total size limit. This is an implementation bound, not a
+            \\language rule: depth alone does not bound a macro that doubles its
+            \\argument at every level, and such a source would otherwise run the
+            \\compiler out of memory with no diagnostic. Expand less, or split the
+            \\generated text into a file and `include it.
             ,
         },
         .E0147 => .{
@@ -2059,6 +2080,21 @@ fn infoOf(c: Code) Info {
             \\A file no specification matches is compiled into `work` (13.2.1).
             ,
         },
+        .E0297 => .{
+            .title = "paramset declares no item",
+            .lrm = "A.1.9",
+            .explain =
+            \\Syntax 6-4 / A.1.9 open every paramset body with
+            \\
+            \\    paramset_item_declaration { paramset_item_declaration }
+            \\
+            \\so a paramset declares at least one parameter, local parameter,
+            \\aliasparam, integer or real before its statements. A body of
+            \\`.name = value;` statements alone is not a paramset_declaration.
+            \\Declare the parameter the statements are written in terms of, or
+            \\any one parameter, e.g. `parameter real unused_item = 0;`.
+            ,
+        },
         .E0296 => .{
             .title = "a forever loop needs a statement, not a null statement",
             .lrm = "A.6.8",
@@ -2728,14 +2764,56 @@ fn infoOf(c: Code) Info {
             .explain =
             \\LRM 3.6.1.2: "If specified, the constant expression assigned to
             \\idt_nature shall be the name (not a string) of a nature which is
-            \\defined elsewhere." A derived nature may override the parent's
+            \\defined elsewhere." The attribute "is optional; the default value
+            \\is the nature itself". A derived nature may override the parent's
             \\value, but "the nature thus specified shall be related (share the
             \\same base nature) to the nature the parent uses for its
-            \\idt_nature".
+            \\idt_nature", which is the parent itself when it gives none.
             \\
             \\`idt(access(...))` takes its tolerance from that nature, so a
             \\dangling or unrelated name leaves the integral with no tolerance
             \\the solver can use.
+            ,
+        },
+        .E0374 => .{
+            .title = "`ddt_nature` does not name a related nature",
+            .lrm = "3.6.1.2",
+            .explain =
+            \\LRM 3.6.1.2: "If specified, the constant expression assigned to
+            \\ddt_nature shall be the name (not a string) of a nature which is
+            \\defined elsewhere." The attribute "is optional; the default value
+            \\is the nature itself". A derived nature may override the parent's
+            \\value, but "the nature thus specified shall be related (share the
+            \\same base nature) to the nature the parent uses for its
+            \\ddt_nature", which is the parent itself when it gives none.
+            \\
+            \\`ddt(access(...))` takes its tolerance from that nature, so a
+            \\dangling or unrelated name leaves the derivative with no
+            \\tolerance the solver can use. Derive the override from the
+            \\parent's ddt_nature: `nature dI : Current; endnature`.
+            ,
+        },
+        .E0375 => .{
+            .title = "incompatible hierarchical discipline override",
+            .lrm = "3.6.2",
+            .explain =
+            \\LRM 3.6.2: "It is possible to set the discipline of interconnect
+            \\and digital nets through discipline declaration with hierarchical
+            \\references to these nets. It shall be an error to hierarchically
+            \\override the discipline of a net that was explicitly declared
+            \\unless it is a compatible discipline."
+            \\
+            \\Compatible is LRM 3.11.1's: the same discipline, or the same
+            \\domain with compatible potential and flow natures (one derived
+            \\from the other, a shared base nature, or the same `units`).
+            \\
+            \\    module leaf(p); inout p; electrical p; endmodule
+            \\    module top; leaf u1(a); rotational u1.p; endmodule  // error
+            \\
+            \\The leaf's equations were written for its own access functions,
+            \\so an incompatible override would rename the quantity they read.
+            \\Override only an undeclared net, or one whose discipline the new
+            \\one is compatible with.
             ,
         },
         .E0342 => .{
@@ -3533,6 +3611,29 @@ fn infoOf(c: Code) Info {
             \\genvar".
             ,
         },
+        .E0485 => .{
+            .title = "genvar loop exceeds the unroll limit",
+            .lrm = "6.6.1",
+            .explain =
+            \\The loop terminates, but after more iterations than the engine
+            \\unrolls (4096). This is an implementation bound, not a language
+            \\rule: each iteration is a copy of the generate block, and a design
+            \\that needs more copies than that is refused by name rather than
+            \\expanded until memory runs out. A loop that never terminates is
+            \\E0420, the language's own error.
+            ,
+        },
+        .E0486 => .{
+            .title = "genvar set to x or z",
+            .lrm = "6.6.1",
+            .explain =
+            \\LRM 6.6.1: "It shall be an error if any bit of the genvar is set to
+            \\x or z." A genvar is an integer the loop generate scheme folds at
+            \\elaboration time, so its initialization and iteration values must
+            \\be known two-state integers: an x or z literal reaching either one
+            \\is refused here, whatever the trip count.
+            ,
+        },
         .E0420 => .{
             .title = "genvar loop did not terminate",
             .lrm = "6.6.1",
@@ -3712,6 +3813,10 @@ fn infoOf(c: Code) Info {
             \\
             \\Assign the elements one at a time if the shapes genuinely differ —
             \\there is no truncating or padding form of this statement.
+            \\
+            \\The clause also requires: "The arrays on the LHS and the RHS of the
+            \\assignment must be unpacked." A packed vector (`reg [1:0] B`) or a
+            \\scalar on the right of a whole array is refused here too.
             ,
         },
         .E0430 => .{
@@ -5031,6 +5136,21 @@ fn infoOf(c: Code) Info {
             \\`--deny=E0707` makes this the error the LRM says it is.
             ,
         },
+        .E0708 => .{
+            .title = "initial_step or final_step in the digital context",
+            .lrm = "5.10",
+            .explain =
+            \\LRM 5.10: "The usage of initial_step and final_step analog events
+            \\are not allowed in the digital context." The two events mark the
+            \\first and last point of an analog analysis (5.10.2), which only the
+            \\analog block runs at. An `initial` or `always` block has its own
+            \\start: write `initial` for the first, or move the statement into
+            \\the analog block:
+            \\
+            \\    always @(initial_step) r = 1.0;     // no
+            \\    analog @(initial_step) r = 1.0;     // yes
+            ,
+        },
         .W0750 => .{
             .title = "event fires on the testbench's fixed time grid, not at its own time",
             .lrm = "5.10.3",
@@ -5177,6 +5297,19 @@ fn infoOf(c: Code) Info {
             \\LRM. Spell the name as a literal or a string parameter.
             ,
         },
+        .E0894 => .{
+            .title = "an omitted argument or element has no value here",
+            .lrm = "A.8.2",
+            .explain =
+            \\A.8.2's system_function_call admits an empty slot, `$f(a, , c)`,
+            \\but only the clause that defines the function can give that slot
+            \\a meaning (a default, or "no string supplied"). This function's
+            \\clause gives this position none, so the call has no value to
+            \\compute. A.8.1's assignment pattern has no empty element at all,
+            \\except where §3.6.3.2's bus nodeset reads one as "no nodeset value
+            \\for this element". Write the argument or the element.
+            ,
+        },
         .E0888 => .{
             .title = "descriptor argument is not an integer",
             .lrm = "9.5.2",
@@ -5258,6 +5391,23 @@ fn infoOf(c: Code) Info {
             \\Both answer a question about the INSTANTIATION — was this
             \\parameter overridden, was this port connected — so a variable or
             \\an internal net has no answer: nothing instantiates it.
+            ,
+        },
+        .E0824 => .{
+            .title = "$fatal finish_number is not 0, 1 or 2",
+            .lrm = "9.7.3",
+            .explain =
+            \\LRM 9.7.3 Syntax 9-7:
+            \\
+            \\    fatal_message_task ::= $fatal [ ( finish_number
+            \\                           [ , message_argument ... ] ) ] ;
+            \\    finish_number ::= 0 | 1 | 2
+            \\
+            \\"The first argument passed to $fatal shall be consistent with the
+            \\corresponding argument to the Verilog $finish system task", whose
+            \\diagnostic levels are Table 9-25's 0, 1 and 2. Write one of those
+            \\three numbers; any other value, or one known only at run time, is
+            \\not a finish_number.
             ,
         },
         .E0806 => .{

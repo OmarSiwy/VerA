@@ -3,7 +3,9 @@
 // ordered and the second named; parameter_list_forms.va executes each legal
 // form in a separate instance, including a named empty value.
 //! lrm A.4.1
-//! reject E0246
+//! lrm A.4.1:1000
+//! reject-only E0246
+//! neighbour parameter_list_forms.va
 module parameter_list_mixed_leaf(p);
   inout p; electrical p;
   parameter real a=3,b=7;

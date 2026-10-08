@@ -13,7 +13,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.20
-//! reject bit select or part select
+//! lrm 9.20:2
+//! reject-only bit select or part select
 //! reject E0812
 module ch09_node_alias_bit_select_rejected(p, n);
   inout p, n; electrical p, n;

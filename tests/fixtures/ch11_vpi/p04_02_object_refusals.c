@@ -109,6 +109,12 @@
 //! lrm-reject 12.23
 //! lrm-reject 12.30
 //! lrm-reject 12.35
+//! lrm 12.2:1
+//! lrm 12.2:3
+//! lrm 12.2:4
+//! lrm 12.2:5
+//! lrm-reject 12.4:4
+//! lrm-reject 12.5:6
 
 #include "p02_check.h"
 

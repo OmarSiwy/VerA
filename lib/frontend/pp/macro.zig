@@ -8,6 +8,7 @@ const Preprocessor = @import("../preprocessor.zig");
 const diag = @import("diag");
 const Error = Preprocessor.Error;
 const max_expansion_depth = Preprocessor.max_expansion_depth;
+const max_expanded_bytes = Preprocessor.max_expanded_bytes;
 const Macro = Preprocessor.Macro;
 const Pp = Preprocessor.Pp;
 const scan = Preprocessor.scan;
@@ -230,6 +231,9 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         }
         break :blk try substitute(pp, m.body, m.params, actuals);
     } else m.body;
+    pp.expanded_bytes += body.len;
+    if (pp.expanded_bytes > max_expanded_bytes)
+        return pp.fail(sp, .E0150, "limit is {d} bytes", .{max_expanded_bytes});
 
     // Fits: `expand_depth` was checked and bumped above.
     pp.expanding[pp.n_expanding] = name;

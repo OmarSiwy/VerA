@@ -14,7 +14,7 @@
 // `noshowcancelled` and `endspecify`. They are censused in
 // 22_shadowed_spellings.va, which explains the mechanism.
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject edge
 //! reject endspecify
 //! reject ifnone

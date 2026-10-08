@@ -7,6 +7,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.3
 //! reject constant
+//! neighbour b_14_3_path_delay_values.v
 `timescale 1ns/1ns
 module b_14_3_variable_delay_rejected(a, q);
   input a;

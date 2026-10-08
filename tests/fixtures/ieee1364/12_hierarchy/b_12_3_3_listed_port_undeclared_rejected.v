@@ -8,9 +8,14 @@
 // m lists b but declares no direction for it. Legal neighbour:
 // b_12_1_module_header_forms.v (b_12_1_plain declares both a and y).
 // digital-runner: reject
+//! lrm 6.2
+//! lrm 6.2:5
+//! lrm 6.5.2.2
+//! lrm 6.5.2.2:1
 //! inherited IEEE 1364-2005 12.3.3 12.1
 //! reject E1100
 //! reject has no direction declaration
+//! neighbour b_12_1_module_header_forms.v
 module m(a, b);
   input a;
 endmodule

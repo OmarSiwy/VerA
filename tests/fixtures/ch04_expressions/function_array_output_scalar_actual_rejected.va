@@ -11,7 +11,9 @@
 // value, as if the output argument did not exist.
 //
 //! lrm 4.7.2.3
-//! reject E0511
+//! lrm 4.7.2.3:2
+//! reject-only E0511
+//! neighbour 108_function_array_output_pattern.va
 `include "disciplines.vams"
 module ch04_fn_array_out_scalar(p);
   inout p;

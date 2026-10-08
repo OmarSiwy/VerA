@@ -19,8 +19,10 @@
 // is 176_dist_type_string_misspelled_rejected.va.
 //
 //! lrm 9.13.1
-//! reject E0816
+//! lrm 9.13.1:6
+//! reject-only E0816
 //! reject within a paramset
+//! neighbour 175_dist_type_string_inside_paramset.va
 module ch09_arandom_type_string_outside_paramset(p, n);
   inout p, n; electrical p, n;
   integer a;

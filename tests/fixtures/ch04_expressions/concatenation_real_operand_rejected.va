@@ -10,7 +10,9 @@
 //
 //! lrm 4.2.13
 //! lrm 4.2.1
-//! reject E0327
+//! lrm 4.2.1:1
+//! reject-only E0327
+//! neighbour 30_concatenation.va
 `include "disciplines.vams"
 module ch04_concatenation_real_operand(p, n);
   inout p, n; electrical p, n;

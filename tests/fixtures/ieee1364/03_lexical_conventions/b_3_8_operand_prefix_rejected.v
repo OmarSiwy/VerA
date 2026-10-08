@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 3.8
 //! reject E0209
 //! reject expected an expression: found `(*`
+//! neighbour b_3_8_1_examples.v
 module b_3_8_operand_prefix_rejected;
   reg [3:0] a, b;
   initial begin

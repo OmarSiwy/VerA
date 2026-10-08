@@ -57,6 +57,9 @@
 // contribution at the end uses them because a module with no contribution
 // solves nothing.
 //! lrm 2.6
+//! lrm 2.6:1
+//! lrm 2.6.1
+//! lrm 2.6.1:1
 `include "check.vh"
 module ch02_number_positions(p, n);
     inout p, n;

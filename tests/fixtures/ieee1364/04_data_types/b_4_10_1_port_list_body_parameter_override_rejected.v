@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 4.10.1
 //! reject E1100
 //! reject local parameter
+//! neighbour b_4_10_1_port_list_parameter_defparam.v
 module b_4_10_1_leaf2 #(parameter P = 1) ();
   parameter Q = 2;
   initial $display("%0d %0d", P, Q);

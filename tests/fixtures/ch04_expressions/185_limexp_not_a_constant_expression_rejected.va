@@ -42,7 +42,10 @@
 // before this file existed, the classification had no source that depended on
 // it.
 //! lrm 4.5
-//! reject E0363
+//! lrm 4.1
+//! lrm 4.1:1000
+//! reject-only E0363
+//! neighbour ../ch06_hierarchy/dependent_parameter_transcendental.va
 module ch04_limexp_not_constant(p, n);
     inout p, n;
     electrical p, n;

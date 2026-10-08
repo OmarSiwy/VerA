@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 A.6.8
 //! reject E0207
 //! reject unexpected token: found `)`
+//! neighbour b_A_6_8_looping_statements.v
 module b_A_6_8_for_without_step_rejected;
   integer i;
   initial begin

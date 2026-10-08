@@ -159,6 +159,14 @@ pub const Directives = struct {
     /// fixture: it must not compile, and every substring must appear in the
     /// diagnostics.
     reject: []const []const u8 = &.{},
+    /// `//! reject-only <substring>`: a `reject` line whose substrings must
+    /// also match EVERY error the compile reported, so an incidental error
+    /// on legal source cannot ride inside a passing refusal.
+    reject_only: bool = false,
+    /// `//! neighbour <path>`, one per line, relative to the fixture's
+    /// directory: the legal variant of a refused construct, which must be a
+    /// collected fixture that compiles and asserts. Only on a reject fixture.
+    neighbours: []const []const u8 = &.{},
     /// `//! warn <substring>`, one per line: each must match a WARNING the
     /// compile reported, by code or text as `reject` matches. The fixture
     /// still compiles and runs; a warning nobody named does not fail it.
@@ -167,6 +175,8 @@ pub const Directives = struct {
     nowarn: bool = false,
     /// `//! lrm <section>`, one per line: the clauses this fixture pins. No
     /// verdict depends on it; failure reports and `--coverage` read it.
+    /// `<section>:<n>` pins the n-th normative sentence of the clause, a row
+    /// of `tests/fixtures/OBLIGATIONS.tsv` (docs/TESTING.md §3.2).
     lrm: []const []const u8 = &.{},
     /// `//! xfail <reason>`: the fixture states an LRM requirement VerA does
     /// not meet yet. With `reject`, VerA wrongly accepts the construct;
@@ -184,6 +194,20 @@ pub const Directives = struct {
     /// so `contract`'s conformance checks run on the device and this host
     /// (`vera --validate-contract`; the fixture suite always sets it).
     validate_contract: bool = false,
+    /// Not a directive: the suite's `--certify` (docs/TESTING.md L4). The
+    /// runner checks every Jacobian entry against a central difference at
+    /// each point (`fdCheck`), a proved-finite device at random points
+    /// (`finiteCheck`), and the revert path at each accepted point
+    /// (`stateCheck`).
+    certify: bool = false,
+    /// Not a directive: every contribution unit of the device was proved
+    /// finite (`proof.Verdict.unit_modes` all `.optimized`), the claim
+    /// `finiteCheck` tests under `certify`.
+    finite_proved: bool = false,
+    /// `//! fd-exempt <reason>`: the `certify` gates do not apply to this
+    /// fixture, by design and for the stated reason (a `vera_nodiff`
+    /// region, a limited iterate). Reviewable, never silent.
+    fd_exempt: ?[]const u8 = null,
 };
 
 /// What a mixed-signal testbench needs from the compile besides the device:

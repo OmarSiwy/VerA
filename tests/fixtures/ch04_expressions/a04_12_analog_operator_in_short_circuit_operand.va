@@ -72,6 +72,7 @@
 // there, where it looked like a §4.5.9 defect and was not one.
 //
 //! lrm 4.5.15
+//! lrm 4.5.15:1
 //! bias V(n) = 0
 //! wave V(in) = 0, 1
 //! time 0, 1n, 2n, 3n, 4n, 5n

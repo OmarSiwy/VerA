@@ -26,6 +26,9 @@
 // conforming implementation may defer it.
 //
 //! lrm 9.5
+//! lrm 9.5.4.2
+//! lrm 9.5.4.2:1
+//! lrm 9.5.4.2:4
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_file_io_categories_in_analog_context(p, n);

@@ -20,7 +20,10 @@
 // which made every expression in that position equally legal.
 //
 //! lrm 3.6.3.2
-//! reject E0365
+//! lrm 3.6.3.2:1
+//! reject-only E0365
+//! neighbour 21_net_nodeset.va
+//! neighbour 91_nodeset_over_parameter.va
 module ch03_nodeset_not_constant(p, n);
     inout p, n;
     electrical p, n;

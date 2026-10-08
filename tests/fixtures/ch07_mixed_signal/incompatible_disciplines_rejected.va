@@ -16,8 +16,11 @@
 // The pair is what makes the compatibility rule falsifiable in both directions.
 //
 //! lrm 7.4.3
+//! lrm 7.4.3:2
 //! lrm 3.11
-//! reject incompatible discipline
+//! lrm 3.11:1
+//! reject-only incompatible discipline
+//! neighbour compatible_disciplines.va
 nature ch7_inc_potential;
   units = "V";
   access = V;

@@ -1,7 +1,7 @@
 //! §3.6 disciplines and natures and §3.11.1 compatibility, read from the AST
 //! alone. The one owner of these rules: which declaration a discipline name
 //! denotes (`declOf`), its domain (`domainOf`/`isContinuous`), its access
-//! spellings (`accessOf`), nature derivation (`baseNatureOf`/`idtNatureOf`)
+//! spellings (`accessOf`), nature derivation (`baseNatureOf`/`parentDerivNatureOf`)
 //! and §3.11.1 compatibility (`disciplineConflict`). Elaboration and lowering
 //! both call them.
 
@@ -18,38 +18,37 @@ pub fn baseNatureOf(file: *const Ast.SourceFile, name: Ast.StrId) Ast.StrId {
         const nat = for (file.natures) |*n| {
             if (n.name == want) break n;
         } else return if (hops == 0) .none else want;
-        if (nat.parent == .none) return want;
-        if (nat.parent_access) |half| {
-            const d = declOf(file, nat.parent) orelse return want;
-            const bound = switch (half) {
-                .potential => d.potential,
-                .flow => d.flow,
-            };
-            if (bound == .none) return want;
-            want = bound;
-        } else want = nat.parent;
+        const parent = parentNatureOf(file, nat);
+        if (parent == .none) return want;
+        want = parent;
     }
     return want;
 }
 
-/// The `idt_nature` a nature ends up with, its own or an inherited one.
-pub fn idtNatureOf(file: *const Ast.SourceFile, name: Ast.StrId) Ast.StrId {
-    var want = name;
-    var hops: u32 = 0;
-    while (hops < 16) : (hops += 1) {
-        const nat = for (file.natures) |*n| {
-            if (n.name == want) break n;
-        } else return .none;
-        for (nat.attrs) |a| {
-            if (std.mem.eql(u8, file.str(a.name), "idt_nature") and
-                file.exprs.tag(a.value) == .ident)
-                return file.exprs.strOf(a.value);
-        }
-        if (nat.parent == .none) return .none;
-        if (nat.parent_access != null) return .none;
-        want = nat.parent;
-    }
-    return .none;
+/// A.1.6 `parent_nature ::= nature_identifier | discipline_identifier .
+/// potential_or_flow`: the nature a derived nature derives from, the one
+/// the discipline binds to that half in the second form (§3.6.2.6). `.none`
+/// for a base nature, or a discipline that binds nothing there.
+fn parentNatureOf(file: *const Ast.SourceFile, nat: *const Ast.NatureDecl) Ast.StrId {
+    if (nat.parent == .none) return .none;
+    const half = nat.parent_access orelse return nat.parent;
+    const d = declOf(file, nat.parent) orelse return .none;
+    return switch (half) {
+        .potential => d.potential,
+        .flow => d.flow,
+    };
+}
+
+/// §3.6.1.2 the nature derived nature `nat`'s parent "uses for its"
+/// `idt_nature` or `ddt_nature` (`attr`): the value the parent gives or
+/// inherits (§3.6.1.1), else the parent itself, since "the default value is
+/// the nature itself". `.none` for a base nature, or when that value is not
+/// a nature name (E0340 reports it where it is written).
+pub fn parentDerivNatureOf(file: *const Ast.SourceFile, nat: *const Ast.NatureDecl, attr: []const u8) Ast.StrId {
+    const parent = parentNatureOf(file, nat);
+    if (parent == .none) return .none;
+    const v = file.natureAttrExpr(parent, attr) orelse return parent;
+    return if (file.exprs.tag(v) == .ident) file.exprs.strOf(v) else .none;
 }
 
 /// §3.11.1's five NATURE rules, in the order that makes each one's job visible.

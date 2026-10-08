@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 6.2.2
 //! reject E1100
 //! reject an unpacked array declaration takes no initializer
+//! neighbour b_6_2_2_declaration_forms.v
 module b_6_2_2_real_array_initializer_rejected;
   real r [0:1] = 0.0;
   initial #1 $display("%f", r[0]);

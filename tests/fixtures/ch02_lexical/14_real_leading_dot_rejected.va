@@ -8,7 +8,8 @@
 // `_rejected` for the same reason 15/16/43/44/45 are, and together the six
 // cover the whole list.
 //! lrm 2.6.2
-//! reject E0209
+//! lrm 2.6.2:2
+//! reject-only E0209
 module ch02_real_leading_dot_rejected(p, n);
     inout p, n;
     electrical p, n;

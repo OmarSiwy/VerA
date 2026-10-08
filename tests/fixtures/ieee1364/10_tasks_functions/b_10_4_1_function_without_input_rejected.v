@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 10.4.1 10.4.4
 //! reject E1100
 //! reject input
+//! neighbour b_10_4_1_function_declaration_forms.v
 module b_10_4_1_function_without_input_rejected;
   reg x;
   function f;

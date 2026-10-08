@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 8.5
 //! reject E0208
 //! reject found `#`
+//! neighbour b_8_1_3_initial_values.v
 `timescale 1ns/1ns
 primitive delayed_init(q, g, d);
   output q;

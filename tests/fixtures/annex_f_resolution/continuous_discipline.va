@@ -19,6 +19,7 @@
 //
 //! lrm 3.6.2.2
 //! lrm 3.6.3
+//! lrm 3.6.3:1
 //! bias V(p) = 0.7
 `include "check.vh"
 nature annex_f_voltage;

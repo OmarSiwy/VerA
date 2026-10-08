@@ -10,7 +10,8 @@
 // -0.000000001". (It refuses a negative expr_tol the same way.)
 //
 //! lrm 5.10.3.2
-//! reject E0517
+//! lrm 5.10.3.2:1
+//! reject-only E0517
 `include "disciplines.vams"
 module ch5_above_negative_time_tol(p, n);
   inout p, n;

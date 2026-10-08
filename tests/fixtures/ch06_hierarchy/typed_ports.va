@@ -8,6 +8,7 @@
 // either access function to the other node and both numbers move.
 //
 //! lrm 6.5.2.1
+//! lrm 6.5.2.1:1000
 //! bias V(p) = 0.6
 //! bias heat = 350
 `include "check.vh"

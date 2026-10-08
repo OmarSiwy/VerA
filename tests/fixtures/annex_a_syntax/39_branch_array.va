@@ -36,6 +36,8 @@
 //! lrm A.2.3
 //! lrm A.8.9
 //! lrm 5.5.1
+//! lrm A.2.3:1000
+//! lrm A.8.9:1000
 //! bias V(p) = 0.8
 //! bias V(n) = 0.3
 //! print none

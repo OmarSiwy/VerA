@@ -27,6 +27,7 @@
 // the two integer verdicts cross into the analog block.
 //
 //! lrm 9.6
+//! lrm 9.6:1000
 //! analysis tran
 //! time 0, 10n
 //! print none

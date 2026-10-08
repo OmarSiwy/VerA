@@ -17,7 +17,8 @@
 //
 //! lrm A.8.2
 //! lrm 4.5.14
-//! reject E0505
+//! lrm A.8.2:1000
+//! reject-only E0505
 module ch04_operator_missing_mandatory_argument(p, n);
     inout p, n;
     electrical p, n;

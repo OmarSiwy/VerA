@@ -42,9 +42,18 @@
 // connects by order rather than by name.
 //
 //! lrm E.3
+//! lrm E.3:1
+//! lrm E.3:2
 //! lrm E.1.2
+//! lrm E.1.2:1
 //! lrm E.2
+//! lrm E.2:2
 //! lrm 6.7.1
+//! lrm 6.2.2
+//! lrm 6.2.2:2
+//! lrm 6.5.4
+//! lrm 6.5.4:1
+//! lrm 6.7.1:1
 //! bias V(a) = 0.75, V(c) = 0.25
 `include "check.vh"
 module annex_e_primitive_diode(a, c);

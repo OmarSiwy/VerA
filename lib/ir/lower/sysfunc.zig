@@ -346,9 +346,13 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             .ty = .real,
         };
     }
+    const written = if (Mir.callee.family(Mir.Callee.fromName(name)) == .display)
+        sys_args.len
+    else
+        try writtenArgs(self, e, name, sys_args) orelse return poison;
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
-    for (sys_args, 0..) |a, i| {
+    for (sys_args[0..written], 0..) |a, i| {
         if (a == .none) continue;
         const tv = try lowerSysArg(self, a, takesNetRef(name));
         if (try checkDescriptor(self, name, i, a, tv)) return poison;
@@ -365,6 +369,11 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // $feof): ordinary values, but each one moves or creates state the next call
     // observes, so it is sequenced into the I/O phase like the tasks.
     if (Mir.callee.family(.fromName(name)) == .file_func) try lower_systask.sequenceFileCall(self, ex.mainTok(e), name, v);
+    // §12.32.1 "The sysfunctype field ... shall define the type of value
+    // which a system function shall return": a vpiIntFunc's call is an
+    // integer, the host's value rounded as §4.2.1.1 converts a real.
+    if (Mir.Callee.fromName(name) == .systf) for (self.int_systfs) |n| if (std.mem.eql(u8, n, name))
+        return .{ .v = try self.emit(.fi_cast, &.{v}), .ty = .integer };
     return .{ .v = v, .ty = sysFuncTy(name) };
 }
 
@@ -426,6 +435,28 @@ fn hostSized(self: *Lower, e: Ast.ExprId, acc: *HostSized) Oom!void {
     };
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| try hostSized(self, c, acc);
+}
+
+/// Returns how many leading arguments of a system call were written, or null
+/// after reporting E0894. A.8.2's analog_system_function_call admits an empty
+/// slot anywhere, but only the function's own clause gives one a meaning:
+/// trailing empty slots are optional arguments not supplied, while one before a
+/// written argument would shift every later argument into the wrong position
+/// (`$hypot(x, , y)` is not `$hypot(x, y)`), and dropping a trailing one must
+/// still leave an arity the function admits. The §9.4 display family is not
+/// judged here: IEEE 1364 §17.1.1.1 gives its empty argument a meaning.
+pub fn writtenArgs(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const Ast.ExprId) Oom!?usize {
+    var n = args.len;
+    while (n > 0 and args[n - 1] == .none) n -= 1;
+    for (args[0..n], 1..) |a, pos| if (a == .none) {
+        try self.err(self.file.exprs.mainTok(e), .E0894, "argument {d} of `{s}` is empty", .{ pos, name });
+        return null;
+    };
+    if (n != args.len and !Mir.callee.arity(Mir.Callee.fromName(name)).admits(n)) {
+        try self.err(self.file.exprs.mainTok(e), .E0894, "argument {d} of `{s}` is empty", .{ n + 1, name });
+        return null;
+    }
+    return n;
 }
 
 /// Checks a system call's argument count against `callee.Info.args` and returns

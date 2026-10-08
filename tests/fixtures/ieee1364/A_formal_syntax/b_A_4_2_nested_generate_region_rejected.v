@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.4.2
 //! reject E0228
 //! reject a generate region inside another generate region
+//! neighbour b_A_4_2_generate_constructs.v
 module b_A_4_2_nested_generate_region_rejected;
   wire w;
   generate

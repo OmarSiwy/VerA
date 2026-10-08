@@ -6,6 +6,7 @@
 // here is a sum and not a single number.
 //! lrm 2.8.4
 //! lrm 10.3
+//! lrm 2.8.4:1
 `include "check.vh"
 `define CH02_GAIN(value) ((value) * 2.0)
 module ch02_compiler_directive_macro(p, n);

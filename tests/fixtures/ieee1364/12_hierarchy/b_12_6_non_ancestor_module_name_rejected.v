@@ -15,6 +15,7 @@
 //! inherited IEEE 1364-2005 12.6
 //! reject E1100
 //! reject undeclared instance in a hierarchical reference
+//! neighbour audit_hierarchy_upward_reference.v
 `timescale 1ns/1ns
 module b_12_6_non_ancestor_module_name_rejected;
   p u();

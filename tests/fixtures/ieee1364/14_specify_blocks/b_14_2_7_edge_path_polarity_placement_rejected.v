@@ -14,6 +14,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.7 14.2.3
 //! reject polarity
+//! neighbour b_14_2_3_edge_sensitive_paths.v
 `timescale 1ns/1ns
 module b_14_2_7_edge_path_polarity_placement_rejected(clock, in, out);
   input clock, in;

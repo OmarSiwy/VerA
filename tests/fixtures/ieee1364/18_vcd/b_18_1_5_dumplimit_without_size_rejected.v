@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 18.1.5
 //! reject E1100
 //! reject $dumplimit takes one file size
+//! neighbour b_18_1_5_dumplimit_stops_with_comment.v
 `timescale 1ns/1ns
 module b_18_1_5_dumplimit_without_size_rejected;
   reg a;

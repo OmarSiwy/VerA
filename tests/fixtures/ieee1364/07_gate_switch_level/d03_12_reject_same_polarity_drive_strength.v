@@ -36,6 +36,7 @@
 //! reject drive strength pairs one 0-side with one 1-side
 //! lrm A.2.2.2
 //! lrm A.6.1
+//! lrm A.2.2.2:1000
 //! inherited IEEE 1364-2005 6.1.4 A.2.2.2
 
 module d03_reject_same_polarity_drive_strength;

@@ -17,7 +17,8 @@
 // and nothing else, so it is what is pinned now.
 //
 //! lrm 3.6.2.2
-//! reject E0339
+//! lrm 3.6.2.2:2
+//! reject-only E0339
 nature ch3_discrete_n; units="V"; access=DiscreteV; abstol=1u; endnature
 discipline ch3_discrete_natured;
     domain discrete;

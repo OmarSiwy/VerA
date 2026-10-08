@@ -11,6 +11,8 @@
 //
 //! lrm 6.3.5
 //! lrm 9.19
+//! lrm 6.3.5:1000
+//! lrm 9.19:4
 //! param gain = 2.0
 //! bias V(p) = 0.25
 `include "check.vh"

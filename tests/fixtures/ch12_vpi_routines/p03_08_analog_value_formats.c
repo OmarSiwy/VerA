@@ -62,6 +62,12 @@
 
 //! lrm 12.10
 //! lrm 12.12
+//! lrm 12.10:1
+//! lrm 12.10:2
+//! lrm 12.10:3
+//! lrm 12.10:4
+//! lrm 12.10:5
+//! lrm 12.10:7
 
 #include "p03_vpi_analog.h"
 #include <string.h>

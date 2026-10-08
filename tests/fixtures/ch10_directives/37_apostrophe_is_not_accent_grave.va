@@ -19,7 +19,8 @@
 // at the apostrophe itself.
 //
 //! lrm 10.1
-//! reject E0201
+//! lrm 10.1:1000
+//! reject-only E0201
 'define GAIN 3.0
 module ch10_apostrophe_is_not_accent_grave(p, n);
   inout p, n; electrical p, n;

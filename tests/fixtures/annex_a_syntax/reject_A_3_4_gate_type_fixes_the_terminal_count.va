@@ -38,10 +38,13 @@
 //! lrm A.3
 //! lrm A.3.4
 //! lrm A.3.1
-//! reject E0209
+//! lrm A.3.1:1000
+//! lrm A.3.4:1000
+//! reject-only E0209
 //! reject an enable gate takes an output, a data input and an enable
 //! reject cmos_switchtype
 //! reject pass_en_switchtype
+//! neighbour 57_primitive_strengths_unsupported.va
 module annex_a_gate_type_fixes_terminal_count(p, n);
     inout p, n;
     electrical p, n;

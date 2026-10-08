@@ -6,7 +6,8 @@
 // inside the statement and contributes it outside, as
 // vera_timepoint_cache.va does.
 //! lrm 2.9
-//! reject a contribution (§5.6)
+//! reject-only a contribution (§5.6)
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_contribution(p, n);
   inout p, n; electrical p, n;
   analog begin

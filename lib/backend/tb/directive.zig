@@ -36,6 +36,8 @@ const Keyword = enum {
     checks,
     plusargs,
     reject,
+    @"reject-only",
+    neighbour,
     warn,
     nowarn,
     noise,
@@ -54,6 +56,7 @@ const Keyword = enum {
     onoise,
     @"discipline-resolution",
     display,
+    @"fd-exempt",
 };
 
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
@@ -69,6 +72,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var waves: std.ArrayList(Sweep) = .empty;
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
+    var neighbours: std.ArrayList([]const u8) = .empty;
     var warn: std.ArrayList([]const u8) = .empty;
     var plusargs: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
@@ -149,11 +153,18 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                     try plusargs.append(arena, try arena.dupe(u8, arg));
                 }
             },
-            .reject => {
+            .reject, .@"reject-only" => {
                 // The whole rest of the line is ONE substring, verbatim: message
                 // fragments contain spaces and commas.
                 if (rest.len == 0) return error.BadSyntax;
                 try reject.append(arena, try arena.dupe(u8, rest));
+                if (kw == .@"reject-only") d.reject_only = true;
+            },
+            .neighbour => {
+                // A path, relative to the fixture's directory; the harness
+                // checks that it names a collected positive fixture.
+                if (rest.len == 0 or std.mem.indexOfAny(u8, rest, " \t") != null) return error.BadSyntax;
+                try neighbours.append(arena, try arena.dupe(u8, rest));
             },
             .warn => {
                 // One verbatim substring, as `reject`.
@@ -243,6 +254,11 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             .@"discipline-resolution" => d.discipline_resolution = std.meta.stringToEnum(@TypeOf(d.discipline_resolution), rest) orelse return error.BadSyntax,
             // §9.4 `vera --emit-exe --display=record`: the device's `say`.
             .display => d.display_record = if (std.mem.eql(u8, rest, "record")) true else return error.BadSyntax,
+            .@"fd-exempt" => {
+                // As `xfail`: the reason is the claim, so it is required.
+                if (rest.len == 0) return error.BadSyntax;
+                d.fd_exempt = try arena.dupe(u8, rest);
+            },
             .print => {
                 if (std.mem.eql(u8, rest, "none")) {
                     d.print_residual = false;
@@ -262,6 +278,10 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.waves = waves.items;
     d.psweeps = psweeps.items;
     d.reject = reject.items;
+    d.neighbours = neighbours.items;
+    // A legal neighbour is the other half of a refusal; a fixture that is
+    // not one has none.
+    if (d.neighbours.len != 0 and d.reject.len == 0) return error.BadSyntax;
     d.plusargs = plusargs.items;
     if (d.expected_checks != null and d.reject.len != 0) return error.BadSyntax;
     d.warn = warn.items;
@@ -283,9 +303,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
 }
 
 /// Returns whether `s` is a `//! lrm` cite: a chapter number or annex letter,
-/// then dotted numbers (`5.8`, `A.8.3`, `B`). Syntax only: a well-formed
-/// section the LRM does not have still passes.
-fn validSection(s: []const u8) bool {
+/// then dotted numbers (`5.8`, `A.8.3`, `B`), then optionally `:<n>`, the
+/// n-th normative sentence of that clause (`5.6.1.3:2`). Syntax only: a
+/// well-formed section the LRM does not have still passes.
+pub fn validSection(cite: []const u8) bool {
+    const colon = std.mem.indexOfScalar(u8, cite, ':');
+    if (colon) |c| if (!digits(cite[c + 1 ..]) or std.mem.eql(u8, cite[c + 1 ..], "0")) return false;
+    const s = cite[0 .. colon orelse cite.len];
     var it = std.mem.splitScalar(u8, s, '.');
     const first = it.first();
     const annex = first.len == 1 and first[0] >= 'A' and first[0] <= 'H';

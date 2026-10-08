@@ -22,6 +22,8 @@
 //
 //! lrm 4.5.3
 //! lrm 4.5.2
+//! lrm 4.5.2:1
+//! lrm 4.5.3:1000
 //! bias V(p) = 1.0
 //! print none
 //! abstol ddt$0 = 1e-3

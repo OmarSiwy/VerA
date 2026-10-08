@@ -22,7 +22,10 @@
 //
 //! lrm 10.1
 //! lrm 3.6.5
-//! reject E0367
+//! lrm 2.8.4
+//! lrm 2.8.4:2
+//! lrm 10.1:1000
+//! reject-only E0367
 `include "nettype_none.vh"
 module ch10_crosses_boundary_child(a, b);
     inout a, b;

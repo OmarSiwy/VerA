@@ -1,7 +1,7 @@
 //! Annex F.2 discipline resolution across the hierarchy: the flattened nets
 //! with their declared and inherited disciplines → one discipline per net, or
 //! a diagnostic for an incompatible connection. Also checks `connectrules`
-//! names and every net's declared discipline. LRM §3.10, §3.11, §5.5.3, §7.2.4, §7.4,
+//! names and every net's declared discipline. LRM §3.6.2, §3.10, §3.11, §5.5.3, §7.2.4, §7.4,
 //! §7.4.4.1, §7.4.4.3, §7.6, §7.7.1, §7.7.2, §7.7.2.1, §7.7.3, §7.8, Annex F.2.1.
 
 const std = @import("std");
@@ -67,7 +67,40 @@ pub fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!vo
 /// `used` flag on `ooc`, like `Defparam.used`.
 pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
     const d = self.ooc.getAdapted(PathKey{ .path = path, .local = self.ctx.file.str(local) }, PathKey.Context{}) orelse return null;
-    return if (d == .none) null else d;
+    return if (d.disc == .none) null else d.disc;
+}
+
+/// §3.6.2: "It shall be an error to hierarchically override the discipline
+/// of a net that was explicitly declared unless it is a compatible
+/// discipline" (§3.11.1). Judged once per segment of `child`, the module
+/// inlined at `path`: each port, and each net that is not a port's second
+/// declaration. Reports E0375 at the out-of-context declaration.
+///
+/// An Annex E primitive's `electrical` is the placeholder E.3.2 resolves
+/// past, not a declaration of the net, so its ports are not judged.
+pub fn checkOocOverrides(self: *Flatten, child: *const Ast.ModuleDecl, path: []const u8) Error!void {
+    if (elab_names.isPrimitive(self, child)) return;
+    for (child.ports) |p| try checkOocOverride(self, path, p.name, p.discipline);
+    for (child.nets) |n| {
+        if (declaresPort(child, n.name)) continue;
+        try checkOocOverride(self, path, n.name, n.discipline);
+    }
+}
+
+fn declaresPort(m: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    for (m.ports) |p| if (p.name == name) return true;
+    return false;
+}
+
+fn checkOocOverride(self: *Flatten, path: []const u8, local: Ast.StrId, declared: Ast.StrId) Error!void {
+    if (declared == .none) return;
+    const file = self.ctx.file;
+    const o = self.ooc.getAdapted(PathKey{ .path = path, .local = file.str(local) }, PathKey.Context{}) orelse return;
+    if (o.disc == .none) return;
+    const why = discipline.disciplineConflict(file, declared, o.disc) orelse return;
+    try self.err(o.tok, .E0375, "`{s}{s}` is declared `{s}` and cannot be overridden with `{s}` ({s})", .{
+        path, file.str(local), file.str(declared), file.str(o.disc), why,
+    });
 }
 
 /// Annex F.2.1 step 3: records `module`'s out-of-context discipline
@@ -84,11 +117,11 @@ pub fn collectOoc(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u
         const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(n.name) });
         if (self.ooc.get(key)) |first| {
             try self.err(n.main_tok, .E0902, "`{s}` already has the out-of-context discipline `{s}`", .{
-                key, self.ctx.file.str(first),
+                key, self.ctx.file.str(first.disc),
             });
             continue;
         }
-        try self.ooc.put(self.ctx.arena, key, n.discipline);
+        try self.ooc.put(self.ctx.arena, key, .{ .disc = n.discipline, .tok = n.main_tok });
         if (n.init != .none) try self.ooc_inits.append(self.ctx.arena, .{
             .key = key,
             .depth = path.len,

@@ -13,6 +13,8 @@
 //
 //! lrm 4.6.1
 //! lrm 4.6.2
+//! lrm 4.6.2:1
+//! lrm 4.6.1:1
 //! analysis dc
 //! bias V(p) = 0.5
 `include "check.vh"

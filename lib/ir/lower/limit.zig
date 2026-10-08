@@ -21,7 +21,7 @@ const TypedValue = Lower.TypedValue;
 // ponytail: lookup only; add an error set if resolution ever does fallible work.
 pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
     const ex = &self.file.exprs;
-    if (ex.tag(a) != .ident) return null;
+    if (a == .none or ex.tag(a) != .ident) return null;
     const name = self.file.str(ex.strOf(a));
     if (self.vars.contains(name) or self.param_index.contains(name) or self.consts.contains(name))
         return null;

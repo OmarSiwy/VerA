@@ -7,6 +7,14 @@
 //! lrm 6.3.4
 //! lrm 9.18
 //! lrm 9.19
+//! lrm 6.3.3:2
+//! lrm 6.3.4:1000
+//! lrm 6.3.5
+//! lrm 6.3.5:1000
+//! lrm 6.3.6
+//! lrm 6.3.6:2
+//! lrm 9.18:1000
+//! lrm 9.19:4
 //! checks 6
 `include "check.vh"
 module audit_hierarchy_empty_named_semantics(p);

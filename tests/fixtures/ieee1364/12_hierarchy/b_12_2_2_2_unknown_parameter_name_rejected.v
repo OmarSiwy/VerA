@@ -5,9 +5,12 @@
 // vdff has no parameter named width. Legal neighbour:
 // b_12_2_2_parameter_assignment_forms.v (.size and .delay).
 // digital-runner: reject
+//! lrm 6.3.3
+//! lrm 6.3.3:1
 //! inherited IEEE 1364-2005 12.2.2.2
 //! reject E1100
 //! reject no such parameter
+//! neighbour b_12_2_2_parameter_assignment_forms.v
 module vdff;
   parameter size=5, delay=1;
   initial $display("%0d %0d", size, delay);

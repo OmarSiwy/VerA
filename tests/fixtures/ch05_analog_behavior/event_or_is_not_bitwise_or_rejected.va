@@ -25,8 +25,10 @@
 // legal. The directives pin the phase and the offending token.
 //
 //! lrm 5.10.1
-//! reject ParseError
+//! reject-only ParseError
 //! reject `|`
+//! neighbour event_or.va
+//! neighbour initial_final_analysis_lists.va
 module ch5_event_bitwise_or(p);
   inout p; electrical p;
   real x;

@@ -21,6 +21,7 @@
 // equation, so a conforming compiler reads back exactly what was contributed.
 //
 //! lrm 1.3.4
+//! lrm 1.3.4:1
 //! bias V(in) = 0.375
 //! solve
 `include "check.vh"

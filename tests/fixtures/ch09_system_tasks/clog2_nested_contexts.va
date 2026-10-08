@@ -30,6 +30,7 @@
 // neighbours reject_clog2_wide_arithmetic{,_default}.va, not an XFAIL.
 //! lrm 9.14
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param a = 7
 //! checks 26
 `include "check.vh"

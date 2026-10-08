@@ -23,6 +23,7 @@
 //! param m = 4
 //! lrm 3.4.7
 //! lrm 6.3.6
+//! lrm 3.4.7:7
 `include "check.vh"
 module ch03_aliasparam_mfactor(p, n);
     inout p, n;

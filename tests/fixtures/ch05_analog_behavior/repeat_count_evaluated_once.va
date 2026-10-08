@@ -17,6 +17,7 @@
 // being optimised away.
 //
 //! lrm 5.9.1
+//! lrm 5.9.1:1
 `include "check.vh"
 module ch5_repeat_count_once(p);
   inout p; electrical p; integer n; real x;

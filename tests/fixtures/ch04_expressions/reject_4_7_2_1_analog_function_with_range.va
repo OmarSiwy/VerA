@@ -17,7 +17,9 @@
 // parser recovering from that one error.
 //
 //! lrm 4.7.2.1
+//! lrm 4.7.2.1:1
 //! lrm A.2.6
+//! lrm A.2.6:1000
 //! reject E0208
 `include "disciplines.vams"
 module ch4_function_with_range(p, n);

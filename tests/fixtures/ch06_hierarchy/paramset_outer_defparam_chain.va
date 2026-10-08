@@ -2,9 +2,13 @@
 // The outer w=7 overrides inline w=2, selecting near->far_high->leaf.
 // far_high sets gain=5, so I=5*(1/2)=2.5 A. The near links have no module
 // parameter assignment: this asserts no unspecified near/far precedence.
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 6.3
 //! lrm 6.4
 //! lrm 6.4.2
+//! lrm 6.4.2:4
+//! lrm 6.4:1
+//! lrm 6.4:2
 //! bias V(p) = 0.5
 //! checks 2
 `include "check.vh"
@@ -29,9 +33,11 @@ paramset ps_chain_near ps_chain_far_high;
   tag=w;
 endparamset
 paramset ps_chain_far_low ps_chain_leaf;
+  parameter real unused_item = 0;
   .gain=2.0;
 endparamset
 paramset ps_chain_far_high ps_chain_leaf;
+  parameter real unused_item = 0;
   .gain=5.0;
 endparamset
 module ps_chain_leaf(p);

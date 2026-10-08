@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 12.2.2 12.2.2.2
 //! reject E0246
 //! reject mixes ordered and named parameter assignments
+//! neighbour b_12_2_2_parameter_assignment_forms.v
 module vdff;
   parameter size=5, delay=1;
   initial $display("%0d %0d", size, delay);

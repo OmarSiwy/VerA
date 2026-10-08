@@ -30,6 +30,7 @@
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.9
 //! lrm 6.2.2
+//! lrm 6.2.2:3
 //! bias V(p) = 0.5
 //! solve
 `include "check.vh"

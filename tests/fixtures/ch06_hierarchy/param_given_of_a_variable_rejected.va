@@ -24,8 +24,11 @@
 //
 //! lrm 6.3.5
 //! lrm 9.19
-//! reject E0822
+//! lrm 9.19:3
+//! reject-only E0822
 //! reject requires a parameter identifier
+//! neighbour param_given.va
+//! neighbour param_given_absent.va
 module ch6_param_given_variable(p);
   inout p; electrical p;
   parameter real gain = 1.0;

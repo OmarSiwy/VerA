@@ -43,7 +43,8 @@
 //
 //! lrm 6.2
 //! lrm A.1.2
-//! reject E1001
+//! reject-only E1001
+//! neighbour ../ch07_mixed_signal/connectrules_accepted.va
 connectrules annex_c_connectrules_not_a_device;
     connect a2d;
 endconnectrules

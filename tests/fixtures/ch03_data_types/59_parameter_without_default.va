@@ -14,7 +14,8 @@
 // may contain, this one is about its absence.
 //
 //! lrm 3.4.1
-//! reject E0207
+//! lrm 3.4.1:1
+//! reject-only E0207
 module ch3_parameter_without_default(p, n);
     inout p, n;
     electrical p, n;

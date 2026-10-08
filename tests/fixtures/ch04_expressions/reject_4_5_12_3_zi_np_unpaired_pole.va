@@ -7,7 +7,8 @@
 // The only error is the unpaired complex pole.
 //
 //! lrm 4.5.12.3
-//! reject no conjugate partner
+//! lrm 4.5.12.3:2
+//! reject-only no conjugate partner
 `include "disciplines.vams"
 module ch4_zi_np_unpaired_pole(p, n);
   inout p, n;

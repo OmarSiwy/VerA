@@ -79,6 +79,9 @@
 //! lrm 10.6
 //! lrm 2.8.2
 //! lrm B
+//! lrm B:1
+//! lrm C.16
+//! lrm C.16:1000
 //! bias V(assert) = 1.25, V(n) = 0.25
 `begin_keywords "VAMS-2023"
 `include "check.vh"

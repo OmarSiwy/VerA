@@ -26,6 +26,7 @@
 // loudly in both directions rather than only through the exit code.
 //
 //! lrm 9.21.2
+//! lrm 9.21.2:1
 //! exit 1
 //! sweep V(p) = 2.0, 5.0
 `include "check.vh"

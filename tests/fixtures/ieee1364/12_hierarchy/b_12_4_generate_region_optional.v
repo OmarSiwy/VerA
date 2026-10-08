@@ -16,6 +16,9 @@
 //   bin[7] = 1, [6] = 1^1 = 0, [5] = 0^0 = 0, [4] = 0^0 = 0,
 //   [3] = 0^1 = 1, [2] = 1^0 = 1, [1] = 1^1 = 0, [0] = 0^0 = 0
 //   -> 10001100 for all three, printed at t = 2.
+//! lrm 6.6
+//! lrm 6.6:3
+//! lrm 6.6:5
 //! inherited IEEE 1364-2005 12.4
 `timescale 1ns/1ns
 module g2b1 (bin, gray);

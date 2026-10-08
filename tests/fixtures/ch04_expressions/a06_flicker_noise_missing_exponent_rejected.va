@@ -33,7 +33,9 @@
 //
 //! lrm 4.6.4.2
 //! lrm A.8.2
-//! reject E0522
+//! lrm 4.6.4.2:1000
+//! lrm A.8.2:1000
+//! reject-only E0522
 module a06_flicker_noise_missing_exponent_rejected(p, n);
     inout p, n;
     electrical p, n;

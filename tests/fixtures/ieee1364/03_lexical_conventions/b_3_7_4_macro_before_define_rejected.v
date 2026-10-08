@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 3.7.4
 //! reject E0115
 //! reject undefined macro
+//! neighbour b_3_7_4_directive_takes_effect_when_read.v
 module b_3_7_4_macro_before_define_rejected;
   initial $display("%0d", `W);
 `define W 8

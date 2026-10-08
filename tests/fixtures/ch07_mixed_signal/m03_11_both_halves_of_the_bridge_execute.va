@@ -88,6 +88,12 @@
 //! lrm 7.5
 //! lrm 7.6
 //! lrm 7.8.4
+//! lrm 7.4.2
+//! lrm 7.4.2:1
+//! lrm 7.5:1000
+//! lrm 7.8:1
+//! lrm A.1.8
+//! lrm A.1.8:1000
 //! solve
 `include "check.vh"
 

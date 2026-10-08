@@ -11,7 +11,8 @@
 //
 //! lrm G.1
 //! lrm 9.17.1
-//! reject E0214
+//! reject-only E0214
+//! neighbour ../ch09_system_tasks/24_discontinuity.va
 module annex_g_discontinuity_v1_spelling(p, n);
   inout p, n; electrical p, n;
   analog begin

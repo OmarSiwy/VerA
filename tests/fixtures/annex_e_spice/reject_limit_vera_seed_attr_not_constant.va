@@ -7,7 +7,9 @@
 // is not a constant_expression: `vtox` is an analog block variable. VerA
 // reads no `vera_seed` attribute, so this is the §2.9 rule alone, E0357.
 //! lrm 2.9
-//! reject E0357
+//! lrm 2.9:2
+//! reject-only E0357
+//! neighbour limit_seed_mos1_initjct.va
 module reject_limit_vera_seed_attr_not_constant(p, n);
   inout p, n; electrical p, n, a;
   parameter real vto = 0.7, vt = 0.025, vcrit = 0.6;

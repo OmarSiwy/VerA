@@ -26,7 +26,9 @@
 // `connectrules_accepted.va`'s, which is the positive twin and runs green.
 //
 //! lrm 7.7
-//! reject expected `connect`
+//! lrm 7.7:1000
+//! reject-only expected `connect`
+//! neighbour connectrules_accepted.va
 `include "disciplines.vams"
 connectmodule ch7_cr_a2d(el, dg);
   input el;

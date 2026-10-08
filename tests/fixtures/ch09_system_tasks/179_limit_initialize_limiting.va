@@ -8,6 +8,7 @@
 // `iteration` count and no `iniLim`; the iterate numbering and the seeded
 // trajectory are VerA's (the unknown-name fallback half is 9.15's and is pinned
 // with a tag elsewhere).
+//! fd-exempt §9.17.3: the residual is evaluated at the limited iterate and the Jacobian is taken w.r.t. it (Newton linearization), so a difference across the clamp is not the Jacobian
 //! analysis dc
 //! time 0, 1, 2, 3
 //! bias V(p) = 5

@@ -25,7 +25,10 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.13.2
-//! reject E0816
+//! lrm 9.13.2:1
+//! lrm 9.13.2:2
+//! lrm 9.13.2:3
+//! reject-only E0816
 //! reject greater than zero
 module ch09_rdist_domain_rejected(p, n);
   inout p, n; electrical p, n;

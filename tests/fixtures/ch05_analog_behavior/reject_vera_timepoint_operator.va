@@ -6,7 +6,8 @@
 // legal neighbour, a statement of `$abstime` and held state, is
 // vera_timepoint_cache.va.
 //! lrm 2.9
-//! reject the analog operator `idt`
+//! reject-only the analog operator `idt`
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_operator(p, n);
   inout p, n; electrical p, n;
   real w;

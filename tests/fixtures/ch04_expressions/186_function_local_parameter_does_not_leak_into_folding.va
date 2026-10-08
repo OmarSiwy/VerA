@@ -25,6 +25,7 @@
 //! lrm 4.7.1
 //! lrm 6.8
 //! lrm 3.5
+//! lrm 4.7.1:3
 `include "check.vh"
 module ch04_function_local_parameter_does_not_leak_into_folding(p, n);
     inout p, n;

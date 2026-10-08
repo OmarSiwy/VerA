@@ -7,7 +7,8 @@
 //
 //! lrm 10.4
 //! inherited IEEE 1364-2005 19.3.2
-//! reject E0113
+//! reject-only E0113
+//! neighbour 08_undef_conditional.va
 `define CH10_GAIN 1.0
 `undef
 module ch10_undef_requires_a_name(p, n);

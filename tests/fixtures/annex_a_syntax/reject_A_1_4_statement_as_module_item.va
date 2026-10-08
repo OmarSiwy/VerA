@@ -33,8 +33,12 @@
 //! lrm A
 //! lrm A.1
 //! lrm A.1.4
-//! reject E0240
+//! lrm A:1000
+//! lrm A.1.4:1000
+//! reject-only E0240
 //! reject not a module item
+//! neighbour 05_behavioral_statements.va
+//! neighbour 16_analog_initial.va
 module annex_a_statement_as_module_item(p, n);
     inout p, n;
     electrical p, n;

@@ -8,7 +8,8 @@
 // per element (§3.6.3). The legal element access is vector_access.va.
 //
 //! lrm 5.5.2
-//! reject E0351
+//! reject-only E0351
+//! neighbour vector_access.va
 `include "disciplines.vams"
 module ch5_access_function_on_whole_vector(p, n);
   inout p, n; electrical p, n;

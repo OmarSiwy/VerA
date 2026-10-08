@@ -1,0 +1,59 @@
+// §10.4: the same doubling as macro_doubling_expands.va, 40 levels deep:
+// D40 expands to 2^40 copies. Depth is bounded (E0119 at 128), but 40 levels
+// is legal; the total substituted text is what no machine can hold. VerA's
+// limit on it is E0150 (64 MiB of substituted macro bodies), an engine bound
+// refused by name. Before 2026-10-08 the compiler ran out of memory with no
+// diagnostic (tests/fixtures/ADVERSARIAL.tsv).
+//
+//! lrm 10.4
+//! reject-only E0150
+//! neighbour macro_doubling_expands.va
+`define D0 1.0 +
+`define D1 `D0 `D0
+`define D2 `D1 `D1
+`define D3 `D2 `D2
+`define D4 `D3 `D3
+`define D5 `D4 `D4
+`define D6 `D5 `D5
+`define D7 `D6 `D6
+`define D8 `D7 `D7
+`define D9 `D8 `D8
+`define D10 `D9 `D9
+`define D11 `D10 `D10
+`define D12 `D11 `D11
+`define D13 `D12 `D12
+`define D14 `D13 `D13
+`define D15 `D14 `D14
+`define D16 `D15 `D15
+`define D17 `D16 `D16
+`define D18 `D17 `D17
+`define D19 `D18 `D18
+`define D20 `D19 `D19
+`define D21 `D20 `D20
+`define D22 `D21 `D21
+`define D23 `D22 `D22
+`define D24 `D23 `D23
+`define D25 `D24 `D24
+`define D26 `D25 `D25
+`define D27 `D26 `D26
+`define D28 `D27 `D27
+`define D29 `D28 `D28
+`define D30 `D29 `D29
+`define D31 `D30 `D30
+`define D32 `D31 `D31
+`define D33 `D32 `D32
+`define D34 `D33 `D33
+`define D35 `D34 `D34
+`define D36 `D35 `D35
+`define D37 `D36 `D36
+`define D38 `D37 `D37
+`define D39 `D38 `D38
+`define D40 `D39 `D39
+module macro_expansion_too_large(p);
+  inout p; electrical p;
+  real x;
+  analog begin
+    x = `D40 0.0;
+    I(p) <+ x;
+  end
+endmodule

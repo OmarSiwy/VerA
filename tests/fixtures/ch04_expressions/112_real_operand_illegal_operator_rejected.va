@@ -21,7 +21,8 @@
 // rule actually lives; the code is the stable half and is what is matched.)
 //
 //! lrm 4.2.1
-//! reject E0322
+//! lrm 4.2.1:1
+//! reject-only E0322
 module ch04_real_operand_illegal_operator_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -29,9 +29,10 @@
 // only by that requirement (elaborate/resolve.zig `checkConnectRules`).
 //
 //! lrm 7.8
+//! lrm 7.8:2
 //! lrm 7.7.1
 //! lrm 3.11.1
-//! reject E0923
+//! reject-only E0923
 
 discipline m03_elec2;
   potential Voltage;

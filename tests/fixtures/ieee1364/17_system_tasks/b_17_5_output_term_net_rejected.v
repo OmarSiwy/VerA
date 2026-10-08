@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 17.5
 //! reject E1100
 //! reject there is no procedural assignment to a net
+//! neighbour audit_pla_async_personality.v
 `timescale 1 ns / 1 ns
 module b_17_5_output_term_net_rejected;
   reg [1:2] mem [1:1];

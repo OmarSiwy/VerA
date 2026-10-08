@@ -14,6 +14,7 @@
 // 1 / 200 = 5 mA, which is I(a,b), independent of any limiting.
 //
 //! lrm 9.17.3
+//! lrm 9.17.3:2
 //! warn W0853
 //! warn its first argument is not a §4.4 potential probe
 //! solve

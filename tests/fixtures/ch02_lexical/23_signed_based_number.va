@@ -18,6 +18,9 @@
 // Without these wants a compiler that ignores `s` and answers 15 everywhere
 // passes, which is exactly what this file used to allow.
 //! lrm 2.6.1
+//! lrm 2.6.1:13
+//! lrm 2.6.1:6
+//! lrm 2.6.1:11
 `include "check.vh"
 module ch02_signed_based_number(p, n);
     inout p, n;

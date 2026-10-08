@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.1.4
 //! reject E0207
 //! reject unexpected token: found `[`
+//! neighbour b_7_1_4_optional_instance_name.v
 module b_7_1_4_unnamed_array_rejected;
   reg [3:0] a, b;
   wire [3:0] o;

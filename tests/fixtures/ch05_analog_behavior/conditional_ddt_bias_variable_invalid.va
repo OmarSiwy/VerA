@@ -12,8 +12,13 @@
 // condition through a variable must not launder the dependence away.
 //
 //! lrm 4.5.15
+//! lrm 4.5.15:1
 //! lrm 5.8.1
-//! reject E0514
+//! lrm 5.6.5
+//! lrm 5.6.5:3
+//! lrm 5.8.1:1
+//! reject-only E0514
+//! neighbour conditional_ddt_parameter_variable.va
 module ch05_conditional_ddt_bias_variable_invalid(d, s);
     inout d, s;
     electrical d, s;

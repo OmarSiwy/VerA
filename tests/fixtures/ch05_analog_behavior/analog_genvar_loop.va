@@ -22,6 +22,11 @@
 // discriminate are `tmp`'s.
 //
 //! lrm 5.9.3
+//! lrm 5.5.2
+//! lrm 5.5.2:1
+//! lrm 5.9.2
+//! lrm 5.9.2:1
+//! lrm 5.9.3:1000
 //! bias V(dt[1]) = 0.5, V(dt[2]) = 0.25, V(dt[3]) = 0.125
 `include "check.vh"
 module ch5_genvar(out, dt);

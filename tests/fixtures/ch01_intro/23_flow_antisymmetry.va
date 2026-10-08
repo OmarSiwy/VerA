@@ -21,6 +21,7 @@
 // note in 05_potential_and_flow.va for why no `//! xfail` covers it.)
 //
 //! lrm 1.3.1.2
+//! lrm 1.3.1.2:1000
 //! sweep flowZ28pZ2cnZ29 = 0.125
 `include "check.vh"
 module ch01_flow_antisymmetry(p, n);

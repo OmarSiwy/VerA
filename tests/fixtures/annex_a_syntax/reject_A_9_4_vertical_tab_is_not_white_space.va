@@ -31,8 +31,11 @@
 //! lrm A.9
 //! lrm A.9.4
 //! lrm 2.3
-//! reject E0208
+//! lrm 2.3:1
+//! lrm A.9.4:1000
+//! reject-only E0208
 //! reject invalid token
+//! neighbour 68_white_space.va
 module annex_a_vertical_tab_is_not_white_space(p, n);
     inout p, n;
     electrical p, n;

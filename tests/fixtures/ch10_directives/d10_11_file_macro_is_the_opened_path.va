@@ -20,6 +20,7 @@
 // VerA used to expand the short name ("d10_file_macro_probe.vh") and read 1.
 //
 //! lrm 10.7
+//! lrm 10.7:1
 `include "check.vh"
 module d10_11_file_macro_is_the_opened_path(p, n);
   inout p, n; electrical p, n;

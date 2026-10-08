@@ -32,10 +32,13 @@
 // would FAIL it and only one without SPICE support would pass.
 //
 //! lrm E.1.2
+//! lrm E.1.2:1
 //! lrm E.2.2.1
 //! lrm E.3
 //! lrm 6.5.5
 //! lrm 6.7.1
+//! lrm 6.5.5:1
+//! lrm 6.7.1:1
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25, V(s1) = 0.125
 `include "check.vh"
 module annex_e_primitive_named_ports(c1, b1, e1, s1);

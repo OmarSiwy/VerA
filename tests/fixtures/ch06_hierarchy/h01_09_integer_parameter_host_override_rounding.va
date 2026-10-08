@@ -38,6 +38,7 @@
 // card-write sites (the shared card and `//! psweep`'s per-point one).
 //
 //! lrm 4.2.1.1
+//! lrm 4.2.1.1:1
 //! lrm 3.4.1
 //! param n_half_neg = -1.5, n_half_pos = 35.5, n_down = 35.2
 //! bias V(p) = 0.5

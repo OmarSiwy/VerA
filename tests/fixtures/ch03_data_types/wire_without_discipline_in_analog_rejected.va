@@ -17,8 +17,14 @@
 // port connections, which §3.6.2.4 permits.
 //
 //! lrm 3.6.2.4
+//! lrm 3.6.2.4:2
+//! lrm 3.6.2.4:3
+//! lrm 3.6.2.4:4
 //! lrm 3.6.3
-//! reject E0337
+//! lrm 3.6.2
+//! lrm 3.6.2:3
+//! reject-only E0337
+//! neighbour 34_implicit_nets.va
 module ch3_wire_without_discipline_in_analog(p, n);
     inout p, n;
     electrical p, n;

@@ -17,7 +17,9 @@
 // a conforming compiler never reaches, because it diagnoses line 22 first.
 //
 //! lrm 4.4
-//! reject E0501
+//! lrm 4.4:5
+//! reject-only E0501
+//! neighbour 110_custom_discipline_access.va
 nature ch4_custom_p; units="V"; access=CustomV; abstol=1u; endnature
 nature ch4_custom_f; units="A"; access=CustomI; abstol=1p; endnature
 discipline ch4_custom_d; potential ch4_custom_p; flow ch4_custom_f; enddiscipline

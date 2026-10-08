@@ -15,7 +15,7 @@
 // as the trailing sign argument.
 //
 //! lrm 9.17.3
-//! reject E0891
+//! reject-only E0891
 //! reject first argument is not an access function reference
 module ch09_limit_scaled_probe_rejected(p, n);
   inout p, n; electrical p, n, a;

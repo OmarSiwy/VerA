@@ -20,8 +20,9 @@
 //
 //! lrm 9.4.2
 //! lrm 2.7
-//! reject E0138
+//! reject-only E0138
 //! reject a string literal may not span lines
+//! neighbour 06_display_formats.va
 `include "disciplines.vams"
 module ch09_display_newline_only_by_escape(p, n);
   inout p, n; electrical p, n;

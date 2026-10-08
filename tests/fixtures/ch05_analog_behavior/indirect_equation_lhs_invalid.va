@@ -9,7 +9,8 @@
 // left side is the only defect.
 //
 //! lrm 5.6.7
-//! reject E0414
+//! lrm 5.6.7:1
+//! reject-only E0414
 module ch5_indirect_equation_lhs(p, c);
   inout p, c; electrical p, c; real x;
   analog begin

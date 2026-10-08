@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 4.10.2
 //! reject E1100
 //! reject local parameter
+//! neighbour b_4_10_2_localparam_from_parameter.v
 module b_4_10_2_leaf;
   localparam L = 1;
   initial $display("%0d", L);

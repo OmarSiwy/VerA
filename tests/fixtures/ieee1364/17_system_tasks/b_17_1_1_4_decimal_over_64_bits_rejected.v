@@ -6,6 +6,7 @@
 // digital-runner: reject
 //! reject E1100
 //! reject decimal display of an operand wider than 64 bits
+//! neighbour b_17_1_1_3_wide_operand_prints_every_digit.v
 module b_17_1_1_4_decimal_over_64_bits_rejected;
   reg [64:0] r;
   initial begin

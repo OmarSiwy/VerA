@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 10.1 10.2
 //! reject E1100
 //! reject a task is enabled as a statement, not called in an expression
+//! neighbour b_10_1_task_function_distinctions.v
 module b_10_1_task_as_operand_rejected;
   reg [7:0] x;
   task t;

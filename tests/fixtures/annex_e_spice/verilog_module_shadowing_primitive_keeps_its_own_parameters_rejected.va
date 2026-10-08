@@ -27,8 +27,10 @@
 //
 //! lrm E.3.3
 //! lrm 6.3.3
-//! reject E0907
+//! lrm 6.3.3:1
+//! reject-only E0907
 //! reject `r` is not a parameter of `resistor`
+//! neighbour spice_name_shadow.va
 `include "disciplines.vams"
 module e33_shadow_top(p, n);
   inout p, n; electrical p, n;

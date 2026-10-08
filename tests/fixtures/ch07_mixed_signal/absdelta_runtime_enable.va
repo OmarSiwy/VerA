@@ -7,6 +7,7 @@
 // Four final-step assertions give checks = 4. Invalid literal enables are
 // pinned by event_bounds_absdelta_noninteger_enable_rejected.va.
 //! lrm 5.10.3.4
+//! lrm 5.10.3.4:1
 //! analysis tran
 //! time 0, 2n, 4n, 6n, 8n
 //! bias V(p) = 1.0

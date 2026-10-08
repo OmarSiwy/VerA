@@ -21,7 +21,8 @@
 //
 //! lrm A.6.4
 //! lrm A.6.5
-//! reject E0401
+//! lrm A.6.4:1000
+//! reject-only E0401
 //! reject disable
 module annex_c_disable_rejected(p);
     inout p;

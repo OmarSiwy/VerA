@@ -5,6 +5,8 @@
 // disciplines and the net they connect to.
 //
 //! lrm 6.5.7
+//! lrm 6.5
+//! lrm 6.5:1000
 //! bias V(shared) = 0.8
 //! print none
 `include "check.vh"

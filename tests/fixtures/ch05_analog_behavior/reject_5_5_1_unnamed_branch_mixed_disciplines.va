@@ -11,7 +11,8 @@
 // `electrical` and `t` is of discipline `thermal`".
 //
 //! lrm 5.5.1
-//! reject E0355
+//! lrm 5.5.1:5
+//! reject-only E0355
 `include "disciplines.vams"
 module ch5_unnamed_branch_mixed(p, t);
   inout p, t;

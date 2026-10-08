@@ -17,7 +17,9 @@
 // unrelated failed compilation phase.
 //
 //! lrm 3.6.1.2
+//! lrm 3.6.1.2:11
 //! lrm 3.11.1
-//! reject E0340
+//! reject-only E0340
+//! neighbour 76_nature_compatibility_rules.va
 nature ch3_units_ident; units=Volt; access=UnitsIdentV; abstol=1u; endnature
 module ch3_nature_units_as_identifier; endmodule

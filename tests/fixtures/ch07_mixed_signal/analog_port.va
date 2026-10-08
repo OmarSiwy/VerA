@@ -3,37 +3,35 @@
 // access function regardless of direction — `input` does not make a net
 // unreadable from the other side, nor `output` unprobeable.
 //
-// The body is a potential source, whose branch equation is V(driven) - V(sense)
-// = 0 (§1.3.1.2 associated reference directions). The second check is NOT that
-// residual, despite the shape: both operands are `//! bias` values the runner
-// forced, so what it observes is that each analog port reads back the value it
-// was given and that the two subtract in the declared direction. Seeing a
-// solver drive the branch to zero would need the equation solved, which a dc
-// probe at a forced operating point does not do.
+// The body is a potential source on the OUTPUT port, whose branch equation is
+// V(driven) - V(sense) = 0 (§5.4.2.2; §1.3.1.2 associated reference
+// directions). `sense` is biased to 0.7 V by the testbench; `driven` is left
+// free and `//! solve` hands it to the Newton loop, so the second check reads
+// the solved value of the output port, not a number the runner wrote in:
 //
-// The difference is written to the last bit rather than as -0.5, because -0.5
-// is not what binary64 computes: 0.2 and 0.7 are each inexact and their
-// difference rounds to -0.49999999999999994 (exactly
-// -0.499999999999999944488848768742172978818416595458984375), half an ulp shy
-// of -0.5. §4.2 makes real arithmetic IEEE-754 double, so that value is fixed
-// for every conforming compiler and the check is CHECKX. The old -0.5 passed
-// only because CHECK's 1e-15 tolerance was 18x the 5.551115123125783e-17 error
-// — the digits, not the tolerance, were the defect.
+//     V(driven) = V(sense) = 0.7       V(driven) - V(sense) = 0
 //
-// The first check is CHECKX for the same reason. A `//! bias` value is written
-// into the unknown vector verbatim and no arithmetic stands between it and the
-// probe, so the readback is bit-identical to the literal. A 1e-15 window there
-// was nine ulp of slack (ulp(0.7) = 1.1102230246251565e-16) on a value nothing
-// is permitted to perturb.
+// RECONCILER, 2026-10-08. An earlier revision biased BOTH ports (driven = 0.2,
+// sense = 0.7) and asserted their difference, -0.49999999999999994. A potential
+// source between `driven` and ground in parallel with the testbench's 0.2 V
+// drive has no solution, so that digit described a point no conforming
+// simulator reaches; §5.4.2.2's equation makes the difference 0 at every
+// solution. The `//! lrm 4.2` cite went with that digit.
+//
+// The first check is CHECKX: a `//! bias` value is written into the unknown
+// vector verbatim and no arithmetic stands between it and the probe. The second
+// allows 1e-12 for the solve.
 //
 //! lrm 7.2.3
-//! lrm 4.2
-//! bias V(sense) = 0.7, V(driven) = 0.2
+//! bias V(sense) = 0.7
+//! solve
+//! checks 2
 `include "check.vh"
 module ch7_analog_port(input electrical sense, output electrical driven);
   analog begin
     `CHECKX("the input analog port is readable", V(sense), 0.7);
-    `CHECKX("both analog ports read back, V(driven) - V(sense)", V(driven) - V(sense), -0.49999999999999994);
+    `CHECK("the output analog port is driven to the input's potential, V(driven) - V(sense)",
+           V(driven) - V(sense), 0.0, 1e-12);
     V(driven) <+ V(sense);
   end
 endmodule

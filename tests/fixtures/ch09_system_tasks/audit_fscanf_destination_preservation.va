@@ -5,6 +5,8 @@
 // "nope" from that SAME offending character. EOF leaves later outputs intact.
 //! lrm 9.5.4.2
 //! lrm 9.5.5
+//! lrm 9.5.4.2:5
+//! lrm 9.5.5:1
 //! checks 8
 `include "check.vh"
 module audit_fscanf_destination_preservation(p, n);

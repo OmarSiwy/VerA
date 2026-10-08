@@ -31,6 +31,11 @@
 //
 //! lrm 7.7.2.1
 //! lrm 7.7.2
+//! lrm 7.4.1
+//! lrm 7.4.1:1000
+//! lrm 7.7.2:1000
+//! lrm A.1.8
+//! lrm A.1.8:1000
 //! bias s_xy = 0.75, s_ya = 0.25
 `include "check.vh"
 nature ch7_crr_x_pot; units = "V"; access = XV; abstol = 1u; endnature

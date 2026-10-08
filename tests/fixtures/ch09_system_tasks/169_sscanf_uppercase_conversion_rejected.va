@@ -22,8 +22,9 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.5.4.2
-//! reject conversion
+//! reject-only conversion
 //! reject E0813
+//! neighbour 048_sscanf.va
 module ch09_sscanf_uppercase_conversion_rejected(p, n);
   inout p, n; electrical p, n;
   integer code, value;

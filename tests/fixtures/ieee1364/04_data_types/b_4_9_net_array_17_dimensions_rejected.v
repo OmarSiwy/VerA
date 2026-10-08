@@ -10,6 +10,7 @@
 // digital-runner: reject
 //! reject E1100
 //! reject arrays of more than 16 dimensions
+//! neighbour audit_type_net_array.v
 module b_4_9_net_array_17_dimensions_rejected;
   wire w [0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0][0:0];
   assign w[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0] = 1'b1;

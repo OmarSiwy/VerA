@@ -6,6 +6,9 @@
 // arm at all leaves the LRM 3.2 initial 0.0.
 //
 //! lrm 5.8.1
+//! lrm 5.8.1:2
+//! lrm 5.8.2
+//! lrm 5.8.2:3
 //! bias V(c) = 1.5
 `include "check.vh"
 module ch5_if_else(p, c);

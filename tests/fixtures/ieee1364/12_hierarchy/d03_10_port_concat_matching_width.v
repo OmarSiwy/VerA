@@ -32,6 +32,7 @@
 // Demanding a refusal would pin a rule neither document states.
 //
 //! lrm 6.5.7.1
+//! lrm 6.5.7.1:1
 //! lrm annex A.4.1
 //! timescale 1ns/1ns
 //! inherited IEEE 1364-2005 12.3.5 12.3.9.2

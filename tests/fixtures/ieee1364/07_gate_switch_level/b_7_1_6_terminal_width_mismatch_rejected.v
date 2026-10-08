@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.1.6
 //! reject E1100
 //! reject a gate's input terminal is one bit, or one per instance of an array
+//! neighbour b_7_1_5_two_named_arrays.v
 module b_7_1_6_terminal_width_mismatch_rejected;
   reg [2:0] a;
   reg [3:0] b;

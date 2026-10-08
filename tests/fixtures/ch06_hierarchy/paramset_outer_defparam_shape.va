@@ -9,6 +9,7 @@
 // refusal is an implementation limit, not an invalid-source LRM rule.
 //! lrm 6.3
 //! lrm 6.4.2
+//! lrm 6.4.2:4
 //! bias V(p) = 0.5
 //! checks 4
 `include "check.vh"

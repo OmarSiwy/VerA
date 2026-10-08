@@ -34,7 +34,8 @@
 //
 //! lrm 7.3.4
 //! lrm 7.3.6.2
-//! reject E0406
+//! reject-only E0406
+//! neighbour m01_04_posedge_in_an_analog_event_control.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_contrib_under_posedge(p);

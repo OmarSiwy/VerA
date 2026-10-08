@@ -4,7 +4,9 @@
 // and observes both its delivered value and the time.
 // digital-runner: reject
 //! lrm 2.6.2
+//! lrm 2.6.2:3
 //! reject E0247
+//! neighbour digital_delay_notation.v
 module scaled_delay_nonblocking_rejected;
   reg q;
   initial q <= #(2 + 5u) 1;

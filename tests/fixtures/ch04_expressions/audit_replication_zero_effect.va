@@ -7,6 +7,7 @@
 // contributes no bits at replication count zero, but the counter must be 1.
 // Binding the result before CHECK avoids textual macro re-evaluation.
 //! lrm 4.2.13
+//! lrm 4.2.13:6
 //! checks 2
 `include "check.vh"
 module audit_replication_zero_effect(p, n);

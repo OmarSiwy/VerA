@@ -11,7 +11,8 @@
 // extrapolation characters" — 1 interpolation + 2 extrapolation = 3.
 //
 //! lrm 9.21.2
-//! reject E0815
+//! lrm 9.21.2:2
+//! reject-only E0815
 `include "disciplines.vams"
 module ch9_control_substring_too_long(p, n);
   inout p, n;

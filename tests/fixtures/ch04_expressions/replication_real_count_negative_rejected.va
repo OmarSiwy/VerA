@@ -8,7 +8,8 @@
 // The legal neighbour is replication_real_count.va.
 //
 //! lrm 4.2.1
-//! reject non-negative, got -2
+//! reject-only non-negative, got -2
+//! neighbour replication_real_count.va
 `include "disciplines.vams"
 module ch04_replication_real_count_negative(p);
     inout p;

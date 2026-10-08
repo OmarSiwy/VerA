@@ -69,6 +69,7 @@
 //! lrm 9.21.1
 //! bias V(p) = 1.5
 //! bias V(n) = 0
+//! fd-exempt §9.21: the guarded sites run past V(p,n) = 100 and must fail there (a missing file, a duplicate abscissa), which L4b's random unknowns reach
 `include "check.vh"
 module a05_file_loaded_on_first_executed_call(p, n);
   inout p, n; electrical p, n;

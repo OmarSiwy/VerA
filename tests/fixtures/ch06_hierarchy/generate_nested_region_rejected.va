@@ -19,7 +19,8 @@
 // anyway, transparently — §6.6 gives it no scope, so reading it as if the keywords
 // were absent is exact recovery and the file reports this rule alone.
 //! lrm 6.6
-//! reject E0228
+//! lrm 6.6:7
+//! reject-only E0228
 module ch6_generate_nested_region(p);
   inout p; electrical p;
   generate

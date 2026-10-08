@@ -8,7 +8,8 @@
 // the other.
 //
 //! lrm 4.2.11
-//! reject E0324
+//! lrm 4.2.11:1000
+//! reject-only E0324
 module ch04_arithmetic_shift_left_rejected(p, n);
     inout p, n;
     electrical p, n;

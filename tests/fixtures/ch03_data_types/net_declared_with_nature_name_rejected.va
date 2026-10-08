@@ -17,7 +17,8 @@
 //
 //! lrm 3.6
 //! lrm 3.6.3
-//! reject E0371
+//! lrm 3.6:1000
+//! reject-only E0371
 module ch3_net_declared_with_nature_name(p, n);
     inout p, n;
     electrical p, n;

@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 7.1.1
 //! reject E1100
 //! reject undeclared module in instantiation
+//! neighbour b_7_1_1_every_primitive.v
 module b_7_1_1_unknown_gate_keyword_rejected;
   reg a, b;
   wire o;

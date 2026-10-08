@@ -27,7 +27,9 @@
 //
 // The stop changes lanes, never a value: `cs` equals `c` to the last bit.
 //! lrm 2.9
+//! lrm 2.9:3
 //! lrm 4.5.6
+//! fd-exempt `(* vera_nodiff *)` stores its assignments with no derivative by design (AGENTS.md §6), so the Jacobian omits what a difference sees
 //! bias V(a) = 0.5, V(b) = 0.0
 `include "check.vh"
 module ddx_vera_nodiff_assignment(a, b);

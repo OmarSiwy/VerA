@@ -17,6 +17,7 @@
 // analog fixture; lib/ir/proof/test.zig pins W0653.
 //
 //! lrm 4.2.4
+//! lrm 4.2.4:1
 `include "check.vh"
 module ch04_divisor_unproven_accepted(p, n);
     inout p, n;

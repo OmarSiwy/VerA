@@ -9,6 +9,7 @@
 // point at 1 ns (1/3 ns late, 0.5 V above zero). Three final-step assertions
 // compare each independent counter to the one crossing, so checks = 3.
 //! lrm 5.10.3.1
+//! lrm 5.10.3.1:1
 //! analysis tran
 //! time 0, 1n, 2n
 //! wave V(p) = -1.0, 0.5, 1.0

@@ -7,6 +7,7 @@
 // dropped as dead, could not land on 1.30.
 //
 //! lrm 5.2
+//! lrm 5.2:1
 //! bias V(p) = 0.9, V(n) = 0.25
 `include "check.vh"
 module ch5_analog_block(p, n);

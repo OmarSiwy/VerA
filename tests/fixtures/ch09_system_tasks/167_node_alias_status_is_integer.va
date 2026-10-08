@@ -14,6 +14,7 @@
 // Put the call under a shift and there is nowhere for the conversion to hide.
 //
 //! lrm 9.20
+//! lrm 9.20:10
 //! lrm 4.2.9
 //! lrm 4.2.11
 `include "check.vh"

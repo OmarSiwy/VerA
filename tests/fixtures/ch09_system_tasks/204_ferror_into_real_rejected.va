@@ -21,8 +21,9 @@
 // is real".
 //
 //! lrm 9.5.7
-//! reject E0813
+//! reject-only E0813
 //! reject `$ferror` writes into a `string` variable, and this one is real
+//! neighbour 053_ferror.va
 `include "disciplines.vams"
 module ch09_ferror_into_real(p, n);
   inout p, n; electrical p, n;

@@ -3,6 +3,8 @@
 //! lrm 4.2.7
 //! lrm 4.2.12
 //! lrm 6.3.4
+//! lrm 4.2.3:4
+//! lrm 6.3.4:1000
 //! param divisor = 0
 //! param positive = -4
 `include "check.vh"

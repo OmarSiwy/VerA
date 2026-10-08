@@ -13,6 +13,7 @@
 //
 //! bias V(p) = 1.25
 //! lrm 3.6.2.3
+//! lrm 3.6.2.3:1
 `include "check.vh"
 discipline ch3_natureless;
     domain continuous;

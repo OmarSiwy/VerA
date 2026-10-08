@@ -43,7 +43,9 @@
 //
 //! lrm 6.2
 //! lrm A.1.2
-//! reject E1001
+//! reject-only E1001
+//! neighbour ../ch07_mixed_signal/connectmodule_accepted.va
+//! neighbour ../ch09_system_tasks/38_driver_update_connectmodule.va
 connectmodule annex_c_connectmodule_rejected(digital_side, analog_side);
     input digital_side;
     output analog_side;

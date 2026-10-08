@@ -21,6 +21,8 @@
 // $fopen with STDOUT and quietly sends every later $fdisplay to the transcript.
 //
 //! lrm 9.5.1
+//! lrm 9.5.1:2
+//! lrm 9.5.1:3
 `include "check.vh"
 module ch09_file_open_close(p, n);
   inout p, n; electrical p, n;

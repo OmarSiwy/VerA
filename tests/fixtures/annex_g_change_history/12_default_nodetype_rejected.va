@@ -9,7 +9,7 @@
 //
 //! lrm G.1
 //! lrm 10.2
-//! reject E0115
+//! reject-only E0115
 //! reject default_nodetype
 `default_nodetype electrical
 module annex_g_default_nodetype(p, n);

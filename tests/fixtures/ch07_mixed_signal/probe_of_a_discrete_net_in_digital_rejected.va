@@ -29,7 +29,8 @@
 //
 //! lrm 7.3.3
 //! lrm 7.3.6.3
-//! reject E0501
+//! reject-only E0501
+//! neighbour m01_08_analog_probe_in_a_digital_expression.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_probe_discrete(p, dn);

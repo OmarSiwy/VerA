@@ -425,12 +425,14 @@ fn assignValue(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// (§4.2.1.1/§4.2.1.2).
 fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     const ex = &self.file.exprs;
+    // The rhs is not lowered: a whole array there is no scalar value (E0314).
+    if (try paramArrayTarget(self, target)) return;
     // §3.2.2 whole-array assignment from an assignment pattern (§4.2.13):
     // both sides are scalarized, so this is an element-wise copy.
     if (ex.tag(target) == .ident and (ex.tag(value) == .assign_pattern or ex.tag(value) == .concat)) {
         const name = self.file.str(ex.strOf(target));
         if (self.arrays.get(name)) |info| {
-            const elems = try lower_shape.flattenPattern(self, value, info.dims);
+            const elems = try lower_shape.flattenPattern(self, value, info.dims, false);
             var key_buf: [lower_shape.elem_key_len]u8 = undefined;
             var sub: [lower_shape.max_stack_dims]i64 = undefined;
             const idx = try lower_shape.subscriptBuf(self, &sub, info.dims.len);
@@ -450,10 +452,19 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     if (try copyArraySlice(self, target, value)) return;
     // §5.7 whole-array assignment from another array, `A = B`: a shape rule,
     // checked here where both shapes are in scope, then an element-wise copy.
-    if (ex.tag(target) == .ident and ex.tag(value) == .ident) {
+    if (ex.tag(target) == .ident) {
         const dst_name = self.file.str(ex.strOf(target));
         if (self.arrays.get(dst_name)) |dst| {
-            if (try copyWholeArray(self, target, value, dst_name, dst)) return;
+            if (ex.tag(value) == .ident and try copyWholeArray(self, target, value, dst_name, dst)) return;
+            // §5.7 "The arrays on the LHS and the RHS of the assignment must
+            // be unpacked": a whole array takes an array, a slice or an
+            // assignment pattern, all handled above.
+            var b = self.errWith(ex.mainTok(target), .E0429);
+            b.msg("`{s}` is an unpacked array and the right-hand side is not", .{dst_name});
+            b.help("assign an unpacked array, a slice of one or an assignment pattern `'{{ ... }}`", .{});
+            try b.emit();
+            _ = try lower_expr.lowerExpr(self, value);
+            return;
         }
     }
     // §3.2.2 `a[i] = ...` with a runtime index (§4.7.1 Example 3's `arrayadd`
@@ -469,6 +480,24 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     const tv = try assignValue(self, value);
     try writeLvalue(self, lv, try self.coerceTo(value, lv.ty, tv));
     if (ex.tag(target) == .ident) try lower_contrib.noteVarNoise(self, self.file.str(ex.strOf(target)), value);
+}
+
+/// §5.7 "The array on the LHS of the assignment shall be an array variable,
+/// a slice of an array variable or an array parameter (when the default value
+/// of the parameter is assigned)": past its declaration an array parameter is
+/// no target, whole, sliced or one element. Reports E0312 and returns true
+/// for one.
+fn paramArrayTarget(self: *Lower, target: Ast.ExprId) Oom!bool {
+    var subs: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
+    const chain = (try indexChain(self, target, &subs)) orelse return false;
+    const name = self.file.str(chain.name);
+    const info = self.arrays.get(name) orelse return false;
+    if (!info.param) return false;
+    var b = self.errWith(self.file.exprs.mainTok(target), .E0312);
+    b.msg("array parameter `{s}`", .{name});
+    b.help("declare an array variable if the values change during the solve", .{});
+    try b.emit();
+    return true;
 }
 
 /// Runtime scalar-element assignment. Each cell receives `select(index == k,
@@ -980,9 +1009,10 @@ fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId)
                 return;
             };
             if (value != .none) {
+                // §5.11 "an expression of the correct type": a store into the
+                // function's result, so §3.3's string rule holds (`coerceTo`).
                 const tv = try lower_expr.lowerExpr(self, value);
-                const v = if (rc.slot.ty == .real) try self.toReal(tv) else try self.toInt(tv);
-                try self.builder.writeVariable(rc.slot.place, self.cur, v);
+                try self.builder.writeVariable(rc.slot.place, self.cur, try self.coerceTo(value, rc.slot.ty, tv));
             }
             try self.gotoBlock(rc.exit);
         },

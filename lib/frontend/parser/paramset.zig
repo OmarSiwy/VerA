@@ -1,10 +1,11 @@
 //! Annex A.1.9 paramset_declaration (LRM §6.4): tokens from `paramset` to
 //! `endparamset` in, one `Ast.ParamsetDecl` out: the paramset's own
-//! declarations and its `.name = expr;` overrides of the target module's
-//! parameters. §6.4.1's restrictions on what a paramset body may hold are
-//! checked here, including in the statements it skips.
+//! declarations, its `.name = expr;` overrides of the target module's
+//! parameters, and its other statements (`body`). §6.4.1's restrictions on
+//! what a paramset body may hold are checked here, by a token scan of each
+//! statement before it is parsed.
 //!
-//! LRM clauses cited: §2.9, §6.4, §6.4.1, §6.4.3, §9.18.
+//! LRM clauses cited: §2.9, §6.4, §6.4.1, §6.4.3, §9.18, A.1.9.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -12,14 +13,18 @@ const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
 const parse_source = @import("source.zig");
+const parse_stmt = @import("stmt.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
 
 /// Parses one A.1.9 paramset_declaration (LRM §6.4):
 ///
 ///     paramset paramset_identifier module_or_paramset_identifier ;
-///         { paramset_item_declaration } { paramset_statement }
+///         paramset_item_declaration { paramset_item_declaration }
+///         { paramset_statement }
 ///     endparamset
+///
+/// An empty item list is E0297.
 ///
 /// §6.4: "The paramset itself contains no behavioral code; all of the
 /// behavior is determined by the associated module". The result holds the
@@ -36,13 +41,13 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
     var aliasparams: std.ArrayList(Ast.AliasParam) = .empty;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
     var overrides: std.ArrayList(Ast.ParamsetOverride) = .empty;
+    const body_mark = self.bag.count();
 
-    // ponytail: A.1.9's other two statement forms are read and dropped:
-    // `paramset_local_identifier = expr ;` (§6.4.3's output variables, whose
-    // value a host reports for the instance) and `analog_function_statement`.
-    // Nothing downstream has an operating-point reporting path for them
-    // (ch06_hierarchy/paramset_output_unsupported.va). The upgrade is an
-    // output-variable table on the emitted device, parsed in this loop.
+    // A.1.9's other two statement forms, `paramset_local_identifier = expr ;`
+    // (§6.4.1 "Paramset statements may assign values to variables declared in
+    // the paramset") and `analog_function_statement`, in source order.
+    // Elaboration runs them after the module's analog blocks (§6.4.3).
+    var body: std.ArrayList(Ast.StmtId) = .empty;
     while (true) {
         const mark = self.attrs.items.len;
         try self.skipAttributes();
@@ -84,14 +89,13 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                     .main_tok = tok,
                 });
             },
-            // The two dropped statement forms, and only those. They are
-            // skipped by tokens, not parsed: an output assignment's
-            // right-hand side may use §6.4.3's `.module_output_variable`
-            // spelling, which is not an expression anywhere else. The skip
-            // is limited to what A.1.9 admits here, a variable assignment
-            // (`ft = 3.0 * .gm;`: an identifier, then `=` or `[`) or a
-            // §6.4.1 statement wrapping such assignments, so a misspelled
-            // `paramter real rr;` is still refused.
+            // The two other statement forms, and only those: a variable
+            // assignment (`ft = 3.0 * .gm;`: an identifier, then `=` or `[`)
+            // or a §6.4.1 statement wrapping such assignments, so a
+            // misspelled `paramter real rr;` is still refused. A token scan
+            // first reports what §6.4.1 forbids (E0237); a statement it
+            // passes is parsed, with §6.4.3's `.module_output_variable`
+            // spelling admitted as a primary (`in_paramset`).
             else => { // else: every other paramset statement, gated to what A.1.9 admits just below
                 const legal = (self.identLike(self.pos) and
                     (self.peekAt(1) == .assign_eq or self.peekAt(1) == .lbracket)) or
@@ -105,9 +109,31 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                     "found {s} in a paramset body",
                     .{self.found(self.pos)},
                 );
+                const start = self.pos;
+                const errors = self.bag.count();
                 try skipParamsetStatement(self);
+                if (legal and self.bag.count() == errors) {
+                    const end = self.pos;
+                    self.pos = start;
+                    self.in_paramset = true;
+                    defer self.in_paramset = false;
+                    // A parse error is in the bag; the scan's end resumes.
+                    if (parse_stmt.parseStmt(self)) |id| {
+                        try body.append(self.arena, id);
+                    } else |e| if (e == error.OutOfMemory) return e;
+                    self.pos = end;
+                }
             },
         }
+    }
+    // A.1.9 `paramset_item_declaration { paramset_item_declaration }`: at
+    // least one. Not after an error in the body, which may have been a
+    // misspelled declaration (`paramter real rr;`, E0205).
+    if (params.items.len + aliasparams.items.len + vars.items.len == 0) {
+        const clean = for (body_mark..self.bag.count()) |i| {
+            if (self.bag.at(i).severity == .err) break false;
+        } else true;
+        if (clean) try self.report(main_tok, .E0297, "paramset `{s}` declares no parameter, aliasparam or variable", .{self.file.str(name)});
     }
     _ = try self.expect(.kw_endparamset);
     // §2.9 attributes inside a paramset decorate its declarations, and
@@ -122,6 +148,7 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
         .aliasparams = aliasparams.items,
         .vars = vars.items,
         .overrides = overrides.items,
+        .body = body.items,
         .main_tok = main_tok,
     };
 }

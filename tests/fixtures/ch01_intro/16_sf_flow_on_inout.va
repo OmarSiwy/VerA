@@ -11,7 +11,8 @@
 // binding and miss the flow-only one.
 //
 //! lrm 1.3.4.2
-//! reject E0360
+//! lrm 1.3.4.2:2
+//! reject-only E0360
 module ch01_sf_flow_on_inout(p);
     inout p;
     current p;

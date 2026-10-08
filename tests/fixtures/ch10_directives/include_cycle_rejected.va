@@ -12,7 +12,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
-//! reject E0125
+//! reject-only E0125
 `include "include_cycle_rejected.va"
 `include "disciplines.vams"
 module ch10_include_cycle(p, n);

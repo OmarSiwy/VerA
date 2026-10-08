@@ -34,8 +34,10 @@
 //
 //! lrm 10.5
 //! lrm 3.4.2
-//! reject E0361
+//! lrm 3.4.2:2
+//! reject-only E0361
 //! reject `g.del` is 0
+//! neighbour 13_predefined_vams_enable.va
 `include "disciplines.vams"
 module d10_not_gate(p, n);
   inout p, n; electrical p, n;

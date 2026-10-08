@@ -19,6 +19,8 @@
 // the same value respelled in decimal notation, so the check is still a
 // conversion claim: 23E10 = 23 x 1e10 = 230000000000, 29E-2 = 29 / 100 = 0.29.
 //! lrm 2.6.2
+//! lrm 2.6.2:1
+//! lrm 2.6.2:2
 `include "check.vh"
 module ch02_real_notation(p, n);
     inout p, n;

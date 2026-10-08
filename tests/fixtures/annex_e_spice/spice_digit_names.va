@@ -36,6 +36,12 @@
 //! lrm E.2.2.2
 //! lrm 2.8.1
 //! lrm 6.7.1
+//! lrm 6.2.2
+//! lrm 6.2.2:2
+//! lrm 6.5.4
+//! lrm 6.5.4:1
+//! lrm 6.7.1:1
+//! lrm E.2:3
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
 //! spice .MODEL 2N2222 NPN BF=100 IS=1E-14
 //! spice .SUBCKT FLT A 1 B

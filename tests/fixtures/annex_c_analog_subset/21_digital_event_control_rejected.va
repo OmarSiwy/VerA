@@ -36,9 +36,11 @@
 //
 //! lrm C.7
 //! lrm 5.10.5
-//! reject E0704
+//! reject-only E0704
 //! reject posedge
 //! reject negedge
+//! neighbour 05_analog_event.va
+//! neighbour 19_named_event_in_subset.va
 module annex_c_digital_event_control_rejected(p);
     inout p;
     electrical p;

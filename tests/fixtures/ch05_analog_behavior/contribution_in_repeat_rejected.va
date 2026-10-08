@@ -21,7 +21,9 @@
 //
 //! lrm 5.9.1
 //! lrm 5.9
-//! reject E0426
+//! lrm 5.9:1
+//! reject-only E0426
+//! neighbour repeat_loop.va
 module ch5_repeat_contribution(p);
   inout p; electrical p;
   analog begin

@@ -11,7 +11,8 @@
 // VerA reports E0817 "$simprobe resolves to nothing and has no fallback".
 //
 //! lrm 9.16
-//! reject E0817
+//! lrm 9.16:1
+//! reject-only E0817
 `include "disciplines.vams"
 module ch9_simprobe_unresolved(p, n);
   inout p, n;

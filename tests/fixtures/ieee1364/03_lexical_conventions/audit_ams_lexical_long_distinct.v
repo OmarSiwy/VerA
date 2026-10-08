@@ -1,6 +1,7 @@
 // AMS2.8: minimum supported identifier length is 1024 characters.
 // Two names differ only at character1024; same-prefix truncation must not alias.
 //! lrm 2.8
+//! lrm 2.8:6
 //! expect stdout audit_ams_lexical_long_distinct.expected.txt
 //! inherited IEEE 1364-2005 3.7
 module audit_ams_lexical_long_distinct;

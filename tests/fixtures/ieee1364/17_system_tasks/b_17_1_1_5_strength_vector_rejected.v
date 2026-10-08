@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 17.1.1.5
 //! reject E1100
 //! reject scalar
+//! neighbour b_17_1_1_5_strength_format.v
 module b_17_1_1_5_strength_vector_rejected;
   wire [3:0] v;
   assign v = 4'b1010;

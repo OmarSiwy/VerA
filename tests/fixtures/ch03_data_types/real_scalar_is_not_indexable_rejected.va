@@ -11,7 +11,8 @@
 //
 //! lrm 3.2
 //! inherited IEEE 1364-2005 4.8.1
-//! reject E0309
+//! reject-only E0309
+//! neighbour 02_variable_arrays.va
 `include "disciplines.vams"
 module ch3_real_scalar_is_not_indexable(p, n);
   inout p, n; electrical p, n;

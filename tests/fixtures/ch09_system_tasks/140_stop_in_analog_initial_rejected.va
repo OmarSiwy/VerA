@@ -17,8 +17,11 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.7.2
-//! reject analog initial
+//! lrm 9.7.2:1
+//! reject-only analog initial
 //! reject E0807
+//! neighbour 056_stop.va
+//! neighbour 12_finish_stop.va
 module ch09_stop_in_analog_initial_rejected(p, n);
   inout p, n; electrical p, n;
   analog initial begin

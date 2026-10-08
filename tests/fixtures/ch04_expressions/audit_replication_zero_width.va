@@ -4,6 +4,7 @@
 // All operands are explicitly sized, and both siblings have positive size.
 // Evaluation side effects are isolated in audit_replication_zero_effect.va.
 //! lrm 4.2.13
+//! lrm 4.2.13:4
 //! checks 1
 `include "check.vh"
 module audit_replication_zero_width(p, n);

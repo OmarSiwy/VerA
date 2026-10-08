@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 10.1 10.4.4
 //! reject E1100
 //! reject a function cannot enable a task
+//! neighbour b_10_1_task_function_distinctions.v
 module b_10_4_4_function_enables_task_rejected;
   reg [7:0] x;
   task t;

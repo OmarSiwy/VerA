@@ -30,8 +30,14 @@
 // for source Table E.1 prescribes.
 //
 //! lrm E.3
+//! lrm E.3:1
 //! lrm E.2
 //! lrm 6.7.1
+//! lrm 6.2.2
+//! lrm 6.2.2:2
+//! lrm 6.5.4
+//! lrm 6.5.4:1
+//! lrm 6.7.1:1
 //! bias V(out) = 1.0, V(gnd) = 0.0, V(sense) = 0.5, V(sgnd) = 0.0
 `include "check.vh"
 module annex_e_spice_network_primitives(out, gnd, sense, sgnd);

@@ -5,6 +5,7 @@
 // guard=2 and gain=11. At 1/2 V, the currents are 13.5,6.5,5.5 A.
 //! lrm 6.3
 //! lrm 6.4.2
+//! lrm 6.4.2:5
 //! bias V(p) = 0.5
 //! checks 6
 `include "check.vh"

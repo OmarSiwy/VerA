@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 5
 //! reject E1100
 //! reject a constant expression is required here
+//! neighbour b_5_constant_operands.v
 module b_5_constant_time_rejected;
   parameter P = $time;
   initial $display("%0d", P);

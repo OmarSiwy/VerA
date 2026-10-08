@@ -6,6 +6,7 @@
 // not 0.0 and not -1.0.
 //
 //! lrm 5.8.3
+//! lrm 5.8.3:1
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch5_case(p);

@@ -26,6 +26,7 @@
 // reading reads 2 and the crossing reading still reads 1.
 //
 //! lrm 5.10.3.2
+//! lrm 5.10.3.2:4
 //! analysis dc
 //! bias V(p) = 0.3
 //! sweep V(c) = -1.0, 1.25, 2.0

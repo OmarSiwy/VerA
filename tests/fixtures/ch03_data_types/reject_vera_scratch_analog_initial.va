@@ -9,7 +9,8 @@
 // vera_scratch_starts_each_evaluation.va.
 //! lrm 2.9
 //! lrm 5.2.1
-//! reject E0536
+//! reject-only E0536
+//! neighbour vera_scratch_starts_each_evaluation.va
 module reject_vera_scratch_analog_initial(p, n);
   inout p, n; electrical p, n;
   (* vera_scratch *) real g;

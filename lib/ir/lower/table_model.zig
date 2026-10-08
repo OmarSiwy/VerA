@@ -10,6 +10,7 @@ const Lower = @import("../lower.zig");
 const lower_analog_op = @import("analog_op.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
+const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const diag = @import("diag");
@@ -48,7 +49,7 @@ pub const State = struct {
 /// unique snapshot site; codegen captures their rows at the first executed call.
 pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
-    const args = ex.args(e);
+    const args = ex.args(e)[0 .. try lower_sysfunc.writtenArgs(self, e, "$table_model", ex.args(e)) orelse return poison];
 
     // Syntax 9-16 puts `table_inputs` first, then `table_data_source`. The
     // boundary is decidable without counting: an input is "any legal expression
@@ -128,9 +129,10 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         }
         ctl = strs[1];
         // §9.21.1: "The state of the data source is captured on the first call
-        // to the table model function." An absent file is the call's error, not the
-        // compilation's, so it lowers to an empty data set that `zTable` refuses
-        // only when a lookup reaches it.
+        // to the table model function." An absent file, or one that is not a data
+        // set ("The numbers shall be real or integer"), is the call's error, not
+        // the compilation's, so it lowers to an empty data set that `zTable`
+        // refuses only when a lookup reaches it.
         var absent = false;
         if (try readTableFile(self, e, strs[0], "$table_model", .E0815, &absent)) |nums| {
             if (nums.cols <= nd) {
@@ -220,6 +222,7 @@ fn isTableSource(self: *Lower, a: Ast.ExprId) bool {
 /// concatenation operator"). `appendVectorArg` reads both shapes.
 fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
     const ex = &self.file.exprs;
+    if (a == .none) return false;
     return switch (ex.tag(a)) {
         .assign_pattern, .concat => true,
         .ident => if (self.arrays.get(self.file.str(ex.strOf(a)))) |info| info.dims.len == 1 else false,
@@ -260,11 +263,10 @@ pub fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]
 /// Shared with §4.6.4.3's `noise_table` file input, which states the same format;
 /// `who` and `code` name the caller's clause in diagnostics, and the caller checks
 /// the column count. Resolved against `include_dirs`, like an `include (§9.21 names
-/// no search path). A non-null `missing` defers only the not-found case to the caller
-/// (see `lowerTableModel`); a malformed file is reported here either way.
-//
-// ponytail: an unexecuted site naming a malformed file is still refused, where one
-// naming an absent file is not. Defer parse failures too when a fixture needs it.
+/// no search path). A non-null `missing` defers to the caller (see
+/// `lowerTableModel`) both a file that cannot be read and one whose text is not a
+/// data set (a token that is not a number, rows of unequal width): either way the
+/// first call captures no data set, and that call is where §9.21.1 errs.
 fn readTableFile(
     self: *Lower,
     e: Ast.ExprId,
@@ -307,6 +309,10 @@ fn readTableFile(
         var it = std.mem.tokenizeAny(u8, line, " \t\r");
         while (it.next()) |tok| {
             const x = std.fmt.parseFloat(f64, tok) catch {
+                if (missing) |m| {
+                    m.* = true;
+                    return null;
+                }
                 try self.err(self.file.exprs.mainTok(e), code, "\"{s}\": `{s}` is not a real or integer number", .{ name, tok });
                 return null;
             };
@@ -316,6 +322,10 @@ fn readTableFile(
         if (n == 0) continue; // blank line, or a line that was only a comment
         if (cols == 0) cols = n;
         if (n != cols) {
+            if (missing) |m| {
+                m.* = true;
+                return null;
+            }
             try self.err(self.file.exprs.mainTok(e), code, "\"{s}\": every row is the same width; found a row of {d} after a row of {d}", .{ name, n, cols });
             return null;
         }

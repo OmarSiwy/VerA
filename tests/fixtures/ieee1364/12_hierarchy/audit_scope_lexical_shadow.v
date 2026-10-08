@@ -3,6 +3,7 @@
 // the module boundary. The inner assignment must not change the outer value.
 // Independent oracle: outer 11; inner initialized 23, then 24; outer still 11.
 //! lrm 6.8
+//! lrm 6.8:4
 //! inherited IEEE 1364-2005 12.7
 //! expect stdout audit_scope_lexical_shadow.expected.txt
 module audit_scope_lexical_shadow;

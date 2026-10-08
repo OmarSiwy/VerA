@@ -6,7 +6,8 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
-//! reject E0105
+//! reject-only E0105
+//! neighbour 11_elsif.va
 `elsif SOMETHING
 `endif
 module ch10_elsif_without_ifdef(p, n);

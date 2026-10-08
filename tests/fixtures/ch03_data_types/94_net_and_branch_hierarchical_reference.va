@@ -27,6 +27,8 @@
 //
 //! lrm 3.13.3
 //! lrm 3.13.4
+//! lrm 3.13.3:1000
+//! lrm 3.13.4:1000
 //! bias V(p) = 1.0, V(n) = 0.0
 //! solve
 `include "check.vh"

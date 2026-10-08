@@ -18,6 +18,8 @@
 // codegen crash as the expected behaviour of a normative function.
 //
 //! lrm 4.6.3
+//! lrm 4.6
+//! lrm 4.6:1000
 //! analysis dc
 //! bias V(p) = 0.5
 //! bias V(n) = 0.0

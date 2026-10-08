@@ -42,6 +42,7 @@
 //
 //! lrm 3.11.1
 //! lrm 3.11
+//! lrm 3.11.1:2
 //! bias base_net = 4.0, hi_net = 1.5, lo_net = 0.25, other_net = 3.0
 `include "check.vh"
 nature ch3_volt; units="V"; access=CV; abstol=1u; endnature

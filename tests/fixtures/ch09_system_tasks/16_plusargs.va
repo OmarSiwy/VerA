@@ -22,6 +22,7 @@
 // implementation would leave behind.
 //
 //! lrm 9.12
+//! lrm 9.12:1000
 `include "check.vh"
 module ch09_plusargs(p, n);
   inout p, n; electrical p, n;

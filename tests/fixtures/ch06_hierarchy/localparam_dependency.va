@@ -10,6 +10,7 @@
 //
 //! lrm 6.3.4
 //! lrm 3.4.5
+//! lrm 6.3.4:1000
 //! param base = 3.0
 `include "check.vh"
 module ch6_localparam(p);

@@ -46,6 +46,7 @@
 //
 //! lrm A.6.8
 //! lrm A.6.4
+//! lrm A.6.8:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_loops(p, n);

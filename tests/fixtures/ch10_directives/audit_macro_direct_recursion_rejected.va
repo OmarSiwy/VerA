@@ -2,7 +2,8 @@
 // through a macro's own replacement text is an error. Isolate a direct cycle;
 // the legal nested-actual case is 49_nested_macro_argument.va.
 //! lrm 10.4
-//! reject E0118
+//! reject-only E0118
+//! neighbour 49_nested_macro_argument.va
 `define AUDIT_CYCLE `AUDIT_CYCLE
 module audit_macro_direct_recursion_rejected;
   parameter real value = `AUDIT_CYCLE;

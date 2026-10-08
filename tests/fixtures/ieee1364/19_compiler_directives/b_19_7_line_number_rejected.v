@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 19.7
 //! reject E0128
 //! reject the line number must be a positive integer
+//! neighbour b_19_7_line_directive.v
 `line 0 "orig.v" 0
 module b_19_7_line_number_rejected;
   initial $display("accepted");

@@ -46,6 +46,7 @@
 // be negative at every one of the five points.
 //
 //! lrm 4.5.10
+//! lrm 4.5.10:1
 //! bias V(n) = 0
 //! wave V(p) = -1, -1, 1, 1, 1
 //! time 0, 1n, 2n, 3n, 4n

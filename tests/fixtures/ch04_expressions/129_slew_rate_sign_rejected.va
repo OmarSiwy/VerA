@@ -21,9 +21,11 @@
 // which is exactly the failure mode a two-violation file exists to rule out.
 //
 //! lrm 4.5.9
-//! reject max_pos_slew_rate
+//! lrm 4.5.9:1
+//! reject-only max_pos_slew_rate
 //! reject max_neg_slew_rate
 //! reject E0516
+//! neighbour 21_slew.va
 module ch04_slew_rate_sign_rejected(p, n);
     inout p, n;
     electrical p, n;

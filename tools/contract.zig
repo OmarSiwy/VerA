@@ -1946,13 +1946,20 @@ comptime {
     std.debug.assert(@sizeOf(PsdTerm) <= 48);
 }
 
-/// §2.8.3/§12.32 one `$name` the compiler could not resolve, left to a VPI
-/// application. Position k of `systf_calls` is what `SystfHost.call(ctx, k, ...)`
-/// answers. Keyed by name, as `vpi_register_analog_systf()` registers it, so
-/// two calls to one `$name` are one entry.
+/// §2.8.3/§12.32 one call of a `$name` the compiler could not resolve, left
+/// to a VPI application. Position k of `systf_calls` is what
+/// `SystfHost.call(ctx, k, ...)` answers. One entry per source call, so two
+/// calls of one `$name` are two entries with that name: a host binds the
+/// application by name (`vpi_register_analog_systf()` registers names) and
+/// tells the calls apart by k, as §12.32.1's `vpi_handle(vpiSysTfCall, NULL)`
+/// must.
 pub const Systf = struct {
     /// `$sampnhold`, with the `$`. §12.32: "first character shall be `$`".
     name: []const u8,
+    /// The source token of the call, in the token stream the compiler lexed:
+    /// a host that parsed the same source (VerA's VPI host) matches its call
+    /// object by it. `maxInt(u32)` when the call has no source token.
+    tok: u32 = std.math.maxInt(u32),
 };
 
 /// The VPI application as the device sees it. The host owns it and writes a
@@ -3211,8 +3218,10 @@ pub fn InstancePtr(comptime D: type) type {
 ///                                instance cached from the card)
 ///   collapse(S, &model, &inst)   once per instance at build: per internal unknown,
 ///                                the index it merges into, or null
-///   initState(&model, &inst)     once per instance, before the first solve
-///   seed(S, ...)                 once before Newton iteration 1
+///   initState(&model, &inst)     once per instance, before the first solve, and
+///                                at the start of each later analysis: it resets
+///                                what `updateState` advances in `inst` (§4.6.2)
+///   seed(S, ...)               once before Newton iteration 1
 ///   eval / q / evalQ             every iterate; `q` returns one charge per site
 ///                                (`Sites`), `evalQ` both from one evaluation
 ///   limit(S, ..., cur, old, sim) every iterate, on the instance's private limited

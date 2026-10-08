@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 9.8.1 9.8.3
 //! reject E0209
 //! reject found `reg`
+//! neighbour b_9_8_3_named_block_variables.v
 module b_9_8_1_unnamed_block_declaration_rejected;
   initial begin
     reg r;

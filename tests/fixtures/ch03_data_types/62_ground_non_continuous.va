@@ -17,7 +17,9 @@
 // infer that every discipline without an explicit discrete domain is continuous.
 //
 //! lrm 3.6.4
-//! reject E0344
+//! lrm 3.6.4:1
+//! reject-only E0344
+//! neighbour 13_ground_declaration.va
 discipline ch3_ground_discrete;
     domain discrete;
 enddiscipline

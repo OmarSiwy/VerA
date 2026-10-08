@@ -4,6 +4,7 @@
 // 0.7 V, the probe must read 0.7 V.
 //
 //! lrm 5.4.1
+//! lrm 5.4.1:1000
 //! bias V(p) = 0.7
 `include "check.vh"
 module ch5_access_one(p);

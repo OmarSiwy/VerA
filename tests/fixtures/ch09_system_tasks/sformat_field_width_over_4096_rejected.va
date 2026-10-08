@@ -6,7 +6,7 @@
 // text goes to $sformat and feeds the contribution, because a device drops a
 // $strobe it cannot print (W0850) before its format is read.
 //
-//! reject E1011
+//! reject-only E1011
 module sformat_field_width_over_4096_rejected(p, n);
   inout p, n; electrical p, n;
   string s;

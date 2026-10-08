@@ -25,6 +25,7 @@
 //
 //! lrm 3.4.2
 //! lrm 4.3.2
+//! lrm 4.3.2:2
 `include "check.vh"
 module ch04_punctured_divisor_accepted(p, n);
     inout p, n;

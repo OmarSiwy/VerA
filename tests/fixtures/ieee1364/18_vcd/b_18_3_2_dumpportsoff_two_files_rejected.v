@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 18.3.2
 //! reject E1100
 //! reject argument
+//! neighbour b_18_3_2_dumpports_control_tasks.v
 `timescale 1ns/1ns
 module b_18_3_2_dumpportsoff_two_files_rejected_dev(a, y);
   input a;

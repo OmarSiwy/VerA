@@ -32,6 +32,13 @@
 //
 //! lrm 6.1
 //! lrm 6.3
+//! lrm 6.1:1000
+//! lrm 6.2
+//! lrm 6.2:2
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.5
+//! lrm 6.5:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 //! solve
 `include "check.vh"

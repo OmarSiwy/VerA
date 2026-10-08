@@ -13,7 +13,8 @@
 // `( strength1 )`".
 //
 //! lrm A.3.2
-//! reject E0207
+//! lrm A.3.2:1000
+//! reject-only E0207
 //! reject single-strength bracket
 module annex_a_pullup_zero_strength(o);
   output o;

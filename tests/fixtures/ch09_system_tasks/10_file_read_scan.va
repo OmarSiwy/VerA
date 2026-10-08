@@ -14,6 +14,7 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:1
 `include "check.vh"
 
 module ch09_file_read_scan(p, n);

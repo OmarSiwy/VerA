@@ -12,6 +12,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 3.8.2
 //! reject attribute instance prefixes nothing
+//! neighbour b_3_8_2_attribute_positions.v
 module b_3_8_2_dangling_attribute_rejected;
   initial $display("ran");
 endmodule

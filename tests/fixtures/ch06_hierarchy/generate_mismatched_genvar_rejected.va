@@ -32,7 +32,7 @@
 // rejects at the body, never reaching the loop scheme at all.
 //
 //! lrm 6.6.1
-//! reject E0419
+//! reject-only E0419
 module ch6_generate_mismatched_genvar(p);
   inout p; electrical p; genvar i, j;
   generate

@@ -15,7 +15,7 @@
 // E0144 is VerA's code for this rule.
 //
 //! lrm 10.1
-//! reject E0144
+//! reject-only E0144
 `include "disciplines.vams" stray_word
 module ch10_include_line_holds_only_the_file_name(p, n);
   inout p, n; electrical p, n;

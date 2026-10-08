@@ -55,6 +55,9 @@
 //! lrm E.3
 //! lrm E.1
 //! lrm 6.7.1
+//! lrm 6.7.1:1
+//! lrm E.4.2
+//! lrm E.4.2:1
 //! bias V(a) = 1.0, V(b) = 0.0
 //! spice .MODEL RMOD R R=2000
 `include "check.vh"

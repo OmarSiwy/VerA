@@ -3,6 +3,7 @@
 // Definition-only test isolates the table alphabet from unimplemented runtime.
 // digital-runner: reject
 //! lrm A.5.3
+//! lrm A.5.3:1000
 //! inherited IEEE 1364-2005 8.1.5
 //! reject E0233
 //! reject not a UDP input symbol

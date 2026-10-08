@@ -16,7 +16,8 @@
 // connect module is connectrules_accepted.va.
 //
 //! lrm 7.7.1
-//! reject E0915
+//! reject-only E0915
+//! neighbour connectrules_accepted.va
 `include "disciplines.vams"
 module ch7_plain(p, n);
   inout p, n; electrical p, n;

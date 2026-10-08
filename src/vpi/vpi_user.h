@@ -533,9 +533,13 @@ typedef struct t_vpi_error_info {
 #define vpiScaledRealTime       1
 #define vpiSimTime              2
 #define vpiSuppressTime         3
+/* VAMS §12.15 "scaled real, analog, or simulation time": the analog time in
+ * seconds, in `real` (vpi_get_time). The LRM gives it no number; this is
+ * VerA's. */
+#define vpiAnalogTime           4
 
 typedef struct t_vpi_time {
-  PLI_INT32  type;              /* vpi[ScaledRealTime,SimTime,SuppressTime] */
+  PLI_INT32  type;              /* vpi[ScaledRealTime,SimTime,SuppressTime,AnalogTime] */
   PLI_UINT32 high, low;         /* for vpiSimTime */
   double     real;              /* for vpiScaledRealTime */
 } s_vpi_time, *p_vpi_time;
@@ -642,9 +646,12 @@ typedef struct t_cb_data {
  *                                          changed value
  *   IEEE 1364-2005   cbStmt               just before a Table 27-6 statement
  *   §27.33.1.1                             runs; on a module, each of its own
- *                    cbForce, cbRelease   accepted; they fire on a force or
- *                                          release, and VerA's digital engine
- *                                          performs neither, so they never do
+ *                    cbForce, cbRelease   after a force or release: a
+ *                    cbAssign, cbDeassign  vpi_put_value one (obj the object)
+ *                                          or a design statement (obj the
+ *                                          statement); obj NULL hears every one
+ *                    cbDisable            after `disable` ends the named
+ *                                          begin or fork in obj
  *   §12.31.2 time    cbAtStartOfSimTime   absolute time, before its queue —
  *                                          "even if no event is present"
  *                    cbAfterDelay         a delay from now, before its queue
@@ -654,13 +661,17 @@ typedef struct t_cb_data {
  *   §12.31.4 action  cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation
  *   IEEE 1364-2005   cbError              the digital run stopped on an error
  *   §27.33.3 action  cbPLIError           a VPI routine recorded an error
+ *   §27.33.3 feature cbInteractiveScopeChange  vpi_sim_control
+ *                                          (vpiSetInteractiveScope); obj is
+ *                                          the new scope
  *
  * A time reason needs a vpiSimTime or vpiScaledRealTime time (IEEE 1364
  * 27.33.2); NULL or vpiSuppressTime is refused, as is a cbAtStartOfSimTime
  * for the current time once it has started, outside a cbAtStartOfSimTime
  * callback, and a cbReadWriteSynch of delay zero at read-only synch. Every
  * callback is ONE-SHOT except cbValueChange, cbStmt, cbForce, cbRelease,
- * cbError and cbPLIError, which stand until removed. */
+ * cbAssign, cbDeassign, cbDisable, cbError, cbPLIError and
+ * cbInteractiveScopeChange, which stand until removed. */
 #define cbValueChange           1
 #define cbStmt                  2
 #define cbForce                 3
@@ -674,6 +685,10 @@ typedef struct t_cb_data {
 #define cbStartOfSimulation    11
 #define cbEndOfSimulation      12
 #define cbError                13
+#define cbInteractiveScopeChange 23
+#define cbAssign               25
+#define cbDeassign             26
+#define cbDisable              27
 #define cbPLIError             28
 
 #define vpiCallback           107   /* §11.6.25 vpi_get(vpiType, callback) */
@@ -955,13 +970,22 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
 
 /* §12.36 simulation control. vpiFinish (one int: the $finish diagnostic
  * level) ends the run when the calling routine returns, at the current time.
- * vpiStop, vpiReset and vpiSetInteractiveScope need an interactive mode VerA
- * does not have and are deliberately absent. */
+ * vpiStop (one int, as $stop) does the same: a VerA run has no interactive
+ * mode to suspend into. vpiSetInteractiveScope (one vpiHandle of the scope
+ * class) fires cbInteractiveScopeChange with it. vpiReset always fails: a
+ * VerA run cannot restart. */
+#define vpiStop                66
 #define vpiFinish              67
+#define vpiReset               68
+#define vpiSetInteractiveScope 69
 /* VAMS §12.36 vpiRejectTransientStep (one double: the current timestep)
  * rejects the analog solution awaiting acceptance, as a non-zero
  * acbConvergenceTest return does. The LRM gives it no number; this is VerA's. */
 #define vpiRejectTransientStep 730
+/* VAMS §12.36 vpiTransientFailConverge (no argument) makes the analog walk
+ * solve the time awaiting acceptance again, with no backup and no acceptance
+ * between. The LRM gives it no number; this is VerA's. */
+#define vpiTransientFailConverge 731
 extern PLI_INT32  vpi_sim_control(PLI_INT32 operation, ...);
 
 /* §12.31 register, §12.34 remove, §12.6 read back. A removed callback's

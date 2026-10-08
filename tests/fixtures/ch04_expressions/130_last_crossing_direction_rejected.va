@@ -13,9 +13,11 @@
 // Both indicators are constants. 22_last_crossing.va is the legal +1 side.
 //
 //! lrm 4.5.10
-//! reject direction
+//! lrm 4.5.10:1
+//! reject-only direction
 //! reject last_crossing
 //! reject E0516
+//! neighbour 22_last_crossing.va
 module ch04_last_crossing_direction_rejected(p, n);
     inout p, n;
     electrical p, n;

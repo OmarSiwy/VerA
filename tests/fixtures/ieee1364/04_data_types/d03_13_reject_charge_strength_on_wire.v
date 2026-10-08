@@ -37,6 +37,8 @@
 //! lrm A.2.2.1
 //! lrm A.2.1.3
 //! lrm A.2.2.2
+//! lrm A.2.1.3:1000
+//! lrm A.2.2.2:1000
 //! inherited IEEE 1364-2005 4.4 4.4.1
 
 module d03_reject_charge_strength_on_wire;

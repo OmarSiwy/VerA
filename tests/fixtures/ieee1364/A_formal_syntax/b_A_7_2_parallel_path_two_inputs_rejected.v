@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.7.2
 //! reject E0207
 //! reject a parallel path (`=>`) connects one source to one destination
+//! neighbour b_A_7_2_path_declarations.v
 module b_A_7_2_parallel_path_two_inputs_rejected (a, b, y);
   input a, b;
   output y;

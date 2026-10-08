@@ -343,6 +343,9 @@ pub fn paramsetOverrides(
     over: *std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId),
     unit: *Unit,
     path: []const u8,
+    /// Receives the chain's paramset statements, cloned, for `inlineInstance`
+    /// to run after the module's analog blocks.
+    stmts: *std.ArrayList(Ast.StmtId),
 ) Error!void {
     const ps_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, self.ctx.file.str(ps.name), sep });
 
@@ -437,11 +440,58 @@ pub fn paramsetOverrides(
             .output_var => {}, // §6.4.3, dropped in the parser
         };
     }
+    try paramsetStatements(self, chain.items, child, path, stmts);
     self.in_paramset = false;
     self.unit = saved;
 
     unit.hier = hier;
     try elab_override.markGiven(self, child, over, unit);
+}
+
+/// §6.4.1: "Paramset statements may assign values to variables declared in
+/// the paramset; the values need not be constant expressions. ... Paramset
+/// variables may be used to provide output variables (see 6.4.3)." Each
+/// link's variables are declared under `path ++ link ++ sep` (where its
+/// parameters are) and its statements cloned into `stmts`, far link first
+/// as the module assignments are; a described variable is reported as the
+/// instance's own (`Design.ps_outputs`). §6.4.3's `.gm` reads the module's
+/// `gm` of this instance. Runs with the near link's unit in force.
+fn paramsetStatements(
+    self: *Flatten,
+    chain: []const *const Ast.ParamsetDecl,
+    child: *const Ast.ModuleDecl,
+    path: []const u8,
+    stmts: *std.ArrayList(Ast.StmtId),
+) Error!void {
+    const file = self.ctx.file;
+    var any = false;
+    for (chain) |link| any = any or link.body.len != 0 or link.vars.len != 0;
+    if (!any) return;
+    for (child.vars) |v| try bindDotted(self, path, v.name);
+    for (child.params) |p| try bindDotted(self, path, p.name);
+    var i = chain.len;
+    while (i > 0) {
+        i -= 1;
+        const link = chain[i];
+        const link_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, file.str(link.name), sep });
+        for (link.vars) |v| try self.unit.rename.put(self.ctx.arena, v.name, try elab_names.join(self, link_path, v.name));
+        for (link.vars) |v| {
+            const out = try elab_clone.cloneVar(self, v);
+            try self.vars.append(self.ctx.arena, out);
+            if (v.desc) try self.ps_outputs.append(self.ctx.arena, .{
+                .report = try self.ctx.arena.print("{s}{s}", .{ path, file.str(v.name) }),
+                .flat = file.str(out.name),
+            });
+        }
+        for (link.body) |st| try stmts.append(self.ctx.arena, try elab_clone.cloneStmt(self, st));
+    }
+}
+
+/// Binds §6.4.3's `.name` (the parser's spelling, `parsePrimary`) to the
+/// instance's `name`. Interned only where a statement wrote it.
+fn bindDotted(self: *Flatten, path: []const u8, name: Ast.StrId) Error!void {
+    const dotted = self.ctx.file.strings.find(try self.ctx.arena.print(".{s}", .{self.ctx.file.str(name)})) orelse return;
+    try self.unit.rename.put(self.ctx.arena, dotted, try elab_names.join(self, path, name));
 }
 
 /// §6.4.1 the first identifier in `e` that names one of `ps`'s variables.

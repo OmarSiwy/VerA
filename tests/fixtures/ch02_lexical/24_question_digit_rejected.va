@@ -9,7 +9,7 @@
 // stands for.
 //! lrm C.3
 //! lrm 2.6.1
-//! reject E0130
+//! reject-only E0130
 module ch02_question_digit_rejected;
     integer value;
     analog value = 4'b?;

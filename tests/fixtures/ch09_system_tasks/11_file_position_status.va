@@ -36,6 +36,16 @@
 // say only "if an error occurs, EOF is returned", and the LRM never fixes EOF's
 // numeric value, so there is no digit to write for them.
 //
+// WHEN THE FILE IS WRITTEN, AND WHEN IT IS READ. §9.5.9: "If a file is being
+// written to during an iterative solve, then the file write operations shall
+// not be performed unless the iteration is accepted." So "abc\n" is written by
+// `@(initial_step)` inside the t = 0 solve and reaches the file only when that
+// point is accepted; the positioning walk runs at t = 1e-3, the next point,
+// where the file holds exactly those four bytes. The failed-descriptor half is
+// asserted at both points (2 + 2), the walk at t = 1e-3 only (4): eight checks.
+// (Reconciler, 2026-10-08: an earlier revision wrote, closed, reopened and read
+// in ONE evaluation, where §9.5.9 has not yet performed the write.)
+//
 // The filename is unique to this fixture on purpose. Nine §9.5 fixtures used to
 // share the single name "fixture.dat", and 052_fflush.va opened it for append —
 // Table 9-24 type "a" is "create for writing" — so from the second run onward
@@ -45,6 +55,12 @@
 //! lrm 9.5.1
 //! lrm 9.5.5
 //! lrm 9.5.8
+//! lrm 9.5.5:1
+//! lrm 9.5.5:3
+//! lrm 9.5.8:1000
+//! lrm 9.5.9
+//! time 0, 1e-3
+//! checks 8
 `include "check.vh"
 module ch09_file_position_status(p, n);
   inout p, n; electrical p, n;
@@ -62,20 +78,24 @@ module ch09_file_position_status(p, n);
     code = $feof(fd);
     `CHECKI("§9.5.8: nothing was read from fd, so no EOF was detected", code, 0);
 
-    live = $fopen("ch09_11_position.dat", "w");
-    $fwrite(live, "abc\n");
-    $fclose(live);
-    live = $fopen("ch09_11_position.dat", "r");
-    at_open = $ftell(live);
-    count = $fgets(text, live);
-    after_read = $ftell(live);
-    rewound = $rewind(live);
-    at_rewind = $ftell(live);
-    $fclose(live);
-    `CHECKI("§9.5.5: $ftell on a fresh read descriptor is byte 0", at_open, 0);
-    `CHECKI("§9.5.5: and byte 4 once the 4-byte line has been read", after_read, 4);
-    `CHECKI("§9.5.5: $rewind succeeds, and success is 0", rewound, 0);
-    `CHECKI("§9.5.5: after which the position really is back at byte 0", at_rewind, 0);
+    @(initial_step) begin
+      live = $fopen("ch09_11_position.dat", "w");
+      $fwrite(live, "abc\n");
+      $fclose(live);
+    end
+    if ($abstime > 0.0) begin
+      live = $fopen("ch09_11_position.dat", "r");
+      at_open = $ftell(live);
+      count = $fgets(text, live);
+      after_read = $ftell(live);
+      rewound = $rewind(live);
+      at_rewind = $ftell(live);
+      $fclose(live);
+      `CHECKI("§9.5.5: $ftell on a fresh read descriptor is byte 0", at_open, 0);
+      `CHECKI("§9.5.5: and byte 4 once the 4-byte line has been read", after_read, 4);
+      `CHECKI("§9.5.5: $rewind succeeds, and success is 0", rewound, 0);
+      `CHECKI("§9.5.5: after which the position really is back at byte 0", at_rewind, 0);
+    end
     I(p,n) <+ pos + code + count + at_open + after_read + rewound + at_rewind + 0.0*V(p,n);
   end
 endmodule

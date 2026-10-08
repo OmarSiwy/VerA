@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 13.3.1.1
 //! reject E0207
 //! reject begins no A.1.5 config_rule_statement
+//! neighbour b_13_3_1_1_multiple_top_cells.v
 config cfg;
   design work.top;
   design work.top;

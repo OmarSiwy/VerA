@@ -26,7 +26,10 @@
 //
 //! lrm A.1.1
 //! lrm A.1.2
-//! reject E0232
+//! lrm A
+//! lrm A:1000
+//! lrm A.1.2:1000
+//! reject-only E0232
 `include "check.vh"
 library annex_a_lib "." ;
 module annex_a_library_host(p, n);

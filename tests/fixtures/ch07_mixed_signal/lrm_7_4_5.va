@@ -48,6 +48,7 @@
 // fixture; nothing here is declared.
 //
 //! lrm 7.4.5
+//! lrm 7.4.5:1
 //! bias V(undec) = 0.5
 //! print none
 `include "check.vh"

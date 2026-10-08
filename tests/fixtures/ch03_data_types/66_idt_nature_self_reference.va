@@ -17,6 +17,7 @@
 // here is fixed by the LRM to the last bit.
 //
 //! lrm 3.6.1.2
+//! lrm 3.6.1.2:4
 //! lrm 4.5.4
 //! bias SelfP = 2.0, SelfN = 0.5
 `include "check.vh"

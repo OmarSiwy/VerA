@@ -30,9 +30,10 @@
 // literal spelling now reads as its packed bytes instead of 0.)
 //
 //! lrm 9.17.1
+//! lrm 9.17.1:2
 //! lrm 3.3
 //! lrm 3.4.6
-//! reject E0820
+//! reject-only E0820
 module a01_discontinuity_string_degree_rejected(p, n);
   inout p, n;
   electrical p, n;

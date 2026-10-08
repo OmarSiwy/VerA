@@ -37,6 +37,7 @@
 //
 //! lrm 4.7.2.4
 //! lrm 4.7.3
+//! lrm 4.7.2.4:2
 `include "check.vh"
 module ch4_fn_array_inout(p);
   inout p;

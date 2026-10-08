@@ -32,6 +32,7 @@
 // plain module.
 //
 //! lrm 8.2
+//! lrm 8.2:2
 //! lrm 6.4.1
 //! psweep k = 1.0, 3.0
 //! analysis dc

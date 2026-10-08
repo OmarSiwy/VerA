@@ -27,6 +27,7 @@
 //
 //! lrm 6.7
 //! lrm 2.8.1
+//! lrm 2.8.1:1
 //! analysis dc
 //! solve
 `include "check.vh"

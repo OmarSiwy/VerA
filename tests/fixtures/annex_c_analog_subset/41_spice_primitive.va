@@ -23,6 +23,9 @@
 //! lrm C.18
 //! lrm E.3
 //! lrm 6.7.1
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.7.1:1
 //! bias V(p) = 2.0, V(n) = 0.0
 `include "check.vh"
 module annex_c_spice_primitive(p, n);

@@ -20,7 +20,9 @@
 // `8'd -6` — the lexer ends the literal at the space and the sign then arrives
 // where a primary was expected. Retarget this line at E0132 if that is fixed.
 //! lrm 2.6.1
-//! reject E0209
+//! lrm 2.6.1:12
+//! reject-only E0209
+//! neighbour 36_based_number_digit_whitespace.va
 module ch02_base_sign_between_base_and_digits_rejected(p, n);
     inout p, n;
     electrical p, n;

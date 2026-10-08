@@ -32,9 +32,12 @@
 //
 //! lrm E.3.2
 //! lrm E.3.2.2
+//! lrm E.3.2.2:2
 //! lrm 3.11
-//! reject E0355
+//! lrm 3.11:4
+//! reject-only E0355
 //! reject incompatible disciplines
+//! neighbour primitive_segment_discipline.va
 `include "disciplines.vams"
 module e322_top(p, n);
   inout p, n; electrical p, n;

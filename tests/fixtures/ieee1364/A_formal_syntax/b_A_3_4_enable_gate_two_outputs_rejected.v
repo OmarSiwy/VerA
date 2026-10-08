@@ -14,6 +14,8 @@
 //! inherited IEEE 1364-2005 A.3.4
 //! reject E0209
 //! reject an enable gate takes an output, a data input and an enable
+//! neighbour b_A_3_1_gate_instantiations.v
+//! neighbour b_A_3_4_gate_and_switch_types.v
 module b_A_3_4_enable_gate_two_outputs_rejected;
   reg a, en;
   wire y1, y2;

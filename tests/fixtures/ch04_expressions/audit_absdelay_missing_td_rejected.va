@@ -3,7 +3,9 @@
 // cannot establish the absdelay arity check. 19_absdelay.va is the legal pair.
 //! lrm 4.5.7
 //! lrm A.8.2
-//! reject E0505
+//! lrm A.8.2:1000
+//! reject-only E0505
+//! neighbour 19_absdelay.va
 module audit_absdelay_missing_td_rejected(p, n);
     inout p, n;
     electrical p, n;

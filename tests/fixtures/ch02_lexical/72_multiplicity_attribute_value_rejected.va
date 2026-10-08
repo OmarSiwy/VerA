@@ -2,7 +2,8 @@
 // "sideways" is a string outside that enumeration. This fixture contains
 // no sibling violation that could mask a missing multiplicity check.
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:4
+//! reject-only E0358
 module ch02_multiplicity_attribute_value_rejected(p, n);
     inout p, n;
     electrical p, n;

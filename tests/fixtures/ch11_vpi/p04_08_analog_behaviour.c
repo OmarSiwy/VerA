@@ -25,7 +25,13 @@
  * accessfunc Vp(b1) and the real constant 2.5 (vpiRealConst, reads 2.5).
  *
  * 11.6.19 accessfunc -> branches, discipline: Vp(b1) names the declared
- * branch b1, whose discipline is p04_elec; vpiName is the access name "Vp".
+ * branch b1, whose discipline is p04_elec, and the accessfunc's discipline is
+ * the very discipline object its branch has (5.4.1: "The name of the access
+ * function is taken from the discipline of the net, port, or branch associated
+ * with the signal"). The diagram gives an accessfunc those two relations and
+ * the expr class's size and value, and no vpiName, so its name is not asserted
+ * (reconciler, 2026-10-08: an earlier revision asserted vpiName == "Vp", a
+ * property 11.6.19 does not draw; the check that replaced it keeps the count).
  *
  * 11.6.20. Statement 3 contributes to b1 with the `<+` operator, so it is a
  * direct contribution (vpiDirect TRUE), and Ip is p04_elec's FLOW access
@@ -48,6 +54,9 @@
 //! lrm 12.13
 //! lrm 12.32
 //! lrm 12.33.2
+//! lrm 11.6.20:1000
+//! lrm 11.6.21:1000
+//! lrm 12.32:1
 
 #include "p02_check.h"
 
@@ -70,8 +79,9 @@ static int scan_all(vpiHandle itr, vpiHandle *out, int max)
 static void accessfunc(vpiHandle h, const char *branch)
 {
   CHECK(vpi_get(vpiType, h) == vpiAccessFunc, "an accessfunc");
-  CHECK(strcmp(vpi_get_str(vpiName, h), "Vp") == 0, "named by its access, Vp");
   CHECK(vpi_compare_objects(vpi_handle(vpiBranch, h), p02_by_name(branch)), "applied to %s", branch);
+  CHECK(vpi_compare_objects(vpi_handle(vpiDiscipline, h), vpi_handle(vpiDiscipline, vpi_handle(vpiBranch, h))),
+        "5.4.1: its discipline is its branch's");
   CHECK(strcmp(vpi_get_str(vpiName, vpi_handle(vpiDiscipline, h)), "p04_elec") == 0, "of discipline p04_elec");
 }
 

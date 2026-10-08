@@ -18,6 +18,7 @@
 //
 //! lrm A.7
 //! lrm A.7.1
+//! lrm A.7.1:1000
 //! reject E0207
 //! reject begins no A.7.1 specify_item
 module annex_a_gate_in_specify(o, a);

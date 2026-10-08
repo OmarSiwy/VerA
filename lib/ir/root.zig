@@ -23,6 +23,8 @@ pub const Lowered = Lower.Lowered;
 pub const ifconv = @import("ifconv.zig");
 /// Per-unit float-mode verdict from the finiteness proof.
 pub const proof = @import("proof.zig");
+/// The MIR's postcondition, checked after lowering and each MIR pass.
+pub const verify = @import("verify.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 B
 //! reject E0208
 //! reject found `begin`
+//! neighbour b_B_keywords.v
 module b_B_keyword_as_identifier_rejected;
   reg begin;
   initial $display("unreachable");

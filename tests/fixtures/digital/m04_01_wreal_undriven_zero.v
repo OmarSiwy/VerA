@@ -33,6 +33,9 @@
 // the standard says so" from "everything in this engine starts at zero".
 //
 //! lrm 3.7
+//! lrm 3.7:1
+//! lrm 3.7:2
+//! lrm 3.7:3
 //! lrm annex A.2.1.3
 //! timescale 1ns/1ns
 //

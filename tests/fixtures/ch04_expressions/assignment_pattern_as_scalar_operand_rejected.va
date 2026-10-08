@@ -12,7 +12,10 @@
 // 09_assignment_pattern.va and 23_laplace_filters.va.
 //
 //! lrm 4.2.14
-//! reject E0509
+//! lrm 4.2.14:1000
+//! reject-only E0509
+//! neighbour 09_assignment_pattern.va
+//! neighbour 23_laplace_filters.va
 `include "disciplines.vams"
 module ch04_assignment_pattern_as_scalar_operand(p, n);
   inout p, n; electrical p, n;

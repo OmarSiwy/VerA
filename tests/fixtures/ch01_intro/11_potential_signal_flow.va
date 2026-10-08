@@ -24,6 +24,8 @@
 //
 //! lrm 1.3.4.1
 //! lrm 5.4.2.2
+//! lrm 1.3.4.1:1
+//! lrm 1.3.4.1:2
 //! bias V(in) = 1.25
 //! solve
 `include "check.vh"

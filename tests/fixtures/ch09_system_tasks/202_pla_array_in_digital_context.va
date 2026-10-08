@@ -24,6 +24,7 @@
 // later.
 //
 //! lrm 9.8
+//! lrm 9.8:1000
 //! analysis tran
 //! time 0, 10n
 //! print none

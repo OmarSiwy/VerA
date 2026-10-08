@@ -3,7 +3,9 @@
 // precede constant folding and dead-branch elimination. The legal original
 // spelling and legitimate alias bindings run in aliasparam_source_bindings.va.
 //! lrm 3.4.7
-//! reject E0373
+//! lrm 3.4.7:3
+//! reject-only E0373
+//! neighbour aliasparam_source_bindings.va
 module aliasparam_dead_read(p);
   inout p; electrical p;
   parameter real gain=1;

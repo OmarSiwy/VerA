@@ -4,9 +4,12 @@
 // a is declared as a reg and again as an integer. Legal neighbour:
 // b_4_2_2_variable_initial_values.v declares each variable once.
 // digital-runner: reject
+//! lrm 2.8
+//! lrm 2.8:1
 //! inherited IEEE 1364-2005 4.2.2
 //! reject E1100
 //! reject duplicate digital variable
+//! neighbour b_4_2_2_variable_initial_values.v
 module b_4_2_2_variable_redeclared_rejected;
   reg a;
   integer a;

@@ -8,6 +8,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 15.1
 //! reject timing check
+//! neighbour b_15_1_timing_check_forms.v
 `timescale 1ns/1ns
 module b_15_1_timing_check_in_procedure_rejected;
   reg d, clk;

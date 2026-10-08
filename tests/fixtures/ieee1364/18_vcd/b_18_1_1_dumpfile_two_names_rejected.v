@@ -10,6 +10,8 @@
 //! inherited IEEE 1364-2005 18.1.1
 //! reject E1100
 //! reject $dumpfile takes at most one filename
+//! neighbour b_18_1_1_dumpfile_default_name.v
+//! neighbour b_18_1_1_dumpfile_variable_name.v
 `timescale 1ns/1ns
 module b_18_1_1_dumpfile_two_names_rejected;
   reg a;

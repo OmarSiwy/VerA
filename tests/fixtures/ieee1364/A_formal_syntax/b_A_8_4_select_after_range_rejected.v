@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 A.8.4
 //! reject E1100
 //! reject a select is of a whole vector or an unpacked array element
+//! neighbour b_A_8_4_primaries.v
 module b_A_8_4_select_after_range_rejected;
   reg [7:0] v;
   initial begin

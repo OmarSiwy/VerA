@@ -5,7 +5,8 @@
 // carrier diagnostic, never report 128. The legal carrier neighbour is
 // clog2_unsigned_width.va's 64-bit high-bit and 128-bit signed -1 cases.
 //! lrm 9.14
-//! reject E0130
+//! reject-only E0130
+//! neighbour clog2_unsigned_width.va
 module reject_clog2_wide_unsigned_carrier;
   integer result;
   analog result = $clog2(128'h8000000000000000);

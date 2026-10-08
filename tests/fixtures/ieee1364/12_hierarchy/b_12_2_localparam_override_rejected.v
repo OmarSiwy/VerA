@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 12.2 4.10.2
 //! reject E1100
 //! reject local parameter
+//! neighbour b_12_2_1_defparam_last_wins.v
 module leaf;
   localparam LP = 1;
   initial $display("%0d", LP);

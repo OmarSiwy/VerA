@@ -1,6 +1,7 @@
 // The actual lossy_tline classification changes after its host card is bound.
 //! lrm 3.4.5
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param r = 1
 //! param g = 1
 //! param len = 2

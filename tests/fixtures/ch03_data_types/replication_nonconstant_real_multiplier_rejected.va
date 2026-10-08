@@ -13,7 +13,9 @@
 // replication with an `integer` multiplier.
 //
 //! lrm 3.3
-//! reject nonconstant replication multiplier shall be of integral type
+//! lrm 3.3:4
+//! reject-only nonconstant replication multiplier shall be of integral type
+//! neighbour string_replication_runtime_multiplier.va
 module ch3_replication_nonconstant_real_multiplier_rejected(p);
     inout p;
     electrical p;

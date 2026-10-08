@@ -13,6 +13,7 @@
 // still fails.
 //
 //! lrm 9.19
+//! lrm 9.19:4
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_param_given_not_overridden(p, n);

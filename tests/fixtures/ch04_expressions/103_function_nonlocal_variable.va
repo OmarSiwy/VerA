@@ -11,7 +11,8 @@
 // identifier, and the identifier being unknown IS the rule taking effect.
 //
 //! lrm 4.7.1
-//! reject E0314
+//! lrm 4.7.1:3
+//! reject-only E0314
 //! reject outer
 module ch04_function_nonlocal_variable(p, n);
     inout p, n;
