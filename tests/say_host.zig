@@ -35,7 +35,7 @@ fn render(out: *contract.Say) ![]const u8 {
 test "say_sites: one C-style format per recorded task, in source order" {
     const want = [_]struct { fmt: []const u8, nargs: u32 }{
         .{ .fmt = "v = %g\n", .nargs = 1 },
-        .{ .fmt = "%d|%5.2f|", .nargs = 2 },
+        .{ .fmt = "%11d|%5.2f|", .nargs = 2 },
         .{ .fmt = "k=%h\n", .nargs = 1 },
         .{ .fmt = "WARNING: hot %g > %g\n", .nargs = 2 },
         .{ .fmt = "\n", .nargs = 0 },
@@ -55,16 +55,16 @@ test "say: the tasks that run are recorded, a guarded one only when its arm runs
     sayAt(0.5, &out);
     // The printing artifact's order: a guarded task where its arm is, the
     // unconditional ones at the end of the block.
-    try std.testing.expectEqualStrings("v = 0.5\n3| 0.50|k=ff\n\n", try render(&out));
+    try std.testing.expectEqualStrings("v = 0.5\n          3| 0.50|k=ff\n\n", try render(&out));
     sayAt(2.0, &out);
-    try std.testing.expectEqualStrings("WARNING: hot 2 > 1\nv = 2\n3| 0.50|k=ff\n\n", try render(&out));
+    try std.testing.expectEqualStrings("WARNING: hot 2 > 1\nv = 2\n          3| 0.50|k=ff\n\n", try render(&out));
 }
 
 test "say: a record that does not fit is counted, never cut" {
     var store: [4]f64 = undefined;
     var out: contract.Say = .{ .buf = &store };
     sayAt(0.5, &out);
-    // `v = %g` (2 values) fits, `%d|%5.2f|` (3) does not, `k=%h` (2) fits,
+    // `v = %g` (2 values) fits, `%11d|%5.2f|` (3) does not, `k=%h` (2) fits,
     // the bare newline (1) does not.
     try std.testing.expectEqual(@as(usize, 4), out.len);
     try std.testing.expectEqual(@as(usize, 2), out.lost);

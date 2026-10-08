@@ -28,6 +28,6 @@ module retry(p, n);
       hit = 1;
       t_hit = $abstime;
     end
-    $strobe("t = %g  hit = %d  t_hit = %g", $abstime, hit, t_hit);
+    $strobe("t = %g  hit = %0d  t_hit = %g", $abstime, hit, t_hit);
   end
 endmodule

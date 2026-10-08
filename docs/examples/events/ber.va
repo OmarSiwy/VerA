@@ -25,6 +25,6 @@ module bit_error_rate(in, ref);
       bits = bits + 1;
     end
     @(final_step)
-      $strobe("bit error rate = %f%% (%d of %d bits)", 100.0 * errors / bits, errors, bits);
+      $strobe("bit error rate = %f%% (%0d of %0d bits)", 100.0 * errors / bits, errors, bits);
   end
 endmodule

@@ -103,7 +103,10 @@ showing where it appears.
 so in a real simulation it prints once per accepted point, not once per
 iteration. `$display` has the same format rules; `$write` omits the newline;
 `$debug` prints at every iteration of the solver. The format strings follow
-C's `printf`: `%g`, `%e`, `%f`, `%d`, `%s`.
+C's `printf`: `%g`, `%e`, `%f`, `%d`, `%s`. One difference is Verilog's:
+`%d` pads its number to the width of the largest value the operand can
+hold, 11 columns for an `integer` (IEEE 1364 §17.1.1.3), and `%0d` prints
+the digits alone, which is what the examples here use.
 
 A device inside a simulator does not print by itself: printing from the hot
 loop of a circuit solver would cost more than the model. Instead it

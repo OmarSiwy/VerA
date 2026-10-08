@@ -19,6 +19,6 @@ module ladder_initial(p, n);
   end
   analog begin
     I(p, n) <+ g * V(p, n);
-    $strobe("count %d: g = %g S, I = %g A", count, g, I(p, n));
+    $strobe("count %0d: g = %g S, I = %g A", count, g, I(p, n));
   end
 endmodule

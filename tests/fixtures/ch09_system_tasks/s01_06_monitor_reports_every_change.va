@@ -31,7 +31,7 @@
 //
 // each exact in binary (a quarter is dyadic and 4*0.25 = 1 exactly; 2.5, 25 and
 // 250 are exact and so are their products with 4), each an exact integer under
-// §4.2.1.1's round-to-nearest conversion for %d, and each DIFFERENT from its
+// §4.2.1.1's round-to-nearest conversion for %0d (no IEEE 1364 §17.1.1.3 automatic field), and each DIFFERENT from its
 // predecessor. Their decimal renderings are 1, 2, 3 and 4 characters long, and
 // §9.4.1 gives $monitor $strobe's trailing newline, so the four records are
 //
@@ -80,7 +80,7 @@ module s01_monitor_change(p, n);
   analog begin
     @(initial_step) begin
       fd = $fopen("s01_06_monitor_change.dat", "w");
-      $fmonitor(fd, "%d", V(p,n) * 4.0);
+      $fmonitor(fd, "%0d", V(p,n) * 4.0);
     end
 
     bytes = $ftell(fd);

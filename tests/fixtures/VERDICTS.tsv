@@ -2246,6 +2246,7 @@ pass	ch09_system_tasks/a05_11_spline_derivative_reaches_the_solver.va
 pass	ch09_system_tasks/a05_12_error_extrapolation_is_fatal.va
 pass	ch09_system_tasks/a05_13_duplicate_points.va
 pass	ch09_system_tasks/a05_14_table_snapshot_per_instance.va
+pass	ch09_system_tasks/analog_decimal_is_auto_sized.va
 pass	ch09_system_tasks/arandom_constant_seed_stream.va
 pass	ch09_system_tasks/arandom_execution_paths.va
 pass	ch09_system_tasks/audit_binding_source_overrides.va

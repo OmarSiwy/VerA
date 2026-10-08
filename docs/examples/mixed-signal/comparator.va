@@ -19,5 +19,5 @@ module comparator(in);
   always @(cross(V(in) - 0.6, -1)) q = 0;
   always @(q) $display("%0t ns: q = %b", $time, q);
 
-  analog $strobe("t = %g  V(in) = %g  q = %d", $abstime, V(in), q);
+  analog $strobe("t = %g  V(in) = %g  q = %0d", $abstime, V(in), q);
 endmodule

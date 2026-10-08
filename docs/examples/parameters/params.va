@@ -22,7 +22,7 @@ module params(p, n);
       I(p, n) <+ V(p, n) / rseries;
     else
       I(p, n) <+ V(p, n) / rparallel;
-    $strobe("r = %g (given: %d), stages = %d, g = %g S, topology = %s",
+    $strobe("r = %g (given: %0d), stages = %0d, g = %g S, topology = %s",
             r, $param_given(r), stages, g, topology);
     $strobe("I(p,n) = %g A", I(p, n));
   end

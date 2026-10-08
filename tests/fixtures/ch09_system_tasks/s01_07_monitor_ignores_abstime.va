@@ -20,7 +20,7 @@
 //
 // HAND DERIVATION.
 //   `//! wave V(p) = 0.5`, V(n) at the reference: V(p,n)*4 is 2 at every step.
-//   The record at t = 0 is "%d %g" of (2, 0) plus $strobe's newline: "2 0\n",
+//   The record at t = 0 is "%0d %g" of (2, 0) (the zero width drops IEEE 1364 §17.1.1.3's automatic field) plus $strobe's newline: "2 0\n",
 //   4 bytes (C's %g writes 0 as "0").
 //
 //   end of step t=0  first accepted step, reported   -> 4 bytes
@@ -49,7 +49,7 @@ module s01_monitor_time_exempt(p, n);
   analog begin
     @(initial_step) begin
       fd = $fopen("s01_07_monitor_time.dat", "w");
-      $fmonitor(fd, "%d %g", V(p,n) * 4.0, $abstime);
+      $fmonitor(fd, "%0d %g", V(p,n) * 4.0, $abstime);
     end
 
     bytes = $ftell(fd);

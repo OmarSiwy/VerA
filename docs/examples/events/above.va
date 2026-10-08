@@ -16,6 +16,6 @@ module above_vs_cross(p);
       n_above = n_above + 1;
     @(cross(V(p) - 0.5, +1))
       n_cross = n_cross + 1;
-    $strobe("V(p) = %g  above events = %d  cross events = %d", V(p), n_above, n_cross);
+    $strobe("V(p) = %g  above events = %0d  cross events = %0d", V(p), n_above, n_cross);
   end
 endmodule

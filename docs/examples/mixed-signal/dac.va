@@ -20,6 +20,6 @@ module dac1(out);
 
   analog begin
     V(out) <+ (q == 1) ? 1.8 : 0.0;
-    $strobe("t = %g  q = %d  V(out) = %g", $abstime, q, V(out));
+    $strobe("t = %g  q = %0d  V(out) = %g", $abstime, q, V(out));
   end
 endmodule

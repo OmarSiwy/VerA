@@ -161,11 +161,14 @@ const PrintArg = struct {
 /// format consumed prints in the §9.4.3 default decimal format; nothing
 /// inserts separators (a null argument is §9.4.1's space).
 ///
-/// Two deviations from IEEE 1364 §17.1.1.3:
-///   - a bare or `%d` integer prints minimal-width rather than auto-sized to
-///     20 columns, unless it is an unsigned sized literal whose width lowering
-///     records (`decimalWidth`); the radices auto-size at every recorded width;
-///   - a bare real prints shortest-round-trip decimal, not `%g`.
+/// §9.1 makes Verilog-AMS "a superset of IEEE Std 1364 Verilog", and §9.4.1
+/// "extends the display tasks so that they can be used in the analog
+/// context" without a sizing rule of its own, so IEEE 1364 §17.1.1.3's
+/// automatic sizing holds here as in the digital engine (#61): a bare or
+/// `%d` number pads to its largest value's columns (`decimalField`: 11 for
+/// an `integer`, 20 for a real), the radices show their leading zeros at
+/// every width lowering records, and `%0d`/`%0h` print minimal-width.
+/// One deviation: a bare real prints shortest-round-trip decimal, not `%g`.
 pub fn buildArgs(
     g: *Gen,
     args: []const Mir.Value,
@@ -467,7 +470,8 @@ pub fn sayRecords(c: Mir.Callee) bool {
 /// recorded numbers: each string argument is a format whose conversions take
 /// the arguments after it, a constant string under `%s` spliced in as text
 /// and `%l` as the module name (what the printing artifact writes); an
-/// argument no format took is `%d` (integer) or `%g`. Appends the recorded
+/// argument no format took is `%d` (integer) or `%g`, and a bare `%d` gets
+/// the printing artifact's automatic field (`decimalField`). Appends the recorded
 /// arguments to `vals`. False when one has no numeric record: a string that
 /// is not a constant, or a number under `%s` (§9.4.5's bytes).
 fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *std.ArrayList(Mir.Value)) Error!bool {
@@ -476,7 +480,7 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
     while (i < args.len) {
         const s = g.strArg(args, i) orelse {
             if (g.an.tyOf(args[i]) == .str) return false;
-            try fmt.appendSlice(g.arena, if (g.an.tyOf(args[i]) == .int) "%d" else "%g");
+            if (g.an.tyOf(args[i]) == .int) try sayDecimal(g, fmt, args[i]) else try fmt.appendSlice(g.arena, "%g");
             try vals.append(g.arena, args[i]);
             i += 1;
             continue;
@@ -521,13 +525,20 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
             }
             // A number, or §2.7 a string literal's integer.
             if (g.an.tyOf(a) == .str and g.strArg(args, i - 1) == null) return false;
-            try fmt.appendSlice(g.arena, s[start .. j + 1]);
+            if (conv == 'd' and j == start + 1) try sayDecimal(g, fmt, a) else try fmt.appendSlice(g.arena, s[start .. j + 1]);
             try vals.append(g.arena, a);
         }
     }
     assert(i == args.len);
     assert(vals.items.len - vals_before <= args.len);
     return true;
+}
+
+/// `%d` with `v`'s automatic field (`decimalField`), `%11d` for an `integer`.
+fn sayDecimal(g: *Gen, fmt: *std.ArrayList(u8), v: Mir.Value) Error!void {
+    const cols = decimalField(g, v) orelse return fmt.appendSlice(g.arena, "%d");
+    var buf: [8]u8 = undefined;
+    try fmt.appendSlice(g.arena, std.mem.print(&buf, "%{d}d", .{cols}) catch unreachable);
 }
 
 /// `text` into a format as itself: each `%` doubled.
@@ -1033,6 +1044,66 @@ fn appendStrField(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, full: bool) Erro
     }) catch unreachable);
 }
 
+/// The width lowering recorded on a display operand (`$display$width`,
+/// lower/systask.zig): `bits`, and whether the operand is signed, which
+/// only a `%d` record states (a radix shows the bit pattern either way).
+const WidthRecord = struct { bits: u7, signed: bool };
+
+fn widthRecord(g: *Gen, v: Mir.Value) ?WidthRecord {
+    const def = g.mir.valueDef(g.an.rv(v));
+    if (def != .inst_result) return null;
+    const data = g.mir.instData(def.inst_result);
+    if (data != .call or data.call.callee != .@"$display$width") return null;
+    // (value, width) for a radix or `%s`, (value, width, signed) for `%d`.
+    const args = data.call.args;
+    assert(args.len == 2 or args.len == 3);
+    const bits = g.mir.valueDef(args[1]).int_const;
+    assert(bits >= 1 and bits <= 64);
+    return .{ .bits = @intCast(bits), .signed = args.len == 3 and g.mir.valueDef(args[2]).int_const != 0 };
+}
+
+/// IEEE 1364 §17.1.1.3's automatic decimal field for `%d` (and §9.4.3's
+/// bare default) of `v`: the columns of the largest value it can hold, its
+/// sign included, so a 32-bit `integer` is 11 ("-2147483648"), as the
+/// digital engine prints it (`kernels/fmt.zig` `autoWidth`). Lowering
+/// records an integer operand's width and sign (`systask.decimalWidth`); a
+/// real is the 64-bit signed integer it converts to, 20 columns
+/// (specification/Vague_Decisions.md VD-120). Null for an integer with no
+/// record (a 1-bit result, or a sink lowering does not size), a string
+/// operand (§2.7's integer has no fixed width) and a one-column field.
+fn decimalField(g: *Gen, v: Mir.Value) ?usize {
+    const r: WidthRecord = switch (g.an.tyOf(g.an.rv(v))) {
+        .int => widthRecord(g, v) orelse return null,
+        .real => .{ .bits = 64, .signed = true },
+        .str, .wide => return null,
+    };
+    const cols = fieldCols(r);
+    return if (cols > 1) cols else null;
+}
+
+/// The decimal columns of record `r`'s largest value: 2^bits - 1 unsigned,
+/// -2^(bits-1) signed (its magnitude's digits plus the sign).
+fn fieldCols(r: WidthRecord) usize {
+    assert(r.bits >= 1 and r.bits <= 64);
+    const most: u64 = if (r.signed) @as(u64, 1) << @intCast(r.bits - 1) else std.math.maxInt(u64) >> @intCast(64 - @as(u8, r.bits));
+    const cols = std.math.log10_int(most) + 1 + @intFromBool(r.signed);
+    assert(cols <= 20);
+    return cols;
+}
+
+test fieldCols {
+    // Against the largest values written out by hand.
+    const cases = [_]struct { r: WidthRecord, cols: usize }{
+        .{ .r = .{ .bits = 32, .signed = true }, .cols = 11 }, // -2147483648
+        .{ .r = .{ .bits = 64, .signed = true }, .cols = 20 }, // -9223372036854775808
+        .{ .r = .{ .bits = 12, .signed = false }, .cols = 4 }, // 4095
+        .{ .r = .{ .bits = 64, .signed = false }, .cols = 20 }, // 18446744073709551615
+        .{ .r = .{ .bits = 8, .signed = true }, .cols = 4 }, // -128
+        .{ .r = .{ .bits = 1, .signed = false }, .cols = 1 }, // 1
+    };
+    for (cases) |c| try std.testing.expectEqual(c.cols, fieldCols(c.r));
+}
+
 /// Appends one conversion's `{…}` to `fmt` and its operand to `ops`.
 /// `conv_raw == 0` means the §9.4.3 default: the operand's natural form.
 pub fn appendConv(
@@ -1045,35 +1116,32 @@ pub fn appendConv(
 ) Error!void {
     const a = g.arena;
     const v = operand;
-    var bits: u7 = 64;
-    if (g.mir.valueDef(g.an.rv(v)) == .inst_result) {
-        const inst = g.mir.valueDef(g.an.rv(v)).inst_result;
-        const data = g.mir.instData(inst);
-        if (data == .call and data.call.callee == .@"$display$width") {
-            assert(data.call.args.len == 2); // (value, width): lower/systask.zig
-            bits = @intCast(g.mir.valueDef(data.call.args[1]).int_const);
-        }
-    }
+    const rec = widthRecord(g, v);
+    const bits: u7 = if (rec) |r| r.bits else 64;
     const conv = std.ascii.toLower(conv_raw);
     const ty = g.an.tyOf(g.an.rv(v));
-    // §9.4.3 a bare operand is "the default decimal format"; lowering records a
-    // width on one (`decimalWidth`) only when `%d` would size it.
-    if (conv == 0 and ty == .int and bits < 64) return appendConv(g, fmt, ops, operand, 'd', spec_arg);
-    // IEEE 1364 §17.1.1.3 automatic sizing, for a width lowering recorded: the
-    // radices "always" show leading zeros, a decimal field pads with spaces to
-    // the largest value's columns, and `%0h`/`%0d` (the '0' flag with no width)
-    // "overrides" both.
+    // §9.4.3 a bare operand is "the default decimal format", `%d`'s field.
+    if (conv == 0 and ty == .int) return appendConv(g, fmt, ops, operand, 'd', spec_arg);
+    // IEEE 1364 §17.1.1.3 automatic sizing: the radices "always" show leading
+    // zeros at a width lowering recorded, a decimal field pads with spaces to
+    // the largest value's columns (`decimalField`), and `%0h`/`%0d` (the '0'
+    // flag with no width) "overrides" both.
     var spec = spec_arg;
-    if (bits < 64 and spec.width == 0 and !spec.zero and !spec.left and !spec.plus and !spec.space) {
-        const max = (@as(u64, 1) << @intCast(bits)) - 1;
-        switch (conv) {
-            'h', 'x' => spec = .{ .width = (@as(usize, bits) + 3) / 4, .zero = true },
-            'o' => spec = .{ .width = (@as(usize, bits) + 2) / 3, .zero = true },
-            'b' => spec = .{ .width = bits, .zero = true },
-            'd' => spec = .{ .width = std.math.log10_int(max) + 1 },
-            else => {},
-        }
-    }
+    if (spec.width == 0 and !spec.zero and !spec.left and !spec.plus and !spec.space) switch (conv) {
+        'h', 'x' => if (bits < 64) {
+            spec = .{ .width = (@as(usize, bits) + 3) / 4, .zero = true };
+        },
+        'o' => if (bits < 64) {
+            spec = .{ .width = (@as(usize, bits) + 2) / 3, .zero = true };
+        },
+        'b' => if (bits < 64) {
+            spec = .{ .width = bits, .zero = true };
+        },
+        'd' => if (decimalField(g, v)) |cols| {
+            spec = .{ .width = cols };
+        },
+        else => {},
+    };
     const at = fmt.items.len;
     const ops_before = ops.items().len;
     switch (conv) {
@@ -1139,9 +1207,10 @@ pub fn appendConv(
             }
         },
         else => {
-            // The Zig verb for the remaining conversions. `conv == 0` is
-            // §9.4.3's "default decimal format" in the value's own type
-            // (minimal-width, see `buildArgs`); a string prints its text,
+            // The Zig verb for the remaining conversions. `conv == 0` on a
+            // real or string is §9.4.3's "default decimal format" in the
+            // value's own type (an integer took `%d` above; a real's
+            // shortest round trip is `buildArgs`'s deviation); a string prints its text,
             // which every `CHECK` macro's `%s` depends on. `%t`/`%u`/`%z`/`%v`
             // are rows an analog device has no data for; they print the value.
             const verb: []const u8 = switch (conv) {
@@ -1289,24 +1358,27 @@ test "§9.4.1 every string argument opens a format run; output concatenates" {
 
     // Two runs, each consuming its own operand: `a=1b=2`, with no separator
     // anywhere: the second string is a FORMAT, not the first run's operand.
+    // Each `%d` of an unsized literal, a 32-bit `integer` (IEEE 1364 §3.5.1),
+    // pads to its 11 columns (§17.1.1.3, #61).
     const two = try emitBody(a, "$strobe(\"a=%d\", 1, \"b=%d\", 2);");
-    try std.testing.expect(has(two, "\"a={d}b={d}\\n\""));
+    try std.testing.expect(has(two, "\"a={s:>11}b={s:>11}\\n\""));
 
     // A string consumed BY a conversion stays an operand: `%s` takes "x",
     // then "y=%d" opens the next run over 2.
     const eaten = try emitBody(a, "$strobe(\"%s;\", \"x\", \"y=%d\", 2);");
-    try std.testing.expect(has(eaten, "\"{s};y={d}\\n\""));
+    try std.testing.expect(has(eaten, "\"{s};y={s:>11}\\n\""));
 
     // An expression before the first string prints in the §9.4.3 default,
-    // in order: `3.5lead 7`.
+    // in order: `3.5lead          7`.
     const lead = try emitBody(a, "$strobe(3.5, \"lead %d\", 7);");
-    try std.testing.expect(has(lead, "\"{d}lead {d}\\n\""));
+    try std.testing.expect(has(lead, "\"{d}lead {s:>11}\\n\""));
     try std.testing.expect(has(lead, "S.con(3.5)"));
 
-    // No inserted space before a bare trailing operand: `v:42`, not `v: 42`.
-    // §9.4.1's way to write that space is a null argument.
+    // No inserted space before a bare trailing operand: §9.4.1's way to
+    // write a space is a null argument. Its default decimal format is
+    // `%d`'s, so the 11 columns are the field's own (#61).
     const bare = try emitBody(a, "$strobe(\"v:\", 42);");
-    try std.testing.expect(has(bare, "\"v:{d}\\n\""));
+    try std.testing.expect(has(bare, "\"v:{s:>11}\\n\""));
 }
 
 test "§9.7.3 $fatal's finish_number is a diagnostic level, not message text" {
@@ -1315,8 +1387,8 @@ test "§9.7.3 $fatal's finish_number is a diagnostic level, not message text" {
     const a = arena_state.allocator();
     const out = try emitBody(a, "$fatal(0, \"died %d\", 7);");
     // The 0 is consumed by the skip, not printed by the walk.
-    try std.testing.expect(has(out, "\"FATAL: died {d}\\n\""));
-    try std.testing.expect(!has(out, "{d}died"));
+    try std.testing.expect(has(out, "\"FATAL: died {s:>11}\\n\""));
+    try std.testing.expect(!has(out, "}died"));
 }
 
 test "§9.4.3 Table 9-23: every real conversion routes through the C kernel" {
@@ -1503,7 +1575,7 @@ test "§9.7 simulation control: the run ends at the call, with the pinned status
 
     // §9.7.3: $fatal prints its message, then exits with the finish_number as
     // the errorcode (173_fatal_terminates.va checks the run's exit status).
-    const fat = try emitBody(a, "$fatal(2, \"died %d\", 7);");
+    const fat = try emitBody(a, "$fatal(2, \"died %0d\", 7);");
     try std.testing.expect(has(fat, "\"FATAL: died {d}\\n\""));
     try std.testing.expect(has(fat, "_ = zHalt(2); "));
     // ...floored at 1, so a $fatal never reads as success to a shell.
@@ -1595,12 +1667,12 @@ test "§9.4.1 a call past 32 operands prints in runs of 32, in order (#29)" {
             return o.items;
         }
     }.f;
-    // 32 operands: one print, as before.
-    const d32 = try emitBody(a, try std.mem.concat(a, u8, &.{ "$strobe(", try rep(a, "\"%d\", 1, ", 31), "\"%d\", 1);" }));
+    // 32 operands: one print, as before. `%0d`, so each operand is `{d}`.
+    const d32 = try emitBody(a, try std.mem.concat(a, u8, &.{ "$strobe(", try rep(a, "\"%0d\", 1, ", 31), "\"%0d\", 1);" }));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, d32, "std.debug.print(\"{d}"));
     // 33: the first print takes 32 and the text up to the 33rd, the second
     // the 33rd and the newline.
-    const d33 = try emitBody(a, try std.mem.concat(a, u8, &.{ "$strobe(", try rep(a, "\"%d\", 1, ", 32), "\"x%d\", 2);" }));
+    const d33 = try emitBody(a, try std.mem.concat(a, u8, &.{ "$strobe(", try rep(a, "\"%0d\", 1, ", 32), "\"x%0d\", 2);" }));
     try std.testing.expect(has(d33, try std.mem.concat(a, u8, &.{ "std.debug.print(\"", try rep(a, "{d}", 32), "x\", .{" })));
     try std.testing.expect(has(d33, "std.debug.print(\"{d}\\n\", .{"));
 }

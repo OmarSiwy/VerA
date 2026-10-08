@@ -241,7 +241,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     if (formats) {
         // §9.4.3's other pairing half — each conversion against its operand's
         // TYPE. After the loop, because the types are what lowering computed.
-        try prepareFormatArgs(self, tok, live.items, tys.items, vals.items);
+        try prepareFormatArgs(self, tok, live.items, tys.items, vals.items, messageStart(c, tys.items));
     }
     // A restricted context's monitor reports at the statement: its operands
     // are diagnosed there, and an inlined function's locals end with the body.
@@ -795,9 +795,12 @@ fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
 /// operands so a string used by `%s` does not become a new format. Numeric
 /// `%s` operands also retain their source width through an identity call.
 /// A shortfall stops where the operands stop; E0810 already owns it.
-fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
+/// The first `skip` operands are not message text (`messageStart`): no
+/// format reads them, and they keep their own values.
+fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value, skip: usize) Oom!void {
     std.debug.assert(live.len == tys.len);
-    var at: usize = 0;
+    std.debug.assert(skip <= live.len);
+    var at: usize = skip;
     while (at < live.len) {
         // Use the actual lowered bytes, including direct literal NUL escapes,
         // so validation and emission inspect the same format.
@@ -877,7 +880,8 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
                             vals[next - 1], try self.mir.addIntConst(self.arena, bits),
                         });
                     }
-                } else if (conv == 'd' and ty == .integer) {
+                } else if (conv == 'd' and ty == .integer and !cv.prefixed) {
+                    // A flag or width replaces §17.1.1.3's automatic size.
                     try decimalWidth(self, arg, &vals[next - 1]);
                 }
                 continue;
@@ -897,17 +901,94 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
     }
 }
 
+/// How many leading operands of task `c` are not message text: §9.5.2's
+/// descriptor, and §9.7.3's finish_number, which `cg_display.emitDisplayTask`
+/// drops when it is not a string and `finishLevel` reads as a constant.
+fn messageStart(c: Mir.Callee, tys: []const Ty) usize {
+    if (Mir.callee.family(c) == .file_out) if (Mir.callee.fdArg(c)) |fd| return @min(tys.len, @as(usize, fd) + 1);
+    if (c == .@"$fatal" and tys.len > 0 and tys[0] != .string) return 1;
+    return 0;
+}
+
 /// IEEE 1364 §17.1.1.3: "the values written to the output ... are sized
-/// automatically" — a decimal field is as wide as the operand's largest value.
-/// That needs the width AND the signedness, and only an unsigned sized literal
-/// carries both through today's IR; every other integer keeps the minimal
-/// field `cg_display.buildArgs` documents as a deviation.
+/// automatically", a decimal field as wide as the operand's largest value,
+/// which needs its width and signedness (#61): recorded as
+/// `$display$width(value, bits, signed)` for `cg_display.decimalField`. A
+/// 1-bit result needs one column, which an operand with no record prints.
 fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
+    const size = decimalSize(self, e);
+    if (size.bits == 1 and !size.signed) return;
+    v.* = try self.call("$display$width", &.{
+        v.*,
+        try self.mir.addIntConst(self.arena, size.bits),
+        try self.mir.addIntConst(self.arena, @intFromBool(size.signed)),
+    });
+}
+
+const DecimalSize = struct { bits: u7, signed: bool };
+const one_bit: DecimalSize = .{ .bits = 1, .signed = false };
+/// §3.2's `integer`, the width the analog context computes every integer
+/// expression at (`render.intBin32`), and IEEE 1364 §3.5.1's unsized literal.
+const integer: DecimalSize = .{ .bits = 32, .signed = true };
+
+/// An integer operand's IEEE 1364 width and sign, a name typed as
+/// `lower_wide.identType` types it: a sized literal (§3.5.1), a 1-bit result
+/// (Table 5-22: a relational, equality, logical or reduction operator), a
+/// `reg` or a ranged parameter keep their own; everything else (an unsized
+/// literal, an `integer` variable, a call, arithmetic, a width past the
+/// 64-bit carrier) is an `integer`.
+fn decimalSize(self: *Lower, e: Ast.ExprId) DecimalSize {
     const ex = &self.file.exprs;
-    if (ex.tag(e) != .int_literal) return;
-    const lit = ex.intLiteral(e);
-    if (lit.width == 0 or lit.width >= 64 or lit.signed) return;
-    v.* = try self.call("$display$width", &.{ v.*, try self.mir.addIntConst(self.arena, lit.width) });
+    return switch (ex.tag(e)) {
+        .int_literal => blk: {
+            const lit = ex.intLiteral(e);
+            if (lit.width == 0 or lit.width > 64) break :blk integer;
+            break :blk .{ .bits = @intCast(lit.width), .signed = lit.signed };
+        },
+        .unary => switch (ex.unOp(e)) {
+            .plus => decimalSize(self, ex.lhs(e)),
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => one_bit,
+            .minus, .bit_not => integer,
+        },
+        .binary => switch (ex.binOp(e)) {
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => one_bit,
+            .add, .sub, .mul, .div, .mod, .pow, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr => integer,
+        },
+        .ternary => blk: {
+            const then = decimalSize(self, ex.rhs(e));
+            const els = decimalSize(self, ex.ternaryElse(e));
+            break :blk if (then.bits == els.bits and then.signed == els.signed) then else integer;
+        },
+        .ident => identSize(self, self.file.str(ex.strOf(e))),
+        .sys_call => if (std.mem.eql(u8, self.file.str(ex.strOf(e)), "$realtobits")) .{ .bits = 64, .signed = false } else integer,
+        else => integer, // else: any other integer-valued expression (a call, a select) is an `integer`
+    };
+}
+
+/// A name's width and sign, in `lower_wide.identType`'s order: a variable
+/// (only a `reg` has a width of its own), a discrete input with a range, a
+/// parameter. An `integer`, an unranged discrete input (Table 7-1 reads it
+/// as an integer) and a width past 64 are `integer`.
+fn identSize(self: *Lower, name: []const u8) DecimalSize {
+    var w: u32 = 32;
+    var signed = true;
+    if (self.vars.get(name)) |slot| {
+        if (slot.reg_width) |rw| {
+            w = rw;
+            signed = slot.reg_signed;
+        }
+    } else if (self.out.discrete_inputs.contains(name)) {
+        if (self.reg_ranges.get(name)) |rr| {
+            w = rr.width;
+            signed = rr.signed;
+        }
+    } else if (!lower_expr.funcParamShadows(self, name)) if (self.param_index.get(name)) |pi| {
+        const p = self.out.params.items[pi];
+        w = p.source_width orelse 32;
+        signed = p.source_signed orelse true;
+    };
+    if (w == 0 or w > 64) return integer;
+    return .{ .bits = @intCast(w), .signed = signed };
 }
 
 /// §9.4.1: "Any null argument produces a single space character in the
@@ -973,7 +1054,7 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         try tys.append(self.arena, tv.ty);
     }
     try checkFormatPairing(self, tok, args[1..]);
-    try prepareFormatArgs(self, tok, live.items, tys.items, vals.items);
+    try prepareFormatArgs(self, tok, live.items, tys.items, vals.items, 0);
     self.out.uses.insert(.str_tasks);
     const v = try self.call("$sformat", vals.items);
     try lower_stmt.writeLvalue(self, slot, v);
@@ -1305,7 +1386,7 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         }
         for (dd.genvars) |g| _ = self.consts.remove(g.name);
         // §9.4.3 conversion-vs-type pairing, postponed with the operands.
-        try prepareFormatArgs(self, dd.tok, live.items, tys.items, vals.items);
+        try prepareFormatArgs(self, dd.tok, live.items, tys.items, vals.items, messageStart(.fromName(dd.name), tys.items));
         if (outer) |s| _ = swapScope(self, s);
         if (dd.monitor) |k| try vals.insert(self.arena, 0, k);
         self.out.displays.items[dd.display].val = try self.call(dd.name, vals.items);

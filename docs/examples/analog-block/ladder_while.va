@@ -29,6 +29,6 @@ module ladder_while(p, n);
       1: I(p, n) <+ 2 * g * V(p, n);
       default: I(p, n) <+ 0;
     endcase
-    $strobe("count %d, mode %d: g = %g S, I = %g A", count, mode, g, I(p, n));
+    $strobe("count %0d, mode %0d: g = %g S, I = %g A", count, mode, g, I(p, n));
   end
 endmodule

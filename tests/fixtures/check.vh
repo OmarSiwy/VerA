@@ -64,7 +64,7 @@
 `define CHECKX(NAME, GOT, WANT) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), ((GOT) == `VERA_PW(WANT)))
 `define CHECKI(NAME, GOT, WANT) \
-  $strobe("%s got=%d want=%d ok=%d", NAME, GOT, (WANT) + 1, ((GOT) == (WANT) + 1))
+  $strobe("%s got=%0d want=%0d ok=%d", NAME, GOT, (WANT) + 1, ((GOT) == (WANT) + 1))
 `define CHECKEQ(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), (abs((GOT) - `VERA_PW(WANT)) <= (TOL)))
 `else
@@ -85,8 +85,11 @@
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, WANT, ((GOT) == (WANT)))
 
 // Integer form of the same, so the transcript shows `12` and not `12.0000`.
+// `%0d`, because a bare `%d` pads to the operand's widest value (IEEE 1364
+// §17.1.1.3: 11 columns for an `integer`); `ok=%d` of a comparison is one
+// column either way.
 `define CHECKI(NAME, GOT, WANT) \
-  $strobe("%s got=%d want=%d ok=%d", NAME, GOT, WANT, ((GOT) == (WANT)))
+  $strobe("%s got=%0d want=%0d ok=%d", NAME, GOT, WANT, ((GOT) == (WANT)))
 
 // RELATIONAL, and deliberately a weaker claim than the four above.
 //
