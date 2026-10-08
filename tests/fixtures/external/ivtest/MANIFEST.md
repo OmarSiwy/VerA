@@ -61,4 +61,5 @@ compile warnings recorded in a gold file, and vvp's VCD banners. The rule is
 
 `--native` repeats every `normal` test VerA's interpreter accepts through
 `vera --emit-exe` and judges the executable's stdout the same way
-(`ivtest-native` in the report; its triage is this folder's).
+(`ivtest-native` in the report; its triage is this folder's
+`TRIAGE-native.md`).

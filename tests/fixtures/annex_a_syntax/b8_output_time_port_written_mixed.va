@@ -16,11 +16,14 @@
 // DERIVATION (`timescale 1ns/1ns). t = 12 at 1 ns; checked at 2 ns as the flag
 // (t == 12), so the check needs no 64-bit print: 1. One verdict.
 //
+// Until 2026-10-08 the digital half of the mixed run left every `time` of a
+// mixed module to the analog block, so the port became a net and `t = 12`
+// failed E1100 ("there is no procedural assignment to a net").
+//
 //! lrm A.2.1.2
 //! lrm A.2.2.1
 //! lrm A.2.1.2:1000
 //! lrm A.2.2.1:1000
-//! xfail E1100 "a net is driven by a continuous assignment; there is no procedural assignment to a net" at `t = 12`: the digital half of the mixed run treats a top-level `output time t` port as a net (`output integer o` runs)
 //! analysis tran
 //! time 0, 10n
 //! checks 1

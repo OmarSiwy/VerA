@@ -4,7 +4,8 @@
 //! active and NBA regions, a net's resolution and a VPI put all take.
 //! Clauses: IEEE 1364-2005 §5.10.1 edges, §5.10.4 named events, §6.1 static
 //! fan-out, §9.3 procedural continuous assignments, §9.7.1-§9.7.3 event
-//! controls, §10.2.1, §11.4.2, §17.1.3, §18; VAMS §8.5 D2A events.
+//! controls, §10.2.1, §11.4.2, §15 timing checks, §17.1.3, §18; VAMS §8.5
+//! D2A events.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -19,6 +20,7 @@ const wordMask = @import("net.zig").wordMask;
 const evaluate = @import("evaluate.zig");
 const exec = @import("exec.zig");
 const resolution = @import("resolution.zig");
+const tchk = @import("tchk.zig");
 
 /// §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
 /// with x and z as the intermediate value on either side of the transition.
@@ -159,6 +161,8 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
         if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
     }
     try wake(self, target, before, dest.bit(0));
+    // IEEE 1364-2005 §15: a timing check whose event this slot is.
+    if (watchers.contains(.tchk)) try tchk.changed(self, target, before, dest.bit(0));
     if (watchers.contains(.vpi)) if (self.vpi_change) |f| f(self, target);
     // After `wake`, so a `driver_update` process runs after the driver it
     // watches has re-evaluated (both join the same active-region FIFO).

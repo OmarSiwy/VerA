@@ -48,8 +48,14 @@ an ignored hook.
 are the host's to write, all `f64`, each defaulting to the SPICE value
 (`host_model_fields`): `temperature__` (kelvin, 300.15), `nom_temp__`
 (`$simparam("tnom")`, °C), `reltol__`, `abstol__`, `vntol__`, `gmin__` and
-`source_scale__`. The temperature belongs to the `Model` row (ABI 6), so an
-instance at its own temperature gets its own row.
+`source_scale__`. The temperature belongs to the `Model` row (since ABI 6),
+so an instance at its own temperature gets its own row. A device whose source
+calls LRM §9.19 `$port_connected` also has `port_connected__`, a `u64` mask
+of the connected ports that defaults to all ones. Two more are `u32` indices into
+your `contract.host_strings`, `cwd_idx__` and `analysis_name_idx__`, for
+`$simparam$str` ([tables](tables.md)); 0, the default, means not written.
+`noise_table_points__` is the device's, written by `derive`: the card's
+noise-table knots, read through `contract.noiseTable`.
 
 The order in which a host prepares a card is fixed:
 
@@ -69,8 +75,9 @@ The order in which a host prepares a card is fixed:
 6. `setupInstance(&model, &inst)`, when declared: per instance, after every
    `setup` and every instance write.
 
-`V` in `setup(V, ...)` is your value-only scalar: a family whose values carry
-no derivative lanes (`RefFamily(f64, &no lanes, ...).Of(0)` in the examples).
+`V` in `setup(V, ...)` (and the `S` of `derive`) is a value-only scalar
+family: a family whose values carry no derivative lanes. In the examples it
+is `Val`, a `RefFamily` with every lane `contract.no_lane`.
 
 ## SimState
 
@@ -102,7 +109,7 @@ operating point at t = 0. One value serves every instance.
 |---|---|
 | `eval(S, &x, &model, &inst, sim)` | `Rows(D, S)`: one value per unknown, the resistive residual of that row (LRM §5.6). Each row's value is the current leaving that node through the device, and its derivative lanes are that row of the Jacobian |
 | `q(S, &x, &model, &inst, sim)` | `Sites(D, S)`: one charge per **charge site** (each `ddt` term), not per row. See [charges](state.md) |
-| `evalQ(S, ...)` | `.{ .res = Rows, .q = Sites }` from one evaluation, at about half the cost of calling both |
+| `evalQ(S, ...)` | `.{ .res = Rows, .q = Sites }` from one evaluation instead of two |
 
 `Rows(D, S)` is a tuple whose row `r` has type `S.Of(rowMask(D, r))`: the
 row carries exactly the derivative lanes its `jac_pattern` entry allows.
@@ -116,10 +123,12 @@ must give each evaluation exclusive access; `InstancePtr(D)`).
 
 ## Version stamp
 
-`contract.abi_version` is the ABI version the contract file specifies (6 at
-the time of writing). Every generated device mirrors it as
-`pub const contract_abi`, and `validateHost` refuses, always, a device whose
-value differs: regenerate it with the VerA your contract came from.
+`contract.abi_version` is the ABI version the contract file specifies. Every
+generated device mirrors it as `pub const contract_abi` (the `contract_abi`
+line of the listing above), and `validateHost` refuses, always, a device
+whose value differs: regenerate it with the VerA your contract came from.
+The comment above `abi_version` in `contract.zig` says what the current
+version changed.
 
 ## The optional declarations, by job
 
@@ -134,6 +143,7 @@ can.
 | limiting and start | `limit`, `limit_reads`, `limit_writes`, `seed`, `collapse`, `collapse_full`, `u_nodeset` | [state](state.md) |
 | time | `nextBreakpoint`, `pendingBreakpoint`, `delays` | [state](state.md) |
 | small signal | `noise_gens`, `noisePsd`, `noise_tables`, `noiseTablePoints`, `ac_gens`, `acStim`, `ac_dyn_slots`, `acDyn` | [tables](tables.md) |
-| metadata | `u_kinds`, `u_abstol`, `mc_param`, `status_sites`, `file_io`, `systf_calls`, `display` | [tables](tables.md) |
+| metadata and output | `u_kinds`, `u_abstol`, `decl_meta`, `mc_param`, `status_sites`, `say_sites`, `say`, `file_io`, `systf_calls`, `display` | [tables](tables.md) |
+| analog VPI | `vpiContribs`, `vpi_contrib_access`, `vpi_contrib_hi`, `vpi_contrib_lo`, `vpi_contrib_flow_u`: the contribution rows an LRM chapter 12 analog VPI host reads, emitted only when a program that embeds VerA as a library sets `Options.vpi_contribs` (VerA's VPI host does; no command-line flag sets it). `vpiShares`, `vpi_share_row`: when two instances' unnamed branches over one node pair share a row, each instance's own share of it (the flow of that instance's branch), by row | none |
 | batching | `batch_ok`, `batch_lead`, `batch_inst`, `mutable_eval` | [batching](batching.md) |
 | card | `derive`, `checkShape`, `checkCard`, `Setup`, `setup`, `setup_simparams`, `setup_chunks`, `setupInstance`, `attempt`, `precompute` | above, and [linking](linking.md) |

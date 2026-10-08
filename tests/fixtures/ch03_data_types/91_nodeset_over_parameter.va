@@ -13,12 +13,19 @@
 // guess and not a clamp, so the probes must carry the potentials the circuit
 // gives them and neither 1.5 nor 2.25 may appear among them.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the file
+// declared `electrical p = 1.5, n;`. A.2.1.3 gives a net declaration either a
+// list_of_net_identifiers or a list_of_net_decl_assignments, never a mix
+// (E0292; reject_A_2_1_3_net_list_mixes_assignment.va is this file with the
+// old line), so `p` and `n` are declared on two lines.
+//
 //! lrm 3.6.3.2
 //! bias V(p) = 3.0, V(mid) = 2.0, V(n) = 0.0
 `include "check.vh"
 module ch03_nodeset_over_parameter(p, n);
     inout p, n;
-    electrical p = 1.5, n;
+    electrical p = 1.5;
+    electrical n;
     parameter real vstart = 2.25;
     electrical mid = vstart;
 

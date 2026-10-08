@@ -21,17 +21,20 @@ const Error = parser.Error;
 // -----------------------------------------------------------------------
 
 /// Parses one A.7.1 `specify_block ::= specify { specify_item } endspecify`
-/// into `b.paths` and `b.timing_checks`, then warns W0251, naming the block's
-/// timing checks.
+/// into `b.paths` and `b.timing_checks`, then warns W0251: in an analog
+/// compile naming the block's timing checks, in a digital parse only when
+/// the block holds a path delay or a pulse control.
 ///
 /// The block is legal source under §1.1, and annex C.16 does not exempt it.
 /// Its content is §8 scheduling (A.7.2 path delays, A.7.5 timing checks):
-/// §11.6.15's VPI objects read what is recorded, but no simulation applies
-/// it, which is what W0251 says. The block is parsed rather than skipped so
-/// a typo in a path declaration is still an error.
+/// §11.6.15's VPI objects read what is recorded, an analog device applies
+/// none of it, and the digital engine runs the timing checks only. The
+/// block is parsed rather than skipped so a typo in a path declaration is
+/// still an error.
 pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const open = self.pos;
     const first = b.timing_checks.items.len;
+    const first_path = b.paths.items.len;
     self.pos += 1; // `specify`
     while (!self.reservedIs(self.pos, "endspecify")) {
         if (self.peek() == .eof or self.peek() == .kw_endmodule)
@@ -39,6 +42,20 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
         try parseSpecifyItem(self, b);
     }
     self.pos += 1; // `endspecify`
+    // A digital run (`vera --run`, src/sim/digital/tchk.zig) evaluates the
+    // §15 timing checks, or refuses one by name (E1149); what no run
+    // applies is §14: the path delays and the pulse controls. So a digital
+    // parse warns only for a block holding one of those.
+    if (self.digital) {
+        if (b.paths.items.len == first_path and !pulseControls(self, open)) return;
+        return self.bag.add(
+            .parse,
+            .W0251,
+            lexer.tokenSpan(self.src, self.starts, open),
+            "its module path delays and pulse controls are never applied",
+            .{},
+        );
+    }
     // A timing check is the one item whose loss a design notices by name (a
     // violation it expected to be told about), so each is listed.
     const checks = b.timing_checks.items[first..];
@@ -59,6 +76,20 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
         "{s}",
         .{names.items},
     );
+}
+
+/// Whether the block opened at token `open` and closed just before
+/// `self.pos` writes a §14.6 pulse control: an A.7.1 pulsestyle or
+/// showcancelled declaration, or an A.2.4 `PATHPULSE$` specparam.
+fn pulseControls(self: *const Parser, open: u32) bool {
+    for (open..self.pos) |at| {
+        const w = self.tokenText(@intCast(at));
+        if (std.mem.startsWith(u8, w, "PATHPULSE$")) return true;
+        if (self.tags[at] != .kw_reserved) continue;
+        for ([_][]const u8{ "pulsestyle_onevent", "pulsestyle_ondetect", "showcancelled", "noshowcancelled" }) |k|
+            if (std.mem.eql(u8, w, k)) return true;
+    }
+    return false;
 }
 
 /// Parses one A.7.1 `specify_item`, any of the five arms:
@@ -86,9 +117,12 @@ fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
             {
                 self.pos += 1;
                 // A.7.2's `list_of_path_outputs` has no parentheses of its
-                // own; §14.2.6's examples write them, so one pair is taken
-                // if it is there.
-                const paren = self.eat(.lparen);
+                // own, and IEEE 1364-2005 §14.6.4.2's examples write none
+                // (`pulsestyle_ondetect out, out_b;`). A pair is reported,
+                // then read, so the block's other items still parse.
+                const paren = self.peek() == .lparen;
+                if (paren) try self.report(self.pos, .E0207, "found `(`: A.7.1's `{s}` takes list_of_path_outputs, written without parentheses", .{w});
+                if (paren) self.pos += 1;
                 _ = try parseSpecifyTerminalList(self);
                 if (paren) _ = try self.expect(.rparen);
                 _ = try self.expect(.semicolon);
@@ -424,6 +458,8 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     // only counted.
     var args: [max_timing_args]Ast.ExprId = undefined;
     var edges: [max_timing_args]Ast.SpecEdge = undefined;
+    var masks: [max_timing_args]u8 = undefined;
+    var conds: [max_timing_args]Ast.ExprId = undefined;
     const arity = timing_checks.get(self.tokenText(tok)) orelse return self.failAt(
         tok,
         .E0207,
@@ -441,12 +477,46 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         const arg = self.pos;
         var slot: Ast.ExprId = .none;
         var ev: Ast.SpecEdge = .none;
+        var mask: u8 = 0;
+        var cond: Ast.ExprId = .none;
         const controlled = self.peek() != .comma and self.peek() != .rparen and
-            try parseTimingCheckArg(self, &slot, &ev, mintypmaxArg(self.tokenText(tok), n));
+            try parseTimingCheckArg(self, &slot, &ev, &mask, &cond, mintypmaxArg(self.tokenText(tok), n));
         if (n <= max_timing_args) {
             args[n - 1] = slot;
             edges[n - 1] = ev;
+            masks[n - 1] = mask;
+            conds[n - 1] = cond;
         }
+        // A.7.5.2: only `reference_event`, `data_event` and
+        // `controlled_reference_event` are `timing_check_event`s. Every
+        // command's are its first one (`$period`, `$width`) or two; the
+        // limits, flags, offsets and notifier after them are expressions
+        // and identifiers that take no event control and no `&&&`.
+        if (n > eventArgs(self.tokenText(tok)) and (ev != .none or cond != .none)) return self.failAt(
+            arg,
+            .E0207,
+            "found {s}: argument {d} of `{s}` is not an event, so it takes no event control or `&&&` condition (A.7.5.2)",
+            .{ self.found(arg), n, self.tokenText(tok) },
+        );
+        // A.7.5.1's mandatory arguments are not bracketed, so none of them
+        // may be left empty (only `[ , [ notifier ] ]` and its kin may).
+        if (n <= arity[0] and slot == .none) return self.failAt(
+            arg,
+            .E0207,
+            "found {s}: argument {d} of `{s}` is required (A.7.5.1)",
+            .{ self.found(arg), n, self.tokenText(tok) },
+        );
+        // A.7.5.1 `$width ( controlled_reference_event , timing_check_limit
+        // [ , threshold [ , notifier ] ] )` brackets neither of its two
+        // optional arguments on its own, and §15.3.4: "If the notifier is
+        // present, a non-null value for the threshold shall also be
+        // present", calling `$width ( negedge clr, lim, , notif );` illegal.
+        if (n > arity[0] and slot == .none and std.mem.eql(u8, self.tokenText(tok), "$width")) return self.failAt(
+            arg,
+            .E0207,
+            "found {s}: `$width`'s threshold and notifier are not null arguments (A.7.5.1, §15.3.4)",
+            .{self.found(arg)},
+        );
         // A.7.5.1: `$period` and `$width` open with a
         // `controlled_reference_event`, and A.7.5.3's
         // `controlled_timing_check_event` makes its event control
@@ -479,8 +549,17 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         .name = try self.internTok(tok),
         .args = try self.arena.dupe(Ast.ExprId, args[0..n]),
         .edges = try self.arena.dupe(Ast.SpecEdge, edges[0..n]),
+        .masks = try self.arena.dupe(u8, masks[0..n]),
+        .conds = try self.arena.dupe(Ast.ExprId, conds[0..n]),
         .main_tok = tok,
     });
+}
+
+/// How many of a command's leading arguments are A.7.5.2 events: one for
+/// the `controlled_reference_event` commands, two (reference and data) for
+/// the rest.
+fn eventArgs(name: []const u8) u8 {
+    return if (controlled_first.has(name)) 1 else 2;
 }
 
 /// Parses one argument of an A.7.5.1 command into `slot` and `ev`, and
@@ -494,9 +573,15 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
 ///
 /// Every argument accepts that union; `parseTimingCheck` enforces the
 /// mandatory control of a `controlled_reference_event` (`$period`,
-/// `$width`).
-fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge, mtm: MinTypMaxArg) Error!bool {
+/// `$width`) and refuses one on an argument that is no event. `mask` is the
+/// control's `TimingCheck.masks` entry, `cond` its `&&&` condition.
+fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge, mask: *u8, cond: *Ast.ExprId, mtm: MinTypMaxArg) Error!bool {
     ev.* = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
+    mask.* = switch (ev.*) {
+        .posedge => Ast.TimingCheck.posedge_mask,
+        .negedge => Ast.TimingCheck.negedge_mask,
+        .none, .edge => 0,
+    };
     var controlled = ev.* != .none;
     if (!controlled and self.reservedIs(self.pos, "edge")) {
         controlled = true;
@@ -507,7 +592,11 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge, mtm:
         // depending on their characters, so each is read as the characters
         // of its tokens up to the next `,` or `]`.
         self.pos += 1;
-        if (self.eat(.lbracket)) while (true) {
+        // The brackets are the production's own (§15.4: "the keyword edge
+        // followed by a square-bracketed list"), so a bare `edge clk`
+        // names no transition and is refused.
+        _ = try self.expect(.lbracket);
+        while (true) {
             const at = self.pos;
             var d: [3]u8 = undefined;
             var n: usize = 0;
@@ -519,9 +608,10 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge, mtm:
                 }
             }
             if (n != 2 or !edgeDescriptor(d[0], d[1])) return self.failAt(at, .E0207, "found {s}, not an A.7.5.3 edge descriptor (01, 10, or 0 or 1 paired with x or z)", .{self.found(at)});
+            mask.* |= Ast.TimingCheck.transition(d[0], d[1]);
             if (self.eat(.rbracket)) break;
             self.pos += 1; // `,`
-        };
+        }
     }
     slot.* = switch (mtm) {
         .no => try parse_expr.parseExpr(self),
@@ -537,7 +627,7 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge, mtm:
     };
     // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
     // has no tag for it.
-    if (self.eatSymbol("&&&")) _ = try parse_expr.parseExpr(self);
+    cond.* = if (self.eatSymbol("&&&")) try parse_expr.parseExpr(self) else .none;
     return controlled;
 }
 

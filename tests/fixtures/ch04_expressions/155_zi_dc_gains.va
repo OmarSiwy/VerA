@@ -29,6 +29,13 @@
 // `156_zi_sampling_period.va` pins that the answer does not depend on the
 // spacing at all.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+//
 //! lrm 4.5.12.1
 //! lrm 4.5.12.2
 //! lrm 4.5.12.3
@@ -46,13 +53,13 @@ module ch04_zi_dc_gains(in, n);
 
     analog begin
         // one zero at 0, one pole at 1/2  ->  1 / (1 - 1/2) = 2
-        zp = zi_zp(V(in, n), {0.0, 0.0}, {0.5, 0.0}, 1u);
+        zp = zi_zp(V(in, n), '{0.0, 0.0}, '{0.5, 0.0}, 1u);
         // one zero at 0, denominator 4 - 2z^-1  ->  1 / (4 - 2) = 1/2
-        zd = zi_zd(V(in, n), {0.0, 0.0}, {4.0, -2.0}, 1u);
+        zd = zi_zd(V(in, n), '{0.0, 0.0}, '{4.0, -2.0}, 1u);
         // numerator 3 + z^-1, one pole at 1/2  ->  (3 + 1) / (1 - 1/2) = 8
-        np = zi_np(V(in, n), {3.0, 1.0}, {0.5, 0.0}, 1u);
+        np = zi_np(V(in, n), '{3.0, 1.0}, '{0.5, 0.0}, 1u);
         // numerator 1 + 2z^-1, denominator 1 + z^-1/2  ->  3 / (3/2) = 2
-        nd = zi_nd(V(in, n), {1.0, 2.0}, {1.0, 0.5}, 1u);
+        nd = zi_nd(V(in, n), '{1.0, 2.0}, '{1.0, 0.5}, 1u);
         $strobe("t=%g zp=%g zd=%g np=%g nd=%g", $abstime / 1u, zp, zd, np, nd);
         `CHECKI("zi_zp settles to ∏(1-ζ)/∏(1-ρ) = 2", ($abstime < 20u) || (abs(zp - 2.0) < 1e-4), 1);
         `CHECKI("zi_zd settles to ∏(1-ζ)/Σd = 0.5", ($abstime < 20u) || (abs(zd - 0.5) < 1e-4), 1);

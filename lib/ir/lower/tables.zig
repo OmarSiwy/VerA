@@ -240,10 +240,24 @@ pub const Contribution = struct {
     /// cannot discard the aggregate.
     unit: u32 = 0,
     /// A `<+` from an instance other than `unit` accumulated into this entry
-    /// (two devices in parallel over one pair). The row is still right; what
-    /// is gone is any one instance's share of it, so a reader that wants the
-    /// flow of `unit`'s own §5.4.1 branch (the VPI, §11.6.7) must refuse.
+    /// (two devices in parallel over one pair). The row is still right, and
+    /// it is the sum: a reader that wants the flow of one instance's own
+    /// §5.4.1 branch (the VPI, §11.6.7) reads that instance's
+    /// `contrib_shares` entry instead.
     shared: bool = false,
+};
+
+/// §5.4.1 one instance's own share of a `Contribution.shared` row: what its
+/// unnamed branch carries (its `<+`, and §5.6.8.2's hierarchical ones aimed at
+/// it), in the row's canonical direction. The end-of-block reads of lowering's
+/// `unit_accum`.
+pub const ContribShare = struct {
+    /// A `contributions` index.
+    row: u32,
+    /// The instance (`Ast.AnalogBlock.unit`) whose branch this is.
+    unit: u32,
+    resist_val: Mir.Value = .f_zero,
+    react_val: Mir.Value = .f_zero,
 };
 
 /// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones, then
@@ -531,8 +545,10 @@ pub const Kernel = enum {
     /// field the host writes and the `zPlusarg` search over it.
     plusargs,
     /// §9.15 Table 9-28 `$simparam$str("cwd")` / `("analysis_name")`, or a
-    /// name not known until the solve: the host-written `Instance.cwd` and
-    /// `Instance.analysis_name`.
+    /// name not known until the solve, or a §4.6.3 `ac_stim` name that is not
+    /// a Table 4-21 small-signal kind (VD-109): the host-written
+    /// `Instance.cwd`/`analysis_name` slices and their GPU-safe twins,
+    /// `Model.cwd_idx__`/`analysis_name_idx__` (`contract.host_strings`).
     host_strings,
 };
 // ---- row types: the discrete half -------------------------------------------
@@ -640,6 +656,10 @@ contributions: std.ArrayList(Contribution) = .empty, // §5.6
 /// instance. The row's own `unit` is not repeated here. Each still declares its
 /// own unnamed branch (§5.4.2), which the VPI's §11.6.6 model lists.
 contrib_sharers: std.ArrayList(struct { row: u32, unit: u32 }) = .empty,
+/// Every instance's share of a shared row (`ContribShare`), sorted by row,
+/// then unit. Nothing in the device reads them; a VPI device publishes them
+/// (`codegen.Options.vpi_contribs`, `vpiShares`) by this index.
+contrib_shares: std.ArrayList(ContribShare) = .empty,
 /// §5.6.1.2 every charge site, in source order (`ChargeSite`).
 charge_sites: std.ArrayList(ChargeSite) = .empty,
 

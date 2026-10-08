@@ -67,8 +67,9 @@ pub const runner_body =
     \\pub const iteration_hooks = true;
     \\pub const mutable_eval = true;
     \\/// 4.6.4.3 an array-parameter noise table: this host reads the card's own
-    \\/// knots out of `noiseTablePoints`, not the declared defaults that reach
-    \\/// `noise_tables`. See `emitNoiseTopology`'s `points=` comparison.
+    \\/// knots through `contract.noiseTable` (the row's `noise_table_points__`),
+    \\/// not the declared defaults that reach `noise_tables`. See
+    \\/// `emitNoiseComptime`'s `points=` and `psd=` comparisons.
     \\pub const noise_table_points = true;
     \\/// §3.4 this host refuses a card that moves a shape parameter: `shapeCheck`
     \\/// runs after every `derive`.
@@ -1320,6 +1321,9 @@ pub const vpi_lib_body =
     \\    if (comptime @hasDecl(D, "ac_gens")) {
     \\        const ph = D.acStim(Val, g_x, &g_model, &g_inst, sim_state);
     \\        for (D.ac_gens, ph) |g, p| {
+    \\            // §4.6.3 only the stimuli of this analysis: an `.ac` sweep
+    \\            // this host labels nothing.
+    \\            if (!contract.acStimActive(g.name, .ac, "")) continue;
     \\            const v = C.init(p.mag * @cos(p.phase), p.mag * @sin(p.phase));
     \\            b[g.row] = b[g.row].sub(v);
     \\            // row == col: a branch to ground, which has no row.
@@ -1380,6 +1384,20 @@ pub const vpi_lib_body =
     \\export fn vera_vpi_rows(out: [*]f64) callconv(.c) void {
     \\    if (comptime n_rows == 0) return;
     \\    const v = D.vpiContribs(Dual, &g_x, &g_model, &g_inst, sim_state);
+    \\    for (v, 0..) |r, k| {
+    \\        out[2 * k] = r[0];
+    \\        out[2 * k + 1] = r[1];
+    \\    }
+    \\}
+    \\const n_shares = if (@hasDecl(D, "vpiShares")) D.vpi_share_row.len else 0;
+    \\export fn vera_vpi_n_shares() callconv(.c) usize {
+    \\    return n_shares;
+    \\}
+    \\/// Each instance's share of a shared row (`D.vpiShares`), (resistive,
+    \\/// reactive) at the current x, into `out` (2 per share).
+    \\export fn vera_vpi_shares(out: [*]f64) callconv(.c) void {
+    \\    if (comptime n_shares == 0) return;
+    \\    const v = D.vpiShares(Dual, &g_x, &g_model, &g_inst, sim_state);
     \\    for (v, 0..) |r, k| {
     \\        out[2 * k] = r[0];
     \\        out[2 * k + 1] = r[1];

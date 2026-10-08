@@ -417,7 +417,8 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
         } else if (std.mem.eql(u8, key, "interp")) {
             if (!std.mem.eql(u8, val, "linear") and !std.mem.eql(u8, val, "log")) return error.BadSyntax;
             w.interp = try arena.dupe(u8, val);
-        } else if (std.mem.eql(u8, key, "points")) {
+        } else if (std.mem.eql(u8, key, "points") or std.mem.eql(u8, key, "psd")) {
+            // Both are `<f>:<v>` pairs: knots, or densities at frequencies.
             var pts: std.ArrayList([2]f64) = .empty;
             var it = std.mem.tokenizeScalar(u8, val, ',');
             while (it.next()) |pair| {
@@ -425,7 +426,7 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
                 try pts.append(arena, .{ try number(pair[0..colon]), try number(pair[colon + 1 ..]) });
             }
             if (pts.items.len == 0) return error.BadSyntax;
-            w.points = pts.items;
+            if (std.mem.eql(u8, key, "points")) w.points = pts.items else w.psd = pts.items;
         } else if (std.mem.eql(u8, key, "corr")) {
             // `<j>:<rho>`: the other row by its table index, then ρ.
             const colon = std.mem.indexOfScalar(u8, val, ':') orelse return error.BadSyntax;

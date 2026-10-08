@@ -1,8 +1,7 @@
 // Exercise 2: also sample at the start. `initial_step or cross(...)` (LRM
-// §5.10.1) fires at the first point as well, so `held` is V(in) = 0 at 0,
-// stays 0 at 1 us, and becomes 0.2 at the rising crossing seen at 2 us.
-// Different from sample_hold.va only when V(in) is not 0 at t = 0: here the
-// input starts at 0.05 V, so the initial sample is 0.05.
+// §5.10.1) fires at the first point as well as at the rising crossing. The
+// input starts at 0.05 V, so `held` is 0.05 from t = 0 and 1 us, and becomes
+// 0.2 at 2 us, the first grid point after the crossing.
 //! time 0, 1u, 2u, 3u
 //! wave V(clk) = 0, 0, 1, 1
 //! wave V(in) = 0.05, 0.1, 0.2, 0.3

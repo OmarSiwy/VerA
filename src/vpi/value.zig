@@ -588,6 +588,14 @@ pub fn reset() void {
     put_buf.clearAndFree(gpa);
 }
 
+/// IEEE 1364-2005 C.7's reset "Cancels all scheduled simulation events":
+/// every event a put scheduled went with the run the reset replaced, so its
+/// handle reads unscheduled and names none of the new run's
+/// (`run.zig`'s vpiReset).
+pub fn dropScheduled() void {
+    for (events.items) |e| e.handle = .{ .slot = .none, .generation = 0 };
+}
+
 /// Drop the records of events that fired or were cancelled and whose handle
 /// the application no longer holds.
 fn prune() void {

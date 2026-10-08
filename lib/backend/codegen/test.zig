@@ -572,7 +572,7 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
         \\  analog begin
         \\    I(p, n) <+ V(p, n) / r;
         \\    I(p, n) <+ ddt(c * V(p, n));
-        \\    V(p, n) <+ laplace_nd(V(p, n), {1.0}, {1.0, 1.0});
+        \\    V(p, n) <+ laplace_nd(V(p, n), '{1.0}, '{1.0, 1.0});
         \\  end
         \\endmodule
     , &h);
@@ -852,7 +852,7 @@ test "codegen: §5.8 control flow reconstructs into structured Zig" {
         \\  electrical p, n;
         \\  parameter real ron = 1.0 from (0:inf);
         \\  parameter real roff = 1e9 from (0:inf);
-        \\  analog begin
+        \\  analog begin : body
         \\    real g;
         \\    g = 0.0;
         \\    if (V(p, n) > 0.5) g = 1.0 / ron; else g = 1.0 / roff;
@@ -891,7 +891,7 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
         \\module mix(p, n);
         \\  inout p, n;
         \\  electrical p, n;
-        \\  analog begin
+        \\  analog begin : body
         \\    real g;
         \\    if (V(p, n) > 0.5) g = 2.0 * V(p, n); else g = 0.5 * V(p, n);
         \\    I(p, n) <+ g * exp(V(p, n));
@@ -923,7 +923,7 @@ test "codegen: a value shared by select arms is computed once, not once per use"
         \\module sh(p, n);
         \\  inout p, n;
         \\  electrical p, n;
-        \\  analog begin
+        \\  analog begin : body
         \\    real e, g;
         \\    e = exp(V(p, n));
         \\    if (V(p, n) > 0.5) g = e * e + e; else g = 0.5 * e;
@@ -979,10 +979,10 @@ test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
         \\module ml(p, n);
         \\  inout p, n;
         \\  electrical p, n;
-        \\  analog begin
+        \\  analog begin : body
         \\    real y;
         \\    y = 0.0;
-        \\    if (V(p, n) > 0.0) begin
+        \\    if (V(p, n) > 0.0) begin : arm
         \\      real t;
         \\      t = ln(V(p, n));
         \\      y = t + 2.0 * t; // t shared: markSelectArms could not guard it
@@ -1195,6 +1195,10 @@ test "codegen: §4.6.4.3 an array-parameter table exports the card's knots, a li
     // hook's k-th pair are the same knot, so the sort permuted both.
     try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b2Z5d, model.tblZ5b3Z5d }").? <
         std.mem.indexOf(u8, body, ".{ model.tblZ5b0Z5d, model.tblZ5b1Z5d }").?);
+    // The row carries its own sorted copy (`contract.noiseTable`, ESPice #9):
+    // the declared defaults until `derive`, which refreshes it after the card.
+    try std.testing.expect(std.mem.indexOf(u8, src, "noise_table_points__: [2][2]f64 = .{ .{ 1.0, 0.000000000000000001 }, .{ 1000000.0, 0.000000000000000000000001 } },") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "    model.noise_table_points__ = noiseTablePoints(model);\n") != null);
 
     var h2: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -1207,6 +1211,7 @@ test "codegen: §4.6.4.3 an array-parameter table exports the card's knots, a li
     defer h2.deinit();
     const lit = try h2.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, lit, "noiseTablePoints") == null);
+    try std.testing.expect(std.mem.indexOf(u8, lit, "noise_table_points__") == null);
 }
 
 test "codegen: §4.6.4.6 each use of a shared generator exports its own coefficient" {
@@ -1322,6 +1327,11 @@ test "codegen: §4.6.3 an ac_stim exports its phasor and no noise generator" {
     // been through a complex conversion here is that far out of quadrature
     // before the host has done anything.
     try std.testing.expect(std.mem.indexOf(u8, src[at..], ".phase = 1.5707963267948966") != null);
+    // "xf" is no Table 4-21 small-signal kind, so the residual's stimulus is
+    // live in a small-signal analysis the host labels "xf" (VD-109), read
+    // through the GPU-safe Table 9-28 channel the Model row now carries.
+    try std.testing.expect(std.mem.indexOf(u8, src, "    analysis_name_idx__: u32 = 0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "((sim.kind == .ac or sim.kind == .noise) and std.mem.eql(u8, contract.hostString(model.analysis_name_idx__, inst.analysis_name), \"xf\"))") != null);
 }
 
 test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
@@ -1527,7 +1537,7 @@ test "codegen: §4.5.11 laplace_nd emits a real filter, not a compile error" {
         \\module lp(p, n);
         \\  inout p, n;
         \\  electrical p, n;
-        \\  analog I(p, n) <+ laplace_nd(V(p, n), {1.0}, {1.0, 1.0});
+        \\  analog I(p, n) <+ laplace_nd(V(p, n), '{1.0}, '{1.0, 1.0});
         \\endmodule
     , &h);
     defer h.deinit();
@@ -2023,7 +2033,7 @@ test "codegen: §5.9.1 a short-circuit loop condition still reaches the loop's b
         \\module w(p, n);
         \\  inout p, n;
         \\  electrical p, n;
-        \\  analog begin
+        \\  analog begin : body
         \\    real x, y; integer i;
         \\    x = 1e6; y = V(p, n); i = 0;
         \\    while ((i <= 4) && (abs(y - x) > 1e-12)) begin
@@ -3588,7 +3598,8 @@ test "codegen: §3.6.3.2 a net initializer is exported as a nodeset, not as a va
     try Harness.run(std.testing.allocator,
         \\module ns(p, n);
         \\  inout p, n;
-        \\  electrical p = 1.5, n;
+        \\  electrical p = 1.5;
+        \\  electrical n;
         \\  parameter real vstart = 2.25;
         \\  electrical mid = vstart;
         \\  analog begin
@@ -3835,6 +3846,7 @@ test "codegen: no embedded kernel shadows a device-level declaration" {
         "u_nodeset",
         "decl_meta",
         "vpi_contrib_access",
+        "vpi_share_row",
         "acceptQ",
         "acStim",
         "acDyn",
@@ -3857,6 +3869,7 @@ test "codegen: no embedded kernel shadows a device-level declaration" {
         "stateCtl",
         "updateState",
         "vpiContribs",
+        "vpiShares",
         "core",
         "n_u",
         "Instance",

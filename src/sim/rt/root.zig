@@ -1539,7 +1539,7 @@ pub const State = struct {
     fn bits(self: *const State, r: Rec) W {
         const sh: u6 = @intCast(r.shift);
         var v = self.v[r.word] >> sh;
-        var x = if (two) 0 else self.x[r.word] >> sh;
+        var x: u64 = if (two) 0 else self.x[r.word] >> sh;
         if (sh != 0 and r.shift + r.width > 64) {
             const up: u6 = @intCast(64 - r.shift);
             v |= self.v[r.word + 1] << up;

@@ -332,6 +332,10 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
     // IEEE 1364, and A.2.1.3 grants the bracket to every alternative. Analog
     // lowering does not read it.
     const delay: Ast.Delay3 = if (self.peek() == .hash) try parseDelay3(self) else .{};
+    // A.2.1.3 lists either `list_of_net_identifiers` or
+    // `list_of_net_decl_assignments`, never a mix (E0292): the first name
+    // decides which.
+    var assigns: ?bool = null;
     while (true) {
         const tok = self.pos;
         // Annex F.2.1 step 3 / §3.10 order 1: an out-of-context declaration,
@@ -355,6 +359,14 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
             try parse_expr.parseExpr(self)
         else
             .none;
+        const has_init = nodeset != .none;
+        if (assigns) |first| if (first != has_init)
+            try self.report(tok, .E0292, "`{s}` {s}, and the first name {s}", .{
+                self.file.str(name),
+                if (has_init) "has an initializer" else "has no initializer",
+                if (has_init) "has none" else "has one",
+            });
+        if (assigns == null) assigns = has_init;
         // IEEE 1364-2005 §4.4: "Drive strength shall only be used when placing
         // a continuous assignment on a net in the same statement that
         // declares the net."

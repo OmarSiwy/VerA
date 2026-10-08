@@ -664,14 +664,17 @@ typedef struct t_cb_data {
  *   §27.33.3 feature cbInteractiveScopeChange  vpi_sim_control
  *                                          (vpiSetInteractiveScope); obj is
  *                                          the new scope
+ *   §12.31.4 action  cbTchkViolation      a digital run's timing check
+ *                                          reported a violation; obj is the
+ *                                          check (vpiTchk)
  *
  * A time reason needs a vpiSimTime or vpiScaledRealTime time (IEEE 1364
  * 27.33.2); NULL or vpiSuppressTime is refused, as is a cbAtStartOfSimTime
  * for the current time once it has started, outside a cbAtStartOfSimTime
  * callback, and a cbReadWriteSynch of delay zero at read-only synch. Every
  * callback is ONE-SHOT except cbValueChange, cbStmt, cbForce, cbRelease,
- * cbAssign, cbDeassign, cbDisable, cbError, cbPLIError and
- * cbInteractiveScopeChange, which stand until removed. */
+ * cbAssign, cbDeassign, cbDisable, cbError, cbPLIError,
+ * cbInteractiveScopeChange and cbTchkViolation, which stand until removed. */
 #define cbValueChange           1
 #define cbStmt                  2
 #define cbForce                 3
@@ -685,6 +688,7 @@ typedef struct t_cb_data {
 #define cbStartOfSimulation    11
 #define cbEndOfSimulation      12
 #define cbError                13
+#define cbTchkViolation        14
 #define cbInteractiveScopeChange 23
 #define cbAssign               25
 #define cbDeassign             26
@@ -806,8 +810,10 @@ typedef struct t_vpi_analog_value {
 /* §12.10 the value of a vpiFlow or vpiPotential quantity (§11.6.7), from the
  * solution the running analysis attempted or last accepted. Anything else is
  * refused, as is a value before any analysis solved (NOANALYSIS) and the flow
- * of a branch whose `<+` was summed with a parallel instance's (SHARED). No
- * small-signal analysis runs, so every imaginary part is 0. */
+ * of a branch the model cannot tell from a parallel branch's (SHARED). The
+ * flow of an instance's unnamed branch over a node pair other instances also
+ * drive is that instance's own share. The imaginary part is 0 except at a
+ * small-signal (ac) point. */
 extern void       vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
 /* §12.7 / §12.8 / §12.9: the step, the small-signal frequency (0: none runs)
  * and the analog time. All three are 0 during DC and the time zero solution. */
@@ -916,11 +922,14 @@ extern void       vpi_get_analog_systf_info(vpiHandle obj, p_vpi_analog_systf_da
 extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHandle refHandle2, ...);
 /* --------------------------------------------------------------------------
  * §11.6.15 module paths, timing checks and inter-module paths, over a
- * module's `specify` blocks (IEEE 1364 Annex G numbering). The objects are
- * the model's: no simulation here applies a path delay or checks a timing
- * limit (W0251). vpi_get_delays() and vpi_put_delays() take a path's 1, 2, 3,
- * 6 or 12 delays (IEEE 1364 §14.3.1 derives the rest) and a timing check's
- * limits. vpi_handle_multi(vpiInterModPath, port, port) is always NULL: an
+ * module's `specify` blocks (IEEE 1364 Annex G numbering). A path's delays
+ * are the model's: no simulation here applies a path delay (W0251). A
+ * digital run evaluates the timing checks (IEEE 1364-2005 clause 15, all but
+ * $skew, $timeskew, $fullskew and $nochange, which it refuses), so a put of
+ * a check's limits is the limit its later events are judged by.
+ * vpi_get_delays() and vpi_put_delays() take a path's 1, 2, 3, 6 or 12
+ * delays (IEEE 1364 §14.3.1 derives the rest) and a timing check's limits.
+ * vpi_handle_multi(vpiInterModPath, port, port) is always NULL: an
  * inter-module path is an SDF interconnect annotation, and none is read.
  * -------------------------------------------------------------------------- */
 #define vpiInterModPath        26
@@ -972,8 +981,12 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
  * level) ends the run when the calling routine returns, at the current time.
  * vpiStop (one int, as $stop) does the same: a VerA run has no interactive
  * mode to suspend into. vpiSetInteractiveScope (one vpiHandle of the scope
- * class) fires cbInteractiveScopeChange with it. vpiReset always fails: a
- * VerA run cannot restart. */
+ * class) fires cbInteractiveScopeChange with it. vpiReset (three ints:
+ * stop_value, reset_value, diagnostic_level) is IEEE 1364-2005 C.7's $reset
+ * when the calling routine returns: the digital run goes back to time 0,
+ * every reg and net at its initial value, and runs again when stop_value is
+ * nonzero, or ends (a batch run's interactive mode) when it is 0. Callbacks
+ * stand; reset_value and the diagnostic level are not read. */
 #define vpiStop                66
 #define vpiFinish              67
 #define vpiReset               68

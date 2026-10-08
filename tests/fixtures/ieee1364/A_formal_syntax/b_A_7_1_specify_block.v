@@ -12,10 +12,11 @@
 // showcancelled_declarations (over the two outputs y and z), a
 // path_declaration and a system_timing_check; b_A_7_1_empty's is an empty
 // specify block ({ specify_item } allows none).
-// §14 path delays and §15 timing checks are not modelled by VerA (W0251, the
+// §14 path delays and pulse controls are not modelled by VerA (W0251, the
 // §1 B scope), so what this establishes is the parse: the module runs as the
 // plain buffer its continuous assignments make it. a = 1 -> y = 1, z = 0.
-// Output: "y=1 z=0".
+// The $width check runs and stays quiet: a's x -> 1 at 0 opens a high pulse
+// that no fall closes. Output: "y=1 z=0".
 // digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.7.1
 `timescale 1ns/1ns

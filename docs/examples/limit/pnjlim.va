@@ -1,17 +1,22 @@
-// pnjlim, by hand (SPICE3's algorithm, which VerA's "pnjlim" follows):
+// pnjlim, by hand. LRM 9.17.3 names "pnjlim" but leaves its algorithm to the
+// simulator; VerA's is ngspice's DEVpnjlim (src/spicelib/devices/devsup.c,
+// transcribed in lib/backend/kernels/limit_kernels.zig), not SPICE3f5's
+// older vold + vte * ln(1 + (vnew - vold) / vte).
 // vte = 25 mV and vcrit = 0.6 V. From an old junction voltage of 0.65 V,
 // Newton proposes 1.0 V. That is above vcrit and moves more than 2*vte, and
 // the old value is positive, so the step is compressed logarithmically:
 //
-//   arg  = 1 + (1.0 - 0.65) / 0.025 = 15
-//   vnew = 0.65 + 0.025 * ln(15)    = 0.7177012550
+//   arg  = (1.0 - 0.65) / 0.025             = 14
+//   vnew = 0.65 + 0.025 * (2 + ln(14 - 2))  = 0.7621226662447
 //
+// (python3: 0.65 + 0.025 * (2 + math.log(12)); the testbench compares to a
+// relative 1e-12, so the want carries every digit)
 // and the iteration is not converged, since the value was changed. The
 // junction sits behind a series resistance, so the limited node `ai` is
 // internal: a device clamps only its own nodes, never a port.
 //! bias V(a) = 1.0, V(ai) = 1.0
 //! print none
-//! limit V(ai) = 0.65 -> V(ai) = 0.7177012550, converged = 0
+//! limit V(ai) = 0.65 -> V(ai) = 0.7621226662447, converged = 0
 `include "disciplines.vams"
 
 module pnjlim(a, k);

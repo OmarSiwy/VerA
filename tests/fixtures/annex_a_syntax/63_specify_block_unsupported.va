@@ -42,7 +42,7 @@
 // `&&&` reach the parser as single `.invalid` tokens the lexer already spells
 // out as specify-only, so the three operators A.7 has and the rest of the
 // language does not mean nothing anywhere else. Nothing is RECORDED: the block
-// leaves a W0251 ("specify block read, and nothing in it is modelled") and no
+// leaves a W0251 ("specify block read, and part or all of it is not modelled") and no
 // AST. Its entire content is §8 scheduling — a compiled analog device has no
 // event queue for a path delay to schedule on — so there is nothing to stamp,
 // and inventing one would pin a convention of VerA's as if the standard had
@@ -67,6 +67,12 @@
 // analog assertion — not a behaviour: the specify block reaches no device (W0251). No fixture runs its
 // timing behaviour; this is grammar coverage only.
 //
+// Corrected 2026-10-08 (construct only, the want is unchanged): the file wrote
+// `pulsestyle_onevent (y);`, which A.7.1 does not derive: the declaration takes
+// list_of_path_outputs, and IEEE 1364-2005 14.6.4.2's examples write
+// `pulsestyle_ondetect out, out_b;` with no parentheses (E0207;
+// reject_A_7_1_pulsestyle_parenthesized.va keeps the old line).
+//
 //! lrm A.7
 //! lrm A.7.1
 //! lrm A.7.2
@@ -84,7 +90,7 @@ module annex_a_specify(p, n, y);
         specparam tplh = 1.5, tphl = 2.5;
         (p => y) = (tplh, tphl);
         (n *> y) = 1;
-        pulsestyle_onevent (y);
+        pulsestyle_onevent y;
     endspecify
 
     analog begin

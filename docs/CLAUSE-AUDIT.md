@@ -696,7 +696,8 @@ rejects an AMS `CLAUSES.tsv` row that names it.
 |---|---|---|
 | 16, and §14.6.3, §17.2.10 | SDF back-annotation | `$sdf_annotate` is refused, E1102 |
 | 28 | protected envelopes | any `` `pragma protect `` is refused, E0146 |
-| 14, 15: the clauses that describe simulation (§14.3.2-§14.6.4.2, §15.2-§15.3.6, §15.5-§15.8) | path delays and pulse limits applied, timing checks evaluated, notifiers toggled | W0251 on the specify block, naming its timing checks |
+| 14: the clauses that describe simulation (§14.3.2-§14.6.4.2) | path delays and pulse limits applied | W0251 on the specify block |
+| 15: the skew, $nochange and negative checks (§15.3.1-§15.3.3, §15.3.6, §15.5.1-§15.5.4, §15.8) | $skew, $timeskew, $fullskew, $nochange; negative $setuphold/$recrem limits and their delayed signals and conditions | the digital run is refused, E1149 (since 2026-10-08 the other §15 checks are evaluated, `src/sim/digital/tchk.zig`; an analog compile evaluates none, W0251) |
 
 Chapters 21 to 25 (the PLI 1.0 TF and ACC routines) are not in this table:
 IEEE 1364-2005 §1.6 removed their text, each is one sentence pointing at 1.6,

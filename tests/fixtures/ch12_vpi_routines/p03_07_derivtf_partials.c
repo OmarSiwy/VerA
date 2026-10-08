@@ -52,17 +52,24 @@
  * with the VPI. Here the cold-start derivative is 3 and Newton on u^3 = 8 from
  * u = 1 runs 1, 3.333, 2.462, 2.081, 2.0031, 2.0000073, 2 — monotone.
  *
- * KNOWN GAP. i1 (gnd, q) and c1 (q, gnd) are two instances' unnamed branches
- * over one node pair, which VerA stamps as ONE residual row (the node
- * equation only sees the sum), and the device publishes rows, not each
- * instance's share; so 11.6.7's flow of c1's own branch is refused (SHARED,
- * src/vpi/analog.zig `quantityValue`). Every other assertion runs first and
- * passes; build.zig's vpi_runs pins the refusal as `.xfail` until the device
- * publishes per-instance shares (`Lowered.contrib_sharers`). While it is an
- * xfail, only the sentence it fails is cited (12.10:1, the value of a vpiFlow
- * quantity): a vpi_runs entry counts whatever it cites. When it passes,
- * restore the clause cites 12.16, 12.22, 12.22.1, 12.22.2, 12.30, 12.32,
- * 12.32.1 and 12.32.2.
+ * c1's flow is its OWN branch's. i1 (gnd, q) and c1 (q, gnd) are two
+ * instances' unnamed branches over one node pair, which VerA stamps as ONE
+ * residual row (the node equation only sees the sum); 11.6.7's flow of c1's
+ * branch is c1's own contribution, which the device publishes beside the row
+ * (`vpiShares`, one instance's share of a shared row). In the row's direction
+ * (q, gnd), i1's share is -7 (its I(gnd,q) <+ 7, reversed) and c1's is
+ * icube = 7, so the row sums to 0 and c1's flow reads 7, not 0.
+ *
+ * Expected stdout, from the values above printed with %g:
+ *
+ *   vres  = 1      V(a,gnd), the ideal source
+ *   ires  = 0.001  1/1000 at 1 V
+ *   dres  = 0.001  g = 1/r
+ *   vcube = 1      (V+1)^3 = 8
+ *   icube = 7      (1+1)^3 - 1
+ *   dcube = 12     3*(1+1)^2
+ *
+ *   p03-07: vres=1 ires=0.001 dres=0.001 vcube=1 icube=7 dcube=12
  *
  *! design   p03_systf_devices.va
  *! analysis op
@@ -70,6 +77,14 @@
  */
 
 //! lrm 12.10:1
+//! lrm 12.16
+//! lrm 12.22
+//! lrm 12.22.1
+//! lrm 12.22.2
+//! lrm 12.30
+//! lrm 12.32
+//! lrm 12.32.1
+//! lrm 12.32.2
 
 #include "p03_vpi_analog.h"
 
@@ -197,7 +212,7 @@ static PLI_INT32 on_final(p_cb_data cb)
   P03_NEAR(ir, 1.0e-3, 1e-15, "current through the 12.22.2 $resistor");
   P03_NEAR(last_res_g, 1.0e-3, 0.0, "d(curr)/dV handed to the solver");
 
-  /* The discriminating pair. c1's flow is read last: see KNOWN GAP. */
+  /* The discriminating pair, then c1's own flow (its share of the q row). */
   vc = p03_real_of(vcub, NULL);
   P03_NEAR(vc, 1.0, 1e-9,  "V at the $cube node: (V+1)^3 = 8");
   P03_NEAR(last_cub_g, 12.0, 1e-6,

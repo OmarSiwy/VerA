@@ -105,16 +105,13 @@ iteration. `$display` has the same format rules; `$write` omits the newline;
 `$debug` prints at every iteration of the solver. The format strings follow
 C's `printf`: `%g`, `%e`, `%f`, `%d`, `%s`.
 
-A device inside a simulator does not print: printing in the hot loop of a
-circuit solver would cost more than the model. So VerA compiles display
-tasks away in a device, and says so:
-
-```console
-{{#include ../examples/analog-block/lint.out}}
-```
-
-A testbench (`--run`, `--emit-exe`) is built with `--display=emit`, which
-keeps them. That is why the transcripts in this book print.
+A device inside a simulator does not print by itself: printing from the hot
+loop of a circuit solver would cost more than the model. Instead it
+*records* what each display task would print, and the simulator prints the
+records once per accepted point (`--display=record`, the default for a
+device). `--display=drop` compiles display tasks away entirely. A testbench
+(`--run`, `--emit-exe`) is built with `--display=emit`, where the device
+prints them itself. That is why the transcripts in this book print.
 
 ## Exercises
 

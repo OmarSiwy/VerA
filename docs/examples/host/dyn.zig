@@ -26,7 +26,8 @@ fn Export(comptime D: type) type {
         /// default card, as a DC operating point.
         fn residual(x: *const [n]f64, f: *[n]f64, j: *[n][n]f64) callconv(.c) void {
             var model: D.Model = .{};
-            D.setup(Val.Of(0), &model);
+            if (@hasDecl(D, "derive")) D.derive(Val, &model);
+            if (@hasDecl(D, "setup")) D.setup(Val, &model);
             const inst: D.Instance = .{};
             const rows: [n]S.Of(0) = D.eval(S, x, &model, &inst, .{});
             for (rows, 0..) |row, r| {

@@ -469,7 +469,46 @@ pub const TimingCheck = struct {
     name: StrId,
     args: []const ExprId,
     edges: []const SpecEdge,
+    /// Per argument slot, the IEEE 1364-2005 §15.4 transitions its
+    /// `timing_check_event_control` names, one bit each (`transition`), a z
+    /// read as x: `posedge` is `posedge_mask`, `negedge` `negedge_mask`, an
+    /// `edge [...]` its descriptors; 0 for a slot with no event control.
+    masks: []const u8 = &.{},
+    /// Per argument slot, its A.7.5.3 `&&& timing_check_condition`, or
+    /// `.none`.
+    conds: []const ExprId = &.{},
     main_tok: u32,
+
+    /// §15.4: "posedge clr is equivalent to ... edge[01, 0x, x1] clr".
+    pub const posedge_mask: u8 = 0b100011;
+    /// §15.4: "negedge clr is the same as ... edge[10, x0, 1x] clr".
+    pub const negedge_mask: u8 = 0b011100;
+
+    /// The `masks` bit of the transition `from` -> `to`, each `0`, `1`, `x`
+    /// or `z` (§15.4: "Edge transitions involving z are treated the same
+    /// way as edge transitions involving x"); 0 when they name none (the
+    /// same level, or x to z). Bits 0..5 are 01, 0x, 10, 1x, x0, x1.
+    pub fn transition(from: u8, to: u8) u8 {
+        const f: u8 = if (from == 'z') 'x' else from;
+        const t: u8 = if (to == 'z') 'x' else to;
+        if (f == t) return 0;
+        return switch (f) {
+            '0' => if (t == '1') 1 << 0 else 1 << 1,
+            '1' => if (t == '0') 1 << 2 else 1 << 3,
+            else => if (t == '0') 1 << 4 else 1 << 5, // else: `x`, the only other level after the z fold
+        };
+    }
+
+    /// The transitions `mask` names, each turned around (01 <-> 10, 0x <->
+    /// x0, 1x <-> x1): §15.3.4's "reference event signal with opposite edge".
+    pub fn opposite(mask: u8) u8 {
+        const swap = [6]u3{ 2, 4, 0, 5, 1, 3 };
+        var out: u8 = 0;
+        for (swap, 0..) |to, from| {
+            if (mask & (@as(u8, 1) << @intCast(from)) != 0) out |= @as(u8, 1) << to;
+        }
+        return out;
+    }
 };
 
 /// A.3.1 one `pull_gate_instance`, IEEE 1364-2005 §7.8's pullup/pulldown

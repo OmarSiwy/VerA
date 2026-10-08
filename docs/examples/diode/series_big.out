@@ -1,1 +1,20 @@
 $ vera --run --param rs=10e6 series_r.va
+=== series_r ===
+--- point 0 ---
+  x[a] = 8.000000e-1
+  x[k] = 0.000000e0
+  x[ai] = 3.936039e-1
+V(ai) = 0.393604 V  I(rs) = 4.063961e-08 A  I(junction) = 4.063961e-08 A
+warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 1 — I(k,ai) — compiles with @setFloatMode(.strict)
+  --> series_r.va:17:5
+   |
+17 |     I(ai, k) <+ is * (exp(V(ai, k) / $vt) - 1);
+   |     ^
+   |     - an expression of a probe of node `k` is not provably finite
+   |
+   = note: LRM 4.3
+   = help: constrain the operands with a range or a guard the prover can see
+   = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
+   = help: run `vera --explain W0650` for a detailed explanation
+
+warning: 1 warning(s) emitted

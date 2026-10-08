@@ -163,13 +163,23 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try vals.append(self.arena, try lowerAbstolArg(self, name, a) orelse return poison);
             continue;
         }
+        // A.8.2's `analog_filter_function_arg` is a parameter, a part of
+        // one or a `constant_assignment_pattern_or_null`; VAMS 2.x's `{a, b}`
+        // is the §4.2.13 concatenation, which annex G retired from this slot
+        // ("Add apostrophe before opening { in list of values").
+        if ((i == 1 or i == 2) and isCoefFilter(name) and
+            (self.file.exprs.tag(a) == .concat or self.file.exprs.tag(a) == .multi_concat))
+        {
+            try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a concatenation `{{...}}`: write the assignment pattern `'{{...}}`", .{ name, i + 1 });
+            return poison;
+        }
         if (try appendVectorArg(self, &vals, a)) continue;
         // §4.5.1 "Certain analog operators require arrays or vectors to be
         // passed as arguments: Laplace filters, Z-transform filters ... An
         // array can either be passed as an array_identifier ... or an array
         // assignment pattern." A scalar in a coefficient slot is neither; a
         // part-select or multidimensional array is left to the ordinary path.
-        if ((i == 1 or i == 2) and (std.mem.startsWith(u8, name, "laplace_") or std.mem.startsWith(u8, name, "zi_")) and
+        if ((i == 1 or i == 2) and isCoefFilter(name) and
             !(self.file.exprs.tag(a) == .index or (self.file.exprs.tag(a) == .ident and self.arrays.contains(self.file.str(self.file.exprs.strOf(a))))))
         {
             try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a scalar", .{ name, i + 1 });
@@ -468,6 +478,12 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
     }
 }
 
+/// §4.5.11/§4.5.12: a laplace or Z-transform filter, whose second and third
+/// slots are coefficient vectors.
+fn isCoefFilter(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "laplace_") or std.mem.startsWith(u8, name, "zi_");
+}
+
 /// §4.5.11/§4.5.12: does this filter take its zeros as a root vector, so that
 /// the null form `f(x, , poles, …)` reads as the empty product 1?
 fn nullZerosOk(name: []const u8) bool {
@@ -571,6 +587,13 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         if (a0 != .none and ex.tag(a0) != .str_literal) {
             try self.err(ex.mainTok(a0), .E0521, "", .{});
             return poison;
+        }
+        // A name that is not a Table 4-21 small-signal kind matches the
+        // analysis the host labels with it (`contract.acStimActive`, VD-109),
+        // so the device reads the host's Table 9-28 `analysis_name`.
+        if (a0 != .none) {
+            const s = self.file.str(ex.strOf(a0));
+            if (!std.mem.eql(u8, s, "ac") and !std.mem.eql(u8, s, "noise")) self.out.uses.insert(.host_strings);
         }
     };
     // Syntax 4-4 `flicker_noise ( analog_expression , analog_expression

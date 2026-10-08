@@ -44,6 +44,9 @@ pub const From = struct {
     /// `plan/qsite.zig` `QSites.sites`: the `Lowered.charge_sites` that get a
     /// `q` slot, in slot order. Each one's charge is a core live-out.
     q_sites: []const u32 = &.{},
+    /// `Options.vpi_contribs`: every value `vpiContribs` and `vpiShares`
+    /// report is a core live-out.
+    vpi: bool = false,
 };
 
 /// One emitted unit function, resolved before anything is written.
@@ -105,6 +108,9 @@ pub const Job = struct {
         /// §9.7.3 a device's status code and its arguments, which `eval`
         /// latches into `Instance` (`Lowered.status`).
         status,
+        /// Clause 12 (`From.vpi`): a row's reactive half, or one instance's
+        /// share of a shared row, that `vpiContribs`/`vpiShares` report.
+        vpi,
         /// §9.4: the one job that is NOT folded into the core, because its
         /// body has side effects the residual must not trigger. See
         /// `plan_core.plan`.
@@ -363,6 +369,17 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             });
         }
     }
+    // Clause 12 the values a VPI device reports beside the residual: each
+    // row's reactive half (a resistive half is a `.resist` job already) and
+    // each instance's share of a shared row. After every kind `eval` reads,
+    // so the fields before them number as they do without `vpi`.
+    if (from.vpi) {
+        for (self.lowered.contributions.items, 0..) |c, i| try queueVpi(self, &jobs, from, c.react_val, i);
+        for (self.lowered.contrib_shares.items) |sh| {
+            try queueVpi(self, &jobs, from, sh.resist_val, sh.row);
+            try queueVpi(self, &jobs, from, sh.react_val, sh.row);
+        }
+    }
     // §9.4 the display tasks, as one unit. Queued last, so no existing job
     // (and so no declaration name) moves when a model gains or loses a
     // `$strobe`. `.strict` unconditionally: a print is not on the residual
@@ -385,6 +402,18 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     }
     out.list = jobs.items;
     return out;
+}
+
+/// Queues `v`, a value of contribution `row`, as a `.vpi` job unless it is 0.
+fn queueVpi(self: Input, jobs: *std.ArrayList(Job), from: From, v: Mir.Value, row: usize) !void {
+    const t = self.an.rv(v);
+    if (t == .f_zero) return;
+    try jobs.append(self.arena, .{
+        .kind = .vpi,
+        .target = t,
+        .mode = unitMode(from.unit_modes, row),
+        .comment = "Clause 12 a value vpiContribs or vpiShares reports",
+    });
 }
 
 /// Value -> some instruction reads it, or a job in `queued` returns it. Dead

@@ -1,0 +1,33 @@
+// `$vera_reject_step(t_retry)` (VerA's system task, LRM §2.8.3): on the
+// accepted solution of a transient step, ask the host to reject the step
+// and solve t_retry first. Here the device wants a point at 1.5 s, where
+// its `above` event lies, and the grid has none.
+//
+//   t = 0, 1   $abstime <= 1.5: no request. hit = 0.
+//   t = 2      the request runs first, while hit is still 0, so the step is
+//              rejected with a retry at 1.5. The `above` event then fires on
+//              this attempt, so the line it prints reads hit = 1, t_hit = 2.
+//              The testbench undoes the attempt and solves 1.5.
+//   t = 1.5    above($abstime - 1.25) crossed zero since t = 1: hit = 1,
+//              t_hit = 1.5. No request: $abstime is not past 1.5.
+//   t = 2, 3   hit = 1, so no request; t_hit stays 1.5.
+//! analysis tran
+//! time 0, 1, 2, 3
+//! print none
+`include "disciplines.vams"
+
+module retry(p, n);
+  inout p, n;
+  electrical p, n;
+  integer hit;
+  real t_hit;
+  analog begin
+    I(p, n) <+ V(p, n) / 1k;
+    if ($abstime > 1.5 && hit == 0) $vera_reject_step(1.5);
+    @(above($abstime - 1.25)) begin
+      hit = 1;
+      t_hit = $abstime;
+    end
+    $strobe("t = %g  hit = %d  t_hit = %g", $abstime, hit, t_hit);
+  end
+endmodule

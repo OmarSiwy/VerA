@@ -83,6 +83,12 @@ pub const Parser = struct {
     /// module, so they are admitted by position, not by file extension. An
     /// `analog` block has none of them (A.6.4). See `discreteGrammar`.
     in_discrete: bool = false,
+    /// The next primary heads a discrete-grammar statement, so a call there
+    /// is A.6.9's `task_enable`, not A.8.2's `function_call`: its null
+    /// argument is IEEE 1364-2005 §10.2.2's ("A null expression shall not be
+    /// used as an argument in a task-enabling statement"), which the digital
+    /// engine refuses, not E0289. `parsePrimary` reads and clears it.
+    task_enable_head: bool = false,
     /// §2.6.2 forbids scale factors in digital delay expressions. Kept while
     /// parsing delay_control, delay2/delay3 and path_delay_expression so even
     /// a discarded min/max arm is checked before expression folding.

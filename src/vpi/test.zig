@@ -321,10 +321,34 @@ test "§5.4.2/§11.6.6: an instance's `<+` declares an unnamed branch the instan
     const v1 = root.coldOf(asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.v1"), null))).?).?);
     try std.testing.expect(v1.contrib_pot != null and v1.contrib_flow == null);
     // r1 and r2 are two devices in parallel: lowering sums their `<+` into
-    // one row, so neither one's share of the flow is known — refused, not
-    // reported as the total.
+    // one row, and each branch's flow is its own instance's share of it
+    // (`Lowered.contrib_shares`), not the total.
     const r1 = root.coldOf(asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.r1"), null))).?).?);
-    try std.testing.expect(r1.contrib_flow != null and r1.flow_unknowable);
+    const r2 = root.coldOf(asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.r2"), null))).?).?);
+    try std.testing.expect(r1.contrib_flow != null and !r1.flow_unknowable);
+    try std.testing.expectEqual(r1.contrib_flow, r2.contrib_flow);
+    try std.testing.expect(r1.contrib_share != null and r2.contrib_share != null);
+    try std.testing.expect(r1.contrib_share.? != r2.contrib_share.?);
+}
+
+test "§5.6.8.2: a named branch another instance contributes to reads its own row" {
+    var res = try openSource(
+        \\`include "disciplines.vams"
+        \\module child(b); inout b; electrical b, x;
+        \\  branch (x, b) br;
+        \\  analog I(br) <+ V(br) / 1000.0;
+        \\endmodule
+        \\module top(g); inout g; electrical g;
+        \\  child drv(g);
+        \\  analog I(drv.br) <+ 1m;
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+    // The parent's `<+` lands on the child's own branch: one row, `shared`,
+    // and all of it is that branch's flow, so there is no share to look up.
+    const br = root.coldOf(asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.drv"), null))).?).?);
+    try std.testing.expect(br.contrib_flow != null and br.contrib_share == null and !br.flow_unknowable);
 }
 
 test "§11.6.20/§11.6.21: the analog process, its contribution and an identifier that IS its object" {

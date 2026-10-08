@@ -8,9 +8,12 @@
 // A block_item_declaration can follow only `: block_identifier`; here `reg r;`
 // opens an unnamed begin-end block. Legal neighbour:
 // b_9_8_3_named_block_variables.v declares integer count in `begin : acc`.
+// The code moved 2026-10-08 with the refusal unchanged: E0209 ("expected an
+// expression", A.8.3) became E0290, A.6.3's own "a declaration in an unnamed
+// block", which the analog parse now reports too.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 9.8.1 9.8.3
-//! reject E0209
+//! reject E0290
 //! reject found `reg`
 //! neighbour b_9_8_3_named_block_variables.v
 module b_9_8_1_unnamed_block_declaration_rejected;

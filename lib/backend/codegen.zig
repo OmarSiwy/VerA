@@ -119,7 +119,9 @@ pub const Options = struct {
     diags: ?*diag.Bag = null,
     /// Emits `vpiContribs` and its row tables: both halves of every §5.6
     /// contribution by `Lowered.contributions` index, for a host answering
-    /// §12.10 `vpi_get_analog_value` on a branch flow.
+    /// §12.10 `vpi_get_analog_value` on a branch flow; and, when instances
+    /// share a row, `vpiShares` and `vpi_share_row`: each one's own share
+    /// (`Lowered.contrib_shares`).
     vpi_contribs: bool = false,
 };
 
@@ -484,6 +486,7 @@ pub const Gen = struct {
             .emit_display = self.display == .emit,
             .record_display = self.say.len != 0,
             .q_sites = self.qs.sites,
+            .vpi = self.vpi_contribs,
         }, DynCtrl{ .g = self });
         self.core = try plan_core.plan(self.input(), self.jobs.list);
         // §5.10 a held array's storage carries a derivative only for a load

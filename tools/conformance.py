@@ -4656,13 +4656,15 @@ DIFF_HEAD = (
     "# vera: accept (no error, or only errors after parsing) | syntax (every error\n"
     "# from the preprocess or parse stage) | crash.\n"
     "# class: vera-bug (the grammar is right and VerA's parser is not, or VerA\n"
-    "# crashed), bnf-transcription (the BNF as printed fails to state a rule the\n"
-    "# LRM states elsewhere, or states it wrongly; the PDF prints the same BNF\n"
-    "# unless the reason says otherwise), context-rule (a rule outside the BNF\n"
-    "# decides it: a declaration, a chapter's restriction, a directive rule, a\n"
-    "# resource limit; also a BNF restriction VerA enforces after parsing, where\n"
-    "# both refuse and only the stage differs). `reason` says which, and `probe`\n"
-    "# marks a reading confirmed on an isolated minimal file.\n"
+    "# crashed), extension (a VerA extension AGENTS.md section 6 documents,\n"
+    "# which Annex A does not derive), bnf-transcription (the BNF as printed\n"
+    "# fails to state a rule the LRM states elsewhere, or states it wrongly; the\n"
+    "# PDF prints the same BNF unless the reason says otherwise), context-rule\n"
+    "# (a rule outside the BNF decides it: a declaration, a chapter's\n"
+    "# restriction, a directive rule, a resource limit; also a BNF restriction\n"
+    "# VerA enforces after parsing, where both refuse and only the stage\n"
+    "# differs). `reason` says which, and `probe` marks a reading confirmed on\n"
+    "# an isolated minimal file.\n"
     "# source\tcase\tearley\tvera\tclass\treason\n")
 
 
@@ -4857,13 +4859,13 @@ DIFF_RULES = [
      {"dir": "V", "at": r"(\(|,) >>[,)]<<", "vera": r"^$"}),
     ("vera-bug", "VerA's parser takes an empty argument in a call (A.8.2 derives none; probe `x = f(, 1.0);` "
      "passes with f defined); the later refusal here is for something else",
-     {"dir": "V", "at": r"(\(|,) >>[,)]<<", "vera": r"^semantic (?!E0(502|505|516|522))"}),
+     {"dir": "V", "at": r"(\(|,) >>[,)]<<", "vera": r"^semantic (?!E0(502|505|516|517|522|894))"}),
     # Both refuse; VerA's parser reads a wider form and refuses it by clause
     # after parsing, so only the stage differs.
     ("context-rule", "both refuse: Annex A derives no such text, and VerA's parser reads a wider form and "
      "refuses it after parsing, by clause (later stage); only the stage differs",
      {"dir": "V", "vera": r"^semantic E0(40[1-8]|41[0-4]|42[2]|43[045]|316|317|326|330|349|363|50[25]|509|516|522|"
-                          r"70[123]|708|517|894|90[16])"}),
+                          r"572|70[123]|708|517|894|90[16])"}),
     ("bnf-transcription", "an assignment pattern where A.8.1 and A.2.4 derive none (nested, an override value, a "
      "nodeset, a function argument); 3.3, 3.4.8, 3.6.3 and 4.7.2.3 use one there", {"dir": "V", "at": r">>'<< \{"}),
     ("bnf-transcription", "the recognizer's tokenizer reads `+:`/`-:` as A.8.3's indexed part-select operator, but "
@@ -4874,7 +4876,7 @@ DIFF_RULES = [
      "`(01)`), which the token-level recognizer reads as an identifier or a number; IEEE 1364-2005 15.4 writes "
      "`edge[01, 0x, x1] clr`", {"dir": "V", "at": r"(edge \[[^>]*|table \( )>>\w+<<"}),
     # VerA's parser takes text no rule gives it.
-    ("vera-bug", "VerA extension (AGENTS.md §6 `vera_lte`, `vera_interp`): an attribute after `ddt`/`absdelay`; "
+    ("extension", "VerA extension (AGENTS.md §6 `vera_lte`, `vera_interp`): an attribute after `ddt`/`absdelay`; "
      "A.8.2 allows { attribute_instance } only after an analog_function_identifier (probe "
      "`ddt (* vera_lte = 0 *) (V(p))`)", {"dir": "V", "at": r"(ddt|absdelay|idt|idtmod|transition) >>\(\*<<"}),
     ("vera-bug", "A.1.9 and Syntax 6-4 require a paramset_item_declaration before the paramset statements; VerA "

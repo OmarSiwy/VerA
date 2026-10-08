@@ -517,6 +517,28 @@ pub fn build(b: *std.Build) void {
         run.addCheck(.{ .expect_stderr_match = r.says });
         test_step.dependOn(&run.step);
     }
+    // `--emit-osdi` names what OSDI 0.4 has no slot for before it builds
+    // (VD-102): a step-rejection request is refused, a correlated noise pair
+    // is a warning and the library builds, so tools/osdi_dyn.zig compiles here.
+    // The refused source runs under `--emit-exe` in the fixture suite.
+    for ([_]struct { file: []const u8, exit: u8, says: []const u8 }{
+        .{ .file = "tests/fixtures/ch05_analog_behavior/vera_reject_step_retry.va", .exit = 1, .says = "error[E1099]" },
+        .{ .file = "tests/fixtures/ch04_expressions/a06_noise_anticorrelated_coefficient.va", .exit = 0, .says = "warning[W1098]" },
+    }) |r| {
+        const run = b.addRunArtifact(exe);
+        run.addArgs(&.{ "--emit-osdi", "-I" });
+        run.addDirectoryArg2(b.path("tests/fixtures"), .{});
+        run.addArg("--work-dir");
+        _ = run.addOutputDirectoryArg2("osdi", .{});
+        if (r.exit == 0) {
+            run.addArg("-o");
+            _ = run.addOutputFileArg2("device.osdi", .{});
+        }
+        run.addFileArg(b.path(r.file));
+        run.expectExitCode(r.exit);
+        run.addCheck(.{ .expect_stderr_match = r.says });
+        test_step.dependOn(&run.step);
+    }
     // The fixed-grid runner's W0750 obeys the same lint levels as compiler
     // diagnostics. Allowed/warned neighbours build over the binary's own
     // contract; --run also proves the §5.10.3.1 event actually fires.
@@ -1148,7 +1170,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 78 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=366\n",
+        .stdout = "xfail G: 77 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=367\n",
     },
     // VAMS-2023 ch12 ledger rows (tests/fixtures/OBLIGATIONS.tsv). Each `.xfail`
     // is a requirement VerA does not meet yet; its fixture's header says why.
@@ -1190,7 +1212,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch12_vpi_routines/b7_tchk_violation.c",
         .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .xfail = "12.31.4: registering the action callback cbTchkViolation was refused",
+        .stdout = "p02: b7_tchk_violation checks=12\n",
     },
     .{
         .c = "tests/fixtures/ch12_vpi_routines/b7_objtype_time.c",
@@ -1225,7 +1247,12 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_reset.c",
         .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .xfail = "12.36: vpi_sim_control(vpiReset, 0, 0, 1) failed",
+        .stdout = "p02: b7_sim_control_reset checks=6\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_reset_run.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .stdout = "p02: b7_sim_control_reset_run checks=15\n",
     },
     .{
         .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_scope.c",
@@ -1258,12 +1285,18 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p02_analog.va",
         .stdout = "p02: 11_systf_analog checks=35\n",
     },
-    // Every assertion but the last passes; c1's own flow shares a row with
-    // i1's (the fixture's KNOWN GAP).
+    // c1's own flow is its share of the row it shares with i1 (`vpiShares`).
     .{
         .c = "tests/fixtures/ch12_vpi_routines/p03_07_derivtf_partials.c",
         .design = "tests/fixtures/ch12_vpi_routines/p03_systf_devices.va",
-        .xfail = "vpi_get_analog_value(vpiRealVal) unexpectedly set an error: SHARED",
+        .stdout = "p03-07: vres=1 ires=0.001 dres=0.001 vcube=1 icube=7 dcube=12\n",
+    },
+    // §12.10 a capacitor's flow in a transient: its row's reactive half, and
+    // each instance's share of a row two capacitors share.
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_13_reactive_branch_flow.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_cap_ramp.va",
+        .stdout = "p03-13: v=5 i0=0.001 i1=0.001 i2=0.003\n",
     },
     .{
         .c = "tests/fixtures/ch12_vpi_routines/p03_90_reject_underivative_handle.c",

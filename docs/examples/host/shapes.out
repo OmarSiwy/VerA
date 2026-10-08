@@ -1,0 +1,8 @@
+$ zig test --dep contract -Mroot=shapes.zig -Mcontract=../../../tools/contract.zig
+1/6 shapes.test.every contract declaration the pages name exists...OK
+2/6 shapes.test.device.md: SimState, AnalysisKind...OK
+3/6 shapes.test.families.md: family_fns, family_primitives, JacConst, LaneUse, Constant, RefOptions...OK
+4/6 shapes.test.state.md: StateClass, UpdateResult, StateCtlOp, QStamp, LimitResult...OK
+5/6 shapes.test.tables.md: NoiseGen, PsdTerm, NoiseTable, AcGen, AcPhasor, UnknownKind...OK
+6/6 shapes.test.linking.md: DevicePart...OK
+All 6 tests passed.

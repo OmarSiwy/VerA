@@ -127,8 +127,17 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
-        \\    if (comptime @hasField(D.Instance, "cwd")) inst.cwd = cwdPath();
-        \\    if (comptime @hasField(D.Instance, "analysis_name")) inst.analysis_name = analysis_name;
+        \\    // §9.15 Table 9-28 through the GPU-safe channel a GPU host uses: the
+        \\    // bytes in `contract.host_strings`, the row only their indices. The
+        \\    // `Instance.cwd`/`analysis_name` slices stay "", so a device that
+        \\    // read them instead answers "" and its fixture fails.
+        \\    var tb_strings = [_][]const u8{ "", "", analysis_name };
+        \\    if (comptime @hasField(D.Model, "cwd_idx__")) {
+        \\        tb_strings[1] = cwdPath();
+        \\        contract.host_strings = &tb_strings;
+        \\        model.cwd_idx__ = 1;
+        \\        model.analysis_name_idx__ = 2;
+        \\    }
         \\    // The solve-invariant slice: after the card and the temperature
         \\    // write, before the first evaluation — the ordering a host keeps.
         \\    // With `Dual` itself as the value scalar, so every latched value is
@@ -612,7 +621,8 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
 /// interface, stepped by a host that owns the time walk (`src/vpi/analog.zig`),
 /// since §12.31.3 lets a VPI application force or reject a solution time. It
 /// exports: solve at t tentatively, accept the last solution, read x, and read
-/// each §5.6 row's value; the device must be compiled with
+/// each §5.6 row's value and each instance's share of a shared row (§5.4.1);
+/// the device must be compiled with
 /// `Options.vpi_contribs`. Only an accepted solve writes history, so a rejected
 /// point needs no undo. Every unknown is solved for (§3.6.1) unless a
 /// `//! bias`/`//! wave` line pins it.
@@ -766,7 +776,7 @@ const noise_close =
 fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     var any_points = false;
     for (d.noise) |w| {
-        if (w.points != null) any_points = true;
+        if (w.points != null or w.psd != null) any_points = true;
     }
     var any = any_points;
     for (d.noise) |w| {
@@ -776,7 +786,7 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
     try out.appendSlice(arena, "    if (comptime @hasDecl(D, \"noise_gens\")) {\n");
     if (any_points) try out.appendSlice(arena, noise_close);
     for (d.noise, 0..) |w, k| {
-        if (w.name == null and w.interp == null and w.points == null) continue;
+        if (w.name == null and w.interp == null and w.points == null and w.psd == null) continue;
         try out.print(arena, "        if (comptime D.noise_gens.len > {d}) {{\n", .{k});
         if (w.name) |nm| try out.print(
             arena,
@@ -786,12 +796,12 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                 "            }});\n",
             .{ k, k, std.zig.fmtString(nm), k, std.zig.fmtString(nm) },
         );
-        if (w.interp != null or w.points != null) {
+        if (w.interp != null or w.points != null or w.psd != null) {
             // Only a `.table` row has a spectrum; `points` on another row
             // FAILs with a reason instead of crashing on `g.table.?`.
             try out.print(arena,
                 \\            if (D.noise_gens[{d}].table) |ti| {{
-                \\                const tbl = D.noise_tables[ti];
+                \\                const tbl = contract.noiseTable(D, &model, ti);
                 \\
             , .{k});
             if (w.interp) |ip| try out.print(
@@ -803,21 +813,12 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                 .{ k, ip, ip },
             );
             if (w.points) |pts| {
-                // §4.6.4.3 array-parameter input: `noise_tables` holds the
-                // declared defaults and the card's knots are `noiseTablePoints`,
-                // one flat array with table `ti`'s segment after every earlier
-                // table's. Devices of literal tables lack the hook.
+                // §4.6.4.3 `tbl` is the table as a host reads it,
+                // `contract.noiseTable`: the derived row's own sorted copy of
+                // the card's knots when a knot is a parameter (`noise_tables`
+                // holds only the declared defaults), else `noise_tables`.
                 try out.appendSlice(arena,
-                    \\                const card = if (comptime @hasDecl(D, "noiseTablePoints"))
-                    \\                    D.noiseTablePoints(&model)
-                    \\                else
-                    \\                    [_][2]f64{};
-                    \\                var off: usize = 0;
-                    \\                for (D.noise_tables[0..ti]) |t0| off += t0.points.len;
-                    \\                const got_pts: []const [2]f64 = if (comptime @hasDecl(D, "noiseTablePoints"))
-                    \\                    card[off..][0..tbl.points.len]
-                    \\                else
-                    \\                    tbl.points;
+                    \\                const got_pts = tbl.points;
                     \\
                 );
                 try out.appendSlice(arena, "                const want_pts = [_][2]f64{");
@@ -838,6 +839,27 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                     \\                }});
                     \\
                 , .{ fmtF64(w.rtol), fmtF64(w.rtol), k });
+            }
+            if (w.psd) |ps| {
+                // §4.6.4.3/.4 the density a host integrates, from the same
+                // table: the clause's interpolation and end clamps.
+                try out.appendSlice(arena, "                const want_psd = [_][2]f64{");
+                for (ps, 0..) |p, i| try out.print(arena, "{s}.{{ {f}, {f} }}", .{
+                    if (i == 0) " " else ", ", fmtF64(p[0]), fmtF64(p[1]),
+                });
+                try out.print(arena,
+                    \\ }};
+                    \\                var got_psd: [want_psd.len]f64 = undefined;
+                    \\                var psd_ok = true;
+                    \\                for (want_psd, &got_psd) |fw, *g| {{
+                    \\                    g.* = contract.noiseTableAt(tbl, fw[0]);
+                    \\                    if (!nclose(g.*, fw[1], {f})) psd_ok = false;
+                    \\                }}
+                    \\                std.debug.print("noise[{d}].psd got={{any}} want={{any}} ok={{d}}\n", .{{
+                    \\                    got_psd, want_psd, @intFromBool(psd_ok),
+                    \\                }});
+                    \\
+                , .{ fmtF64(w.rtol), k });
             }
             try out.print(arena,
                 \\            }} else std.debug.print("noise[{d}].table got=none want=a table ok=0\n", .{{}});

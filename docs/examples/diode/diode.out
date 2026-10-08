@@ -1,1 +1,27 @@
 $ vera --run diode.va
+=== diode ===
+--- point 0 ---
+  x[a] = 5.000000e-1
+  x[k] = 0.000000e0
+$vt = 0.025865 V  V(a,k) = 0.50 V  I = 2.4856e-06 A
+--- point 1 ---
+  x[a] = 5.600000e-1
+  x[k] = 0.000000e0
+$vt = 0.025865 V  V(a,k) = 0.56 V  I = 2.5286e-05 A
+--- point 2 ---
+  x[a] = 6.200000e-1
+  x[k] = 0.000000e0
+$vt = 0.025865 V  V(a,k) = 0.62 V  I = 2.5724e-04 A
+warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 0 — I(a,k) — compiles with @setFloatMode(.strict)
+  --> diode.va:15:5
+   |
+15 |     I(a, k) <+ is * (exp(V(a, k) / (n * $vt)) - 1);
+   |     ^
+   |     - an expression of a probe of node `k` is not provably finite
+   |
+   = note: LRM 4.3
+   = help: constrain the operands with a range or a guard the prover can see
+   = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
+   = help: run `vera --explain W0650` for a detailed explanation
+
+warning: 1 warning(s) emitted

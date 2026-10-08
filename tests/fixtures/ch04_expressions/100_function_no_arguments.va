@@ -9,6 +9,11 @@
 // That rule is worth pinning and is pinned on a legal function by
 // 28_user_function.va, so demanding the diagnostic here loses nothing.
 //
+// Corrected 2026-10-08 (construct only, the pin is unchanged): the analog
+// block called `noargs()`. That call is A.8.2's refusal, E0289, a second error
+// this `reject-only` file cannot hold, so the block no longer calls the
+// function; the definition alone is 4.7.1's violation.
+//
 //! lrm 4.7.1
 //! lrm 4.7.1:3
 //! reject-only formal argument
@@ -20,6 +25,6 @@ module ch4_fn_noargs(p);
     noargs = 1.0;
   endfunction
   analog begin
-    I(p) <+ noargs();
+    I(p) <+ V(p);
   end
 endmodule

@@ -374,6 +374,7 @@ fn udpBodyName(sequential: bool) []const u8 {
 /// value for an event queue a compiled analog device does not have.
 pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
     try parse_inst.gateNotModelled(self);
+    const module_tok = self.pos;
     const module = try self.internTok(self.pos);
     self.pos += 1; // the udp_identifier
     var s0: Ast.Strength = .strong;
@@ -402,6 +403,11 @@ pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
             const in_tok = self.pos;
             try ports.append(self.arena, .{ .expr = try parse_expr.parseExpr(self), .main_tok = in_tok }); // input_terminal ::= expression
         }
+        // A.5.4's unnamed instance is a UDP's, with an output and at least
+        // one input terminal; anything else with no name is a module
+        // instance missing A.4.1's name_of_module_instance (`child(s);`).
+        if (name == .none and ports.items.len < 2)
+            return self.failAt(module_tok, .E0293, "`{s}`, with one terminal", .{self.file.str(module)});
         _ = try self.expect(.rparen);
         // The digital engine runs a UDP instance (IEEE 1364-2005 §8); an
         // analog compile keeps nothing (W0252 above).

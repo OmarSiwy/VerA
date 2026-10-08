@@ -54,16 +54,34 @@
 //     | expression === scalar_constant | expression != scalar_constant | expression !== scalar_constant
 //   scalar_constant ::= 1'b0 | 1'b1 | 1'B0 | 1'B1 | 'b0 | 'b1 | 'B0 | 'B1 | 1 | 0
 //
-// All twelve checks, with every optional argument somewhere: notifiers, a
-// null notifier (`, ,`), stamptime and checktime conditions, delayed
-// reference and data signals (plain, and dbus[0] with a constant select for
-// the vector port bit bus[0]), event-based
-// and remain-active flags, a $width threshold, edge descriptors of all four
-// shapes (01, 10, x1, 0z), and &&& conditions of every scalar form. Timing
-// checks are not evaluated by VerA (W0251: §15 is outside the §1 B scope), so
-// nothing toggles the notifier and the cell runs as its assignment:
-// q = d = 1. Output: "q=1 ntfr=0".
-// digital-runner: warning W0251
+// The eight checks VerA's digital engine evaluates, with every optional
+// argument it evaluates somewhere: notifiers, a null notifier (`, )`), a
+// $width threshold, edge descriptors of all four shapes (01, 10, x1, 0z), a
+// constant bit-select terminal (bus[0]), and &&& conditions of every scalar
+// form: a bare expression, `~`, `==`, `===`, `!=` and `!==`, against
+// 1'b1, 'b1, 0 and 1'B0. The productions only the other four commands and
+// the negative-limit arguments use (event_based_flag, remain_active_flag,
+// the $nochange offsets, stamptime and checktime conditions, delayed
+// reference and data) are parsed by a digital run too, which then refuses
+// the design by name (E1149, ieee1364/15_timing_checks/b_15_*_refused.v), so
+// they have no run here; an analog compile accepts them all
+// (annex_a_syntax/b8_timing_checks_design_runs.va).
+//
+// The stimulus sets en, d and clk at 0, raises clk at 10 and bus at 20, so no
+// reference event shares its time with a data event, and every check stays
+// quiet:
+//   t=0   en = 1, d = 1 (a data event of every check on d), clk x -> 0 (x0: a
+//         derived data event of the edge[x1, 0z] $width, with no pulse open;
+//         no other check takes it).
+//   t=10  clk 0 -> 1: the reference event of $setup, $hold, $setuphold (en
+//         is 1), $recovery, $removal and the conditioned $setup and $hold;
+//         d last moved at 0, 10 away, beyond every limit (1, 2). $period's
+//         edge[01, 10] takes its first edge, nothing to measure. The
+//         edge[x1, 0z] $width does not take 01.
+//   t=20  bus x -> 2'b01: bus[0] x -> 1, $recrem's reference event; d last
+//         moved at 0, beyond its limits of 1.
+// No violation, so the notifier keeps the 0 it took at 0, and q = d = 1.
+// Output: "q=1 ntfr=0".
 //! inherited IEEE 1364-2005 A.7.5.1,A.7.5.2,A.7.5.3
 `timescale 1ns/1ns
 module b_A_7_5_cell (clk, d, en, bus, q);
@@ -71,30 +89,31 @@ module b_A_7_5_cell (clk, d, en, bus, q);
   input [1:0] bus;
   output q;
   reg ntfr;
-  wire dclk, dd;
-  wire [1:0] dbus;
   assign q = d;
   initial ntfr = 0;
   specify
     $setup(d, posedge clk, 1, ntfr);
     $hold(posedge clk, d, 1);
-    $setuphold(posedge clk &&& en, negedge d, 1, 1, ntfr, en, en, dclk, dd);
+    $setuphold(posedge clk &&& en, negedge d, 1, 1, ntfr);
     $recovery(posedge clk, d &&& ~en, 2);
     $removal(posedge clk, d &&& (en == 1'b1), 2, );
-    $recrem(posedge bus[0], d &&& en === 'b1, 1, 1, ntfr, , , dbus[0], dd);
-    $skew(posedge clk, d &&& en != 0, 3);
-    $timeskew(posedge clk, negedge d &&& en !== 1'B0, 3, ntfr, 1, 0);
-    $fullskew(posedge clk, negedge d, 3, 3, , 0, 1);
+    $recrem(posedge bus[0], d &&& en === 'b1, 1, 1, ntfr);
+    $hold(posedge clk, d &&& en != 0, 1);
+    $setup(d &&& en !== 1'B0, posedge clk, 1, ntfr);
     $period(edge [01, 10] clk, 10);
     $width(edge [x1, 0z] clk, 4, 1, ntfr);
-    $nochange(posedge clk, d, 0, 0, ntfr);
   endspecify
 endmodule
 module b_A_7_5_system_timing_checks;
+  reg clk, d, en;
+  reg [1:0] bus;
   wire q;
-  b_A_7_5_cell c (1'b1, 1'b1, 1'b1, 2'b01, q);
-  initial #10 begin
-    $display("q=%b ntfr=%0d", q, c.ntfr);
+  b_A_7_5_cell c (clk, d, en, bus, q);
+  initial begin
+    en = 1; d = 1; clk = 0;
+    #10 clk = 1;
+    #10 bus = 2'b01;
+    #10 $display("q=%b ntfr=%0d", q, c.ntfr);
     $finish(0);
   end
 endmodule

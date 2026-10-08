@@ -168,6 +168,10 @@ pub fn parseMinTypMax(self: *Parser) Error!Ast.ExprId {
 /// that begins none of them is E0209.
 pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
+    // A call this primary makes is a task enable when it heads a discrete
+    // statement (`Parser.task_enable_head`); nothing nested in it is.
+    const task_enable = self.task_enable_head;
+    self.task_enable_head = false;
     // §10.6: a keyword the active set does not reserve is just a name, so
     // `sin` under "1364-2005" reads as a variable, not as §4.3.2's builtin.
     // (`tokenText` still switches on the real tag, so the spelling is exact.)
@@ -252,7 +256,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 // elaboration gives the child's function because
                 // `Elaborate.sep` is the same `.`. This join and
                 // `Lower.flatName` must change together.
-                if (self.peek() == .lparen) return parseCall(self, .call, tok, try joinName(self, parts.items));
+                if (self.peek() == .lparen) return parseCall(self, .call, tok, try joinName(self, parts.items), task_enable);
                 const off = try self.file.exprs.addStrList(self.arena, parts.items);
                 return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
             }
@@ -262,7 +266,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 if (self.access_names.contains(self.file.str(name))) {
                     return parseAccess(self, name, tok);
                 }
-                return parseCall(self, .call, tok, name);
+                return parseCall(self, .call, tok, name, task_enable);
             }
             return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
         },
@@ -290,9 +294,9 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 // A.9.3 `hierarchical_function_identifier`, `$root.top.f(x)`:
                 // a call under the joined name, as for a dotted name above.
                 if (self.peek() != .lparen) return h;
-                return parseCall(self, .call, tok, try joinName(self, self.file.exprs.nameParts(h)));
+                return parseCall(self, .call, tok, try joinName(self, self.file.exprs.nameParts(h)), task_enable);
             }
-            if (self.peek() == .lparen) return parseCall(self, .sys_call, tok, name);
+            if (self.peek() == .lparen) return parseCall(self, .sys_call, tok, name, false);
             return addCall(self, .sys_call, tok, name, &.{});
         },
         // §6.4.3: "A paramset output variable's value may be computed from
@@ -342,7 +346,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     const mark = self.attrs.items.len;
     if (self.peek() == .attr_open) try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
     const lte = self.lteSince(mark);
-    const id = try parseCall(self, call_tag, tok, name);
+    const id = try parseCall(self, call_tag, tok, name, false);
     try self.keepLte(lte, .none, id);
     return id;
 }
@@ -544,31 +548,47 @@ pub fn parseNetLvalue(self: *Parser) Error!Ast.ExprId {
 pub fn parseCallArgs(self: *Parser) Error![]const Ast.ExprId {
     const mark = self.scratch_exprs.items.len;
     defer self.scratch_exprs.shrinkRetainingCapacity(mark);
-    try pushCallArgs(self);
+    try pushCallArgs(self, null);
     return self.arena.dupe(Ast.ExprId, self.scratch_exprs.items[mark..]);
 }
 
 /// `parseCallArgs` onto `scratch_exprs` above its current length, for a
 /// caller that copies the arguments into the expression pool and truncates.
-fn pushCallArgs(self: *Parser) Error!void {
+///
+/// `user` names a user function call (A.8.2 `analog_function_call`,
+/// `function_call`: `( expression { , expression } )`), which takes no empty
+/// slot and, in an analog expression, no empty list (E0289). The system,
+/// operator and event forms keep their omitted slots as `.none` for the
+/// clause that gives each one a meaning or a refusal. A task enable passes
+/// no `user` (`parseCall`): IEEE 1364-2005 §10.2.2 forbids its null argument
+/// by its own sentence, and the digital engine refuses it there (E1100). The
+/// discrete grammar keeps a function's `f()` for the same engine, which
+/// refuses it by arity (E1100).
+fn pushCallArgs(self: *Parser, user: ?Ast.StrId) Error!void {
+    const mark = self.scratch_exprs.items.len;
     _ = try self.expect(.lparen);
-    if (self.peek() != .rparen) {
-        while (true) {
-            const arg: Ast.ExprId = if (self.peek() == .comma or self.peek() == .rparen) .none else try parseExpr(self);
-            try self.scratch_exprs.append(self.arena, arg);
-            if (!self.eat(.comma)) break;
-        }
+    if (self.peek() == .rparen) {
+        if (user) |name| if (!self.discreteGrammar())
+            return self.failAt(self.pos, .E0289, "`{s}()` passes no argument", .{self.file.str(name)});
+    } else while (true) {
+        const empty = self.peek() == .comma or self.peek() == .rparen;
+        if (empty) if (user) |name|
+            return self.failAt(self.pos, .E0289, "argument {d} of `{s}` is empty", .{ self.scratch_exprs.items.len - mark + 1, self.file.str(name) });
+        const arg: Ast.ExprId = if (empty) .none else try parseExpr(self);
+        try self.scratch_exprs.append(self.arena, arg);
+        if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
 }
 
 /// Parses an argument list at the cursor and adds the call node of `tag`
 /// over it. The arguments go from the scratch stack straight into the
-/// expression pool, with no list of their own.
-fn parseCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId) Error!Ast.ExprId {
+/// expression pool, with no list of their own. `task_enable`: the `.call`
+/// is A.6.9's task_enable, whose arguments §10.2.2 judges, not A.8.2.
+fn parseCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, task_enable: bool) Error!Ast.ExprId {
     const mark = self.scratch_exprs.items.len;
     defer self.scratch_exprs.shrinkRetainingCapacity(mark);
-    try pushCallArgs(self);
+    try pushCallArgs(self, if (tag == .call and !task_enable) name else null);
     return addCall(self, tag, tok, name, self.scratch_exprs.items[mark..]);
 }
 

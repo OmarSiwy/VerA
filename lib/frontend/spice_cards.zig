@@ -12,13 +12,17 @@
 //! E.1.2: "with which particular variant of SPICE it is compatible, is solely
 //! determined by the authors of the simulator". VerA claims SPICE3 card
 //! syntax for `.MODEL` (the `model_types` rows), for `.SUBCKT` bodies of
-//! numeric-valued R/C/L/V/I/E/F/G/H cards and of M/Q/J/D cards whose model is
-//! a Verilog-A module or paramset (`model_cards`), and for `.INCLUDE`, `.LIB`
-//! and HSPICE's `.HDL` anywhere (`Reader`). Inside a `.SUBCKT`, anything else
-//! (`PARAMS:`, a `{expr}` value, a nested `.SUBCKT`, a model-referenced R or
-//! unlisted device card, a binned model) is a `Refusal` (E0928), and a card
-//! whose model is a Table E.1 semiconductor with no behaviour is E0953:
-//! skipping either would change the circuit, a dropped R being an open.
+//! R/C/L/V/I/E/F/G/H cards, of M/Q/J/D cards whose model is a Verilog-A
+//! module or paramset (`model_cards`, binned models included) and of X cards
+//! (`emitSubcktCard`), and for `.INCLUDE`, `.LIB` and HSPICE's `.HDL`
+//! anywhere (`Reader`); and HSPICE's subcircuit parameters (`PARAMS:` on
+//! the header) and `{expr}`/`'expr'` values over them (`expression`).
+//! Inside a `.SUBCKT`, anything else (a nested `.SUBCKT`, `.PARAM`, an
+//! expression `expression` does not read, a model-referenced R or unlisted
+//! device card, a binned model no bin of which holds the card) is a
+//! `Refusal` (E0928), and a card whose model is a Table E.1 semiconductor
+//! with no behaviour is E0953: skipping either would change the circuit, a
+//! dropped R being an open.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -172,7 +176,7 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
     // A body card may name a model declared after it, or in another file.
     var models: std.ArrayList(ModelCard) = .empty;
     for (cards.items) |card| {
-        var it = std.mem.tokenizeAny(u8, card.text, " \t(),");
+        var it = tokens(card.text);
         if (!std.mem.eql(u8, it.next() orelse continue, ".model")) continue;
         const name = it.next() orelse continue;
         const type_ = it.next() orelse continue;
@@ -356,6 +360,41 @@ fn tightEquals(arena: Allocator, card: []const u8) Allocator.Error![]const u8 {
     return out.items;
 }
 
+/// A card's fields: split at blanks and at `(`, `)` and `,`, which are noise
+/// in a SPICE card, except inside a `{...}` or `'...'` expression, which is
+/// one field whatever it holds (HSPICE writes `{w * 2}`, `'max(a, b)'`).
+const Tokens = struct {
+    text: []const u8,
+    i: usize = 0,
+
+    const seps = " \t(),";
+
+    fn next(t: *Tokens) ?[]const u8 {
+        while (t.i < t.text.len and std.mem.indexOfScalar(u8, seps, t.text[t.i]) != null) t.i += 1;
+        if (t.i == t.text.len) return null;
+        const start = t.i;
+        var depth: usize = 0;
+        var quoted = false;
+        while (t.i < t.text.len) : (t.i += 1) {
+            const c = t.text[t.i];
+            if (c == '\'') {
+                quoted = !quoted;
+            } else if (quoted) {
+                continue;
+            } else if (c == '{') {
+                depth += 1;
+            } else if (c == '}') {
+                depth -|= 1;
+            } else if (depth == 0 and std.mem.indexOfScalar(u8, seps, c) != null) break;
+        }
+        return t.text[start..t.i];
+    }
+};
+
+fn tokens(text: []const u8) Tokens {
+    return .{ .text = text };
+}
+
 /// One physical line with its comments removed: `*` is a full-line comment, `;`
 /// and `$` start a trailing one.
 fn strip(raw: []const u8) []const u8 {
@@ -393,7 +432,7 @@ fn emitCard(
 ) Allocator.Error!bool {
     // `(` `)` and `,` are noise in a SPICE port list: E.2.2.2's own example
     // writes `.SUBCKT ECPOSC (OUT GND)` with parentheses that carry no meaning.
-    var it = std.mem.tokenizeAny(u8, card.text, " \t(),");
+    var it = tokens(card.text);
     const kw = it.next() orelse return false;
     const is_model = std.mem.eql(u8, kw, ".model");
     if (!is_model and !std.mem.eql(u8, kw, ".subckt")) return false; // a device card, .tran, .include, ...
@@ -426,7 +465,7 @@ fn emitCard(
         // primitive, so the model behaves as Table E.1's Behavior column gives
         // that row; an empty column (bjt, mosfet, diode) gives nothing, which
         // E.2 makes implementation dependent.
-        const params = try modelParams(arena, row.prim, &it);
+        const params = try modelParams(arena, row.prim, &it, name, card, refusals) orelse return false;
         try out.print(arena,
             \\module {s}({s});
             \\   inout {s};
@@ -437,17 +476,37 @@ fn emitCard(
             \\
         , .{ decl, row.ports, row.ports, row.ports, params.decls, row.prim, params.args, row.ports });
     } else {
-        // `.SUBCKT name p1 p2 ... [params: k=v]`: ports up to the first thing
-        // that is not a node name. Numeric nodes are the SPICE default (`1`,
-        // `2`, `0`), so only a parameter ends the list.
+        // `.SUBCKT name p1 p2 ... [PARAMS:] [k=v ...]`: ports up to the first
+        // parameter. Numeric nodes are the SPICE default (`1`, `2`, `0`), so
+        // only a parameter ends the list. Each `k=v` (HSPICE's PARAMS:, which
+        // HSPICE also lets go unwritten) is a real parameter of the module
+        // with `v` as its default, a number or a `{expr}` over the parameters
+        // before it; the body's expressions read them all.
         var ports: std.ArrayList([]const u8) = .empty;
+        var params: std.ArrayList([]const u8) = .empty;
+        var decls: std.ArrayList(u8) = .empty;
+        var in_params = false;
         while (it.next()) |t| {
-            if (!isSpiceName(t)) {
-                // `params:`, `k=v`: HSPICE/Spectre subcircuit parameters.
-                try refusals.add(card, "`{s}` on `.subckt {s}`: subcircuit parameters (`PARAMS:`, `k=v`) are not read", .{ t, name });
+            if (std.mem.eql(u8, t, "params:")) {
+                in_params = true;
+                continue;
+            }
+            const eq = std.mem.indexOfScalar(u8, t, '=') orelse {
+                if (in_params or !isSpiceName(t)) {
+                    try refusals.add(card, "`{s}` on `.subckt {s}`: neither a node before the parameters nor a `k=v` parameter", .{ t, name });
+                    return false;
+                }
+                try ports.append(arena, try spell(arena, t));
+                continue;
+            };
+            in_params = true;
+            if (!isIdent(t[0..eq])) {
+                try refusals.add(card, "`{s}` on `.subckt {s}`: `{s}` is not a parameter name", .{ t, name, t[0..eq] });
                 return false;
             }
-            try ports.append(arena, try spell(arena, t));
+            const v = try paramValue(arena, t, eq, name, card, refusals, params.items) orelse return false;
+            try decls.print(arena, "   parameter real {s} = {f};\n", .{ try spell(arena, t[0..eq]), v });
+            try params.append(arena, t[0..eq]);
         }
         // A.1.2 makes the port list optional, so a portless `.SUBCKT` is a legal
         // module, and an empty `electrical ;` would not be.
@@ -462,7 +521,19 @@ fn emitCard(
                 \\
             , .{ decl, list, list, list });
         }
-        try emitBody(arena, out, body, models, refusals);
+        try out.appendSlice(arena, decls.items);
+        var inner: std.ArrayList(u8) = .empty;
+        try emitBody(arena, &inner, body, models, params.items, refusals);
+        // SPICE's node 0 is the global ground inside a subcircuit too. Spelled
+        // `\0 ` (only a node can be: values are numbers) it would be a local
+        // implicit net and every card on it an open; declared `ground`, it
+        // is §3.6.4's "global reference node in the circuit".
+        const zero_port = for (ports.items) |pt| {
+            if (std.mem.eql(u8, pt, "\\0 ")) break true;
+        } else false;
+        if (!zero_port and std.mem.indexOf(u8, inner.items, "\\0 ") != null)
+            try out.appendSlice(arena, "   electrical \\0 ;\n   ground \\0 ;\n");
+        try out.appendSlice(arena, inner.items);
         try out.appendSlice(arena, "endmodule\n\n");
     }
     try seen.append(arena, name);
@@ -516,12 +587,14 @@ const controlled = [_]struct { letter: u8, lhs: []const u8, rhs: []const u8, by_
 // The `controlled` letters are the exception, and read their own shape.
 
 /// Emits the instance lines and analog contributions a `.SUBCKT`'s device
-/// cards become.
+/// cards become. `scope` is the subcircuit's parameters, the names a
+/// `{expr}` value may read.
 ///
-/// A card this cannot read is a `Refusal`: a letter with no `device_cards` or
-/// `controlled` row (`Q`, `M`, `X`), a value that is a model name or a
-/// `{expr}` rather than a number (`R1 A B RMOD`), a missing or extra field, a
-/// nested `.SUBCKT` or any other dot card.
+/// A card this cannot read is a `Refusal`: a letter with no `device_cards`,
+/// `controlled` or `model_cards` row and not `X` (`S`, `T`, `K`), a value
+/// that is a model name (`R1 A B RMOD`) or an expression `expression` does
+/// not read, a missing or extra field, a nested `.SUBCKT` or any other dot
+/// card (`.PARAM` included).
 ///
 /// A node the port list does not name needs no declaration: it is an implicit
 /// net of the synthesized module, resolved by §7.5 from the primitive port it
@@ -531,12 +604,13 @@ fn emitBody(
     out: *std.ArrayList(u8),
     body: []const Card,
     models: []const ModelCard,
+    scope: []const []const u8,
     refusals: *Refusals,
 ) Allocator.Error!void {
     // The V cards an F or H card reads the current of, by name.
     var controls: std.ArrayList([]const u8) = .empty;
     for (body) |card| {
-        var it = std.mem.tokenizeAny(u8, card.text, " \t(),");
+        var it = tokens(card.text);
         const inst = it.next() orelse continue;
         if (inst[0] != 'f' and inst[0] != 'h') continue;
         _ = it.next() orelse continue;
@@ -545,7 +619,7 @@ fn emitBody(
     }
     var analog: std.ArrayList(u8) = .empty;
     for (body) |card| {
-        var it = std.mem.tokenizeAny(u8, card.text, " \t(),");
+        var it = tokens(card.text);
         const inst = it.next() orelse continue;
         if (inst[0] == '.') {
             if (std.mem.eql(u8, inst, ".subckt"))
@@ -587,20 +661,24 @@ fn emitBody(
                     continue;
                 }),
             });
-            const gain = try cardValue(it.next(), &it, inst, card, refusals) orelse continue;
-            try analog.print(arena, "      {s}({s}, {s}) <+ {f} * {s}({s});\n", .{ c.lhs, p, n, num(gain), c.rhs, ctl });
+            const gain = try cardValue(arena, it.next(), &it, inst, card, refusals, scope) orelse continue;
+            try analog.print(arena, "      {s}({s}, {s}) <+ {f} * {s}({s});\n", .{ c.lhs, p, n, gain, c.rhs, ctl });
             continue;
         }
         if (for (model_cards) |m| {
             if (inst[0] == m.letter) break m;
         } else null) |m| {
-            try emitModelCard(arena, out, card, inst, &it, m, models, refusals);
+            try emitModelCard(arena, out, card, inst, &it, m, models, scope, refusals);
+            continue;
+        }
+        if (inst[0] == 'x') {
+            try emitSubcktCard(arena, out, card, inst, &it, scope, refusals);
             continue;
         }
         const row = for (device_cards) |d| {
             if (inst[0] == d.letter) break d;
         } else {
-            try refusals.add(card, "`{s}`: a `{c}` device card is not one VerA reads in a subcircuit (R, C, L, V, I, E, F, G, H, M, Q, J, D)", .{ inst, inst[0] });
+            try refusals.add(card, "`{s}`: a `{c}` device card is not one VerA reads in a subcircuit (R, C, L, V, I, E, F, G, H, M, Q, J, D, X)", .{ inst, inst[0] });
             continue;
         };
         const p = it.next() orelse {
@@ -611,19 +689,21 @@ fn emitBody(
             try refusals.add(card, short, .{inst});
             continue;
         };
-        const value = try cardValue(it.next(), &it, inst, card, refusals) orelse continue;
+        const value = try cardValue(arena, it.next(), &it, inst, card, refusals, scope) orelse continue;
         if (row.letter == 'v' and for (controls.items) |v| {
             if (std.mem.eql(u8, v, inst)) break true;
         } else false) {
+            // An independent source, so §9.15's source-stepping factor scales
+            // it, as it does the Annex E sources.
             const name = try spell(arena, inst);
             try out.print(arena, "   branch ({s}, {s}) {s};\n", .{ try spell(arena, p), try spell(arena, n), name });
-            try analog.print(arena, "      V({s}) <+ {f};\n", .{ name, num(value) });
+            try analog.print(arena, "      V({s}) <+ $simparam(\"sourceScaleFactor\") * {f};\n", .{ name, value });
             continue;
         }
         try out.print(arena, "   {s} #(.{s}({f})) {s}({s}, {s});\n", .{
             row.prim,
             row.param,
-            num(value),
+            value,
             try spell(arena, inst),
             try spell(arena, p),
             try spell(arena, n),
@@ -647,8 +727,22 @@ const model_cards = [_]struct { letter: u8, nodes: u8, prim: []const u8 }{
     .{ .letter = 'd', .nodes = 2, .prim = "diode" },
 };
 
-/// One `.name(value)` a model card's instance carries.
-const Override = struct { name: []const u8, value: f64 };
+/// A card value: a number, or a `{expr}` as Verilog-AMS text (`expression`),
+/// which elaboration evaluates against the subcircuit's parameters.
+const Value = union(enum) {
+    num: f64,
+    expr: []const u8,
+
+    pub fn format(v: Value, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (v) {
+            .num => |n| try num(n).format(w),
+            .expr => |e| try w.writeAll(e),
+        }
+    }
+};
+
+/// One `.name(value)` an instance carries.
+const Override = struct { name: []const u8, value: Value };
 
 /// Emits the instance an M/Q/J/D card is (`model_cards`). E.2: "models
 /// contained within the SPICE netlist are treated as module definitions",
@@ -664,22 +758,31 @@ const Override = struct { name: []const u8, value: f64 };
 ///     leaves without a Behavior, which E.2 makes "implementation dependent",
 ///     and VerA has no equations for. Refused (E0953): an instance with no
 ///     behaviour would be an open where the netlist has a transistor;
+///   - binned model cards `.MODEL name.N type ... LMIN= LMAX= WMIN= WMAX=`
+///     (E.4.2's "model binning"): the first bin, in card order, that holds the
+///     card's numeric L and W, lmin <= L < lmax and wmin <= W < wmax (a bound
+///     the bin card does not give is open), read as the case above without
+///     its four bounds, which only select. A card whose L or W is missing or
+///     an expression, or that no bin holds, is refused: VerA chooses the bin
+///     here, before elaboration;
 ///   - no `.MODEL` of that name: the name itself, as a module or paramset of
 ///     the design; one naming nothing is E0904 at elaboration.
 ///
-/// A binned model (`.MODEL name.1 ...`, E.4.2) is not read. The card's own
-/// parameters (`W=`, `L=`, `NFIN=`, a positional area) override the model
-/// card's of the same name, and `M=` is E.4.1's multiplicity factor, the
-/// §6.3.6 `$mfactor`. Names keep the netlist's lower case: elaboration
-/// matches them to the module's regardless of case (E.2.1, `spiceCase`).
+/// The card's own parameters (`W=`, `L=`, `NFIN=`, a positional area)
+/// override the model card's of the same name, and `M=` is E.4.1's
+/// multiplicity factor, the §6.3.6 `$mfactor`. A card value may be a
+/// `{expr}` over `scope`, a model card's only over numbers. Names keep the
+/// netlist's lower case: elaboration matches them to the module's regardless
+/// of case (E.2.1, `spiceCase`).
 fn emitModelCard(
     arena: Allocator,
     out: *std.ArrayList(u8),
     card: Card,
     inst: []const u8,
-    it: *std.mem.TokenIterator(u8, .any),
+    it: *Tokens,
     row: @TypeOf(model_cards[0]),
     models: []const ModelCard,
+    scope: []const []const u8,
     refusals: *Refusals,
 ) Allocator.Error!void {
     var plain: std.ArrayList([]const u8) = .empty;
@@ -691,7 +794,7 @@ fn emitModelCard(
             try plain.append(arena, t);
             continue;
         };
-        try setOverride(arena, &over, t[0..eq], try paramValue(t, eq, inst, card, refusals) orelse return);
+        try setOverride(arena, &over, t[0..eq], try paramValue(arena, t, eq, inst, card, refusals, scope) orelse return);
     }
     // Q's substrate is optional: a fifth name that is not a number is the
     // model after it, as SPICE3 reads the card.
@@ -704,16 +807,17 @@ fn emitModelCard(
     if (row.letter != 'm' and extra.len == 1) if (spiceNumber(extra[0])) |a| {
         for (over.items) |o| {
             if (std.mem.eql(u8, o.name, "area")) break;
-        } else try over.append(arena, .{ .name = "area", .value = a });
+        } else try over.append(arena, .{ .name = "area", .value = .{ .num = a } });
         extra = extra[1..];
     };
     if (extra.len != 0) return refusals.add(card, "`{s}`: the field `{s}` after the model is not read", .{ inst, extra[0] });
 
     var module = model;
     var params: std.ArrayList(Override) = .empty;
-    if (for (models) |m| {
+    const found = for (models) |m| {
         if (std.mem.eql(u8, m.name, model)) break m;
-    } else null) |m| {
+    } else try pickBin(card, inst, model, models, over.items, refusals) orelse return;
+    if (found) |m| {
         if (for (model_types) |t| {
             if (std.mem.eql(u8, t.type_, m.type_)) break t;
         } else null) |t| {
@@ -722,42 +826,131 @@ fn emitModelCard(
                 .at = card.at,
                 .len = card.len,
                 .code = .E0953,
-                .why = try refusals.arena.print("`{s}`: its model `{s}` is `.model {s} {s}`, Table E.1's `{s}`, which has no behaviour in VerA; name a Verilog-A module as the model's type (`.model {s} <module> ...`)", .{ inst, model, model, m.type_, t.prim, model }),
+                .why = try refusals.arena.print("`{s}`: its model `{s}` is `.model {s} {s}`, Table E.1's `{s}`, which has no behaviour in VerA; name a Verilog-A module as the model's type (`.model {s} <module> ...`)", .{ inst, model, m.name, m.type_, t.prim, m.name }),
             });
             return;
         }
         module = m.type_;
-        var mit = std.mem.tokenizeAny(u8, m.card.text, " \t(),");
+        // A bin (`name.N`, picked or named) keeps its bounds to itself.
+        const binned = std.mem.indexOfScalar(u8, m.name, '.') != null;
+        var mit = tokens(m.card.text);
         for (0..3) |_| _ = mit.next(); // `.model name type`
         while (mit.next()) |t| {
             const eq = std.mem.indexOfScalar(u8, t, '=') orelse
-                return refusals.add(card, "`{s}`: the field `{s}` of `.model {s}` is not read", .{ inst, t, model });
-            try setOverride(arena, &params, t[0..eq], try paramValue(t, eq, inst, card, refusals) orelse return);
+                return refusals.add(card, "`{s}`: the field `{s}` of `.model {s}` is not read", .{ inst, t, m.name });
+            if (binned and binBound(t[0..eq]) != null) continue;
+            try setOverride(arena, &params, t[0..eq], try paramValue(arena, t, eq, inst, card, refusals, &.{}) orelse return);
         }
-    } else for (models) |m| {
-        const bin = std.mem.startsWith(u8, m.name, model) and m.name.len > model.len + 1 and m.name[model.len] == '.';
-        if (bin) return refusals.add(card, "`{s}`: `{s}` is a binned model (`.model {s}`), which is not read", .{ inst, model, m.name });
     }
     for (over.items) |o| try setOverride(arena, &params, o.name, o.value);
+    try emitInstance(arena, out, module, params.items, inst, plain.items[0..nodes]);
+}
 
+/// A bin card's four bounds, in the order `pickBin` keeps them.
+const BinBound = enum { lmin, lmax, wmin, wmax };
+
+/// Which of the four bin bounds `key` is, or null.
+fn binBound(key: []const u8) ?BinBound {
+    return std.meta.stringToEnum(BinBound, key);
+}
+
+/// The bin of the binned model `model` that holds the card's L and W
+/// (`emitModelCard`), wrapped in an optional: `.{null}` when `model` is not
+/// binned at all, null after a refusal.
+fn pickBin(card: Card, inst: []const u8, model: []const u8, models: []const ModelCard, over: []const Override, refusals: *Refusals) Allocator.Error!??ModelCard {
+    var any = false;
+    for (models) |m| {
+        if (!(std.mem.startsWith(u8, m.name, model) and m.name.len > model.len + 1 and m.name[model.len] == '.')) continue;
+        any = true;
+    }
+    if (!any) return @as(?ModelCard, null);
+    // The card's L and W, numbers: the bin is chosen here, before elaboration.
+    var lw: [2]f64 = undefined;
+    for ([_][]const u8{ "l", "w" }, &lw) |key, *dst| {
+        const o = for (over) |o| {
+            if (std.mem.eql(u8, o.name, key)) break o;
+        } else {
+            try refusals.add(card, "`{s}`: `{s}` is a binned model (`.model {s}.N`), chosen by the card's L and W, and the card gives no {s}", .{ inst, model, model, key });
+            return null;
+        };
+        dst.* = switch (o.value) {
+            .num => |v| v,
+            .expr => {
+                try refusals.add(card, "`{s}`: `{s}` is a binned model (`.model {s}.N`), chosen by the card's L and W, and its {s} is an expression", .{ inst, model, model, key });
+                return null;
+            },
+        };
+    }
+    for (models) |m| {
+        if (!(std.mem.startsWith(u8, m.name, model) and m.name.len > model.len + 1 and m.name[model.len] == '.')) continue;
+        // lmin, lmax, wmin, wmax; a bound the card does not give is open.
+        var b = [4]f64{ 0, std.math.inf(f64), 0, std.math.inf(f64) };
+        var mit = tokens(m.card.text);
+        for (0..3) |_| _ = mit.next(); // `.model name type`
+        while (mit.next()) |t| {
+            const eq = std.mem.indexOfScalar(u8, t, '=') orelse continue;
+            const k = binBound(t[0..eq]) orelse continue;
+            b[@backingInt(k)] = spiceNumber(t[eq + 1 ..]) orelse {
+                try refusals.add(card, "`{s}`: the bound `{s}` of the bin `.model {s}` is not a number", .{ inst, t, m.name });
+                return null;
+            };
+        }
+        if (b[0] <= lw[0] and lw[0] < b[1] and b[2] <= lw[1] and lw[1] < b[3]) return @as(?ModelCard, m);
+    }
+    try refusals.add(card, "`{s}`: no bin of the binned model `{s}` (`.model {s}.N`) holds L={d}, W={d}", .{ inst, model, model, lw[0], lw[1] });
+    return null;
+}
+
+/// Emits the instance an X card is: `Xname n1 ... nk subckt [PARAMS:] [k=v
+/// ...]`, an instance of the subcircuit (or any module or paramset of the
+/// design) `subckt`, connected by position (E.2: subcircuits "are treated as
+/// module definitions"), each `k=v` an override of its parameter, a number
+/// or a `{expr}` over `scope`, and `M=` E.4.1's `$mfactor`.
+fn emitSubcktCard(
+    arena: Allocator,
+    out: *std.ArrayList(u8),
+    card: Card,
+    inst: []const u8,
+    it: *Tokens,
+    scope: []const []const u8,
+    refusals: *Refusals,
+) Allocator.Error!void {
+    var plain: std.ArrayList([]const u8) = .empty;
+    var over: std.ArrayList(Override) = .empty;
+    while (it.next()) |t| {
+        if (std.mem.eql(u8, t, "params:")) continue;
+        const eq = std.mem.indexOfScalar(u8, t, '=') orelse {
+            if (over.items.len != 0)
+                return refusals.add(card, "`{s}`: the field `{s}` after its parameters is not read", .{ inst, t });
+            try plain.append(arena, t);
+            continue;
+        };
+        try setOverride(arena, &over, t[0..eq], try paramValue(arena, t, eq, inst, card, refusals, scope) orelse return);
+    }
+    const sub = plain.pop() orelse return refusals.add(card, "`{s}` names no subcircuit", .{inst});
+    try emitInstance(arena, out, sub, over.items, inst, plain.items);
+}
+
+/// `   module #(.k(v), ...) inst(n1, ...);`, `m` written as `$mfactor`.
+fn emitInstance(arena: Allocator, out: *std.ArrayList(u8), module: []const u8, params: []const Override, inst: []const u8, nodes: []const []const u8) Allocator.Error!void {
     try out.print(arena, "   {s} ", .{try spell(arena, module)});
-    if (params.items.len != 0) {
+    if (params.len != 0) {
         try out.appendSlice(arena, "#(");
-        for (params.items, 0..) |p, i| {
+        for (params, 0..) |p, i| {
             if (i != 0) try out.appendSlice(arena, ", ");
             const name = if (std.mem.eql(u8, p.name, "m")) "$mfactor" else try spell(arena, p.name);
-            try out.print(arena, ".{s}({f})", .{ name, num(p.value) });
+            try out.print(arena, ".{s}({f})", .{ name, p.value });
         }
         try out.appendSlice(arena, ") ");
     }
     try out.print(arena, "{s}(", .{try spell(arena, inst)});
-    for (plain.items[0..nodes], 0..) |n, i| try out.print(arena, "{s}{s}", .{ if (i == 0) "" else ", ", try spell(arena, n) });
+    for (nodes, 0..) |n, i| try out.print(arena, "{s}{s}", .{ if (i == 0) "" else ", ", try spell(arena, n) });
     try out.appendSlice(arena, ");\n");
 }
 
 /// Sets `name` in `list`, replacing an earlier value: a later assignment of
 /// one parameter wins, as an instance's does over its model card's.
-fn setOverride(arena: Allocator, list: *std.ArrayList(Override), name: []const u8, value: f64) Allocator.Error!void {
+fn setOverride(arena: Allocator, list: *std.ArrayList(Override), name: []const u8, value: Value) Allocator.Error!void {
     for (list.items) |*o| if (std.mem.eql(u8, o.name, name)) {
         o.value = value;
         return;
@@ -765,20 +958,35 @@ fn setOverride(arena: Allocator, list: *std.ArrayList(Override), name: []const u
     try list.append(arena, .{ .name = name, .value = value });
 }
 
-/// The number `t[eq + 1 ..]` of the parameter assignment `t`, or null after
-/// recording why it is not one (a `{expr}`, a name).
-fn paramValue(t: []const u8, eq: usize, inst: []const u8, card: Card, refusals: *Refusals) Allocator.Error!?f64 {
+/// The value `t[eq + 1 ..]` of the parameter assignment `t`: a number, or a
+/// `{expr}` over `scope`; null after recording why it is neither.
+fn paramValue(arena: Allocator, t: []const u8, eq: usize, inst: []const u8, card: Card, refusals: *Refusals, scope: []const []const u8) Allocator.Error!?Value {
     const v = t[eq + 1 ..];
     if (eq == 0 or v.len == 0) {
         try refusals.add(card, "`{s}`: `{s}` is not a parameter assignment", .{ inst, t });
         return null;
     }
-    if (spiceNumber(v)) |n| return n;
-    if (v[0] == '{' or v[0] == '\'')
-        try refusals.add(card, "`{s}`: the expression value `{s}` is not read; write a number", .{ inst, v })
-    else
-        try refusals.add(card, "`{s}`: the value `{s}` of `{s}` is not a number", .{ inst, v, t[0..eq] });
+    if (spiceNumber(v)) |n| return .{ .num = n };
+    if (v[0] == '{' or v[0] == '\'') return exprValue(arena, v, inst, card, refusals, scope);
+    try refusals.add(card, "`{s}`: the value `{s}` of `{s}` is not a number", .{ inst, v, t[0..eq] });
     return null;
+}
+
+/// The `{expr}` or `'expr'` field `v` as a `Value`, or null after recording
+/// why `expression` does not read it.
+fn exprValue(arena: Allocator, v: []const u8, inst: []const u8, card: Card, refusals: *Refusals, scope: []const []const u8) Allocator.Error!?Value {
+    const close: u8 = if (v[0] == '{') '}' else '\'';
+    if (v.len < 2 or v[v.len - 1] != close) {
+        try refusals.add(card, "`{s}`: the expression value `{s}` does not end in `{c}`", .{ inst, v, close });
+        return null;
+    }
+    switch (try expression(arena, v[1 .. v.len - 1], scope)) {
+        .text => |text| return .{ .expr = text },
+        .refused => |why| {
+            try refusals.add(card, "`{s}`: the expression value `{s}` {s}", .{ inst, v, why });
+            return null;
+        },
+    }
 }
 
 /// A card value as Verilog-AMS source: `{d}`'s plain decimal, except an
@@ -796,25 +1004,26 @@ const Num = struct {
 };
 
 /// A device card's one positional value, with nothing after it, or null after
-/// recording why not: a model name (`R1 A B RMOD`), a `{expr}`, a missing
-/// value, or a trailing field (`TC=...`, `AC 1`) whose meaning would be
-/// dropped.
+/// recording why not: a model name (`R1 A B RMOD`), an expression
+/// `expression` does not read, a missing value, or a trailing field (`TC=...`,
+/// `AC 1`) whose meaning would be dropped.
 fn cardValue(
+    arena: Allocator,
     t: ?[]const u8,
-    it: *std.mem.TokenIterator(u8, .any),
+    it: *Tokens,
     inst: []const u8,
     card: Card,
     refusals: *Refusals,
-) Allocator.Error!?f64 {
+    scope: []const []const u8,
+) Allocator.Error!?Value {
     const v = t orelse {
         try refusals.add(card, "`{s}` has too few fields", .{inst});
         return null;
     };
-    const value = spiceNumber(v) orelse {
-        if (v[0] == '{' or v[0] == '\'')
-            try refusals.add(card, "`{s}`: the expression value `{s}` is not read; write a number", .{ inst, v })
-        else
-            try refusals.add(card, "`{s}`: the value `{s}` is not a number (a model-referenced card is not read)", .{ inst, v });
+    const value: Value = if (spiceNumber(v)) |n| .{ .num = n } else if (v[0] == '{' or v[0] == '\'')
+        try exprValue(arena, v, inst, card, refusals, scope) orelse return null
+    else {
+        try refusals.add(card, "`{s}`: the value `{s}` is not a number (a model-referenced card is not read)", .{ inst, v });
         return null;
     };
     if (it.next()) |extra| {
@@ -824,11 +1033,156 @@ fn cardValue(
     return value;
 }
 
+/// The functions a SPICE expression may call: each means the same in HSPICE
+/// and ngspice as in §4.3.1-4.3.2 (`log`, natural in SPICE and base 10 here, is
+/// not one).
+const expr_fns = [_][]const u8{ "sqrt", "exp", "abs", "min", "max", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "floor", "ceil" };
+
+/// What `expression` makes of a SPICE expression.
+const Expr = union(enum) {
+    /// Verilog-AMS source with the same value.
+    text: []const u8,
+    /// Why it is not read, to follow "the expression value `{...}`".
+    refused: []const u8,
+};
+
+/// A SPICE expression (the inside of `{...}` or `'...'`) as Verilog-AMS
+/// text. Read: numbers in SPICE's scaled notation, written as real literals
+/// (`1k` is `1e3`, and `1/3` is a third, not §4.2.1's integer 0); the names in
+/// `scope`, a subcircuit's parameters; `+ - * /`; `**`, HSPICE's power; unary
+/// `+` and `-`; parentheses; and the `expr_fns` calls. Power binds tighter
+/// than a unary minus on its left (`-2**2` is -4), and every operation is
+/// parenthesized, so the grammar's precedence is the text's. Anything else
+/// (`.param` names, `^`, comparisons, `?:`, other functions) is refused.
+fn expression(arena: Allocator, src: []const u8, scope: []const []const u8) Allocator.Error!Expr {
+    var p: ExprParser = .{ .arena = arena, .src = src, .scope = scope };
+    const text = try p.sum() orelse return .{ .refused = p.why.? };
+    p.skip();
+    if (p.i != src.len) return .{ .refused = try arena.print("has `{s}` after a complete expression", .{src[p.i..]}) };
+    return .{ .text = text };
+}
+
+/// `expression`'s recursive descent. Each rule returns its Verilog-AMS
+/// text, or null with `why` set.
+const ExprParser = struct {
+    arena: Allocator,
+    src: []const u8,
+    scope: []const []const u8,
+    i: usize = 0,
+    why: ?[]const u8 = null,
+
+    fn refuse(p: *ExprParser, comptime fmt: []const u8, args: anytype) Allocator.Error!?[]const u8 {
+        if (p.why == null) p.why = try p.arena.print(fmt, args);
+        return null;
+    }
+
+    fn skip(p: *ExprParser) void {
+        while (p.i < p.src.len and (p.src[p.i] == ' ' or p.src[p.i] == '\t')) p.i += 1;
+    }
+
+    /// Consumes `tok` after blanks when it is next. `*` is not taken from
+    /// the front of a `**`.
+    fn eat(p: *ExprParser, tok: []const u8) bool {
+        p.skip();
+        if (!std.mem.startsWith(u8, p.src[p.i..], tok)) return false;
+        if (std.mem.eql(u8, tok, "*") and std.mem.startsWith(u8, p.src[p.i..], "**")) return false;
+        p.i += tok.len;
+        return true;
+    }
+
+    /// sum := product (('+' | '-') product)*
+    fn sum(p: *ExprParser) Allocator.Error!?[]const u8 {
+        var acc = try p.product() orelse return null;
+        while (true) {
+            const op: []const u8 = if (p.eat("+")) "+" else if (p.eat("-")) "-" else return acc;
+            const rhs = try p.product() orelse return null;
+            acc = try p.arena.print("({s} {s} {s})", .{ acc, op, rhs });
+        }
+    }
+
+    /// product := unary (('*' | '/') unary)*
+    fn product(p: *ExprParser) Allocator.Error!?[]const u8 {
+        var acc = try p.unary() orelse return null;
+        while (true) {
+            const op: []const u8 = if (p.eat("*")) "*" else if (p.eat("/")) "/" else return acc;
+            const rhs = try p.unary() orelse return null;
+            acc = try p.arena.print("({s} {s} {s})", .{ acc, op, rhs });
+        }
+    }
+
+    /// unary := ('+' | '-') unary | power
+    fn unary(p: *ExprParser) Allocator.Error!?[]const u8 {
+        if (p.eat("-")) return try p.arena.print("(-{s})", .{try p.unary() orelse return null});
+        if (p.eat("+")) return p.unary();
+        return p.power();
+    }
+
+    /// power := atom ('**' unary)?
+    fn power(p: *ExprParser) Allocator.Error!?[]const u8 {
+        const base = try p.atom() orelse return null;
+        if (!p.eat("**")) return base;
+        return try p.arena.print("({s} ** {s})", .{ base, try p.unary() orelse return null });
+    }
+
+    /// atom := number | name | function '(' sum (',' sum)* ')' | '(' sum ')'
+    fn atom(p: *ExprParser) Allocator.Error!?[]const u8 {
+        p.skip();
+        if (p.i == p.src.len) return p.refuse("ends before an operand", .{});
+        const c = p.src[p.i];
+        if (c == '(') {
+            p.i += 1;
+            const e = try p.sum() orelse return null;
+            if (!p.eat(")")) return p.refuse("has a `(` with no `)`", .{});
+            return e;
+        }
+        if (std.ascii.isDigit(c) or c == '.') {
+            const start = p.i;
+            while (p.i < p.src.len and (std.ascii.isDigit(p.src[p.i]) or p.src[p.i] == '.')) p.i += 1;
+            // A complete exponent only, as `spiceNumber` reads one.
+            if (p.i + 1 < p.src.len and p.src[p.i] == 'e') {
+                var j = p.i + 1;
+                if (p.src[j] == '+' or p.src[j] == '-') j += 1;
+                if (j < p.src.len and std.ascii.isDigit(p.src[j])) {
+                    while (j < p.src.len and std.ascii.isDigit(p.src[j])) j += 1;
+                    p.i = j;
+                }
+            }
+            // The scale letter and any unit letters after it.
+            while (p.i < p.src.len and std.ascii.isAlphabetic(p.src[p.i])) p.i += 1;
+            const v = spiceNumber(p.src[start..p.i]) orelse return p.refuse("has `{s}`, which is not a number", .{p.src[start..p.i]});
+            return try p.arena.print("{e}", .{v});
+        }
+        if (std.ascii.isAlphabetic(c) or c == '_') {
+            const start = p.i;
+            while (p.i < p.src.len and (std.ascii.isAlphanumeric(p.src[p.i]) or p.src[p.i] == '_')) p.i += 1;
+            const name = p.src[start..p.i];
+            if (p.eat("(")) {
+                for (expr_fns) |f| {
+                    if (std.mem.eql(u8, f, name)) break;
+                } else return p.refuse("calls `{s}`, which is not one of sqrt, exp, abs, min, max, pow, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, floor, ceil", .{name});
+                var args: std.ArrayList(u8) = .empty;
+                while (true) {
+                    const a = try p.sum() orelse return null;
+                    if (args.items.len != 0) try args.appendSlice(p.arena, ", ");
+                    try args.appendSlice(p.arena, a);
+                    if (p.eat(",")) continue;
+                    if (p.eat(")")) break;
+                    return p.refuse("has a `{s}(` with no `)`", .{name});
+                }
+                return try p.arena.print("{s}({s})", .{ name, args.items });
+            }
+            for (p.scope) |s| if (std.mem.eql(u8, s, name)) return try spell(p.arena, name);
+            return p.refuse("reads `{s}`, which names no parameter in scope (the subcircuit's PARAMS: before it; a `.param` is not read)", .{name});
+        }
+        return p.refuse("has `{c}`, which is not read", .{c});
+    }
+};
+
 /// Reports whether `body` holds a card named `name`. An F/H card naming a V
 /// card the subcircuit does not declare is skipped like any unreadable card.
 fn declares(body: []const Card, name: []const u8) bool {
     for (body) |card| {
-        var it = std.mem.tokenizeAny(u8, card.text, " \t(),");
+        var it = tokens(card.text);
         if (std.mem.eql(u8, it.next() orelse continue, name)) return true;
     }
     return false;
@@ -859,21 +1213,25 @@ const ModelParams = struct {
 /// silence: E.2 makes "all aspects of SPICE primitives implementation
 /// dependent", E.4.2 makes model-card support "implementation specific", and
 /// E.1.2's remedy for a name mismatch is a user-written wrapper module, not a
-/// diagnostic.
+/// diagnostic. A value for a parameter the primitive does declare is a number
+/// or an expression over numbers (`expression` with no names: no `.param` is
+/// read), and anything else is refused, since dropping it keeps the default.
 fn modelParams(
     arena: Allocator,
     prim: []const u8,
-    it: *std.mem.TokenIterator(u8, .any),
-) Allocator.Error!ModelParams {
+    it: *Tokens,
+    model: []const u8,
+    card: Card,
+    refusals: *Refusals,
+) Allocator.Error!?ModelParams {
     // The card's `k=v` tail; `tightEquals` has joined HSPICE's `k = v`.
     var keys: std.ArrayList([]const u8) = .empty;
-    var vals: std.ArrayList(f64) = .empty;
+    var vals: std.ArrayList([]const u8) = .empty;
     while (it.next()) |t| {
         const at = std.mem.indexOfScalar(u8, t, '=') orelse continue;
         if (at == 0 or at + 1 == t.len) continue;
-        const v = spiceNumber(t[at + 1 ..]) orelse continue;
         try keys.append(arena, t[0..at]);
-        try vals.append(arena, v);
+        try vals.append(arena, t[at + 1 ..]);
     }
 
     var decls: std.ArrayList(u8) = .empty;
@@ -896,12 +1254,21 @@ fn modelParams(
         const bound = for (keys.items, vals.items) |k, v| {
             if (std.mem.eql(u8, k, name)) break v;
         } else null;
-        if (bound) |v| {
+        if (bound) |given| {
+            // A value for a parameter the primitive declares is read or
+            // refused, never dropped: dropping it would keep the default.
+            // An expression may read no name: no `.param` is in scope.
+            const v: Value = if (spiceNumber(given)) |n| .{ .num = n } else if (given[0] == '{' or given[0] == '\'')
+                try exprValue(arena, given, model, card, refusals, &.{}) orelse return null
+            else {
+                try refusals.add(card, "`.model {s}`: the value `{s}` of `{s}` is not a number", .{ model, given, name });
+                return null;
+            };
             // Everything from the `from` range on is kept: §3.4.2's range is part
             // of the declaration, not of the default it replaces.
             const rest = line[eq + 1 ..];
             const tail = if (std.mem.indexOf(u8, rest, " from ")) |f| rest[f..] else ";";
-            try decls.print(arena, "   {s} = {f}{s}\n", .{ head, num(v), tail });
+            try decls.print(arena, "   {s} = {f}{s}\n", .{ head, v, tail });
         } else {
             try decls.print(arena, "   {s}\n", .{line});
         }
@@ -1203,11 +1570,13 @@ test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" 
     // list: three ports, in card order, or §6.5.4's ordered binding is wrong.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module flt(a, \\1 , b);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical a, \\1 , b;") != null);
-    // A parameter assignment is outside the claimed subset (E.1.2).
+    // A parameter assignment ends the port list: it is a module parameter
+    // (HSPICE's PARAMS:, VD-012), not a port.
     const p = try synthesize(arena, ".SUBCKT X N1 N2 PARAMS: W=2\n.ENDS\n", "");
-    try std.testing.expectEqual(@as(u32, 0), p.modules);
-    try std.testing.expectEqual(@as(usize, 1), p.refused.len);
-    try std.testing.expect(std.mem.indexOf(u8, p.refused[0].why, "`params:`") != null);
+    try std.testing.expectEqual(@as(u32, 1), p.modules);
+    try std.testing.expectEqual(@as(usize, 0), p.refused.len);
+    try std.testing.expect(std.mem.indexOf(u8, p.text, "module x(n1, n2);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, p.text, "   parameter real w = 2;") != null);
 }
 
 test "an unrecognised model type, a repeat and an empty netlist all contribute nothing" {
@@ -1247,7 +1616,7 @@ test "E.3.1 the four controlled sources inside a .SUBCKT, and the V card an F or
     , "");
     for ([_][]const u8{
         "branch (a, x) vs;",
-        "V(vs) <+ 0;",
+        "V(vs) <+ $simparam(\"sourceScaleFactor\") * 0;",
         "V(b, \\0 ) <+ 2 * V(a, x);",
         "I(c, \\0 ) <+ 3 * V(a, x);",
         "I(d, \\0 ) <+ 4 * I(vs);",
@@ -1341,6 +1710,97 @@ test "E.2 a card whose model is a Table E.1 semiconductor is E0953; a binned mod
     try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "binned") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[2].why, "{len}") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[3].why, "`off`") != null);
+}
+
+test "PARAMS: on a .SUBCKT, {expr} values over them, and X cards instantiating a subcircuit" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.SUBCKT RDIV IN OUT GND PARAMS: RTOP=1K RBOT={3*RTOP}
+        \\R1 IN OUT { RTOP }
+        \\R2 OUT GND 'RBOT'
+        \\R3 OUT GND {max(RTOP, 2k)}
+        \\.ENDS
+        \\.SUBCKT TWO A B
+        \\X1 A MID 0 RDIV PARAMS: RTOP=2K
+        \\X2 MID B 0 RDIV M=2
+        \\.ENDS
+    , "");
+    try std.testing.expectEqual(@as(usize, 0), s.refused.len);
+    try std.testing.expectEqual(@as(u32, 2), s.modules);
+    for ([_][]const u8{
+        "   parameter real rtop = 1000;",
+        // A default may read the parameters before it; numbers are real.
+        "   parameter real rbot = (3e0 * rtop);",
+        // A brace or quote holds its blanks, parentheses and commas.
+        "   resistor #(.r(rtop)) r1(in, out);",
+        "   resistor #(.r(rbot)) r2(out, gnd);",
+        "   resistor #(.r(max(rtop, 2e3))) r3(out, gnd);",
+        "   rdiv #(.rtop(2000)) x1(a, mid, \\0 );",
+        "   rdiv #(.$mfactor(2)) x2(mid, b, \\0 );",
+        // SPICE's node 0 is the global ground, not a local net.
+        "   electrical \\0 ;\n   ground \\0 ;\n",
+    }) |want| {
+        if (std.mem.indexOf(u8, s.text, want) == null) {
+            std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, s.text });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // A name that is not a parameter before it is refused at the card.
+    const bad = try synthesize(arena, ".SUBCKT R A B PARAMS: X={Y}\n.ENDS\n", "");
+    try std.testing.expectEqual(@as(usize, 1), bad.refused.len);
+    try std.testing.expect(std.mem.indexOf(u8, bad.refused[0].why, "reads `y`") != null);
+}
+
+test "SPICE expressions: real arithmetic, power over a unary minus, and what is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Case = struct { []const u8, []const u8 };
+    for ([_]Case{
+        // `1/3` is a third: §4.2.1 would make `1 / 3` an integer 0.
+        .{ "1/3", "(1e0 / 3e0)" },
+        .{ "-2**2", "(-(2e0 ** 2e0))" },
+        .{ "2**-1", "(2e0 ** (-1e0))" },
+        .{ "max(1k, w)*2", "(max(1e3, w) * 2e0)" },
+        .{ " w - 1u - 2 ", "((w - 1e-6) - 2e0)" },
+    }) |c| try std.testing.expectEqualStrings(c[1], (try expression(arena, c[0], &.{"w"})).text);
+    for ([_][]const u8{ "log(2)", "w^2", "v", "1 +", "(w", "w ? 1 : 2" }) |bad|
+        try std.testing.expect((try expression(arena, bad, &.{"w"})) == .refused);
+}
+
+test "E.4.2 a card naming a binned model instantiates the bin that holds its L and W" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.MODEL NCH.1 MYFET KP=1E-3 LMIN=0 LMAX=0.5
+        \\.MODEL NCH.2 MYFET KP=3E-3 LMIN=0.5 LMAX=2 WMIN=1
+        \\.SUBCKT CELL2 D G S B
+        \\M1 D G S B NCH W=2 L=0.5
+        \\M2 D G S B NCH W=2 L=0.25
+        \\M3 D G S B NCH W=2 L=3
+        \\M4 D G S B NCH L=1
+        \\.ENDS
+    , "");
+    // lmin <= L < lmax: 0.5 is the second bin's, 0.25 the first's; the
+    // bounds select and are not forwarded.
+    for ([_][]const u8{
+        "   myfet #(.kp(0.003), .w(2), .l(0.5)) m1(d, g, s, b);",
+        "   myfet #(.kp(0.001), .w(2), .l(0.25)) m2(d, g, s, b);",
+    }) |want| {
+        if (std.mem.indexOf(u8, s.text, want) == null) {
+            std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, s.text });
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), s.refused.len);
+    try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "no bin of the binned model `nch`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "gives no w") != null);
 }
 
 test "a card value at or past 2^31 that is integral is spelled real" {

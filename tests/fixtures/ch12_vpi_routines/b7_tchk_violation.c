@@ -9,25 +9,28 @@
  *          callbacks are the reason, cb_rtn, and user_data". "For
  *          cbTchkViolation callbacks, the obj field shall be a handle to the
  *          timing check."
- * cbTchkViolation is IEEE 1364-2005 Annex G's 14; src/vpi/vpi_user.h does not
- * define it, so this file does, with that number.
+ * cbTchkViolation is IEEE 1364-2005 Annex G's 14, as src/vpi/vpi_user.h
+ * defines it; the guard below keeps the file building against a header
+ * without it.
  *
  * DERIVATION (b7_specify.v's header): u1's $setup(d, posedge clk, 5, notif)
- * sees its data event at 3 and its reference event at 5; 5 - 3 = 2 < 5 is
- * one violation, at t=5, in u1 only (u2's clk2 never rises). So exactly one
- * cbTchkViolation, at t=5, with obj u1's $setup.
+ * sees its data events at 0 (x -> 0) and 3 (0 -> 1) and its reference event
+ * at 5 (clk 0 -> 1; clk's x -> 0 at 0 is a negedge, IEEE 1364-2005 15.4).
+ * 15.2.1: a violation when "(timecheck time) - limit < (timestamp time) <
+ * (timecheck time)", the timestamp the last data event before the
+ * timecheck: 5 - 5 = 0 < 3 < 5 is one violation, at t=5, in u1 only (u2's
+ * clk2 never rises). So exactly one cbTchkViolation, at t=5, with obj u1's
+ * $setup.
  *
- * KNOWN GAP: VerA refuses the reason ("not a reason VerA can deliver",
- * src/vpi/callback.zig), and its digital engine applies no specify block
- * (W0251), so no violation is ever detected. build.zig's vpi_runs pins the
- * refusal as `.xfail`. Only the ledger rows are cited, not the bare clause,
- * because a vpi_runs entry counts for --coverage whether or not it is an
- * xfail.
+ * CENSUS: setup 2, eoc 6 (p02_by_name is a CHECK and an expect_no_error),
+ * on_violation 3 at its one call, eos 1: checks=12.
  */
 
+//! lrm 12.31.4
 //! lrm 12.31.4:1
 //! lrm 12.31.4:2
 //! lrm 12.31.4:5
+//! inherited IEEE 1364-2005 15.2.1
 
 #include "../ch11_vpi/p02_check.h"
 

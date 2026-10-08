@@ -428,7 +428,7 @@ fn addAnalog(
                 found = i;
             }
             const b = found orelse continue;
-            try bindRow(objects, b, c, idx);
+            try bindRow(objects, b, c, idx, null);
             const bc = try objects.coldFor(b);
             bc.flow_unknowable = bc.flow_unknowable or twice;
             continue;
@@ -495,13 +495,17 @@ fn unnamedBranch(
             try scopes[scope].branches.append(gpa, at);
             g.value_ptr.* = at;
         }
-        try bindRow(objects, g.value_ptr.*, c, idx);
+        // §5.4.1 the instance's own share of a row others share too.
+        const share: ?u32 = for (lowered.contrib_shares.items, 0..) |sh, s| {
+            if (sh.row == idx and sh.unit == unit) break @intCast(s);
+        } else null;
+        try bindRow(objects, g.value_ptr.*, c, idx, share);
     }
 }
 
 /// Record contribution row `k` as the source of branch `at`'s potential or
-/// flow.
-fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32) Error!void {
+/// flow; `share`, its `Lowered.contrib_shares` entry when `k` is shared.
+fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32, share: ?u32) Error!void {
     const unnamed = objects.hot.items[at].full.len == 0;
     const b = try objects.coldFor(at);
     if (unnamed) {
@@ -512,7 +516,11 @@ fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32) Error!v
         .potential => b.contrib_pot = k,
         .flow => {
             b.contrib_flow = k;
-            if (c.shared) b.flow_unknowable = true;
+            b.contrib_share = share;
+            // A named branch's row is that branch's alone, however many
+            // instances contribute to it (§5.6.8.2); an unnamed one's is
+            // every instance's over the pair, so it needs the share.
+            if (unnamed and c.shared and share == null) b.flow_unknowable = true;
         },
     }
 }

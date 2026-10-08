@@ -45,7 +45,9 @@
 // `noiseTablePoints(model)` hook beside it carries the card's own knots, which
 // `contract.validateHost` makes a linking host declare it reads. So the
 // override is REPRESENTABLE; it is still untested here, for the `//! param`
-// reason above, and the later fixture is still owed.
+// reason above. a06_noise_table_card_knots.va pins the card's knots reaching
+// a host (the row's `noise_table_points__`, `contract.noiseTable`) with a
+// pattern of SCALAR parameters, which `//! param` can bind.
 //
 // The `//! noise` line is the main assertion: the device publishes the three
 // knots of the array parameter's default. The CHECK reads the last knot's

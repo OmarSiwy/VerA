@@ -27,7 +27,7 @@
 //   wc   `assign #3 wc = a;`                 `# delay_value` on an assign
 //   wp   `assign #d wp = a;`, d = 4          delay_value as an identifier
 // The same delay on a net_decl_assignment, `wire #(2, 6) wd = a;`, is
-// b8_net_decl_assignment_refused.va's (an xfail).
+// b8_net_decl_assignment_drives_net.va's.
 //
 // DERIVATION (`timescale 1ns/1ns). a = 0 from 1 ns, 1 from 11 ns, 0 from 31 ns.
 // The x -> 0 at 1 ns settles every net by 7 ns. Rising edges land at wr 13,

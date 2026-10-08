@@ -23,6 +23,11 @@
 // The other sentence of §7.3.7 — no DIGITAL function called from analog — is
 // still masked; digital_function_from_analog_unsupported.va records why.
 //
+// Corrected 2026-10-08 (construct only, the pins are unchanged): the formal
+// was `input real value;`, which A.2.6 does not derive for an analog function
+// (E0291, a parse error that would have stopped the compile before E0430). It
+// is now `input value; real value;`, 4.7.1's spelling.
+//
 //! lrm 7.3.7
 //! lrm 4.7.3
 //! lrm 4.7.3:2
@@ -32,7 +37,8 @@
 module ch7_analog_function_from_digital;
   real sampled;
   analog function real analog_scale;
-    input real value;
+    input value;
+    real value;
     analog_scale = 2.0 * value;
   endfunction
   initial sampled = analog_scale(1.0);

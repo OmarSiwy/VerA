@@ -288,6 +288,27 @@ fn compileAnalog(
     if (cli.codegen_flag == null) return 0;
     if (cli.emit_verilog) return emitVerilog(io, cli, &result, tb_arena.allocator(), in_path, out, err);
 
+    // OSDI 0.4 has no slot for a step-rejection request or for two noise
+    // rows of one §4.6.4.6 generator (VD-102): named before a library is built.
+    if (cli.emit_osdi) {
+        if (result.lowered.reject_step != .undef)
+            try bag.add(.codegen, .E1099, .none, "`$vera_reject_step` asks the host to reject a step, and an OSDI 0.4 library has no slot to carry the request", .{});
+        // `plan/noise.zig`'s rule: a generator id in two contributions is
+        // one source in two rows.
+        const shared = blk: {
+            const cs = result.lowered.contributions.items;
+            for (cs, 0..) |c, i| for (c.noise_srcs) |s| {
+                if (s.kind == .ac_stim) continue;
+                for (cs[i + 1 ..]) |d| for (d.noise_srcs) |t| {
+                    if (t.id == s.id) break :blk true;
+                };
+            };
+            break :blk false;
+        };
+        if (shared) try bag.add(.codegen, .W1098, .none, "two noise rows share one generator (§4.6.4.6), and OSDI 0.4 has no slot for their correlation: this library's noise analysis treats them as independent sources", .{});
+        if (bag.failed()) return 1;
+    }
+
     // The catalogue that consumes the generated file keys devices by the name
     // the BUILD chose, while the netlist dispatch and the generated type name
     // come from the MODULE name. A mismatch silently breaks lookup, so it is

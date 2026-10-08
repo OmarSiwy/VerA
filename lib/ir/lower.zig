@@ -826,6 +826,27 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // After `finishDisplays`: a deferred display operand appends its
     // `branch_reads` there, and §1.3.1's probe test has to see every read.
     try lower_contrib.checkProbeBranches(self);
+    // Last, so no value numbered above moves.
+    try self.readShareFinals();
+}
+
+/// §5.4.1 each instance's share of a shared row (`unit_accum`) at the end of
+/// the block, sorted by row then unit, into `Lowered.contrib_shares`.
+fn readShareFinals(self: *Lower) Oom!void {
+    const out = &self.out.contrib_shares;
+    try out.ensureTotalCapacity(self.arena, self.unit_accum.count());
+    var it = self.unit_accum.keyIterator();
+    while (it.next()) |k| out.appendAssumeCapacity(.{ .row = k.row, .unit = k.unit });
+    std.mem.sortUnstable(Lowered.ContribShare, out.items, {}, struct {
+        fn lt(_: void, a: Lowered.ContribShare, b: Lowered.ContribShare) bool {
+            return a.row < b.row or (a.row == b.row and a.unit < b.unit);
+        }
+    }.lt);
+    for (out.items) |*sh| {
+        const pa = self.unit_accum.get(.{ .row = sh.row, .unit = sh.unit }).?;
+        sh.resist_val = try self.builder.readVariable(pa.resist, self.cur);
+        sh.react_val = try self.builder.readVariable(pa.react, self.cur);
+    }
 }
 
 /// Reads each contribution's accumulators from `from` on at the end of the

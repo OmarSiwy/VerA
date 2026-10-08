@@ -18,6 +18,9 @@ usage: vera [options] FILE.va
   --check                 type-check the generated device with zig, running
                           the contract's conformance checks
   --emit-so               build lib<name>.<gen>.so via the orchestrator
+  --emit-osdi             build an OSDI 0.4 library (ngspice `pre_osdi`) of a
+                          .va: --emit-so under this vera's tools/osdi_dyn.zig,
+                          copied to -o PATH (default <module>.osdi); print it
   --emit-exe              build a runnable Verilog-A testbench,
                           or a .v design's executable; print its path
                           (--emit-zig, --check and --emit-so of a .v build its
@@ -38,7 +41,11 @@ usage: vera [options] FILE.va
                           whose file_path_spec matches it, else `work`
   -L LIB                  search LIB for an instance's cell (repeatable, in
                           order; IEEE 1364 §13.7.1); default: map order, then work
-  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
+  --display=record|drop|emit
+                          ch9 display tasks: recorded by the device's `say`
+                          for its host to print (default), void, or
+                          printed (--emit-exe's default; with record the
+                          testbench prints the device's records)
   --jac-f32               mark the device as tolerating an f32 Jacobian
   --jac-f32-host          ...and ask the host to use it on its CPU path
   --validate-contract     run the contract's conformance checks (validate,

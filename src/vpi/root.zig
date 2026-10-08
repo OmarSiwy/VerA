@@ -498,13 +498,18 @@ pub const Cold = struct {
     /// row's value is). Both null is an open branch, which carries no flow.
     contrib_pot: ?u32 = null,
     contrib_flow: ?u32 = null,
+    /// `.branch`: when `contrib_flow` is a row several instances share, this
+    /// instance's own share of it, by `Lowered.contrib_shares` index: the
+    /// flow §12.10 reads (§5.4.1).
+    contrib_share: ?u32 = null,
     /// `.branch`: the terminal rows, `Lower.ground` for the reference node.
     hi_row: u16 = Lower.ground,
     lo_row: u16 = Lower.ground,
     /// `.branch`: its flow row absorbed another instance's `<+`
-    /// (`Contribution.shared`), or a named branch whose rows could not be told
-    /// from a sibling's over the same pair — either way its own share of the
-    /// flow is not a number this model holds.
+    /// (`Contribution.shared`) and holds no share of this instance's (it
+    /// drives the pair only through another's branch, §5.6.8.2), or a named
+    /// branch whose rows could not be told from a sibling's over the same
+    /// pair: either way its own flow is not a number this model holds.
     flow_unknowable: bool = false,
     /// `.branch`: a declared branch whose (pos, neg) is the reverse of its
     /// source row's canonical pair — its flow is the row's, negated

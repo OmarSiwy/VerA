@@ -38,7 +38,9 @@ scheduler instead, which inserts the time points events ask for; see
 
 The residual is the current each unknown's row sums to (here 1 mA leaves `p`
 and enters `n`), and the Jacobian is its derivative with respect to each
-unknown. `--param` overrides a parameter for one run:
+unknown. `--param` overrides a parameter for one run. Its value is a plain
+number: a scale factor such as `4k` is source syntax (LRM §2.6.2), not a
+command-line one, and VerA refuses it:
 
 ```console
 {{#include ../examples/testbenches/param.out}}
@@ -114,14 +116,20 @@ own:
 | `//! print none\|residual` | whether to print the residual and Jacobian after each point |
 | `//! spice <card>` | an LRM Annex E SPICE card the source is compiled against, as `--spice` would read it |
 | `//! discipline-resolution basic\|detail` | LRM §7.4.4's mode, as `--discipline-resolution` |
+| `//! display record` | build the device with `--display=record`: it records its `$strobe` and other display output for the host, and the testbench prints the records (LRM §9.4) |
 
 These assert what a device **publishes** to a host, and print a `got=/want=
-ok=` line each: `//! noise` (the noise sources, LRM §4.6.4), `//! acstim` (AC
-stimuli, LRM §4.6.3), `//! acdyn` (a small-signal admittance term), `//!
-qsite` (the charge sites and their truncation-error flag, LRM §5.6.1.2),
-`//! seed` (the `$limit` cold-start values, LRM §9.17.3), `//! abstol` (the
-tolerance of an unknown, LRM §3.6.1.2) and `//! limit` (a `$limit` clamp,
-old values to new). Their exact syntax is in the header of
+ok=` line each: `//! noise` (the noise sources, LRM §4.6.4, with their
+densities and, as `corr=<row>:<rho>`, the correlation coefficient between
+two rows, LRM §4.6.4.6), `//! acstim` (AC stimuli, LRM §4.6.3), `//! acdyn`
+(a small-signal admittance term), `//! qsite` (the charge sites and their
+truncation-error flag, LRM §5.6.1.2), `//! seed` (the `$limit` cold-start
+values, LRM §9.17.3), `//! abstol` (the tolerance of an unknown, LRM
+§3.6.1.2), `//! meta` (the `desc` and `units` a declaration publishes, LRM
+§2.9.2) and `//! limit` (a `$limit` clamp, old values to new). `noise`,
+`acstim`, `qsite`, `seed` and `meta` also take `none`: the device publishes
+no such row, which is a claim, where an absent directive claims nothing.
+Their exact syntax is in the header of
 [`lib/backend/tb/directive.zig`](https://github.com/OmarSiwy/VerA/blob/main/lib/backend/tb/directive.zig).
 
 ## Directives the fixture suite grades
@@ -133,15 +141,21 @@ under `tests/fixtures/` through the same testbench and grades it by these.
 | Directive | Meaning |
 |---|---|
 | `//! reject SUBSTRING` | the source must fail to compile, with a diagnostic containing SUBSTRING (name the code: a bare `//! reject` matches anything) |
+| `//! reject-only CODE` | as `reject`, and that diagnostic must be the only error, so the fixture isolates one rule |
+| `//! neighbour FILE` | with a refusal: the legal variant of the same source, which must compile and pass. It tells a real restriction from a blanket refusal |
+| `//! reject-run CODE` | the source compiles, and the *run* must refuse: exit nonzero (1 unless `//! exit` says) with an `error[` line containing CODE and no other |
 | `//! warn SUBSTRING` | the compile must report a warning containing SUBSTRING, and still run |
 | `//! nowarn` | the compile must report no warning |
 | `//! checks N` | exactly N `ok=` verdicts must be printed, all `ok=1` |
 | `//! exit N` | the testbench's expected exit status |
 | `//! xfail REASON` | a known gap: the fixture states the LRM correctly and VerA does not meet it yet. The suite fails if it unexpectedly passes |
 | `//! lrm 5.6.1` | the LRM clause the fixture tests, counted by `--coverage` |
+| `//! lrm 5.6.1:2` | one normative sentence of the clause (the second), a row of the requirement ledger `tests/fixtures/OBLIGATIONS.tsv` |
 | `//! inherited IEEE 1364-2005 9.2` | the same, for a clause the LRM inherits from IEEE 1364 |
+| `//! fd-exempt REASON` | the derivative and finiteness certificates (`benchmark -- --certify`) do not apply, for the stated reason |
 
-`AGENTS.md` §6 in the repository is the contributor's guide to writing one.
+`AGENTS.md` §6 and `docs/TESTING.md` in the repository are the contributor's
+guide to writing one.
 
 ## Running a testbench by hand
 

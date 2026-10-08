@@ -29,6 +29,13 @@
 // The refusal neighbour is zi_negative_transition_time_rejected.va (τ < 0);
 // 24_z_transform_filters.va is the τ/t0-free form.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+//
 //! lrm 4.5.12
 //! analysis tran
 //! time 0, 0.5n, 1n, 1.5n, 2n, 2.5n, 3n, 3.5n, 4n
@@ -40,8 +47,8 @@ module zi_transition_time_and_first_transition(in, n);
   inout in, n; electrical in, n;
   real ramp, step;
   analog begin
-    ramp = zi_nd(V(in, n), {1.0}, {1.0}, 2n, 1n, 1n);
-    step = zi_nd(V(in, n), {1.0}, {1.0}, 2n, 0, 1n);
+    ramp = zi_nd(V(in, n), '{1.0}, '{1.0}, 2n, 1n, 1n);
+    step = zi_nd(V(in, n), '{1.0}, '{1.0}, 2n, 0, 1n);
     `CHECK("tau = 1n: a linear transition from each sample",
            ramp - (($abstime > 3.75n) ? 4.0 : ($abstime > 3.25n) ? 3.0 : ($abstime > 1.75n) ? 2.0 : ($abstime > 1.25n) ? 1.5 : 1.0),
            0.0, 1e-9);

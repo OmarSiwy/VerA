@@ -1,0 +1,27 @@
+// `vera_nodiff` (VerA's attribute, LRM §2.9): an assignment under it stores
+// its value with no derivative, the frozen coefficient a SPICE load stamps.
+// ddx (LRM §4.5.6) reads the derivative the device computes. At V(a) = 0.5,
+// V(b) = 0:
+//
+//   c  = V(a,b)^2 = 0.25         ddx(c,  V(a)) = 2 * 0.5 = 1
+//   cs = c, under vera_nodiff    ddx(cs, V(a)) = 0, the same value 0.25
+//
+// The current is cs * V(a,b). The stop is on cs only, so the product keeps
+// V(a,b)'s lane: ddx(cs * V(a,b), V(a)) = cs = 0.25. Without the attribute it
+// would be d(V^3)/dV = 3 * V(a)^2 = 0.75.
+//! bias V(a) = 0.5
+//! print none
+`include "disciplines.vams"
+
+module frozen(a, b);
+  inout a, b;
+  electrical a, b;
+  real c, cs;
+  analog begin
+    c = V(a, b) * V(a, b);
+    (* vera_nodiff *) cs = c;
+    I(a, b) <+ cs * V(a, b);
+    $strobe("c = %g  ddx(c) = %g  cs = %g  ddx(cs) = %g", c, ddx(c, V(a)), cs, ddx(cs, V(a)));
+    $strobe("dI/dV(a) = %g  (without the attribute: %g)", ddx(cs * V(a, b), V(a)), ddx(c * V(a, b), V(a)));
+  end
+endmodule

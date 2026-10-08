@@ -111,6 +111,7 @@ pub fn emitDispatchers(self: *Gen) Error!void {
 /// source's flow unknown, -1 for ground or none). A §11.6.7 flow-source flow
 /// is its row value plus d/dt of the reactive half, which the host forms.
 /// Reads `core` as `eval` and `q` do, so the numbers are the residual's own.
+/// Then `vpiShares` and `vpi_share_row` when instances share a row.
 fn emitVpiContribs(self: *Gen) Error!void {
     const cs = self.lowered.contributions.items;
     try self.w("/// Clause 12 (`Options.vpi_contribs`): the §5.6 contribution rows.\n", .{});
@@ -123,8 +124,22 @@ fn emitVpiContribs(self: *Gen) Error!void {
     try self.w(" }};\npub const vpi_contrib_flow_u = [_]i32{{", .{});
     for (self.names.branch_u) |u| try self.w(" {d},", .{if (u == none_u32) @as(i64, -1) else u});
     try self.w(" }};\n", .{});
-    try self.w("pub fn vpiContribs(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) [{d}][2]f64 {{\n", .{cs.len});
-    const uses_core = for (cs) |c| {
+    try emitVpiValues(self, "vpiContribs", cs);
+    // §5.4.1 one instance's flow is its own share of a row several share.
+    const ss = self.lowered.contrib_shares.items;
+    if (ss.len == 0) return;
+    try self.w("/// Clause 12: each instance's own share of a shared row, by\n/// `Lowered.contrib_shares` index; `vpi_share_row` is the row's.\n", .{});
+    try self.w("pub const vpi_share_row = [_]u32{{", .{});
+    for (ss) |sh| try self.w(" {d},", .{sh.row});
+    try self.w(" }};\n", .{});
+    try emitVpiValues(self, "vpiShares", ss);
+}
+
+/// Emits `pub fn <name>`, returning each item's `resist_val` and `react_val`
+/// read out of `core` (0.0 for a value the core does not return).
+fn emitVpiValues(self: *Gen, name: []const u8, items: anytype) Error!void {
+    try self.w("pub fn {s}(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) [{d}][2]f64 {{\n", .{ name, items.len });
+    const uses_core = for (items) |c| {
         if (coreIdx(self, self.an.rv(c.resist_val)) != null or coreIdx(self, self.an.rv(c.react_val)) != null) break true;
     } else false;
     if (uses_core)
@@ -132,7 +147,7 @@ fn emitVpiContribs(self: *Gen) Error!void {
     else
         try self.w("    _ = x;\n    _ = model;\n    _ = inst;\n    _ = sim;\n", .{});
     try self.w("    return .{{\n", .{});
-    for (cs) |c| {
+    for (items) |c| {
         try self.w("        .{{ ", .{});
         for ([_]Mir.Value{ c.resist_val, c.react_val }, 0..) |v, k| {
             if (k != 0) try self.w(", ", .{});

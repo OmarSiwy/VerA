@@ -23,6 +23,15 @@
 // Table 4-15 (audit R4, probe lzp_sin). It now folds every opcode through the
 // `fold` column of lib/ir/opcode.zig.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+// The empty `{}` zeros are now the null argument, which §4.5.11 gives the
+// same meaning: "The zeros argument may be represented as a null argument".
+//
 //! lrm 4.5.11.4
 //! lrm 4.5.11.1
 //! lrm 4.3.2
@@ -37,8 +46,8 @@ module ch04_laplace_trig_coeff(in, n);
     real y, z;
 
     analog begin
-        y = laplace_nd(V(in, n), {sin(w)}, {1.0});
-        z = laplace_zp(V(in, n), {}, {-1e3, 1e3*sin(w), -1e3, -1e3*sin(w)});
+        y = laplace_nd(V(in, n), '{sin(w)}, '{1.0});
+        z = laplace_zp(V(in, n), , '{-1e3, 1e3*sin(w), -1e3, -1e3*sin(w)});
         `CHECK("laplace_nd H(0) = n0/d0 = sin(pi/6) = 1/2", y, 0.5, 1e-15);
         `CHECKX("laplace_zp H(0) = 1 with sin() in its roots", z, 1.0);
         I(in, n) <+ 0.0;

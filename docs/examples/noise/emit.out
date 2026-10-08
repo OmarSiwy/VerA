@@ -11,16 +11,7 @@ warning[W0650]: unit is not provably finite, so it compiles in strict float mode
    = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
    = help: run `vera --explain W0650` for a detailed explanation
 
-warning[W0850]: task dropped: a device does not print and has no file table: `$strobe`
-  --> thermal.va:22:5
-   |
-22 |     $strobe("I(p,n) = %g A", I(p, n));
-   |     ^^^^^^^
-   |
-   = note: LRM 9.4
-   = help: run `vera --explain W0850` for a detailed explanation
-
-warning: 2 warning(s) emitted
+warning: 1 warning(s) emitted
 $ grep -A2 "pub const noise_gens" thermal.zig
 pub const noise_gens = [_]contract.NoiseGen(Self){
     .{ .row = @intFromEnum(U.p), .col = @intFromEnum(U.n), .kind = .thermal, .source = 0, .name = "thermal" },

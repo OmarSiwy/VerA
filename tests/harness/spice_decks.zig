@@ -76,6 +76,13 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
         while (try walker.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".sp")) continue;
+            // `external/` holds suites with their own runner and oracles
+            // (`tools/external_analog.py`, in `nix develop .#benchmarking`):
+            // `external/osdi/*.sp` are ngspice `.control` decks over `vera
+            // --emit-osdi` libraries, graded by their `*! expect` lines, with
+            // no `.hdl` card and no `.expected.json`. Not decks for sim.spice.
+            if (std.mem.startsWith(u8, entry.path, "external") and entry.path.len > "external".len and
+                (entry.path["external".len] == '/' or entry.path["external".len] == '\\')) continue;
             try decks.append(gpa, try arena_state.allocator().dupe(u8, entry.path));
         }
     }
@@ -206,7 +213,8 @@ const Translated = union(enum) {
 ///   Vname a b [DC] v [AC m]   Annex E `vsine` held at v (AC: a short in .noise)
 ///   Vname a b PWL(t v ...)    Annex E `vpwl`
 ///   .tran tstep tstop         `//! tran` (`sim.spice.tran`)
-///   .noise v(out) src lin n f1 f2   `//! onoise` (`sim.spice.noise`)
+///   .noise v(out) src lin|dec|oct n f1 f2   `//! onoise` (`sim.spice.noise`,
+///                                         over `noiseGrid`)
 ///
 /// SPICE is case-insensitive, so the deck is lower-cased first (`.hdl` paths
 /// are already resolved into `models`). Node `0` is ground.
@@ -239,20 +247,19 @@ fn translate(arena: Allocator, netlist: []const u8, models: []const []const u8) 
             const node = it.next() orelse "";
             if (!std.mem.eql(u8, out, "v")) return .{ .missing = ".noise with an output that is not v(node)" };
             _ = it.next(); // the input source: it names inoise, which no oracle here reads
-            const sweep = it.next() orelse "";
-            if (!std.mem.eql(u8, sweep, "lin")) return .{ .missing = try arena.print(".noise {s} sweep (only lin is read)", .{sweep}) };
-            const n = std.fmt.parseInt(usize, it.next() orelse "", 10) catch return .{ .missing = ".noise lin without a point count" };
+            const word = it.next() orelse "";
+            const sweep = std.meta.stringToEnum(Sweep, word) orelse
+                return .{ .missing = try arena.print(".noise {s} sweep (lin, dec and oct are read)", .{word}) };
+            const n = std.fmt.parseInt(usize, it.next() orelse "", 10) catch return .{ .missing = ".noise sweep without a point count" };
             const f1 = spiceNumber(it.next() orelse "") orelse return .{ .missing = ".noise without fstart" };
             const f2 = spiceNumber(it.next() orelse "") orelse return .{ .missing = ".noise without fstop" };
             if (n == 0 or it.next() != null) return .{ .missing = ".noise with a node pair or extra fields" };
+            if (sweep != .lin and !(f1 > 0 and f2 >= f1)) return .{ .missing = ".noise dec/oct with fstart <= 0 or fstop < fstart" };
             if (analysis != null) return .{ .missing = "a second analysis card" };
             analysis = "noise";
+            const freqs = try noiseGrid(arena, sweep, n, f1, f2) orelse return .{ .missing = ".noise sweep of more than 10000 points" };
             try directives.print(arena, "//! analysis noise\n//! onoise V({s}) =", .{try net(arena, &nets, node)});
-            for (0..n) |k| {
-                // SPICE's lin sweep: n points, both ends included.
-                const f = if (n == 1) f1 else f1 + (f2 - f1) * @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(n - 1));
-                try directives.print(arena, "{s} {e}", .{ if (k == 0) "" else ",", f });
-            }
+            for (freqs, 0..) |f, k| try directives.print(arena, "{s} {e}", .{ if (k == 0) "" else ",", f });
             try directives.append(arena, '\n');
             continue;
         }
@@ -320,6 +327,39 @@ fn translate(arena: Allocator, netlist: []const u8, models: []const []const u8) 
     }
     try va.print(arena, "{s}endmodule\n", .{insts.items});
     return .{ .deck = .{ .analysis = a, .va = va.items } };
+}
+
+/// A `.noise` card's sweep kind.
+const Sweep = enum { lin, dec, oct };
+
+/// SPICE's `.noise` frequency grid (ngspice noisean.c). `lin`: `n` points,
+/// both ends included. `dec`/`oct`: from `f1` by the fixed ratio 10^(1/n)
+/// or 2^(1/n), while a point stays at or under f2·(1 + ratio·reltol), with
+/// SPICE's default reltol 1e-3; so `dec 1 1 9.999` ends at 10, and a grid
+/// stops under `f2` when `f2` is not on it. Point k is f1·base^(k/n), not a
+/// running product, as ESPice's `FreqSweep` takes it. Null past 10000
+/// points. Precondition for `dec`/`oct`: 0 < f1 <= f2.
+fn noiseGrid(arena: Allocator, sweep: Sweep, n: usize, f1: f64, f2: f64) !?[]const f64 {
+    var out: std.ArrayList(f64) = .empty;
+    switch (sweep) {
+        .lin => for (0..n) |k| {
+            const f = if (n == 1) f1 else f1 + (f2 - f1) * @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(n - 1));
+            try out.append(arena, f);
+        },
+        .dec, .oct => {
+            const base: f64 = if (sweep == .dec) 10 else 2;
+            const per: f64 = @floatFromInt(n);
+            const top = f2 * (1 + std.math.pow(f64, base, 1 / per) * 1e-3);
+            var k: usize = 0;
+            while (true) : (k += 1) {
+                const f = f1 * std.math.pow(f64, base, @as(f64, @floatFromInt(k)) / per);
+                if (f > top) break;
+                if (out.items.len == 10000) return null;
+                try out.append(arena, f);
+            }
+        },
+    }
+    return out.items;
 }
 
 /// The Verilog-AMS net for SPICE node `node`, declared once in `nets`: `0` is
@@ -589,6 +629,31 @@ test "spiceNumber reads SPICE scale suffixes" {
     try std.testing.expectEqual(@as(?f64, 1e-4), spiceNumber("1e-4"));
     try std.testing.expectEqual(@as(?f64, 90000), spiceNumber("90000"));
     try std.testing.expectEqual(@as(?f64, null), spiceNumber("pwl"));
+}
+
+test "the .noise grids: lin keeps both ends, dec and oct step by a fixed ratio to fstop and no further" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const lin = (try noiseGrid(a, .lin, 9, 1000, 9000)).?;
+    try std.testing.expectEqual(@as(usize, 9), lin.len);
+    try std.testing.expectEqual(@as(f64, 2000), lin[1]);
+    // dec 2 from 1k to 100k: 1k, 3.16k, 10k, 31.6k, 100k.
+    const dec = (try noiseGrid(a, .dec, 2, 1e3, 1e5)).?;
+    try std.testing.expectEqual(@as(usize, 5), dec.len);
+    try std.testing.expectEqual(@as(f64, 1e4), dec[2]);
+    try std.testing.expectEqual(@as(f64, 1e5), dec[4]);
+    try std.testing.expectApproxEqRel(@as(f64, 3162.2776601683795), dec[1], 1e-15);
+    // A stop just under a grid point still reaches it (the reltol margin)...
+    try std.testing.expectEqual(@as(usize, 2), (try noiseGrid(a, .dec, 1, 1, 9.999)).?.len);
+    // ...and one well under it stops short.
+    try std.testing.expectEqual(@as(usize, 1), (try noiseGrid(a, .dec, 1, 1e3, 5e3)).?.len);
+    const oct = (try noiseGrid(a, .oct, 1, 1e3, 8e3)).?;
+    try std.testing.expectEqual(@as(usize, 4), oct.len);
+    try std.testing.expectEqual(@as(f64, 8e3), oct[3]);
+    const r = try translate(a, "R1 a 0 1k\n.noise v(a) v1 dec 2 1k 100k\n", &.{});
+    try std.testing.expect(std.mem.indexOf(u8, r.deck.va, "//! onoise V(a) = 1e3,") != null);
+    try std.testing.expect(std.mem.endsWith(u8, std.mem.sliceTo(r.deck.va[std.mem.indexOf(u8, r.deck.va, "//! onoise").?..], '\n'), ", 1e5"));
 }
 
 test "a deck with a card the runner lacks is NOT RUN, naming it" {

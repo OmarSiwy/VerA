@@ -3,6 +3,10 @@
 // using a return statement, using an output argument, or using an inout argument."
 // This fixture demonstrates all four return mechanisms working correctly.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the analog
+// block declared `real dummy, ret;` without a name. A.6.3 lets only a named
+// block declare (E0290), so the block is `begin : body`.
+//
 //! lrm 4.7.2
 //! lrm 4.7.2:1000
 //! bias V(p) = 0.5
@@ -50,7 +54,7 @@ module ch04_function_return_four_ways(p, n);
         end
     endfunction
 
-    analog begin
+    analog begin : body
         real dummy, ret;
         `CHECKX("return via implicit identifier", via_identifier(1.0), 2.0);
         `CHECKX("return via return statement", via_return(1.0), 3.0);

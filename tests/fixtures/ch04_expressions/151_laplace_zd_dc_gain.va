@@ -16,6 +16,15 @@
 // integrating toward it. So this is exact, not a settled approximation — and
 // `CHECKX` says so.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+// The empty `{}` zeros are now the null argument, which §4.5.11 gives the
+// same meaning: "The zeros argument may be represented as a null argument".
+//
 //! lrm 4.5.11.2
 //! lrm 4.5.11
 //! analysis dc
@@ -28,11 +37,11 @@ module ch04_laplace_zd_dc_gain(in, n);
     real y, y_no_zero;
 
     analog begin
-        y = laplace_zd(V(in, n), {-2.0, 0.0}, {4.0, 1.0});
+        y = laplace_zd(V(in, n), '{-2.0, 0.0}, '{4.0, 1.0});
         // The same denominator with NO zeros at all. §4.5.11.2's product over
         // an empty vector is 1, so this must land on the identical number, and
         // a lowering that folded a zero into the DC term would separate them.
-        y_no_zero = laplace_zd(V(in, n), {}, {4.0, 1.0});
+        y_no_zero = laplace_zd(V(in, n), , '{4.0, 1.0});
         `CHECKX("H(0) = 1/d0 with one zero", y, 0.25);
         `CHECKX("H(0) = 1/d0 with no zeros — a zero cannot move it", y_no_zero, 0.25);
         I(in, n) <+ 0.0;

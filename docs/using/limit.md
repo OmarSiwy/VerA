@@ -9,14 +9,21 @@ does with them.
 
 ## The algorithms
 
+The LRM names `"pnjlim"` and `"fetlim"` but leaves their algorithms to the
+simulator. VerA's are ngspice's, transcribed from its
+`src/spicelib/devices/devsup.c`. That matters for `pnjlim`: ngspice
+compresses a large step as `vold + vte·(2 + ln(arg − 2))`, with
+`arg = (vnew − vold)/vte`, where the older SPICE3f5 used
+`vold + vte·ln(1 + arg)`, so the two give different iterates.
+
 | Algorithm | Limits | Required arguments |
 |---|---|---|
-| `"pnjlim"` | a pn-junction voltage (SPICE3 `DEVpnjlim`) | `vte`, `vcrit` |
+| `"pnjlim"` | a pn-junction voltage (ngspice `DEVpnjlim`) | `vte`, `vcrit` |
 | `"pnjlimds"` | a MOS bulk junction, in the drain/source mode (VerA's own name; below) | `vte`, `vcrit` |
-| `"fetlim"` | a MOS gate voltage (SPICE3 `DEVfetlim`) | `vto` |
+| `"fetlim"` | a MOS gate voltage (ngspice `DEVfetlim`) | `vto` |
 | `"fetlimds"` | a MOS gate voltage, in the drain/source mode (VerA's own name; below) | `vto` |
 | `"steplim"` | any value, to at most `step` per iteration (ngspice's per-model absolute clamp) | `step` |
-| `"limvds"` | a drain-source voltage (SPICE3 `DEVlimvds`) | none |
+| `"limvds"` | a drain-source voltage (ngspice `DEVlimvds`) | none |
 
 A user-defined analog function as the second argument works as the LRM
 describes: VerA passes it the new value, the previous return value, and any

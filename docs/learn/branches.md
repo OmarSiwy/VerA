@@ -65,7 +65,13 @@ unknown: its potential is 0 by definition. An access function with one node,
 {{#include ../examples/branches/ground.out}}
 ```
 
-The testbench lists only `x[a]`: `gnd` is the reference, not an unknown.
+`I(a)` and `I(a, gnd)` are the same branch, and both read 1.5 mA.
+
+The testbench also lists an `x[gnd]` row, held at 0. That row should not be
+there: VerA keeps a row for the net's first declaration, `electrical a,
+gnd;`, after `ground gnd;` has made the net the reference. Nothing
+contributes to it or reads it. It is a known defect; until it is fixed, a
+host must hold such a row at 0, as the testbench does.
 
 ## Probes
 

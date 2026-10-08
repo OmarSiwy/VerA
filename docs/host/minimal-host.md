@@ -40,9 +40,10 @@ Step by step:
   respect to `a`, `k` and `ai`. `Val` has no lanes; the card-time hooks take
   it. [Scalar families](families.md) explains both.
 - **The card.** `Model` holds every parameter at its default. The host runs
-  `derive` (when the device has one), `setup`, which fills the
-  solve-invariant cache (here `n · $vt` at the card's temperature), and
-  `setupInstance` (when declared), in that order.
+  `derive` (when the device has one), `setup`, which fills `model.su` with
+  the values that depend only on the card and its temperature, and
+  `setupInstance` (when declared), in that order. Both card-time hooks take
+  the family itself, `Val`, not a value type.
 - **One evaluation per iterate.** `D.eval` returns one row per unknown: its
   value is the current leaving that node through the device, and its lanes
   are that row of the Jacobian. With a dense family every row has the same

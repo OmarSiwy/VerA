@@ -22,10 +22,10 @@ const Error = parser.Error;
 // -----------------------------------------------------------------------
 
 /// LRM §4.7.1: `analog function [type] name ; items stmt endfunction`, cursor
-/// on `function`. Argument types come from the direction declaration
-/// (`input real x;`) or from a matching variable declaration (`input x; real
-/// x;`, A.2.6). Reports E0224 for no formals and E0225 for an untyped one,
-/// then carries on.
+/// on `function`. Argument types come from a matching variable declaration
+/// (`input x; real x;`, A.2.6); a type on the direction (`input real x;`) is
+/// E0291, and a `;` among the items E0219. Reports E0224 for no formals and
+/// E0225 for an untyped one, then carries on.
 ///
 /// A function without `analog` (an analog parse's digital function, §4.7)
 /// takes A.2.6's `function_declaration` header and A.2.7's `tf_*_declaration`
@@ -67,6 +67,8 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
             const dir = switch (self.peek()) {
                 .kw_input, .kw_output, .kw_inout => blk: {
                     const d = parse_net.portDirection(self.peek()).?;
+                    // A.2.6 `function_port_list`: `tf_input_declaration`s only.
+                    if (!is_analog) try inputOnly(self, d);
                     self.pos += 1;
                     break :blk d;
                 },
@@ -104,6 +106,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
             .eof, .kw_endfunction => break,
             .kw_input, .kw_output, .kw_inout => {
                 const dir = parse_net.portDirection(self.peek()).?;
+                if (!is_analog) try inputOnly(self, dir);
                 self.pos += 1;
                 try analogFormals(self, &args, dir, true, is_analog);
                 _ = try self.expect(.semicolon);
@@ -136,7 +139,9 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
                 const saved_expr = self.analog_expr;
                 self.analog_expr = is_analog;
                 defer self.analog_expr = saved_expr;
-                const s = parse_stmt.parseStmt(self) catch |e| {
+                // A.2.6 has no null item and A.6.4's analog_function_statement
+                // no null alternative, so a bare `;` here is E0219.
+                const s = (if (is_analog) parse_stmt.parseStmtNoNull(self) else parse_stmt.parseStmt(self)) catch |e| {
                     if (e == error.OutOfMemory) return e;
                     self.recoverStatement(before);
                     continue;
@@ -165,9 +170,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
         d.msg("formal `{s}` of `{s}` has no data type declaration", .{
             self.file.str(a.name), self.file.str(name),
         });
-        d.help("add `real {s};` to the function body, or write the type on the direction: `input real {s};`", .{
-            self.file.str(a.name), self.file.str(a.name),
-        });
+        d.help("add `real {s};` to the function body", .{self.file.str(a.name)});
         try d.emit();
         a.ty = .real;
     };
@@ -188,9 +191,21 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     });
 }
 
+/// A.2.6 `function_item_declaration ::= block_item_declaration | {
+/// attribute_instance } tf_input_declaration ;` and `function_port_list`: a
+/// function without `analog` declares inputs only (IEEE 1364-2005 §10.4.1),
+/// so its `output`/`inout`, cursor on the keyword, is E0207. The digital
+/// engine refuses the same text by §10.4.4 (E1100).
+fn inputOnly(self: *Parser, dir: Ast.Direction) error{OutOfMemory}!void {
+    if (dir == .input) return;
+    try self.report(self.pos, .E0207, "found {s}: A.2.6 gives a function `input` formals only; an `analog function` or a task takes `{s}`", .{ self.found(self.pos), @tagName(dir) });
+}
+
 /// A function formal after its direction: `input real x` (A.2.7
-/// task_port_type) or bare `input x`, then A.2.6 `input [ range ]
-/// list_of_ports`: one range, before the names, shared by all of them
+/// task_port_type, a digital function's only; an analog function's is E0291
+/// but for A.2.1.2's `output output_variable_type`) or bare `input x`, then
+/// A.2.6 `input [ range ] list_of_ports`: one range, before the names, shared
+/// by all of them
 /// (§4.7.2.3 `output [0:1] out;`, §4.7.1 Example 3 `inout [0:1]a;`).
 /// `list` reads `, name` onward, as a body declaration does; a port-list
 /// entry names one formal.
@@ -202,6 +217,13 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
 /// `tfPortType`'s A.2.7 types, its range a packed width, not dimensions.
 fn analogFormals(self: *Parser, args: *std.ArrayList(Ast.FuncArg), dir: Ast.Direction, list: bool, is_analog: bool) Error!void {
     var ty = parse_decl.varType(self.peek()) orelse .unspecified;
+    // A.2.6's analog_function_item_declaration takes A.2.1.2's port
+    // declarations, which carry no data type: §4.7.1 types a formal by a
+    // block item declaration. `output integer`/`output time` is the one
+    // typed arm (`output output_variable_type`). Reported, then read as
+    // before, so the body still parses.
+    if (is_analog and ty != .unspecified and !(dir == .output and (self.peek() == .kw_integer or self.peek() == .kw_time)))
+        try self.report(self.pos, .E0291, "`{s} {s}`", .{ @tagName(dir), self.tokenText(self.pos) });
     if (ty != .unspecified) self.pos += 1 else _ = try parse_net.optDiscipline(self);
     var dims: []const Ast.Dim = &.{};
     if (ty == .unspecified and !is_analog) {

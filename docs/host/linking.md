@@ -80,7 +80,7 @@ then linked (`contract.DevicePart`: `.setup`, `.state`, `.eval`). A `dyn`
 module may declare
 
 ```zig
-pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: DevicePart) void
+pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: contract.DevicePart) void
 ```
 
 beside `exportDevice`; the split build calls it once per part, and it must
@@ -117,7 +117,7 @@ With the checks on:
 | `calls_setup` | `setup` or `setupInstance` | you call `setup` per `Model` row after `derive` and after every card, `temperature__` or `setup_simparams` write, then `setupInstance` per instance, before `eval` |
 | `mutable_eval` | `mutable_eval` | each evaluation gets exclusive `*Instance` |
 | `iteration_hooks` | `advanceIteration` or `checkConvergence` | you call the first after every iterate and the second before accepting one |
-| `noise_table_points` | `noiseTablePoints` | you read the card's noise-table knots from it |
+| `noise_table_points` | `noiseTablePoints` | you read the card's noise-table knots, through `contract.noiseTable` (the row's `noise_table_points__`) or the hook |
 | `shape_check` | `checkShape` | you call it after `derive` and refuse a card it names |
 | `calls_ac_dyn` | `ac_dyn_slots` | `true`: every small-signal matrix adds `acDyn`; `false`: you run no small-signal analysis |
 | `systf` | a non-empty `systf_calls` | `fn (*const Model) ?*const SystfHost`, binding the VPI application |
@@ -133,24 +133,24 @@ contract always matches the compiler.
 The generated device imports only `std` and `contract`, calls no OS, and
 reaches transcendental functions only through `contract.gm`: VerA's own
 `exp`, `log` and `pow` (one implementation on every target, faithful to under
-1 ulp) and device forms of `tanh`, `sinh`, `cosh`, `sin`, `cos`, `expm1` and
-`atan` (musl ports, or std's algorithm with a line AMDGCN cannot compile
-dropped), since NVPTX and AMDGCN have no libm. On the host those are the Zig
+1 ulp) and GPU forms of `tanh`, `sinh`, `cosh`, `sin`, `cos`, `expm1` and
+`atan`, since NVPTX and AMDGCN have no libm. On the host those are the Zig
 builtins or `std.math`, so a GPU result may differ slightly from the CPU's
-(`gm`'s comments give each function's bound; `exp`, `log` and `pow` are the
-same bits everywhere). `RefFamily` computes through
+(`gm`'s comments say what each GPU form is and how far it may differ;
+`exp`, `log` and `pow` are the same bits everywhere). `RefFamily` computes through
 `gm` too. So the same `device.zig` compiles for `nvptx64-cuda` and
 `amdgcn-amdhsa` with the LLVM backend.
 
 `tests/status_gpu.zig` is the pattern: a `callconv(.kernel)` export that
-runs `evalQ` and `updateState` over a dense `RefFamily`. `zig build test`
-compiles it for `nvptx64-cuda` (`sm_70`, to LLVM IR, because the NVPTX
-backend refuses the alias `@export` of a kernel makes; a host rewrites the
-IR) and for `amdgcn-amdhsa` (`gfx906`, to an object). No GPU runs it in CI.
+runs `evalQ` and `updateState` over a dense `RefFamily`
+(`tests/say_gpu.zig` does the same for `say`). `zig build test` compiles both
+for `nvptx64-cuda` (`sm_70`, to LLVM IR, because the NVPTX backend refuses
+the alias `@export` of a kernel makes; a host rewrites the IR) and for
+`amdgcn-amdhsa` (`gfx906`, to an object). No GPU runs them in CI.
 
 What is not covered: only the math functions device code is known to reach
 are ported (`gm`'s header says so); a model that reaches another builtin on a
 GPU target fails its kernel compile, and `gm` is where to add it. The
 reference family's `log1p` calls `std.math.log1p` directly rather than a
 `gm` function; whether that compiles for both GPU targets is not covered by
-`tests/status_gpu.zig`.
+those two kernels.

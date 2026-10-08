@@ -156,10 +156,11 @@ jobs:
           STRICT_LOG: /tmp/strict.txt
           COVERAGE_LOG: /tmp/coverage.txt
         run: |
+          python3 tools/conformance.py > measured.md || echo '(conformance.py could not parse this run)' > measured.md
           {
             echo '## Conformance'
             echo
-            python3 tools/conformance.py || echo '(conformance.py could not parse this run)'
+            cat measured.md
             echo
             echo '## Verilog-AMS suite — verdicts'
             echo '```'; tail -40 /tmp/strict.txt; echo '```'
@@ -197,24 +198,36 @@ jobs:
             /tmp/source-audit.txt
             /tmp/verdicts.tsv
 
-  # The external analog suites (tools/external_analog.py): VerA's
-  # `--emit-osdi` libraries in ngspice against hand-derived values,
-  # OpenVAF-Reloaded, the CMC and TU Dresden QA references and Xyce, every
-  # reference tool from `nix develop .#benchmarking`. It reports and does not
-  # gate until every disagreement is triaged (each suite folder's TRIAGE.md);
-  # the FAIL name list is the artifact (AGENTS.md §0 rule 3).
+      # The measures block, as conformance.py printed it above: the book's
+      # conformance page includes this file (docs job), never a typed number.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: measured
+          path: measured.md
+
+  # The external suites, every reference tool from `nix develop .#external`
+  # (the reference tools of `.#benchmarking`, without its GPU toolchains).
+  # Each gates by NAME (AGENTS.md §0 rule 3): a disagreement passes only when
+  # a row of its suite's TRIAGE.md (tests/fixtures/external/<suite>/) names it
+  # with a verdict, and a row that names nothing is STALE and fails too, as an
+  # XPASS does. Upstream sources are fetched at their pinned commits into
+  # .zig-cache/external, never committed.
+  #
+  # Analog (tools/external_analog.py): VerA's `--emit-osdi` libraries in
+  # ngspice against hand-derived values, OpenVAF-Reloaded, the CMC and TU
+  # Dresden QA references and Xyce.
   external-analog:
     runs-on: ubuntu-latest
     timeout-minutes: 240
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - name: Build vera
-        run: nix develop .#benchmarking -c zig build -Doptimize=ReleaseFast install
+        run: nix develop .#external -c zig build -Doptimize=ReleaseFast install
       - name: External analog suites (osdi, va-models, cmcqa, hicum-qa, xyce)
         run: |
-          nix develop .#benchmarking -c python3 tools/external_analog.py --out external-out 2>&1 | tee external.txt
+          nix develop .#external -c python3 tools/external_analog.py --out external-out 2>&1 | tee external.txt
           exit "${PIPESTATUS[0]}"
       - name: Job summary
         if: always()
@@ -222,8 +235,8 @@ jobs:
           {
             echo '## External analog suites'
             echo '```'; tail -1 external.txt; echo '```'
-            echo '### FAIL names'
-            echo '```'; cat external-out/fail.txt; echo '```'
+            echo '### FAIL and STALE names'
+            echo '```'; grep -E '^(FAIL|STALE) ' external.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -232,6 +245,41 @@ jobs:
           path: |
             external.txt
             external-out/fail.txt
+
+  # Digital (tools/external_digital.py): ivtest and the Verilog-2005 subset
+  # of sv-tests by their own verdicts, and iverilog + vvp against `vera --run`
+  # transcript for transcript.
+  external-digital:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build vera
+        run: nix develop .#external -c zig build -Doptimize=ReleaseFast install
+      - name: External digital suites (ivtest, sv-tests, iverilog-diff)
+        run: |
+          status=0
+          nix develop .#external -c python3 tools/external_digital.py zig-out/bin/vera --names external-digital-names.txt > external-digital.tsv 2> external-digital.txt || status=$?
+          cat external-digital.tsv
+          exit "$status"
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## External digital suites'
+            echo '```'; cat external-digital.tsv; echo '```'
+            echo '### FAIL and STALE names'
+            echo '```'; grep -E '^(FAIL|STALE) ' external-digital.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-digital
+          path: |
+            external-digital.tsv
+            external-digital.txt
+            external-digital-names.txt
 
   # Cross-platform builds hold because VerA calls no OS but through `std`
   # (tests/exhaustive.zig's portability guard; lib/dynlib.zig is the one
@@ -253,12 +301,18 @@ jobs:
       - name: Build every artifact for ${{ matrix.target }}
         run: zig build build-all -Dtarget=${{ matrix.target }}
 
-  # The flake (AGENTS.md "Nix"): the source package, its smoke check (a
-  # resistor through `vera --check` in the sandbox) and the latest release
-  # binary's, all built by `nix flake check`.
+  # The flake (AGENTS.md "Nix"), on a runner of each of its four systems:
+  # the source package, its smoke check (a resistor through `vera --check` in
+  # the sandbox) and the latest release binary's, all built by
+  # `nix flake check`.
   nix:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64-linux, aarch64-linux, aarch64-darwin, x86_64-darwin
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
@@ -313,14 +367,44 @@ jobs:
         with:
           name: report
           path: report/
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: report/
 
-  # Publishes the report to GitHub Pages. Needs Settings > Pages > Source set
-  # to "GitHub Actions" once; until then this job fails and nothing else does.
+  # The user documentation (docs/, mdBook). Every transcript a page shows is
+  # re-run against this commit's vera, and a page that no longer matches what
+  # vera prints fails the job (tools/doctest.py). The conformance page
+  # includes the measures block the suites job printed. One heavy build at a
+  # time, two jobs wide (-j2): the runner's RAM.
+  docs:
+    needs: suites
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build vera
+        run: nix develop .#docs -c zig build -Doptimize=ReleaseFast -j2 install
+      - name: Transcripts match vera (gate)
+        run: nix develop .#docs -c python3 tools/doctest.py
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: measured
+          path: docs
+      - name: Build the book (gate)
+        run: |
+          test -s docs/measured.md || echo '(the suites job did not measure this run)' > docs/measured.md
+          nix develop .#docs -c mdbook build docs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: book
+          path: docs/book/
+
+  # Publishes the site to GitHub Pages: the book at /, the report at
+  # /report/. Needs Settings > Pages > Source set to "GitHub Actions" once;
+  # until then this job fails and nothing else does.
   pages:
-    needs: report
+    needs: [docs, report]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -329,6 +413,17 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: book
+          path: site
+      - uses: actions/download-artifact@v4
+        with:
+          name: report
+          path: site/report
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
       - id: deploy
         uses: actions/deploy-pages@v4
 

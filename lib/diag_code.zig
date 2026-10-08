@@ -155,6 +155,11 @@ pub const Code = enum(u16) {
     E0295,
     E0296,
     E0297,
+    E0289,
+    E0290,
+    E0291,
+    E0292,
+    E0293,
     W0250,
     W0251,
     W0252,
@@ -426,6 +431,16 @@ pub const Code = enum(u16) {
     E1103,
     /// A SystemVerilog source.
     E1104,
+    /// IEEE 1364-2005 §15: a timing check argument the digital engine
+    /// cannot bind (a notifier that is no variable, an event terminal that
+    /// is no whole or constant-select vector).
+    E1147,
+    /// IEEE 1364-2005 Tables 15-1..15-11: a limit or threshold that is not
+    /// a non-negative constant expression.
+    E1148,
+    /// IEEE 1364-2005 §15: a timing check form the digital engine does not
+    /// evaluate, refused by name.
+    E1149,
     W1150,
     W1151,
     W1152,
@@ -436,6 +451,8 @@ pub const Code = enum(u16) {
     /// A `$readmem` file address outside the memory, with no bounds given.
     W1156,
     W1160,
+    /// IEEE 1364-2005 §15: a timing check reported a violation at run time.
+    W1199,
     W1050,
     W0950,
     W0951,
@@ -487,6 +504,12 @@ pub const Code = enum(u16) {
     /// §9.16 a `$simprobe` name that does not fold: run-time resolution is
     /// not implemented, and the fallback would answer a valid name wrongly.
     E0823,
+    /// `--emit-osdi` of a device with `$vera_reject_step`: OSDI 0.4 has no
+    /// slot for a step-rejection request (VD-102).
+    E1099,
+    /// `--emit-osdi` of a device whose §4.6.4.6 noise generator feeds two
+    /// rows: OSDI 0.4 reports them as independent sources (VD-102).
+    W1098,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -1406,7 +1429,10 @@ fn infoOf(c: Code) Info {
             \\which is reached from a conditional arm, a case item and an event
             \\statement — and nowhere else. `analog_seq_block` (A.6.3) takes
             \\`{ analog_statement }` and `analog_construct` (A.6.2) takes one,
-            \\so a free-standing `;` in either is underivable.
+            \\so a free-standing `;` in either is underivable. The same holds
+            \\in an analog function (A.2.6): its items are declarations and its
+            \\body one `analog_function_statement`, and neither has a `;` of its
+            \\own, so `input a; ; real a;` is refused too.
             \\
             \\Delete it. A deliberately empty conditional arm keeps its `;`.
             ,
@@ -1528,7 +1554,8 @@ fn infoOf(c: Code) Info {
             \\      scale = 2.0 * x;
             \\    endfunction
             \\
-            \\`input real x;` is the other legal spelling (A.2.7 task_port_type).
+            \\The type is a separate item: `input real x;` is no A.2.6
+            \\analog_function_item_declaration (E0291).
             \\
             \\4.7.1's "if unspecified, the default is real" does NOT apply here:
             \\that sentence is about `analog_function_type`, the FUNCTION's
@@ -2140,6 +2167,120 @@ fn infoOf(c: Code) Info {
             \\retired it, and A.6.8's `analog_loop_statement` has no forever arm.
             ,
         },
+        .E0289 => .{
+            .title = "a function call has an empty argument",
+            .lrm = "A.8.2",
+            .explain =
+            \\A.8.2 writes every user function call with at least one argument
+            \\and no empty slot:
+            \\
+            \\    analog_function_call ::= analog_function_identifier
+            \\        { attribute_instance } ( analog_expression { , analog_expression } )
+            \\    function_call ::= hierarchical_function_identifier
+            \\        { attribute_instance } ( expression { , expression } )
+            \\
+            \\so `f(, 1.0)`, `f(1.0, )` and, in an analog expression, `f()` derive
+            \\from nothing. Only a system function (`$f(a, , c)`, whose clause
+            \\says what the empty slot means) and the slots A.6.5 and A.8.2 mark
+            \\`_or_null` take one. A name that is not a declared access function
+            \\is read as a user function, so `Vp(, n)` (a missing `(` after `V`)
+            \\lands here too: write `V(p, n)`.
+            \\
+            \\A task enable, `t(a, );`, is A.6.9's task_enable, whose null
+            \\argument IEEE 1364-2005 10.2.2 forbids in its own words ("A null
+            \\expression shall not be used as an argument in a task-enabling
+            \\statement"); the digital engine refuses it there, not here.
+            ,
+        },
+        .E0290 => .{
+            .title = "a declaration in an unnamed block",
+            .lrm = "A.6.3",
+            .explain =
+            \\A.6.3 puts a block's declarations inside the bracket that opens
+            \\with its name:
+            \\
+            \\    analog_seq_block ::= begin [ : analog_block_identifier
+            \\        { analog_block_item_declaration } ] { analog_statement } end
+            \\    seq_block ::= begin [ : block_identifier
+            \\        { block_item_declaration } ] { statement } end
+            \\
+            \\so only a named block declares anything. Name the block, or move
+            \\the declaration to the module:
+            \\
+            \\    analog begin : body
+            \\        real x;
+            \\        ...
+            \\
+            \\An analog function's body declares nothing in a block at all: its
+            \\locals are function items (A.2.6), and 4.7.1 forbids the name a
+            \\block would need (E0226).
+            ,
+        },
+        .E0291 => .{
+            .title = "an analog function's direction declaration carries a data type",
+            .lrm = "A.2.6",
+            .explain =
+            \\An analog function declares a formal's direction and its type in
+            \\two items (A.2.6, A.2.1.2):
+            \\
+            \\    analog_function_item_declaration ::= analog_block_item_declaration
+            \\        | input_declaration ; | output_declaration ; | inout_declaration ;
+            \\    input_declaration ::= input [ discipline_identifier ]
+            \\        [ net_type | wreal ] [ signed ] [ range ] list_of_port_identifiers
+            \\
+            \\and 4.7.1 says the same in words: "all formal arguments shall have an
+            \\associated block item declaration specifying the data type". So
+            \\`input real x;` is not an analog function item; write
+            \\
+            \\    input x;
+            \\    real x;
+            \\
+            \\`output integer x;` is the one typed direction A.2.1.2 derives
+            \\(`output output_variable_type`). A digital `function` or `task`
+            \\takes IEEE 1364-2005's `tf_input_declaration`, where `input real x`
+            \\is legal.
+            ,
+        },
+        .E0292 => .{
+            .title = "a net declaration mixes initialized and plain names",
+            .lrm = "A.2.1.3",
+            .explain =
+            \\A.2.1.3 gives a net declaration either a list of names or a list
+            \\of assignments, never both:
+            \\
+            \\    net_declaration ::= ...
+            \\        | discipline_identifier [ range ] list_of_net_identifiers ;
+            \\        | discipline_identifier [ range ] list_of_net_decl_assignments ;
+            \\    list_of_net_decl_assignments ::=
+            \\        net_decl_assignment { , net_decl_assignment }
+            \\    net_decl_assignment ::= ams_net_identifier = expression
+            \\
+            \\(A.2.3), and so does every net type alternative. `electrical p =
+            \\1.5, n;` is neither list; split it:
+            \\
+            \\    electrical p = 1.5;
+            \\    electrical n;
+            ,
+        },
+        .E0293 => .{
+            .title = "a module instance has no instance name",
+            .lrm = "A.4.1",
+            .explain =
+            \\A.4.1 names every module instance:
+            \\
+            \\    module_instance ::=
+            \\        name_of_module_instance ( [ list_of_port_connections ] )
+            \\    name_of_module_instance ::= module_instance_identifier [ range ]
+            \\
+            \\The only instance A.5.4 lets go unnamed is a UDP's, which connects
+            \\an output and at least one input:
+            \\
+            \\    udp_instance ::= [ name_of_udp_instance ]
+            \\        ( output_terminal , input_terminal { , input_terminal } )
+            \\
+            \\so `child(s);` is neither. Name the instance: `child c1(s);`.
+            ,
+        },
         .E0234 => .{
             .title = "a UDP table does not derive from one udp_body",
             .lrm = "A.5.3",
@@ -2285,7 +2426,7 @@ fn infoOf(c: Code) Info {
             ,
         },
         .W0251 => .{
-            .title = "specify block read, and nothing in it is modelled",
+            .title = "specify block read, and part or all of it is not modelled",
             .lrm = "A.7.1",
             .explain =
             \\A.7.1 `specify_block ::= specify { specify_item } endspecify`, and
@@ -2309,6 +2450,14 @@ fn infoOf(c: Code) Info {
             \\Same shape as W0250, and for the same reason: dropping it in
             \\silence gives you a cell whose timing the compiler discarded with
             \\nothing in the output saying so.
+            \\
+            \\A digital run (`vera --run` of a `.v`) is the exception for the
+            \\timing checks: its event queue does evaluate them (IEEE 1364-2005
+            \\clause 15, src/sim/digital/tchk.zig), reporting each violation
+            \\(W1199) or refusing a form it does not run (E1149). There the
+            \\warning is only for what no run applies, the A.7.2 path delays and
+            \\the 14.6 pulse controls (pulsestyle, showcancelled, PATHPULSE$),
+            \\and a block of timing checks and specparams alone raises none.
             \\
             \\  --deny=W0251    refuse the module instead, for a design whose
             \\                  answer depends on the timing being honoured
@@ -2522,6 +2671,13 @@ fn infoOf(c: Code) Info {
             .explain =
             \\Strings are message and file-name payloads. They compare and
             \\concatenate; they do not take part in arithmetic.
+            \\
+            \\LRM 3.3 Table 3-3 defines ==, !=, <, <=, >, >=, concatenation
+            \\and replication on the string type, each between two strings or
+            \\a string and a string literal, and "A string cannot be assigned to
+            \\an integral type". So `s + 1` and `s == 65` are errors for a
+            \\string variable or parameter `s`. A string LITERAL is still the
+            \\Verilog packed integer of its bytes: `"A" + 1` is 66.
             \\
             \\LRM 3.4: "It shall be an error to assign a numeric value to a
             \\parameter declared as string or to assign a string value to a
@@ -4364,7 +4520,13 @@ fn infoOf(c: Code) Info {
             \\
             \\Eliding a slot is not itself an error: Syntax 5-16 types them
             \\analog_expression_or_null and 5.10.3.1's own `sh` example writes
-            \\`cross(V(smpl) - thresh, dir, , , en === 1'b1)`.
+            \\`cross(V(smpl) - thresh, dir, , , en === 1'b1)`. The last slot,
+            \\the enable, is analog_expression (A.6.5), so a comma before it
+            \\promises one: `timer(0, 1n, 1p, )` is refused.
+            \\
+            \\A string-typed value (a `string` variable or parameter, 3.3) has
+            \\no number to monitor. A string literal does: 2.7 reads it as an
+            \\unsigned integer constant, so `cross("s")` monitors 115.
             ,
         },
         .E0518 => .{
@@ -4799,7 +4961,14 @@ fn infoOf(c: Code) Info {
             \\for a single coefficient:
             \\
             \\    laplace_nd(V(in), 2.0, '{1, 1})      // no: 2.0 is a scalar
+            \\    laplace_nd(V(in), {2.0}, '{1, 1})    // no: a concatenation
             \\    laplace_nd(V(in), '{2.0}, '{1, 1})   // yes
+            \\
+            \\VAMS 2.x wrote the list `{2.0}`. That is the 4.2.13 concatenation
+            \\operator, and annex G records the change: "Add apostrophe before
+            \\opening { in list of values (to distinguish a list of values from
+            \\the concatenation operator)". Empty zeros are the null argument,
+            \\`laplace_zp(x, , '{-1, 0})`, not `{}`.
             ,
         },
         .E0573 => .{
@@ -5759,7 +5928,7 @@ fn infoOf(c: Code) Info {
             \\operand types — real, integer, string — and most conversions have a
             \\reading for each: %d/%b/%o/%h round a real, and a string operand
             \\under them takes 2.7's "unsigned constant number" view, one byte
-            \\per character. Three pairings have no rendering VerA emits:
+            \\per character. Four pairings have no rendering VerA emits:
             \\
             \\    %s over a real, or an integral expression whose width the
             \\    current backend cannot preserve. Integer operands with a known
@@ -5773,6 +5942,10 @@ fn infoOf(c: Code) Info {
             \\    %e/%f/%g/%r (and the %t/%u/%z/%v defaults) over a string.
             \\    There is no numeric field to format; %s prints the text, %d
             \\    prints 2.7's integer view.
+            \\
+            \\    Any conversion but %s over a null argument (`,,`). 9.4.1 gives a
+            \\    null argument "a single space character in the display" and no
+            \\    value; %s prints that space (VD-101).
             \\
             \\The diagnostic points to the operand before generated code is
             \\compiled. An unsupported pairing is not necessarily illegal
@@ -6555,6 +6728,12 @@ fn infoOf(c: Code) Info {
             \\    read it from a module above u;
             \\  - u drives the net through a potential source or a 5.6.7
             \\    indirect branch, whose current is a solver unknown.
+            \\
+            \\A module's own `I(<a>)` (or `I(pb)` over its 3.12.1 port branch
+            \\`branch (<a>) pb;`) inside an instance u is the same quantity,
+            \\`I(<u.a>)`, read from inside u, so it is refused too. Read it
+            \\from the module that instantiates u. At the top, `I(<a>)` is the
+            \\host's port current and is read exactly.
             ,
         },
         .E0998 => .{
@@ -6791,13 +6970,72 @@ fn infoOf(c: Code) Info {
             \\clause 16, which replaces a design's specify path delays, specparams,
             \\timing check limits and interconnect delays with values read from
             \\an SDF file. VerA does not implement clause 16, and it applies no
-            \\specify block timing for one to replace (W0251). Running on as if
+            \\specify path delay for one to replace (W0251). Running on as if
             \\the call had succeeded would simulate a design whose timing the
             \\file was meant to set, so the call is refused.
             \\
             \\Write the delays the design needs in its source: a delay control,
             \\a continuous assignment or gate delay, or a module-level specparam
-            \\that one of those reads.
+            \\that one of those reads. A timing check's limits are the ones its
+            \\source writes (or a VPI application puts, IEEE 1364-2005 27.31).
+            ,
+        },
+        .E1147 => .{
+            .title = "a timing check argument the digital engine cannot bind",
+            .lrm = "IEEE 1364-2005 15.5",
+            .explain =
+            \\`vera --run` evaluates a module's timing checks against the
+            \\signals their events name and toggles the notifier a violation
+            \\updates. It refuses a check whose arguments it cannot bind:
+            \\
+            \\  - a notifier that is not a variable. 15.5: "The notifier is a
+            \\    reg, declared in the module where timing check tasks are
+            \\    invoked", and A.7.5.2 `notifier ::= variable_identifier`. A
+            \\    net, a real, a parameter or an array has no reg value for
+            \\    Table 15-13 to toggle;
+            \\  - an event terminal that is not a name, or a constant bit- or
+            \\    part-select of at most 64 bits of a vector (A.7.3
+            \\    `specify_input_terminal_descriptor ::= input_identifier
+            \\    [ [ constant_range_expression ] ]`), or that names a real or
+            \\    an array.
+            \\
+            \\Name a reg as the notifier, and a port (or a constant select of
+            \\one) as each event.
+            ,
+        },
+        .E1148 => .{
+            .title = "a timing check limit that is not a non-negative constant",
+            .lrm = "IEEE 1364-2005 15.1",
+            .explain =
+            \\15.1: "Like expressions for module path delays, timing check limit
+            \\values are constant expressions that can include specparams", and
+            \\Tables 15-1, 15-2, 15-4, 15-5, 15-10 and 15-11 give the limit of
+            \\$setup, $hold, $removal, $recovery, $width and $period, and
+            \\$width's threshold, as a "Non-negative constant expression".
+            \\A limit that reads a signal, or one of those six below zero, is
+            \\refused. $setuphold and $recrem take negative limits (15.8),
+            \\which VerA does not evaluate (E1149).
+            ,
+        },
+        .E1149 => .{
+            .title = "a timing check VerA's digital engine does not evaluate",
+            .lrm = "IEEE 1364-2005 15",
+            .explain =
+            \\`vera --run` evaluates $setup, $hold, $setuphold, $removal,
+            \\$recovery, $recrem, $width and $period (IEEE 1364-2005 15.2,
+            \\15.3.4, 15.3.5), their notifiers (15.5), conditioned events (15.6)
+            \\and vector signals (15.7). It does not evaluate, and so refuses
+            \\rather than run a design whose checks would silently never fire:
+            \\
+            \\  - $skew, $timeskew, $fullskew and $nochange (15.3.1-15.3.3,
+            \\    15.3.6): the skew checks' timer-based windows and $nochange's
+            \\    three-event window;
+            \\  - a negative $setuphold or $recrem limit (15.8 negative timing
+            \\    checks), and their stamptime and checktime conditions and
+            \\    delayed reference and data signals (15.5.1, 15.5.2), which
+            \\    exist for negative checks.
+            \\
+            \\An analog compile never evaluates a timing check (W0251).
             ,
         },
         .E1101 => .{
@@ -6911,6 +7149,27 @@ fn infoOf(c: Code) Info {
             \\(wand with wor), a pull or charge-storage net meeting another, a
             \\uwire meeting a resolved net, supply0 meeting supply1. VerA joins
             \\the two into the external net and issues this warning.
+            ,
+        },
+        .W1199 => .{
+            .title = "timing violation",
+            .lrm = "IEEE 1364-2005 15.2",
+            .explain =
+            \\A timing check of the design detected a violation while `vera
+            \\--run` ran it: 15.2's stability window ($setup, $hold, $setuphold,
+            \\$removal, $recovery, $recrem) held a transition it forbids, or
+            \\15.3.4's $width or 15.3.5's $period measured a pulse or a period
+            \\shorter than its limit. The warning is at the check, naming the
+            \\instance and the times of its timestamp and timecheck events in
+            \\the instance's time unit (docs/Vague_Decisions.md VD-105). Like
+            \\every diagnostic it is reported once per site, so it is the
+            \\check's FIRST violation; each later one still toggles the
+            \\check's notifier as Table 15-13 says (VD-103) and runs a VPI
+            \\application's cbTchkViolation callbacks. The run goes on: a
+            \\violation is the design's report, not an error of the
+            \\simulator's.
+            \\
+            \\  --allow=W1199    silence the reports (the notifier still toggles)
             ,
         },
         .E1004 => .{
@@ -7097,6 +7356,42 @@ fn infoOf(c: Code) Info {
             \\with a placeholder 0 in that place.
             \\
             \\Report it with the source that produced it.
+            ,
+        },
+        .E1099 => .{
+            .title = "`--emit-osdi` cannot carry `$vera_reject_step`",
+            .lrm = "",
+            .explain =
+            \\A limit of the OSDI 0.4 interface, not a language rule.
+            \\`$vera_reject_step(t)` is VerA's task for asking the host to reject
+            \\the transient step it just accepted and retry it ending at `t`
+            \\(`contract.UpdateResult.request_reject_at`). An OSDI library has no
+            \\return value or callback that carries such a request to the
+            \\simulator, so the library would accept every step the device asked
+            \\to reject. VerA refuses to build it rather than build a device that
+            \\silently ignores the call.
+            \\
+            \\The same source builds for a host that has the slot: `--emit-so`,
+            \\`--emit-exe` and `--run`. For an OSDI simulator, drop the call.
+            ,
+        },
+        .W1098 => .{
+            .title = "`--emit-osdi` reports correlated noise rows as independent sources",
+            .lrm = "4.6.4.6",
+            .explain =
+            \\LRM 4.6.4.6: "Perfectly correlated noise is generated by using the
+            \\output of one noise function for more than one noise source." The
+            \\device publishes such rows with one `source` id
+            \\(`contract.NoiseGen.source`), and their cross-spectrum is the
+            \\product of their coefficients times the generator's density.
+            \\
+            \\OSDI 0.4 describes a noise source by its node pair and its density
+            \\alone: it has no slot for a correlation between two sources. The
+            \\library therefore reports each row as its own independent source,
+            \\and a noise analysis of it misses the cross term. DC, AC and
+            \\transient analyses are unaffected.
+            \\
+            \\`--deny=W1098` refuses the build instead.
             ,
         },
         .W1050 => .{

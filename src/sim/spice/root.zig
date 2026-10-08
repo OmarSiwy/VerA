@@ -12,7 +12,7 @@
 pub const Circuit = @import("circuit.zig").Circuit;
 /// Direct Newton and its acceptance gates.
 pub const converger = @import("converger.zig");
-/// The operating point (plain Newton from the cold start).
+/// The operating point: plain Newton, then gmin and source stepping.
 pub const op = @import("op.zig");
 /// Transient with LTE, breakpoint, `$bound_step` and state-flip control.
 pub const tran = @import("tran.zig");
@@ -27,6 +27,8 @@ pub const deck = @import("deck.zig");
 
 test {
     _ = converger;
+    _ = op;
+    _ = noise;
     _ = tran;
     _ = dense_lu;
     _ = integrator;
