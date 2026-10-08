@@ -216,6 +216,8 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
         const gop = try self.segs.getOrPut(self.ctx.arena, bound);
         if (!gop.found_existing) gop.value_ptr.* = .{ .tok = p.main_tok };
         try gop.value_ptr.discs.append(self.ctx.arena, disc);
+        // `levelsOf` finds a level's prefix at a `sep` of the path.
+        std.debug.assert(path.len == 0 or path[path.len - 1] == sep);
         try gop.value_ptr.paths.append(self.ctx.arena, path);
         // Parallel columns: `resolveLevel` reads arrival i's path beside its discipline.
         std.debug.assert(gop.value_ptr.discs.items.len == gop.value_ptr.paths.items.len);
@@ -281,16 +283,20 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
     var it = self.segs.iterator();
     while (it.next()) |entry| {
         const net = entry.key_ptr.*;
+        const s = entry.value_ptr;
+        const undeclared = std.mem.findScalar(Ast.StrId, s.discs.items, .none) != null;
+        if (!undeclared and !self.port_resolved.contains(net)) continue;
+        const lv = try levelsOf(self.ctx.arena, s.paths.items);
         // A declared upper segment does not declare every segment below it
         // (§7.4.4.3 Figure 7-5, Case 2). Their local resolution answers still
         // supply §7.2.4 tolerances and §5.5.3 nature attributes.
-        for (entry.value_ptr.discs.items, 0..) |disc, i| {
-            if (disc == .none) _ = try resolveLevel(self, net, entry.value_ptr, i);
+        for (s.discs.items, 0..) |disc, i| {
+            if (disc == .none) _ = try resolveLevel(self, net, s, &lv, i);
         }
         // A net the source declared was decided by §3.10 precedence
         // (steps 2/3); step 4 is only for undeclared interconnect.
         if (!self.port_resolved.contains(net)) continue;
-        const r = try resolveLevel(self, net, entry.value_ptr, null) orelse continue;
+        const r = try resolveLevel(self, net, s, &lv, null) orelse continue;
         if (self.disc_of.get(net) == r) continue;
         // Bullet 3: "the net is of the resolved discipline given by the
         // statement", which "need not be one of the disciplines specified
@@ -319,6 +325,7 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
 /// reached the net through (the one whose instance path is the longest
 /// proper prefix of `i`'s), or null for a segment at the net's own level.
 /// This recovers the levels a flattened net's single list mixes together.
+/// O(paths) per call: the test oracle for `levelsOf`, which production uses.
 fn levelOf(paths: []const []const u8, i: usize) ?usize {
     std.debug.assert(i < paths.len);
     var best: ?usize = null;
@@ -329,23 +336,84 @@ fn levelOf(paths: []const []const u8, i: usize) ?usize {
     return best;
 }
 
+/// §7.4.1's levels of one flattened net: its arrivals grouped by the arrival
+/// each reached the net through (`levelOf`), built once per net by `levelsOf`
+/// so `resolveLevel` visits every arrival once. Level `g < paths.len` holds
+/// the arrivals directly below arrival g; level `paths.len` the net's own.
+const Levels = struct {
+    /// `members[start[g]..start[g + 1]]` is level g, in arrival order.
+    start: []const u32,
+    /// Every arrival index exactly once.
+    members: []const u32,
+    /// The path-prefix lookups `levelsOf` made: one per `sep` of a path at
+    /// most, plus the empty prefix. The linearity test reads it.
+    probes: u32,
+
+    fn of(lv: *const Levels, g: usize) []const u32 {
+        return lv.members[lv.start[g]..lv.start[g + 1]];
+    }
+};
+
+/// Builds `Levels` from the arrivals' instance paths. An arrival's level is
+/// the first arrival whose path is the longest proper prefix of its own
+/// (`levelOf`, the test oracle). Every path ends in `sep` (asserted in
+/// `resolveDiscipline`), so such a prefix ends just after a `sep` of the path,
+/// or is empty: one hash lookup per `sep`, O(paths × depth), not O(paths²).
+fn levelsOf(arena: std.mem.Allocator, paths: []const []const u8) Error!Levels {
+    const n: u32 = @intCast(paths.len);
+    var first: std.StringHashMapUnmanaged(u32) = .empty;
+    try first.ensureTotalCapacity(arena, n);
+    for (paths, 0..) |p, i| {
+        const gop = first.getOrPutAssumeCapacity(p);
+        if (!gop.found_existing) gop.value_ptr.* = @intCast(i);
+    }
+    const level = try arena.alloc(u32, n);
+    var probes: u32 = 0;
+    for (paths, level) |p, *lvl| {
+        lvl.* = n;
+        var len = p.len;
+        while (len > 0) {
+            len = if (std.mem.findScalarLast(u8, p[0 .. len - 1], sep)) |k| k + 1 else 0;
+            probes += 1;
+            if (first.get(p[0..len])) |j| {
+                lvl.* = j;
+                break;
+            }
+        }
+    }
+    // Counting sort by level, stable, so each level keeps arrival order.
+    const start = try arena.alloc(u32, n + 2);
+    @memset(start, 0);
+    for (level) |g| start[g + 1] += 1;
+    for (1..start.len) |g| start[g] += start[g - 1];
+    const next = try arena.dupe(u32, start[0 .. n + 1]);
+    const members = try arena.alloc(u32, n);
+    for (level, 0..) |g, i| {
+        members[next[g]] = @intCast(i);
+        next[g] += 1;
+    }
+    std.debug.assert(start[n + 1] == n);
+    return .{ .start = start, .members = members, .probes = probes };
+}
+
 /// One level's answer for `net`, over the arrivals directly at that level
 /// (`group`'s members, or the net's own level's at null). A declared lower
 /// connection is itself (§7.4.4.3: "that discipline shall be used"); an
 /// undeclared one is its own level's answer, resolved first, so Figure
 /// 7-2's NetA sees "the resulting cmos3 from module twoblks", not twoblks'
-/// children.
-fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error!?Ast.StrId {
+/// children. `lv` is `s`'s levels; with the `resolved` memo, one net's
+/// resolution visits each arrival once (#75: a scan of every arrival per
+/// level, each through `levelOf`, was cubic in the instance count).
+fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, lv: *const Levels, group: ?usize) Error!?Ast.StrId {
     // `resolveDiscipline` appends the two columns together.
     std.debug.assert(s.discs.items.len == s.paths.items.len);
     if (group) |g| std.debug.assert(g < s.discs.items.len);
     if (group) |g| if (s.resolved.get(@intCast(g))) |cached| return cached;
-    var discs: std.ArrayList(Ast.StrId) = try .initCapacity(self.ctx.arena, s.discs.items.len);
-    for (s.discs.items, 0..) |d, i| {
-        const lvl = levelOf(s.paths.items, i);
-        if ((lvl == null) != (group == null)) continue;
-        if (lvl != null and lvl.? != group.?) continue;
-        const v = if (d != .none) d else (try resolveLevel(self, net, s, i)) orelse continue;
+    const members = lv.of(group orelse s.discs.items.len);
+    var discs: std.ArrayList(Ast.StrId) = try .initCapacity(self.ctx.arena, members.len);
+    for (members) |i| {
+        const d = s.discs.items[i];
+        const v = if (d != .none) d else (try resolveLevel(self, net, s, lv, i)) orelse continue;
         discs.appendAssumeCapacity(v);
     }
     const answer = try levelAnswer(self, net, s.tok, discs.items);
@@ -559,6 +627,51 @@ test levelOf {
     try std.testing.expectEqual(@as(?usize, null), levelOf(&paths, 4));
     // A repeated path is the same level, never its own parent.
     try std.testing.expectEqual(@as(?usize, null), levelOf(&paths, 5));
+}
+
+/// Checks every level of `lv` against the `levelOf` oracle: each arrival sits
+/// in exactly the level `levelOf` names, and each level is in arrival order.
+fn expectLevelsMatchOracle(paths: []const []const u8, lv: *const Levels) !void {
+    try std.testing.expectEqual(paths.len, lv.members.len);
+    for (0..paths.len + 1) |g| {
+        var prev: ?u32 = null;
+        for (lv.of(g)) |i| {
+            try std.testing.expectEqual(if (g == paths.len) null else @as(?usize, g), levelOf(paths, i));
+            if (prev) |p| try std.testing.expect(p < i);
+            prev = i;
+        }
+    }
+}
+
+test levelsOf {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const paths = [_][]const u8{ "u.", "u.v.", "w.", "u.v.x.", "u1.", "u.", "u.v.x.y.z.", "" };
+    const small = try levelsOf(a, &paths);
+    try expectLevelsMatchOracle(&paths, &small);
+
+    // #75: issue 75's shape, N instances `g[i].u.` of a module with an
+    // undeclared port, each holding a leaf `g[i].u.l.`, is 2N arrivals on one
+    // net. The levels take 3 prefix lookups per instance whatever N is (the
+    // old `levelOf` per arrival per level was N^3), so doubling N doubles
+    // the work, and each arrival is in one level, so `resolveLevel` visits
+    // it once. A count, not a clock.
+    var probes: [3]u32 = undefined;
+    for ([_]usize{ 256, 512, 1024 }, &probes) |n, *count| {
+        const ps = try a.alloc([]const u8, 2 * n);
+        for (0..n) |i| {
+            ps[2 * i] = try a.print("g[{d}].u.", .{i});
+            ps[2 * i + 1] = try a.print("g[{d}].u.l.", .{i});
+        }
+        const lv = try levelsOf(a, ps);
+        try expectLevelsMatchOracle(ps, &lv);
+        try std.testing.expectEqual(@as(usize, n), lv.of(ps.len).len);
+        count.* = lv.probes;
+    }
+    try std.testing.expectEqual(@as(u32, 3 * 256), probes[0]);
+    try std.testing.expectEqual(2 * probes[0], probes[1]);
+    try std.testing.expectEqual(2 * probes[1], probes[2]);
 }
 
 test levelCandidates {
