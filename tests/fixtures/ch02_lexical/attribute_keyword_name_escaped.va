@@ -1,7 +1,7 @@
 // LRM 2.9 Syntax 2-4 and A.9.1: `attr_name ::= identifier`. §2.8.1 lets an
 // escaped identifier spell a keyword (`\module ` is an identifier, not the
 // keyword), and §2.9.2 standardizes `units` and prints it unescaped even
-// though annex B reserves it (docs/Vague_Decisions.md VD-024).
+// though annex B reserves it (specification/Vague_Decisions.md VD-024).
 //
 // Legal neighbour of attribute_keyword_name_rejected.va: the same attribute
 // list with `module` escaped. HAND DERIVATION: the attributes carry no

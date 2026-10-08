@@ -15,7 +15,7 @@
  * LRM 12.33.2: "This array of C functions shall be for registering system
  * tasks and functions." Its "performing any other desired task just after
  * the simulator is invoked" is met by registering a callback that performs
- * it, as 12.31.4's setup_report_cpu example does (docs/Vague_Decisions.md
+ * it, as 12.31.4's setup_report_cpu example does (specification/Vague_Decisions.md
  * VD-044: VerA refuses every other routine at startup, with an error that
  * cites 26.2.4).
  *

@@ -17,7 +17,7 @@
 //
 // Only the resolved VALUE is asserted here. The strength of a wired-logic
 // result is not observable from this runner: `%v` is not implemented (see
-// docs/CLAUSE-AUDIT.md row 17.1-07) and there are no switch primitives to
+// specification/CLAUSE-AUDIT.md row 17.1-07) and there are no switch primitives to
 // propagate it into (D08).
 //
 //! lrm annex A.2.2.1

@@ -21,7 +21,7 @@
 // The reservation is Table B.1 and nothing else, so the list is CLOSED, and
 // `assert` is not in it. It would sit between `asinh` and `assign` if it were;
 // it is in neither the 2023 source PDF nor this repository's corrected
-// docs/annex-b-keywords.html.
+// specification/annex-b-keywords.html.
 //
 // THE LRM MAKES THE SAME POINT ABOUT A WORD OF THE SAME PEDIGREE, in §10.6's
 // last worked example: "Note that the word "logic" is not a keyword in

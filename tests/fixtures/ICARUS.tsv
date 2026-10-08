@@ -1,7 +1,7 @@
 # Icarus Verilog version 13.0 (stable) (v13_0) — `iverilog -g2005`, `vvp -n`; written by `tools/conformance.py icarus`.
 # agrees: a transcript fixture's stdout (vvp's own VCD/$finish notices dropped) equals its
 # .expected.txt; a reject fixture is refused at build or exits nonzero. Disagreements are
-# listed, never resolved (docs/TESTING.md L7). Read by `metric` as an independent oracle.
+# listed, never resolved (specification/TESTING.md L7). Read by `metric` as an independent oracle.
 fixture	expect	icarus	exit	agrees	note
 digital/digital_delay_notation.v	transcript	refuses	-	no	tests/fixtures/digital/digital_delay_notation.v:21: syntax error
 digital/digital_delay_primitive_notation.v	transcript	refuses	-	no	tests/fixtures/digital/digital_delay_primitive_notation.v:23: sorry: Net delays not supported.

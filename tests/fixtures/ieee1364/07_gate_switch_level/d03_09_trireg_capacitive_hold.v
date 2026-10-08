@@ -27,7 +27,7 @@
 // The charge STRENGTH itself is still not asserted, and cannot be from this
 // file: a driven trireg takes its drivers' value and strength outright, so
 // small-vs-large is observable only through `%v` (missing,
-// docs/CLAUSE-AUDIT.md row 17.1-07) or through a switch primitive (D08).
+// specification/CLAUSE-AUDIT.md row 17.1-07) or through a switch primitive (D08).
 // The three trireg columns therefore pin only that the strengths are LEGAL and
 // change no stored value. See tests/fixtures/ieee1364/07_gate_switch_level/d03_SPEC.md at 8b1514d4, "Deliberately NOT covered".
 //

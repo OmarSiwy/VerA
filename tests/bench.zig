@@ -13,7 +13,7 @@
 //!   `vpi`        `harness/c_fixtures.zig`
 //!   `spice`      `harness/spice_decks.zig`
 //!   `golden`     `harness/golden.zig`, the before/after snapshot of what vera says
-//!   `archmap`    `harness/archmap.zig`, docs/UNITS.md and the AGENTS.md map
+//!   `archmap`    `harness/archmap.zig`, specification/UNITS.md and the AGENTS.md map
 //!   `canary`     `harness/canary.zig`, the wrong-on-purpose fixtures the judge must FAIL
 //!
 //! `tools/conformance.py` parses the `pass fail unasserted xfail` row this

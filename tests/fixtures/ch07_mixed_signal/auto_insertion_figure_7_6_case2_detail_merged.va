@@ -3,7 +3,7 @@
 // figure lists "d2a at top.mix.blk2, d2a at top.digital_blk.(blk1-blk2), and
 // d2a at top.digital_blk.twoblks (three connect modules)", the same line as
 // Case 1's. §7.8.4's merge rule applied to Case 2 gives two, and VerA follows
-// the rule (docs/Vague_Decisions.md VD-092). This file pins the two.
+// the rule (specification/Vague_Decisions.md VD-092). This file pins the two.
 //
 // The design is auto_insertion_figure_7_6_detail_merged.va's (Case 1) with
 // one change: twoblks declares its port, NetB, `cmos1`. Every digital module

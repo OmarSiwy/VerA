@@ -1,4 +1,4 @@
-// A VerA limit, not an LRM rule (docs/Vague_Decisions.md §7, E0997): the
+// A VerA limit, not an LRM rule (specification/Vague_Decisions.md §7, E0997): the
 // port-branch spelling of port_access_own_port_inside_instance_rejected.va.
 // §3.12.1: "A port branch is a special type of branch used to access the
 // flow into a port of a module (see 5.4.3). It is a branch between the upper

@@ -6,7 +6,7 @@
 //
 // §2.9: "attr_spec ::= attr_name [ = constant_expression ]", and a string is a
 // constant expression. §2.9 leaves the meaning to the tool; this one is VerA's
-// (AGENTS.md §6, docs/Vague_Decisions.md).
+// (AGENTS.md §6, specification/Vague_Decisions.md).
 //
 // WHY. A B-source tape evaluates on a runtime-indexed stack. Plain
 // `vera_scratch` re-zeroes the whole stack (value and every derivative lane)

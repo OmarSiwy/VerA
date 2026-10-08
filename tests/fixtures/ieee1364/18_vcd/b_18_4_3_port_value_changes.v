@@ -49,7 +49,7 @@
 //   #5 the fixture releases io too: both three-stated -> pf 0 0 <3.
 //   #6 u drives io (pull0, pull1) to 0, the fixture weak 0 again. Pull is
 //      5, inside "7 to 5" by number though the parenthesis says "(large)"
-//      (docs/Vague_Decisions.md VD-042: the numbers rule): input weak,
+//      (specification/Vague_Decisions.md VD-042: the numbers rule): input weak,
 //      output strong range -> pl 5 0 <3. Were pull in the weak range, both
 //      sides weak would give p0 5 0 <3.
 //! inherited IEEE 1364-2005 18.4.3 18.4.3.1 18.4.3.2 18.4.4

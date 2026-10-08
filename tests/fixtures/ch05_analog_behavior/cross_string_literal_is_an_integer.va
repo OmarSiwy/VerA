@@ -2,7 +2,7 @@
 // shall be treated as unsigned integer constants represented by a sequence of
 // 8-bit ASCII values". So in `cross("s")` the monitored expression is the
 // constant 0x73 = 115, which never crosses zero: the event never fires and
-// `fired` keeps §3.2's 0 at every point (docs/Vague_Decisions.md VD-107).
+// `fired` keeps §3.2's 0 at every point (specification/Vague_Decisions.md VD-107).
 //
 // The control is cross(V(p)) on the wave -1, 1, 1 over 0, 1n, 2n: one rising
 // crossing strictly between 0 and 1n, so on the fixed grid it fires at the

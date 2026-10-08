@@ -3,7 +3,7 @@
 // net, a transition that is neither to zero nor to z takes the rising delay.
 // §4.3 calls a net 1 bit wide a scalar and a "Multibit" net a vector, so a
 // `wire [0:0]` (a range, one bit) takes the gate rule: width decides
-// (docs/Vague_Decisions.md VD-038).
+// (specification/Vague_Decisions.md VD-038).
 // #(7,5,2), both nets start 0 and both drivers go to x at t=10:
 //   s  [0:0]: gate rule, a transition to x takes min(7,5,2) = 2 -> due 12
 //   v  [1:0]: vector rule, 00 -> xx is "otherwise", rising 7     -> due 17

@@ -86,7 +86,7 @@ dated separately.**
 ### The deletion that this restoration uncovered
 
 `2cc1c08` is titled *"docs: the 2023 LRM replaces 2.4, and the stale prose goes
-with it"*. It added one file — `docs/VAMS-LRM-2023.pdf` — and deleted
+with it"*. It added one file — `specification/VAMS-LRM-2023.pdf` — and deleted
 **thirty-nine**, of which **fourteen are tests and one is a 295-line tool**:
 
 ```
@@ -231,17 +231,17 @@ that is executable and byte-exact against committed transcripts but sits in the
 which harness proves it.
 
 **c. The coverage tool is structurally blind to the inherited clauses.** It
-walks `docs/ch*.html` and `docs/annex-*.html`, which are the AMS LRM. IEEE 1364
+walks `specification/ch*.html` and `specification/annex-*.html`, which are the AMS LRM. IEEE 1364
 Clause 17 and Clause 18 are not in that set, so they can never appear in the
 "uncited" list — they are outside the denominator entirely. This is exactly the
 blind spot D09 names, and it is why Section 4 exists.
 
 The normative hook that makes them in scope, twice over:
 
-- **§2.8.3** (`docs/ch2-lexical.html`): "The system tasks and functions described
+- **§2.8.3** (`specification/ch2-lexical.html`): "The system tasks and functions described
   in Clause 17 and Clause 18 of IEEE Std 1364 Verilog **are part of this
   standard**."
-- **§9.1** (`docs/ch9-system.html`): "Verilog-AMS HDL is a superset of IEEE Std
+- **§9.1** (`specification/ch9-system.html`): "Verilog-AMS HDL is a superset of IEEE Std
   1364 Verilog and hence **all the system tasks in IEEE Std 1364 Verilog are
   supported**."
 
@@ -288,8 +288,8 @@ reason.
 
 **Caveat on numbering.** IEEE 1364-2005 is still not in this worktree. Two
 subclause numbers are confirmed by the AMS LRM's own cross-references —
-**17.2.7** (`$ferror`, `docs/ch9-system.html`) and **17.9.3** (the distribution C
-listing, `docs/ch9-system.html`, Table 9-26). The rest are from the inherited
+**17.2.7** (`$ferror`, `specification/ch9-system.html`) and **17.9.3** (the distribution C
+listing, `specification/ch9-system.html`, Table 9-26). The rest are from the inherited
 standard's structure and must be re-checked against a copy of 1364-2005 before
 this table gates anything (§7.3 item 8). Clause and subclause *content* below is
 stated only where the AMS LRM restates it or where the source settles it.
@@ -330,7 +330,7 @@ outside measure A; see §1.1 b′.
 | 17.1-03 | 17.1.1.1 escape sequences | present — `lib/frontend/lexer.zig:624`, `lib/ir/lower.zig:10367` ("direct output literals retain their lexical bytes (§9.4.2)"); `lexer.zig:918` and `188_numeric_string.va`'s `"\377"`/`"\001A"` | present (`lib/frontend/parser.zig:5043` keeps octal NUL); **no d09 golden contains an escape** | **implemented-without-evidence (digital)** / verified (analog) | §9.4.2 Table 9-21. **`zig build test-literal-output` no longer exists** — deleted in `2cc1c08`; the old citation is dead and survives only in `ch09_system_tasks/COVERAGE.md:50` |
 | 17.1-04 | 17.1.1.2 format specifications | full C prefix `%[flags][width][.prec]conv` via `lib/backend/cg_display.zig:641`; `171_display_c_format_flags.va` plus `s01_01`–`s01_04` all pass (`%g` significant digits, sign before zero fill, round-half-to-even, `%r` engineering notation) | Table 9-22 radix only, `%e/%f/%g` restricted to `$realtime` (`src/sim/digital.zig:1548`), `%t` (`:1516`); `%c %l %m %s %r` refused (`:1525-1528`); bare width, no flags, no precision (`:1499-1503`) | **partial (digital)** / verified (analog) | Boundary nameable: digital has Table 9-22's radix rows, a width and `%t`; it lacks `%c %l %m %s`, C flags/precision, and **§9.4.7's `%r` on reals in the digital context** (row AMS-02) |
 | 17.1-05 | 17.1.1.3 automatic sizing of displayed data | documented **deviation** — `cg_display.zig:136-141`: a bare integer prints minimal-width where 1364 auto-sizes `%d` to 20 columns for 64-bit | implemented — `src/sim/digital.zig:1683` `width orelse autoWidth(v, radix)`, `:1693`; `d09_01` pins `%d` of an 8-bit 7 as `[  7]`, `%0d` as `[7]`, `%h`→2, `%o`→3, `%b`→8 | **partial** | was `missing`. Digital half verified; analog half deviates deliberately and the deviation is in-source |
-| 17.1-06 | 17.1.1.4 unknown / high-impedance display | refused on the prohibition: AMS 7.3.2 makes an x/z operand an error outside ===/!==/case comparisons (`docs/Vague_Decisions.md` VD-017) — E0130, `ch07_mixed_signal/reject_display_x_operand_analog.va`, legal neighbour `display_binary_operand_analog.va` | implemented — `src/sim/digital.zig:1716` `groupText`, `:1739-1744` ("all unknown prints lowercase, partly unknown prints uppercase"); `d09_02_display_unknown_radix.v` pins `ax`/`2Xx`, `z3`/`zZ3`, LSB-first octal grouping | **verified** | was `partial`. Digital verified; the analog half is verified on the prohibition (§7.5 item 1, settled 2026-10-04) |
+| 17.1-06 | 17.1.1.4 unknown / high-impedance display | refused on the prohibition: AMS 7.3.2 makes an x/z operand an error outside ===/!==/case comparisons (`specification/Vague_Decisions.md` VD-017) — E0130, `ch07_mixed_signal/reject_display_x_operand_analog.va`, legal neighbour `display_binary_operand_analog.va` | implemented — `src/sim/digital.zig:1716` `groupText`, `:1739-1744` ("all unknown prints lowercase, partly unknown prints uppercase"); `d09_02_display_unknown_radix.v` pins `ax`/`2Xx`, `z3`/`zZ3`, LSB-first octal grouping | **verified** | was `partial`. Digital verified; the analog half is verified on the prohibition (§7.5 item 1, settled 2026-10-04) |
 | 17.1-07 | 17.1.1.5 strength format `%v` | **fabricated value** — `cg_display.zig:725` maps `'t','u','z','v' => "d"`, so `$display("%v", 65)` silently prints `65` | refused, E1100 (`src/sim/digital.zig:1525`) | **missing** | Verdict unchanged, reason sharper: analog does not refuse `%v`, it *answers* it with a decimal. Needs D03 drivers/strengths |
 | 17.1-08 | 17.1.1.6 hierarchical name `%m`, takes no argument | **verified** — `cg_display.zig:560-571` (`%m`/`%l` consume no operand); `192_m_format_hierarchical_name.va` passes 3/3: the name prints, `%m` consumes no argument so a following `%d` still takes 7 | **refused** (`src/sim/digital.zig:1525`) — a conforming input rejected | **missing (digital)** / verified (analog) | §9.4.4 is explicit and Table 9-1 gives `$display` digital Yes, so this refuses a legal construct. The old `implemented-without-evidence` conflated the halves; `COVERAGE.md:37` is superseded by `192` |
 | 17.1-09 | 17.1.1.7 `%s` ASCII-code output | **verified** — `cg_display.zig:669`; seven `188_numeric_string*.va` files pin byte order, width, leading-zero suppression, interior/trailing NUL, signed carriers | **refused** (`src/sim/digital.zig:1525`) | **missing (digital)** / verified (analog, integer operands) | §9.4.5. Real operands and packed digital expressions still untested; the digital half is now a measured refusal, not an absence |
@@ -576,7 +576,7 @@ their own audit". Recorded here so they are not lost.
 | AMS-02 | §9.4.7 `%r`/`%R` on reals in the **digital** context | **missing** | `src/sim/digital.zig:1505-1527`: the conversion switch admits `b o h d e f g t` and falls through to "only the §9.4.3 Table 9-22 conversions … are implemented" — `%r` is refused by name. §9.4.7 is one sentence of permission ("**may be used** on real expressions in the digital context"), so refusing it is `missing`. The `%r` that works is the Table 9-23 analog engineering-notation specifier (`lib/backend/cg_display.zig:643-650`). Upstream, the whole digital context is walled: XFAIL `193_severity_task_digital_context_rejected.va` and `194_file_descriptor_shared_across_contexts.va` both record that **E0433** (§7.2.2, "statement in an initial block is not a constant assignment") refuses digital-context statements before their own clause is consulted |
 | AMS-03 | §9.22.1/§9.22.3/§9.22.4 driver access (`$driver_count`, `$driver_state`, `$driver_strength`) | **missing** | The `pickTop` claim **re-checked and it holds**: `lib/ir/elaborate.zig:240` `if (m.is_connect) continue;`, under the §7.6 comment "picking one as the device would elaborate a bridge as if the user had asked for it". Refusal at `lib/ir/lower.zig:9237-9243` (E0818, "can only be called from a connect module") over `isConnectModuleOnlySysFunc` at `:7602-7612`. Correct for the *wrong half* of §9.22 ¶3; the right half needs §7.8 insertion. **New evidence**: XFAIL `196_connectmodule_driver_access_example.va` carries §9.22.7's `c2e` example line for line and is refused twice over — `assign d=out;` is E0205 and behind it `out = 1'bx;` is E0130 — and its header adds that a connect module "is never inserted (§7.8) and never lowered, so nothing in the example can RUN even once it parses" |
 | AMS-04 | §9.23.1–§9.23.4 (`$driver_delay`, `$driver_next_state`, `$driver_next_strength`, `$driver_type`) | **missing** | Same list, same site (`lib/ir/lower.zig:7608-7609`, refused at `:9237`). Table 9-20 fences these one step tighter than §9.22 — "supported in the digital context of connectmodules", analog No. Rejection atomics `111`–`114` pin only the prohibition |
-| AMS-05 | §9.22.2 `$receiver_count` | **missing** | **The "Non-normative" reading is withdrawn.** That string does not occur anywhere in `docs/ch9-system.html` at HEAD: `:1621-1625` is a normative subclause with its own syntax box (Syntax 9-18), and Table 9-19 at `:278` gives it `Yes`/`Yes` — **the only member of the five supported in the analog context of a connect module**. The fixture that argued otherwise, `annex_g_change_history/08_new_receiver_count.va`, was deleted in `2cc1c08`; `ch09_system_tasks/COVERAGE.md:103` records why ("authored from an HTML transcription contaminated with Verilog-AMS 2.4 text"). `lib/ir/lower.zig:7597-7600` **still repeats the withdrawn claim and still cites the deleted fixture**, and its blanket E0818 is now wrong in kind for the one row Table 9-19 marks analog-Yes. `ch07_mixed_signal/m04_16_receiver_count_reports_ordinary_receivers.va` is a hard **FAIL** |
+| AMS-05 | §9.22.2 `$receiver_count` | **missing** | **The "Non-normative" reading is withdrawn.** That string does not occur anywhere in `specification/ch9-system.html` at HEAD: `:1621-1625` is a normative subclause with its own syntax box (Syntax 9-18), and Table 9-19 at `:278` gives it `Yes`/`Yes` — **the only member of the five supported in the analog context of a connect module**. The fixture that argued otherwise, `annex_g_change_history/08_new_receiver_count.va`, was deleted in `2cc1c08`; `ch09_system_tasks/COVERAGE.md:103` records why ("authored from an HTML transcription contaminated with Verilog-AMS 2.4 text"). `lib/ir/lower.zig:7597-7600` **still repeats the withdrawn claim and still cites the deleted fixture**, and its blanket E0818 is now wrong in kind for the one row Table 9-19 marks analog-Yes. `ch07_mixed_signal/m04_16_receiver_count_reports_ordinary_receivers.va` is a hard **FAIL** |
 | AMS-06 | §9.22.5 `driver_update` operator | **verified** | Re-scored 2026-10-04 (`Vague_Decisions.md` VD-019): the statement now executes (`src/sim/digital/driver.zig`). `ch07_mixed_signal/m04_12_driver_update_without_resolved_change.va` asserts that it fires on a driver update with no change in the resolved value, and `ch09_system_tasks/213_driver_update_in_analog_event_rejected.va` pins the refusal. §9.22.6's receiver value is a separate row. Under the `partial` rule VD-019 settles (an obligation executed with a recorded result, not a parsed AST path), this row is two-way (§7.5 item 4, closed) |
 | AMS-07 | §4.6.4.3 `noise_table` / §4.6.4.4 `noise_table_log` PSD export | **verified** | **The gap named on 2026-09-16 is closed.** `contract.NoiseGen.kind` is now `enum { thermal, shot, flicker, table }` with a `table: ?u16` back-reference (`tools/contract.zig:681,687`), and `contract.NoiseTable` (`:724-740`) carries `interp: enum { linear, log }` plus ascending knots. `lib/ir/lower.zig:5875-5878` classifies both calls into `.table`/`.table_log` instead of dropping them; `lib/backend/codegen.zig:7285-7320` emits `noise_tables`. Executable: `lib/backend/tb.zig:212` parses `//! noise table(<row>,<col>)#<src> … interp=linear\|log points=…` and the generated testbench asserts the topology byte-exact — `181_noise_table_topology.va`, `182_noise_table_log_topology.va` and two `a06_ntab` fixtures, none in the FAIL/XFAIL list. **The zero residual remains correct and untouched** (`lib/backend/codegen.zig:5754-5762`); §4.6.4 sources contribute in small-signal noise analysis only — **do not re-report it as the gap.** The residual gap is now *downstream of VerA*: `a06_noisetables_SPEC.md` documents that the host never reads `noise_tables`, so `onoise_spectrum == 0.0` on all four `.sp` decks — which are outside measure A (§1.1 b′) |
 | AMS-08 | §4.6.4.4 `noise_table_log` | **verified** | No longer UNCITED. `182_noise_table_log_topology.va` and `a06_ntab_log.va` both pass; `lib/backend/tb.zig:502-503` rejects any `interp` but `linear`/`log`, so the log spelling is pinned and not merely present. `a06_ntab_log_interior.expected.json` states the discrimination: applying §4.6.4.3's linear rule to the same knots is "a factor of 2 off, so this fixture separates the two clauses rather than merely exercising a lookup" |
@@ -612,7 +612,7 @@ grammar (Annex A), not in G.
 
 ### 5.3 Implementation-defined — requires a document *and* a test
 
-`docs/Vague_Decisions.md` §6 is the maintained list; the table below is the
+`specification/Vague_Decisions.md` §6 is the maintained list; the table below is the
 2026-09-21 audit it grew from.
 
 | Item | Choice made | Documented? | Tested? |
@@ -630,7 +630,7 @@ requires the published support statements to match the shipped combination.
 
 ### 5.4 Resource limits — must be stated and must fail loudly
 
-`docs/Vague_Decisions.md` §7 is the maintained table and its §4 lists the
+`specification/Vague_Decisions.md` §7 is the maintained table and its §4 lists the
 limits that do not yet fail loudly; the table below is the 2026-09-21 audit.
 
 **Re-derived at HEAD, 2026-09-21.** Two bounds moved from 512 to 4096 and gained
@@ -671,9 +671,9 @@ sections are already marked this way in its `COVERAGE.md` and that is right.
 
 **Withdrawn 2026-09-21: `$receiver_count` is not non-normative.** The 2026-09-16
 text listed "§9.22.1's `$receiver_count` paragraph (marked 'Non-normative' in the
-LRM itself)" here. The string does not occur anywhere in `docs/ch9-system.html`
+LRM itself)" here. The string does not occur anywhere in `specification/ch9-system.html`
 at HEAD. §9.22.2 — the subclause renumbered, see §4's preamble — is normative,
-carries its own Syntax 9-18 box at `docs/ch9-system.html:1621-1625`, and Table
+carries its own Syntax 9-18 box at `specification/ch9-system.html:1621-1625`, and Table
 9-19 at `:278` marks it `Yes`/`Yes`, making it **the only driver-access function
 supported in the analog context of a connect module**. The reading came from the
 2.4 transcription that `2cc1c08` removed, and the fixture built on it
@@ -943,7 +943,7 @@ re-litigate it from this document's 2026-09-16 column.
 **The two measures still do not add up to each other and must not be made to.**
 The 612 are AMS clauses; the 127 are inherited-1364 obligations the AMS clause
 list does not contain. §1.1 c is the reason, and it is unchanged: `--coverage`
-walks `docs/ch*.html` and `docs/annex-*.html`, so Clause 17 and Clause 18 are
+walks `specification/ch*.html` and `specification/annex-*.html`, so Clause 17 and Clause 18 are
 outside its denominator entirely. **A complete VCD implementation and no VCD
 implementation still produce the same coverage report** (§7.3 item 9).
 
@@ -1000,7 +1000,7 @@ re-derivation.
 
 Recorded rather than guessed. Each would change a §7.1 row.
 
-1. **Settled 2026-10-04 (`docs/Vague_Decisions.md` VD-017): AMS 7.3.2 prohibits
+1. **Settled 2026-10-04 (`specification/Vague_Decisions.md` VD-017): AMS 7.3.2 prohibits
    x/z in an analog display operand, so 17.1-06 is `verified on the prohibition`.**
    The original question follows. **17.1-06's analog half — a contradiction inside this repository.** §4.1 as
    written says §7.3.2 makes `x`/`z` legal analog display operands, which makes
@@ -1008,7 +1008,7 @@ Recorded rather than guessed. Each would change a §7.1 row.
    `tests/fixtures/ch09_system_tasks/s01_SPEC.md` says the refusal is *correct*
    because Table 9-1 does not make four-state values an analog-context concept
    (`verified on the prohibition`). Under §2's own rule those are different rows.
-   Settling it needs §7.3.2 read in `docs/ch7-mixed.html`.
+   Settling it needs §7.3.2 read in `specification/ch7-mixed.html`.
 2. **Closed 2026-10-04 (`Vague_Decisions.md` VD-005): one row per function, both
    contexts scored in it; 17.10-01/-02 are `verified` on the digital `.v`
    fixtures. No `17.10-03` row.** Original question:

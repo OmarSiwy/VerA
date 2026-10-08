@@ -1,5 +1,5 @@
 # Annex G clauses that no fixture takes both ways, with the reason quoted from
-# docs/annex-g-changes.html (LRM 2023). Tab-separated:
+# specification/annex-g-changes.html (LRM 2023). Tab-separated:
 #   <clause>	<kind>	<evidence>
 # Read 2026-09-24. CLAUSE-AUDIT §5.1: "Annex G is historical and creates no
 # obligations"; §5.6 lists `annex_g_change_history` among the non-normative

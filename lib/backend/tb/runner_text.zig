@@ -793,7 +793,7 @@ pub const runner_body =
     \\    }
     \\}
     \\
-    \\/// The derivative gate (docs/TESTING.md L4a), on under the suite's
+    \\/// The derivative gate (specification/TESTING.md L4a), on under the suite's
     \\/// `--certify` (`fd_certify`): every Jacobian entry, as a host stamps it
     \\/// (`withConst`), against a central difference of the value-only `eval`
     \\/// and `q`. h = cbrt(eps)*max(|x|,1) makes the difference's truncation
@@ -863,7 +863,7 @@ pub const runner_body =
     \\    }
     \\}
     \\
-    \\/// The prover-soundness gate (docs/TESTING.md L4b), on under `--certify`
+    \\/// The prover-soundness gate (specification/TESTING.md L4b), on under `--certify`
     \\/// for a device whose every contribution unit the prover rated
     \\/// `.optimized` (`finite_proved`): its rows are finite doubles for any
     \\/// finite unknowns and in-range card (`proof.FloatMode`'s rules). So `eval`
@@ -908,7 +908,7 @@ pub const runner_body =
     \\    std.debug.print("  finite_check: {d} samples finite\n", .{finite_samples});
     \\}
     \\
-    \\/// The state-machine gate (docs/TESTING.md L4c), on under `--certify` for
+    \\/// The state-machine gate (specification/TESTING.md L4c), on under `--certify` for
     \\/// a device with `stateCtl`: a host's reject path at each accepted point,
     \\/// on copies. Commit the working state (the last accepted point, as a host
     \\/// does before it may revert), try `updateState` at this point, then

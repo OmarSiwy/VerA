@@ -1,4 +1,4 @@
-//! L10 fault injection (docs/TESTING.md §5): `checkAllAllocationFailures` over
+//! L10 fault injection (specification/TESTING.md §5): `checkAllAllocationFailures` over
 //! `compileSourceOpts`, `.lint` on one small positive fixture per chapter and
 //! annex directory, `.build` through codegen on two. Each test fails the n-th
 //! allocation for every n the clean compile makes. That is 17-23 sites per

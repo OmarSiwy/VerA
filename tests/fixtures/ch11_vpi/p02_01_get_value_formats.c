@@ -55,7 +55,7 @@
  *
  * The same `wide` as vpiIntVal. Table 12-4: "Integer value of the handle",
  * and value.integer is a PLI_INT32, which 64 bits do not fit. VerA keeps the
- * low 32 bits, two's complement (docs/Vague_Decisions.md VD-049; IEEE
+ * low 32 bits, two's complement (specification/Vague_Decisions.md VD-049; IEEE
  * 1364-2005 5.6's rule for storing a wide value in a narrower integer, with
  * no diagnostic): bits 31:0 are 0xFFFFFFFF, so value.integer == -1. A tool
  * that saturated would give 0x7FFFFFFF, and one that refused would set an

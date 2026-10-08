@@ -1,6 +1,6 @@
 // IEEE 1364-2005 §9.7.2: "An implicit event shall be detected on any change
 // in the value of the expression." §4.1.7 compares reals with IEEE 754
-// `==`/`!=`, under which -0.0 == 0.0. VerA's reading (docs/Vague_Decisions.md
+// `==`/`!=`, under which -0.0 == 0.0. VerA's reading (specification/Vague_Decisions.md
 // VD-032): a real changes when `old != new`, and "no change" governs only
 // the event. The variable still holds what was assigned (§9.2.1: the
 // blocking assignment stores its value), so after r = -0.0, 1.0/r is

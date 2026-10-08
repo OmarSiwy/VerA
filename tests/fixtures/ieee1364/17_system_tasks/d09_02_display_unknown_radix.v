@@ -7,7 +7,7 @@
 //
 // The governing rule is inherited IEEE 1364-2005 §17.1.1.4, "Unknown and
 // high-impedance display" — NOT §17.1.1.2 ("Format specifications"), which is
-// what this header cited until the review; docs/CLAUSE-AUDIT.md:276 is the
+// what this header cited until the review; specification/CLAUSE-AUDIT.md:276 is the
 // repo's own mapping (17.1-06 = "17.1.1.4 unknown / high-impedance display").
 // The sentence, filed by the conformance plan under its 17.1 row: within a
 // hexadecimal or octal

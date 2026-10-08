@@ -34,7 +34,7 @@
 // so both are CHECKEQ. The one-argument idtmod(expr) is written into the
 // contribution but not asserted here. §4.5.5's prose requires its constant
 // to default to zero, and idtmod_one_argument_starts_at_zero.va asserts that
-// (docs/Vague_Decisions.md VD-058).
+// (specification/Vague_Decisions.md VD-058).
 //
 //! lrm 4.5.5
 //! lrm 4.5.5:3

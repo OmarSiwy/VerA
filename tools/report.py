@@ -266,10 +266,10 @@ def chapter_table(rows, std):
 
 def open_defects():
     """The named open defects (a paragraph opening with a bold name) of the
-    "Open defects" section, in docs/Vague_Decisions.md or, once it is folded
-    in, docs/Vague_Decisions.md. Unnamed paragraphs there record what is gone."""
+    "Open defects" section, in specification/Vague_Decisions.md or, once it is folded
+    in, specification/Vague_Decisions.md. Unnamed paragraphs there record what is gone."""
     out = []
-    for name in ("docs/Vague_Decisions.md", "docs/Vague_Decisions.md"):
+    for name in ("specification/Vague_Decisions.md", "specification/Vague_Decisions.md"):
         path = ROOT / name
         if not path.exists():
             continue
@@ -297,8 +297,8 @@ VPI_XFAIL = re.compile(r'\.c = "([^"]+)"(?:(?!\.c = ).)*?\.xfail = "([^"]*)"', r
 
 
 def vague_open():
-    """docs/Vague_Decisions.md entries that say CHANGE NEEDED and are not DONE."""
-    path = ROOT / "docs/Vague_Decisions.md"
+    """specification/Vague_Decisions.md entries that say CHANGE NEEDED and are not DONE."""
+    path = ROOT / "specification/Vague_Decisions.md"
     if not path.exists():
         return []
     out = []
@@ -589,7 +589,7 @@ def render(d):
     o.append("<p>Every number on this page was read from the logs of the commands below "
              "(<code>tools/report.py</code>; raw data in <a href=data.json>data.json</a>). "
              "B and C are static citation inventories: a cite is not a passing test, "
-             "see <code>docs/CLAUSE-AUDIT.md</code>.</p><details><summary>Commands</summary><pre>"
+             "see <code>specification/CLAUSE-AUDIT.md</code>.</p><details><summary>Commands</summary><pre>"
              + E("\n".join(meta["commands"])) + "</pre></details>")
 
     o.append("<p><a href=#conf>Conformance</a> · <a href=#speed>Speed</a> · <a href=#gaps>Gaps</a> · "
@@ -703,7 +703,7 @@ def render(d):
     o.append(f"<h3>Open defects ({len(g['defects'])})</h3>"
              + ("<ul>" + "".join(f"<li><b>{E(x['title'])}</b> {E(x['text'])} <span class=note>({E(x['source'])})</span></li>"
                                  for x in g["defects"]) + "</ul>" if g["defects"] else "<p>None named.</p>"))
-    o.append(f"<h3>docs/Vague_Decisions.md: CHANGE NEEDED, not DONE ({len(g['vague'])})</h3><details><summary>list</summary><ul>"
+    o.append(f"<h3>specification/Vague_Decisions.md: CHANGE NEEDED, not DONE ({len(g['vague'])})</h3><details><summary>list</summary><ul>"
              + "".join(f"<li><b>{E(v['id'])}</b> {E(v['title'])}: {E(v['change'])}</li>" for v in g["vague"]) + "</ul></details>")
 
     # --- Rule map ----------------------------------------------------------
@@ -789,7 +789,7 @@ def load():
 def selftest():
     """The parsers against the frozen report shapes they read."""
     cov = ("STATIC CITATION INVENTORY\n\n§1.2\n  + ch01/a.va\n  - ch01/b.va\n§2.1\n  ~ ch11/c.c\n\n"
-           "UNCITED — no fixture names these at all:\n§2.1 Lexical  (docs/ch2.html)  ~ compile-only .c cite\n\n"
+           "UNCITED — no fixture names these at all:\n§2.1 Lexical  (specification/ch2.html)  ~ compile-only .c cite\n\n"
            "CLASSIFIED — CLAUSE-AUDIT §5: ...\n§3 Data types  [no_prohibition]  (x/CLAUSES.tsv)\n")
     assert lrm_listing(cov) == {"1.2": [("+", "ch01/a.va"), ("-", "ch01/b.va")], "2.1": [("~", "ch11/c.c")]}
     assert buckets(cov) == {"2.1": ("uncited", "Lexical"), "3": ("classified", "Data types")}

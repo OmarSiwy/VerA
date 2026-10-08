@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §17.2.9: a file address is "an at character (@) followed by
 // a hexadecimal number". The clause lets data words use x, z and `_` "as in a
 // Verilog HDL source description" and says nothing of addresses. VerA's
-// reading (docs/Vague_Decisions.md VD-041): an address names one word, and an
+// reading (specification/Vague_Decisions.md VD-041): an address names one word, and an
 // x address names none, so `@x` is a malformed address and the load stops.
 // Legal neighbour: b_17_2_9_readmem_address_underscore.v (`@1_`, `@0_0_`).
 // digital-runner: reject

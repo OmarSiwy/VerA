@@ -3,7 +3,7 @@
 // additive." A.6.5's `disable` transfers control out of the named block
 // (IEEE 1364-2005 9.6.2, inherited); no clause undoes a statement that
 // already ran, so a contribution made before the `disable` stands and only
-// the ones after it are skipped (docs/Vague_Decisions.md VD-010).
+// the ones after it are skipped (specification/Vague_Decisions.md VD-010).
 //
 // The circuit: node m to ground through 1 S (I(m) <+ V(m)), and inside block
 // b two sources pulling 1 A and then 2 A out of m (I(m) <+ -1, I(m) <+ -2).

@@ -34,7 +34,7 @@
 // about the implicit function-identifier variable, `return`, and output/inout
 // arguments, none of which says a digital function may be declared. The
 // sentence that does is in §4.7 itself, quoted above. Opened in
-// `docs/ch4-expressions.html`.
+// `specification/ch4-expressions.html`.
 //
 // THE FUNCTION IS DELIBERATELY INNOCENT. `dig_helper` doubles a real and
 // touches nothing else: no delay, no event, no four-state value, nothing that

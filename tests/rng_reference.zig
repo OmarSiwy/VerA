@@ -1,10 +1,10 @@
-//! L3 RNG oracle (docs/TESTING.md §5): `rng_kernels.zig` against IEEE
+//! L3 RNG oracle (specification/TESTING.md §5): `rng_kernels.zig` against IEEE
 //! 1364-2005 §17.9.3's C listing, compiled as C (`rng_reference.c`, built
 //! with `-ffp-contract=off`) and linked into this test. In: seeds and each
 //! distribution's argument range; out: the variate and the updated seed, two
 //! calls deep, so a correct first value cannot hide a wrong seed walk.
 //! Restored from `git show 4250899d^:tests/rng_reference.zig` (the commit
-//! docs/TESTING.md and CLAUSE-AUDIT.md cite as 2cc1c08) onto today's kernels,
+//! specification/TESTING.md and CLAUSE-AUDIT.md cite as 2cc1c08) onto today's kernels,
 //! which add `$random` and `$dist_uniform` (the listing's `rtl_dist_uniform`)
 //! and the seedless latch step `zRngNext`. Their domain refusals are
 //! `rng_domains.zig`, a separate process because they panic.

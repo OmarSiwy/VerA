@@ -43,7 +43,7 @@
 //!                (the uncollapsed system is exact, a 0 V branch's flow kept
 //!                as an unknown)
 //!
-//! Not mapped, each because OSDI 0.4 has no slot for it (docs/Vague_Decisions.md
+//! Not mapped, each because OSDI 0.4 has no slot for it (specification/Vague_Decisions.md
 //! VD-102): opvars; correlated noise (`NoiseGen.source` shared by rows,
 //! `PsdTerm.corr_with`): each row is an independent source, and `vera`
 //! warns W1098; a step rejection a device asks for (`request_reject_at`),

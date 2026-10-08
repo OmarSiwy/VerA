@@ -48,7 +48,7 @@
 //   seeded   : `wreal seeded = 2.5;` — one continuous-assignment driver whose
 //              right-hand side is the constant 2.5, so the net reads 2.5 at
 //              time 0 and at every later time. %g of 2.5 is "2.5".
-//              RACE (docs/Vague_Decisions.md VD-033): the assignment's first
+//              RACE (specification/Vague_Decisions.md VD-033): the assignment's first
 //              evaluation and this `initial` are both active events at time 0,
 //              which IEEE 1364-2005 11.3 lets run in any order, so a
 //              conforming tool may print 0 for an undelayed read. The `#0`

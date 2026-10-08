@@ -8,7 +8,7 @@
 // The child's parameter-bound range has the same result after flattening,
 // as does its packed reg whose four one bits read as analog integer 15.
 //
-// HOST CARD VALUES (docs/Vague_Decisions.md VD-089). IEEE 1364-2005 12.2: an
+// HOST CARD VALUES (specification/Vague_Decisions.md VD-089). IEEE 1364-2005 12.2: an
 // untyped, unranged parameter takes "the type and range of the final override
 // value assigned to the parameter"; 4.10.1:
 // a parameter "with no type or range specification shall default to the type

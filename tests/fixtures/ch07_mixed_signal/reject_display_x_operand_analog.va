@@ -5,7 +5,7 @@
 // that may meet x/z in an analog block (===, !==, case/casex/casez and the
 // x/z digits they compare against); a $display argument is an ordinary
 // operand, so `1'bx` there is an x value reaching an analog expression and
-// is an error (docs/Vague_Decisions.md VD-017). IEEE 1364-2005 17.1.1.4's x
+// is an error (specification/Vague_Decisions.md VD-017). IEEE 1364-2005 17.1.1.4's x
 // formatting still governs the digital context
 // (ieee1364/17_system_tasks/d09_02_display_unknown_radix.v).
 //

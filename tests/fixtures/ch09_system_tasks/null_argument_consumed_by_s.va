@@ -5,7 +5,7 @@
 // argument shall follow the string in the argument list", and §9.4.3 counts a
 // null argument as an argument that follows. The LRM gives the null argument
 // one rendering, the space, and says nothing of a conversion consuming one.
-// VerA's reading (docs/Vague_Decisions.md VD-101): `%s` prints that space,
+// VerA's reading (specification/Vague_Decisions.md VD-101): `%s` prints that space,
 // since `%s` prints its argument as text; a conversion that needs a value
 // (`%d`, `%e`, ...) is refused, null_argument_consumed_by_d_rejected.va.
 //

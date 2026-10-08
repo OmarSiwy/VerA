@@ -4,7 +4,7 @@
 // half-unit instant they must disagree, and the direction of that disagreement
 // is a rounding rule. (This header cited §17.3 until the review; §17.3 is
 // *Timescale system tasks* and belongs to 07_timeformat.v. Mapping:
-// docs/CLAUSE-AUDIT.md:331-333 vs :323.)
+// specification/CLAUSE-AUDIT.md:331-333 vs :323.)
 //
 // The rounding rule is the one docs/digital-time.md already records for this
 // repo from §§4.8 and 4.8.2 — "nearest-integer real conversion, with exact

@@ -3,7 +3,7 @@
 // returned by the next $fgetc call on that file descriptor." The clause names
 // only $fgetc, but the character goes into the descriptor's buffer, which
 // every read routine of §17.2.4 reads, as C's fgets/fscanf/fread read what
-// ungetc pushed. VerA's reading (docs/Vague_Decisions.md VD-084): $fgets,
+// ungetc pushed. VerA's reading (specification/Vague_Decisions.md VD-084): $fgets,
 // $fscanf and $fread read the pushback before the file, and pushback a read
 // does not consume is still the next input.
 //

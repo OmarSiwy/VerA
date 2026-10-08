@@ -2,7 +2,7 @@
 // \n, \t, \\, \" and \ddd. Neither standard says what a backslash before any
 // other character means, or whether it is an error.
 //
-// VerA's choice (docs/Vague_Decisions.md VD-036, docs/Vague_Decisions.md):
+// VerA's choice (specification/Vague_Decisions.md VD-036, specification/Vague_Decisions.md):
 // keep the character, drop the backslash, and warn W0149 so the portability
 // hazard is never silent. A tool that keeps both bytes or refuses also
 // conforms, so this fixture tests VerA's choice, not the clause.

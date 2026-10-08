@@ -6,7 +6,7 @@
 // cross_string_literal_is_an_integer.va, monitors "s" = 115 and never fires).
 // The grammar does not separate the two (A.8.3's analog_expression derives
 // both), so this is the clause's type rule, not a syntax one
-// (docs/Vague_Decisions.md VD-107).
+// (specification/Vague_Decisions.md VD-107).
 //
 // VerA refuses the string-typed operand with E0517, the 5.10.3 event-argument
 // code; the code is pinned.

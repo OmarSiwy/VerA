@@ -406,7 +406,7 @@ pub const gm = struct {
     const log2e = 1.44269504088896338700;
 
     /// exp, log and pow are VerA's own, one implementation on every target
-    /// (host, NVPTX, AMDGCN): faithful (< 1 ulp; docs/Vague_Decisions.md, "Host
+    /// (host, NVPTX, AMDGCN): faithful (< 1 ulp; specification/Vague_Decisions.md, "Host
     /// math"), fma-free so every target rounds alike (`exact_everywhere`).
     /// `exp`/`log` take `f64` or `@Vector(n, f64)`; `powV` is pow's vector
     /// form.
@@ -1578,7 +1578,7 @@ pub const gm = struct {
     }
 
     test "exp/log/pow stay within the documented bound of an f128 oracle" {
-        // docs/Vague_Decisions.md: exp <= 0.52, log <= 0.52, pow <= 0.55 ulp
+        // specification/Vague_Decisions.md: exp <= 0.52, log <= 0.52, pow <= 0.55 ulp
         // (measured maxima 0.507, 0.500, 0.505; the margin is the bound ARM
         // proves). A fixed sample, so the test is reproducible.
         var prng = std.Random.DefaultPrng.init(0x7a11);

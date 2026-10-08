@@ -1,5 +1,5 @@
 // IEEE 1364-2005 §19.5 (VAMS §10.1); VerA's search order is
-// docs/Vague_Decisions.md VD-091: the including file's directory, then -I.
+// specification/Vague_Decisions.md VD-091: the including file's directory, then -I.
 //
 // "The including file's directory" is per file, not a path that grows as
 // files are included: vd091_nested_only.vh is in include_dir/, and this file is

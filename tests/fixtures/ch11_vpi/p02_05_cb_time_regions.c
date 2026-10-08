@@ -117,7 +117,7 @@
  * read only sync." 11.6.25 NOTE 5: "If any events after read only sync remain
  * in the current queue, then it shall not be returned as part of the
  * iteration." The two differ when an event AND a read-only-sync callback are
- * both pending now; docs/Vague_Decisions.md VD-046 takes 26.6.40's reading
+ * both pending now; specification/Vague_Decisions.md VD-046 takes 26.6.40's reading
  * (NOTE 5 as "if only events after read only sync remain"). Two walks at t=7,
  * where this file has cbReadOnlySynch(7) pending throughout:
  *

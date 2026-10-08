@@ -131,7 +131,7 @@ pub fn build(b: *std.Build) void {
         .dependOn(&b.addRunArtifact(fuzz_test).step);
     b.step("test-all", "Run tests/test_all.zig, the cross-module claims, only").dependOn(&all_run.step);
 
-    // docs/TESTING.md L3's references that need the C library: the IEEE 1364
+    // specification/TESTING.md L3's references that need the C library: the IEEE 1364
     // §17.9.3 listing compiled as C against `rng_kernels`, and `snprintf`
     // against `str_kernels.zCReal`. Neither shares code with what it judges.
     const kernels = byName(mods, "kernels");
@@ -188,7 +188,7 @@ pub fn build(b: *std.Build) void {
     const o = b.addOptions();
     o.addOption([]const u8, "fixture_root", pathFromRoot(b, "tests/fixtures"));
     o.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
-    o.addOption([]const u8, "docs_root", pathFromRoot(b, "docs"));
+    o.addOption([]const u8, "docs_root", pathFromRoot(b, "specification"));
     o.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-suite"));
     o.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
     // The `.c` fixtures compile against the shipped header, not a copy.
@@ -306,12 +306,12 @@ pub fn build(b: *std.Build) void {
     b.step("test-canary", "Check the harness FAILs every wrong-on-purpose fixture in tests/canary/").dependOn(&canary.step);
     test_step.dependOn(&canary.step);
 
-    // docs/UNITS.md and the architecture map in AGENTS.md, read from the code.
+    // specification/UNITS.md and the architecture map in AGENTS.md, read from the code.
     const map = b.addRunArtifact(suite_exe);
     map.addArtifactArg2(exe, .{});
     map.addArg("archmap");
     map.addPassthruArgs();
-    b.step("archmap", "Regenerate docs/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)")
+    b.step("archmap", "Regenerate specification/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)")
         .dependOn(&map.step);
 
     // The VPI acceptance test. A VPI implementation is only tested from C:

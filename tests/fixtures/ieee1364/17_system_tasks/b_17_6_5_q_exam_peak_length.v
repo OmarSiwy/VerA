@@ -1,6 +1,6 @@
 // IEEE 1364-2005 §17.6.5: "The $q_exam system task provides statistical
 // information about activity at the queue q_id." Table 17-15: "3 Maximum
-// queue length". VerA's reading (docs/Vague_Decisions.md VD-051): code 3 is
+// queue length". VerA's reading (specification/Vague_Decisions.md VD-051): code 3 is
 // the largest length the queue has reached, a statistic of its activity like
 // codes 2, 4, 5 and 6, not the max_length given to $q_initialize.
 //

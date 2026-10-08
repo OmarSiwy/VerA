@@ -2,7 +2,7 @@
 // time step taken is no larger than the smallest $bound_step() argument
 // currently active." Several calls may be active in one evaluation; the bound
 // the device hands its host is the smallest argument of the calls that ran
-// (docs/Vague_Decisions.md VD-003).
+// (specification/Vague_Decisions.md VD-003).
 //
 // By hand: at V(p,n) = 1 the three calls 3 ns, 1 ns (its guard is true) and
 // 2 ns all run, so the bound is 1 ns; at V(p,n) = 0 the guarded call does not

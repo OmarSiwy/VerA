@@ -1,7 +1,7 @@
 // §9.15: $simparam("gmin") returns the host's value of Table 9-27's `gmin`,
 // "Minimum conductance placed in parallel with nonlinear branches" — a value the
 // compiler does not know: VerA publishes it as the host-written Model field
-// `gmin__` (docs/Vague_Decisions.md VD-072), so `amount` is derived from it.
+// `gmin__` (specification/Vague_Decisions.md VD-072), so `amount` is derived from it.
 // §6.3.4 then makes the localparam `size` follow it, and §3.4.5 says a
 // localparam "shall not be directly modified", so the host cannot patch `size`:
 // the device has to derive it, after the host's write.

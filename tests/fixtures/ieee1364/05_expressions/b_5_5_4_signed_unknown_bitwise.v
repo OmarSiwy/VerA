@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §5.5.4, p. 66: "If any bit of a signed value is X or Z, then
 // any nonlogical operation involving the value shall result in the entire
 // resultant value being an X". "Nonlogical" is not defined; VerA's reading
-// (docs/Vague_Decisions.md VD-037) is that arithmetic and resizing go all x
+// (specification/Vague_Decisions.md VD-037) is that arithmetic and resizing go all x
 // (b_5_5_4_signed_unknown_bits.v) while the bitwise operators keep §5.1.10's
 // bit tables and an ambiguous `?:` keeps §5.1.13's Table 5-21: signedness
 // changes no bit those tables read.

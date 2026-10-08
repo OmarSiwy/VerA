@@ -141,7 +141,7 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     else
         differ;
     // "No change" governs only the event: -0.0 over +0.0 still stores its
-    // bits, so `1.0/r` reads -inf (docs/Vague_Decisions.md VD-032). Not
+    // bits, so `1.0/r` reads -inf (specification/Vague_Decisions.md VD-032). Not
     // copied when equal, which also covers `planes` aliasing `dest.planes`
     // (`a = a`), a copy @memcpy forbids.
     if (differ) @memcpy(dest.planes, planes);

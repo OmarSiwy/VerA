@@ -6,7 +6,7 @@
 // prefix attached to a declaration, a module item, a statement, or a port
 // connection." And: "If a value is not specifically assigned to the attribute,
 // then its value shall be 1." §2.9 leaves an attribute's meaning to the tool;
-// this one is VerA's (docs/Vague_Decisions.md §6).
+// this one is VerA's (specification/Vague_Decisions.md §6).
 //
 // WHY. §3.2: "Real variables are initialized to zero (0) at the start of a
 // simulation", once, so a variable keeps its value between evaluations, and a

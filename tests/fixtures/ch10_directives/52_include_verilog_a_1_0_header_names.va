@@ -3,7 +3,7 @@
 // disciplines.vams (D.1) and constants.vams (D.2). Models written for the OVI
 // Verilog-A 1.0 reference include the same headers as "discipline.h" and
 // "constants.h" (CMC r3_cmc 1.0.0, among others). VerA's reading
-// (docs/Vague_Decisions.md VD-093): both old names are built-in aliases of the
+// (specification/Vague_Decisions.md VD-093): both old names are built-in aliases of the
 // Annex D files, searched last like them, so a model's own discipline.h wins.
 //
 // The two old names bring in the same text, so `electrical` resolves and

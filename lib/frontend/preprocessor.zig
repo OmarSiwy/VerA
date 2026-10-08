@@ -58,7 +58,7 @@ pub const Output = struct {
     more_starts: []const u32 = &.{},
     /// An `include resolved to the built-in annex D.1 (`disciplines.vams`, or
     /// VD-093's `discipline.h`): the source asked for annex D itself, so its
-    /// natures join §3.13.2's uniqueness rule (docs/Vague_Decisions.md VD-096).
+    /// natures join §3.13.2's uniqueness rule (specification/Vague_Decisions.md VD-096).
     annex_d_included: bool = false,
 };
 
@@ -315,7 +315,7 @@ pub const predefined_macros = [_][]const u8{
 /// expands to nothing. Only D.1 and D.2 are preloaded (see `process`); D.3
 /// driver_access.vams must be included. `discipline.h` and `constants.h`
 /// are the OVI Verilog-A 1.0 names of D.1 and D.2, which CMC models of that
-/// era include (docs/Vague_Decisions.md VD-093).
+/// era include (specification/Vague_Decisions.md VD-093).
 pub const builtin_includes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "constants.vams", pp_annex_d.constants_vams },
     .{ "disciplines.vams", pp_annex_d.disciplines_vams },

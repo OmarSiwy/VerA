@@ -1,7 +1,7 @@
 // §3.13.2: "Furthermore, the access function of each base nature shall be
 // unique."
 //
-// docs/Vague_Decisions.md VD-096: VerA's preloaded annex D natures take part in
+// specification/Vague_Decisions.md VD-096: VerA's preloaded annex D natures take part in
 // this rule when the source includes D.1 itself (`disciplines.vams`, or its
 // Verilog-A 1.0 name `discipline.h`, VD-093). This source does, so annex D's
 // base nature Voltage (access V) is declared by the source, and so is
