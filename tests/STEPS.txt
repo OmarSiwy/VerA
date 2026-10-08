@@ -11,14 +11,15 @@ test
 test-1364
 test-all
 test-ams
-test-backend
 test-beh-verilog
 test-canary
 test-cli
 test-contract
+test-device
 test-devices
 test-diag
 test-dynlib
+test-exe
 test-frontend
 test-grid-events
 test-ir
@@ -32,6 +33,7 @@ test-suite
 test-timers
 test-tools
 test-vera
+test-verilog
 test-vpi
 test-vpi-fixtures
 uninstall

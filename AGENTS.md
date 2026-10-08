@@ -231,7 +231,7 @@ after each release. Do not edit it by hand.
    When you add a root to `test`, add it to `check` too, and never call
    `getEmittedBin`, `addRunArtifact` or `installArtifact` on a `check` compile,
    or it becomes a full build.
-2. **Test: `zig build test-<module>`** (`test-ir`, `test-backend`, `test-cli`,
+2. **Test: `zig build test-<module>`** (`test-ir`, `test-device`, `test-cli`,
    …) for the module you touched, and one fixture by hand (§6). Zig caches a
    test run whose inputs did not change.
 3. **Gate: `zig build test`**, once per commit, gated on `$?` (§0 rule 2),
@@ -259,7 +259,7 @@ modules call; that alias list IS the module's API. Every file opens with a
 (`lib/ir/lowered.zig`); everything downstream takes `*const Lowered` and
 cannot reach lowering's symbol tables. Calls carry a `Mir.Callee` enum
 (`lib/ir/callee.zig`); per-opcode facts are columns of `lib/ir/opcode.zig` and
-`lib/backend/codegen/opcode_zig.zig`. Add a variant and the compiler names every
+`lib/device/codegen/opcode_zig.zig`. Add a variant and the compiler names every
 site that needs a decision. Never add a string compare or a silent default.
 
 **Exhaustiveness is enforced, not reviewed.** `tests/exhaustive.zig` (part of
@@ -333,7 +333,7 @@ make fast. The device's SIMD is the scalar family's DERIVATIVE lanes: every
 value is `S.Of(mask)`, carrying exactly the lanes of the unknowns it depends
 on, and `tools/contract.zig`'s `RefFamily` runs them as
 `@Vector(popcount(mask), L)`. The lane decisions (`pinLanes`, `lane_pinned`,
-`batch_ok`, `jac_f32`, `cur_strict`) live in `lib/backend/codegen/float/`
+`batch_ok`, `jac_f32`, `cur_strict`) live in `lib/device/codegen/float/`
 (`mode.zig`, `lanes.zig`), whose header says what makes a lane dirty and what
 `batch_ok` promises: a family whose value type `V` is a vector of operating
 points evaluates a `batch_ok` device exactly per point, which the
@@ -489,7 +489,7 @@ mixed and VPI runners refuse a request. In `analog initial` or an analog
 function it is E0533.
 `--emit-verilog` alone reads two more on declarations: `vera_pin`
 (`"digital"`, `"analog"`, `"power"`, `"ground"`) and `vera_delay` (seconds);
-`lib/backend/beh_verilog.zig`'s header has the rules.
+`lib/verilog/beh_verilog.zig`'s header has the rules.
 Every other attribute is parsed and ignored, and every attribute value is a
 §2.9 constant_expression (E0357).
 
@@ -575,7 +575,7 @@ Checked against the code on 2026-09-27.
   module's own driver: `cm_driver_updates = false` is the user's 2026-09-24
   reading of §9.22.6, and `m04_12` asserts it.
 - **The testbench solver is text, not a library.**
-  `lib/backend/tb/runner_text.zig` is Zig source emitted into each generated
+  `lib/exe/tb/runner_text.zig` is Zig source emitted into each generated
   testbench, so `src/sim/` cannot call it; the mixed runner drives it through a
   comptime interface. It steps fixed-step backward Euler with no
   truncation-error control and no step rejection, so a fixture can check an
@@ -974,14 +974,17 @@ is published in the device as a contract table, never re-derived from the IR
 by a second spelling. A device feature that exists only for testbenches is a
 contract feature every host can use, or it does not exist.
 
-VerA today: `lib/backend/codegen/` and `lib/backend/tb/` share one module,
-`backend`, so the build cannot enforce this. No file under either imports the
-other, directly or through another file: since Phase 7 the testbench build
-is `lib/zigbuild/exe.zig`, in a module that imports no compiler module. But
-`tb/runner.zig` re-spells the `__xz`/`__w{k}`/`__1b` field names lowering
-owns (inventory, 2026-10-17; `ARCHITECTURE.md` Phase 8 removes it). Both
-read `lib/backend/naming.zig`. New code adds no
-such edge; making the build enforce it is a refactor phase of its own (§4).
+VerA today: since Phase 8 the build enforces the import half. Devices are
+the `device` module (`lib/device/`), testbenches the `exe` module
+(`lib/exe/`) and `--emit-verilog` the `verilog` module (`lib/verilog/`);
+none imports another, and fitness R2 fails if one backend row's closure
+reaches another. The testbench build is `zigbuild` (`lib/zigbuild/exe.zig`),
+which imports no compiler module. The spelling half is not done: the field
+names a device declares (`__xz`, `__w<k>`, `__1b`, `__held__`) have one
+speller, `lib/ir/names.zig`, which lowering, codegen and `tb/runner.zig`
+all call, but the runner still derives them from the IR rather than reading
+a table the device publishes (`ARCHITECTURE.md` B1). New code adds no
+second spelling.
 
 ### 11.9 SIMD is for the emitted device
 

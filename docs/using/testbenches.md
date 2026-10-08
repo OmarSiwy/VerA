@@ -130,7 +130,7 @@ values, LRM §9.17.3), `//! abstol` (the tolerance of an unknown, LRM
 `acstim`, `qsite`, `seed` and `meta` also take `none`: the device publishes
 no such row, which is a claim, where an absent directive claims nothing.
 Their exact syntax is in the header of
-[`lib/backend/tb/directive.zig`](https://github.com/OmarSiwy/VerA/blob/main/lib/backend/tb/directive.zig).
+[`lib/exe/tb/directive.zig`](https://github.com/OmarSiwy/VerA/blob/main/lib/exe/tb/directive.zig).
 
 ## Directives the fixture suite grades
 

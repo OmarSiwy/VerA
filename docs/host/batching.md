@@ -104,6 +104,6 @@ and the estimates for other instruction sets, which are marked as estimates.
 ## The testbench's batch family
 
 VerA's own testbench carries a W-point batch family with the protocol
-(`lib/backend/tb/runner_text.zig`, `@Vector(NL, f64)`), and the fixture suite
+(`lib/exe/tb/runner_text.zig`, `@Vector(NL, f64)`), and the fixture suite
 checks every `batch_ok` device against the scalar result point by point. It
 is a working reference for writing your own.
