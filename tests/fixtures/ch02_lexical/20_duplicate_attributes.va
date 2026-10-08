@@ -3,7 +3,7 @@
 // a warning that a duplicate attribute specification has occurred." So a
 // repeated name is legal, not an error. This fixture does not observe which
 // metadata value wins: unchanged arithmetic cannot distinguish first/last.
-// That obligation (AMS-ATTR-LAST) is open in docs/ROADMAP.md.
+// That obligation (AMS-ATTR-LAST) is not claimed here.
 // The repeated attribute is put on a parameter as well as on the
 // module, so there is a value to read back: `scale` still holds its §3.4
 // default of 2.5, and the module still conducts through it.

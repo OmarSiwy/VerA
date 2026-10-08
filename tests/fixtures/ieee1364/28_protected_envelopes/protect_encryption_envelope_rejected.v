@@ -7,8 +7,8 @@
 //
 // The cleartext between the two directives is ordinary Verilog, so ignoring
 // them would compile. It would also silently drop the author's request that
-// the text be protected, and VerA does not implement clause 28 (ROADMAP.md
-// §1 B), so the first `pragma protect is refused by name (E0146).
+// the text be protected, and VerA does not implement clause 28
+// (CLAUSES.tsv), so the first `pragma protect is refused by name (E0146).
 //
 // Legal neighbour: 19_compiler_directives/pragma_unrecognized_no_effect.v.
 // digital-runner: reject

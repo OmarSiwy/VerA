@@ -7,7 +7,6 @@ marked `DECIDED`.
 
 The items come from three places:
 
-- `docs/ROADMAP.md` §5.1 (decisions) and §5.6 (readings the standards leave open);
 - `specification/Vague_Decisions.md` §6 and §3, for choices that had no recorded rationale;
 - `specification/CLAUSE-AUDIT.md` §7.5 (open questions).
 
@@ -58,7 +57,7 @@ summary and has a **Status** line naming what landed.
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | DONE (4735daab) |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | DONE (9d434792) |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | DONE (4ef087d6) |
-| VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
+| VD-016 | project scope | `.v` contract device: implemented | no |
 | VD-017 | VAMS 7.3.2; IEEE 1364-2005 17.1.1.4 | An x/z analog display operand is an error; fix E0130's explanation, add a fixture | DONE (73d3f9dd) |
 | VD-018 | IEEE 1364-2005 17.2.9 | Excess `$readmem` data: warning, load continues (implemented, W1150) | DONE (4ef087d6) |
 | VD-019 | CLAUSE-AUDIT §2 (house rule) | A parsed AST path is not `partial`; re-score AMS-06 on executing fixtures | DONE (4ef087d6) |
@@ -119,7 +118,7 @@ summary and has a **Status** line naming what landed.
 | VD-074 | VAMS 9.17.3 | Extra $limit args: frame sign, then seed; more declines (W0853) | no |
 | VD-075 | VAMS 12.36 | vpiRejectTransientStep = 730 | no |
 | VD-076 | VAMS E.1, E.2 | SPICE flavour; see VD-012 | no |
-| VD-077 | VAMS E.3.3 | No primitive-shadow warning; W0951 for model/subckt (stale ROADMAP row) | DONE (no code change: W0951 verified, ROADMAP deleted) |
+| VD-077 | VAMS E.3.3 | No primitive-shadow warning; W0951 for model/subckt | DONE (no code change: W0951 verified) |
 | VD-078 | VAMS 9.15 | Temperature per Model row; IMPLEMENTATION cite §9.10 -> §9.15 | DONE (4ef087d6) |
 | VD-079 | VAMS 9.18, Table 9-29 | Card-time domain check for host-set hierarchical system parameters | DONE (76f344c7) |
 | VD-080 | IEEE 1364-2005 8.1.2 | 64 UDP inputs for both kinds, E1017 past it | no |
@@ -155,10 +154,10 @@ summary and has a **Status** line naming what landed.
 | VD-110 | VAMS 9.15 Table 9-28 | `$simparam$str` strings reach a device through `Model` u32 indices into `contract.host_strings`; index 0 falls back to the `Instance` slices (GPU always does) | DONE (2026-10-08) |
 | VD-111 | VAMS 8.4.3.2, 8.4.4, 8.5.1, 7.3.6.3; IEEE 1364-2005 17.1.3 | A digital `$monitor`'s analog probe is an operand: a report is due when a probe's value changed (VD-032's `!=`), checked at every digital time step and at every analog solution at a tick no digital event reached; time moving inside an argument is no change | DONE (2026-10-08) |
 
-## 1. Open decisions (ROADMAP §5.1, CLAUSE-AUDIT §7.5)
+## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
 ### VD-001: A labelled regression gate in a row whose job is to fail
-- **Source**: ROADMAP §5.1 item 1 (`tests/fixtures/MANIFEST.md` §5.8 items 1 and 12 at 8b1514d4).
+- **Source**: `tests/fixtures/MANIFEST.md` §5.8 items 1 and 12 at 8b1514d4.
 - **Rule**: not an LRM reading. House rules: AGENTS.md §2 ("A rejection fixture is not positive coverage"; "XFAIL markers are implemented, never deleted") and §6 ("The trap that produces confidently wrong work").
 - **Why vague**: X01's two `.op` decks, `a05_07_file_multiple_dependents.va`, `a04_09_slew_small_signal_transfer.va`, `a01_06_invalid_index_write_preserves.va`, `a01_07_discontinuity_real_degree.va` and A10's three host decks (`a10_bound_step.sp`, `a10_cross_timestep.sp`, `a10_timer_breakpoints.sp`) pass today and exist to catch a named wrong implementation. MANIFEST §5.8 item 12 records that A01 06/07 were measured to go red under the wrong implementations they name.
 - **Options**: (a) delete them as non-discriminating; (b) keep them as ordinary fixtures under their `//! lrm` tags; (c) keep them, labelled as regression gates.
@@ -168,7 +167,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (4ef087d6). The four `.va` files in this tree already named their wrong implementation and value except `a04_09`, which now does (a ddx through slew() as identity reads 1 where 0 is wanted). The X01 `.op` decks live in ARPice and the A10 `.sp` decks are compile-only; neither carries a VerA header to change.
 
 ### VD-002: Can `";2"` carry a dependent selector with no interpolation control?
-- **Source**: ROADMAP §5.1 item 2; MANIFEST §5.8 item 8 at 8b1514d4.
+- **Source**: MANIFEST §5.8 item 8 at 8b1514d4.
 - **Rule**: VAMS 9.21, Syntax 9-16: `table_control_string ::= "[interp_control[;dependent_selector]]"`, `interp_control ::= 1st_dim_table_ctrl_substr_or_null [, ...]`. Table 9-32, first row: `""` or omitted means "Dimensionality of the data is assumed to be N. Column N+1 is taken as the dependent."
 - **Why vague**: the bracket nesting makes the selector optional inside a present `interp_control`. Since `interp_control` can be a single null sub-string, `";2"` can be read in two ways. In the first, it is a null control plus selector 2, so the dependent is column N+2. In the second, it is one null sub-string spent on one column plus selector 2, so it is column 1+2 = 3 on a 2-D call. `a05_06` and `a05_07` disagree on this.
 - **Options**: (a) one null sub-string is one consumed column (the dependent is column 3 on a 2-D table); (b) an empty head means every dimension takes the default and N comes from `table_inputs` (column N+selector).
@@ -178,26 +177,26 @@ summary and has a **Status** line naming what landed.
 
 ### VD-003: The quotations and mechanism claims the repair pass invented
 - **Status**: DONE (70c42167)
-- **Source**: ROADMAP §5.1 item 3; MANIFEST §5.1(b) at 8b1514d4; ROADMAP §5.5.
+- **Source**: MANIFEST §5.1(b) at 8b1514d4.
 - **Rule**: not an LRM reading. House rule: AGENTS.md §6 (the header quotes the LRM sentence) and §0 rule 1.
 - **Why vague**: five quotations and two mechanism claims in fixture headers were fabricated. One of them, A10's claim that VerA refuses a second `$bound_step`, was given as the reason no fixture was shipped for VAMS 9.17.2's "smallest currently active" rule.
 - **Options**: (a) delete the fabrications; (b) delete them and also ship the coverage the fabrication excused.
 - **Decision**: `DECIDED:` (b). Quoted text in a header must be found verbatim in `docs/`, or the quotation is deleted. VAMS 9.17.2 needs a positive fixture: two `$bound_step` calls in one evaluation, where the smaller bound must win.
-- **VerA today**: none of the invented strings remains in `tests/fixtures`. I grepped for "selected after generate", "is active on the first point", "paramset for each instance" and "default to the unknown value", and ROADMAP §5.5 records the 2026-09-29 corrections. No fixture tests the smallest-bound rule: `25_bound_step.va`, `216_kernel_control_tasks_together.va` and `a10_host.assets_a10_vsine.va` each have one call. CHANGE NEEDED: add `ch09_system_tasks/bound_step_smallest_active_wins.va` (or a host test that reads `inst.bound_step`) with two calls and a hand-derived bound. Patch. It moves A by one fixture and gives 9.17.2 more evidence in C.
+- **VerA today**: none of the invented strings remains in `tests/fixtures`. I grepped for "selected after generate", "is active on the first point", "paramset for each instance" and "default to the unknown value"; the corrections landed 2026-09-29. No fixture tests the smallest-bound rule: `25_bound_step.va`, `216_kernel_control_tasks_together.va` and `a10_host.assets_a10_vsine.va` each have one call. CHANGE NEEDED: add `ch09_system_tasks/bound_step_smallest_active_wins.va` (or a host test that reads `inst.bound_step`) with two calls and a hand-derived bound. Patch. It moves A by one fixture and gives 9.17.2 more evidence in C.
 - **Measure impact**: A (+1 fixture), C (9.17.2 evidence).
 
 ### VD-004: Published figures that do not reproduce
-- **Source**: ROADMAP §5.1 item 4; MANIFEST §5.1(d) at 8b1514d4; ROADMAP §5.5.
+- **Source**: MANIFEST §5.1(d) at 8b1514d4.
 - **Rule**: not an LRM reading. House rule: AGENTS.md §0 rule 1 ("Never type a conformance number. Measure it.") and §9's last item.
 - **Why vague**: headers state some numbers (accepted-point counts, ngspice digits, bounds) as measured, and re-running them does not reproduce those numbers.
 - **Options**: (a) re-measure each one; (b) delete each one; (c) re-measure the ones an assertion depends on and delete the prose-only ones.
 - **Decision**: `DECIDED:` (c). A figure that sets a tolerance or a `//! checks` count is re-measured by a command named in the header. A figure that only appears in prose is deleted. A header that is not re-measured in the same commit may not keep a measured figure.
-- **VerA today**: the remaining items are those listed in ROADMAP §5.5. I did not re-check each one here. CHANGE NEEDED: work through the ROADMAP §5.5 list. Patch, fixture headers only.
+- **VerA today**: see **Status**.
 - **Measure impact**: none.
 - **Status**: DONE (4ef087d6). Pass figures in `a01_06`, `a01_07`, `a04_09`, `a05_07` and `s01_01` re-run at `ae9633f1` and the command named; `s01_01`'s "all four rows fail today" did not reproduce (all four pass) and was removed.
 
 ### VD-005: Does §17.10 get its own digital row?
-- **Source**: ROADMAP §5.1 item 5; CLAUSE-AUDIT §7.5 item 2.
+- **Source**: CLAUSE-AUDIT §7.5 item 2.
 - **Rule**: IEEE 1364-2005 17.10 (`$test$plusargs`, `$value$plusargs`), inherited through VAMS 9.12, whose Table 9-9 marks both functions `Yes` in both contexts. House rule: CLAUSE-AUDIT §7.1, where the weaker context sets a split row.
 - **Why vague**: §17.9 and §17.11 each have a separate digital row (17.9-14, 17.11-24) and §17.10 does not. The digital gap therefore scored 17.10-01/-02 as `missing (digital)`.
 - **Options**: (a) add a `17.10-03 digital` row (total 128); (b) keep one row per function and score both contexts in it.
@@ -207,7 +206,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (4ef087d6). CLAUSE-AUDIT 17.10-01/-02 re-scored `verified` on the listed `.v` fixtures; §7.5 item 2 closed; §7.1 tally updated.
 
 ### VD-006: May `.v` transcript evidence support `verified`?
-- **Source**: ROADMAP §5.1 item 6; CLAUSE-AUDIT §7.5 item 6.
+- **Source**: CLAUSE-AUDIT §7.5 item 6.
 - **Rule**: not an LRM reading. House rule: AGENTS.md §2 (an obligation needs a positive behavioural test, an invalid-input test and a recorded result) and CLAUSE-AUDIT §2.
 - **Why vague**: four verdicts (17.3-01, 17.7-01, the digital half of 17.11-01, 17.11-24) rest on `zig build test-devices`. That step is outside measure A, and CLAUSE-AUDIT recorded it as failing at 47/66.
 - **Options**: (a) only evidence inside `zig build test` counts; (b) any executed transcript suite with a recorded result counts.
@@ -217,7 +216,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (4ef087d6). CLAUSE-AUDIT §7.5 item 6 closed; `zig build test-devices` passes at `ae9633f1` (`tools/conformance.py`).
 
 ### VD-007: Discrete and electrical ports on one undeclared net with no connect statement
-- **Source**: ROADMAP §5.1 item 7; `docs/conformance-mixed-signal.md:211-215` at 8b1514d4.
+- **Source**: `docs/conformance-mixed-signal.md:211-215` at 8b1514d4.
 - **Rule**: VAMS 6.5.7: "Ports of both analog and digital discipline may be connected to a net provided the appropriate connect statements exist (see 7.7)." VAMS 7.8.4 rule 3: "A connection shall be selected for a port only if one of the connections to the port is digital and the other is analog. In this case, the port shall match one (and only one) connect statement."
 - **Why vague**: neither clause names a diagnostic for zero matching statements, and someone could argue the case is legal when nothing actually crosses domains. VerA accepts it.
 - **Options**: (a) accept when no behaviour crosses domains; (b) accept silently (today); (c) refuse with a named error.
@@ -227,17 +226,17 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (8a719d2a). E0927 (`insert.checkUnbridged`, judged after §7.4 resolution); `lrm_7_4_4_1.va` carries a `connectrules` block; `reject_mixed_port_no_connect_statement.va` pins the refusal.
 
 ### VD-008: Detail discipline resolution is testable, and its absence is a gap
-- **Source**: ROADMAP §5.1 item 8; `docs/conformance-mixed-signal.md:193-201` at 8b1514d4; Vague_Decisions.md §6 row "AMS 7.4.4.2".
+- **Source**: `docs/conformance-mixed-signal.md:193-201` at 8b1514d4; Vague_Decisions.md §6 row "AMS 7.4.4.2".
 - **Rule**: VAMS 7.4.4: "There are two modes for this method of resolution, basic (the default) and detail ... The selection of these discipline resolution modes shall be vendor-specific." VAMS 7.4.4.2 (detail mode).
 - **Why vague**: "vendor-specific selection" can be read as permission to offer only one mode. `lrm_7_4_5.va:6-12` reads it that way and argues that a fixture for either mode would fail a conforming compiler.
 - **Options**: (a) detail mode is optional, and basic-only conforms; (b) both modes are required, only the selection mechanism is vendor-specific, and basic is the normative default.
 - **Decision**: `DECIDED:` (b). The clause defines two modes and makes basic the default. Only how a user selects a mode is left to the vendor. So a fixture that pins basic mode without any selection is not vendor-specific. It tests the normative default. Detail mode is testable once a selector exists, by a fixture that selects it and asserts the Figure 7-4 result. Until then, 7.4.4.2 is `missing`, not implementation-defined. See VD-013 for the selector.
-- **VerA today**: basic only (`lib/ir/elaborate/resolve.zig`; Vague_Decisions.md §6 row "AMS 7.4.4.2 ... basic only"). `lrm_7_4_4_1.va` pins basic. CHANGE NEEDED: (1) correct the `lrm_7_4_5.va:6-12` header so it says basic is the testable default and detail is not implemented; (2) re-file IMPLEMENTATION's 7.4.4.2 row as a gap under ROADMAP §5.3 rather than a choice; (3) when VD-013 lands, add a detail-mode fixture. Patch for (1) and (2). Minor for (3), because it adds a CLI option and new resolution results.
+- **VerA today**: basic only (`lib/ir/elaborate/resolve.zig`; Vague_Decisions.md §6 row "AMS 7.4.4.2 ... basic only"). `lrm_7_4_4_1.va` pins basic. CHANGE NEEDED: (1) correct the `lrm_7_4_5.va:6-12` header so it says basic is the testable default and detail is not implemented; (2) re-file IMPLEMENTATION's 7.4.4.2 row as a gap rather than a choice; (3) when VD-013 lands, add a detail-mode fixture. Patch for (1) and (2). Minor for (3), because it adds a CLI option and new resolution results.
 - **Measure impact**: C (7.4.4.2 stays one-way until detail mode lands; no change from the documentation fix).
 - **Status**: DONE (4735daab, detail mode: `segment.zig`). (1) `lrm_7_4_5.va` header corrected; (2) IMPLEMENTATION's row removed (it is a gap, not a choice); (3) detail mode is implemented: `lib/ir/elaborate/segment.zig` runs F.2.1/F.2.2 step 4 and F.2.2 step 5's top-down pass over the unflattened hierarchy, and `insert.plan` places connect modules where it puts the meeting of the domains. `discipline_resolution_detail_figure_7_4.va` asserts Figure 7-4's five leaf bridges (V = 0.2) against basic's two on Figure 7-3 (`discipline_resolution_basic_figure_7_3.va`, V = 0.5); `auto_insertion_figure_7_6_{basic_merged,detail_merged,detail_split}.va` assert Figure 7-6 Case 1's two, three and five. E0930 is retired. §7.4.4.2 states no prohibition, so `ch07_mixed_signal/CLAUSES.tsv` classifies it `no-prohibition`.
 
 ### VD-009: Two modules with one name
-- **Source**: ROADMAP §5.1 item 9; `docs/conformance-ieee-config-review.md:32` (CFG-005) at 8b1514d4.
+- **Source**: `docs/conformance-ieee-config-review.md:32` (CFG-005) at 8b1514d4.
 - **Rule**: IEEE 1364-2005 13.2.1.1: "If multiple cells with the same name map to the same library, then the LAST cell encountered shall be written to the library. ... a warning message shall be issued." IEEE 1364-2005 4.11: "Once a name is used to define a module or primitive, the name shall not be used again to declare another module or primitive."
 - **Why vague**: the two clauses contradict each other. 4.11 forbids reuse, and 13.2.1.1 prescribes last-wins with a warning for exactly this case (same name, one library, one compiler invocation).
 - **Options**: (a) error under 4.11; (b) last wins with a warning under 13.2.1.1; (c) first wins silently.
@@ -248,7 +247,7 @@ summary and has a **Status** line naming what landed.
 
 ### VD-010: A disabled block's contributions already made
 - **Status**: DONE (ea6b1cb6)
-- **Source**: ROADMAP §5.1 item 10; `a03_SPEC.md:170-177` at 8b1514d4.
+- **Source**: `a03_SPEC.md:170-177` at 8b1514d4.
 - **Rule**: VAMS 5.6.1.3: "When solving an analog block during an iteration, multiple contributions to the same potential branch or same flow branch will be additive." VAMS A.6.5 `disable_statement`. In VerA's analog subset only `@(event) disable blk;` is legal (E0401).
 - **Why vague**: no clause says whether `disable` withdraws contributions that the block already executed in the same iteration.
 - **Options**: (a) contributions executed before the `disable` stand; (b) they are withdrawn.
@@ -257,7 +256,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (+1), C (5.6.1.3 and A.6.5 positive evidence).
 
 ### VD-011: `#(.locked())` on a localparam
-- **Source**: ROADMAP §5.1 item 11; `docs/conformance-empty-parameter-fix.md` at 8b1514d4 (the cited lines 184-191 are past the file's 102 lines, so the citation is stale).
+- **Source**: `docs/conformance-empty-parameter-fix.md` at 8b1514d4 (the cited lines 184-191 are past the file's 102 lines, so the citation is stale).
 - **Rule**: VAMS 3.4.5: local parameters "cannot directly be modified with the defparam statement or by the ordered or named parameter value assignment". VAMS 6.3.3: "The parameter expression is optional so the instantiating module can document the existence of a parameter without assigning anything to it." IEEE 1364-2005 12.2.2.1: "Local parameters cannot be overridden".
 - **Why vague**: an empty `.name()` modifies nothing, so 3.4.5's prohibition does not strictly apply. But 6.3.3's purpose is documenting a parameter that the instantiator could assign.
 - **Options**: (a) accept, because nothing is modified; (b) refuse, because a localparam is not part of the instance's parameter interface.
@@ -267,19 +266,19 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (2df23aa8). `ch03_data_types/reject_localparam_empty_named_override.va`.
 
 ### VD-012: Which SPICE flavour VerA claims
-- **Source**: ROADMAP §5.1 item 12; `h04_SPEC.md:116-119` at 8b1514d4; Vague_Decisions.md §6 row "AMS E.1, E.2".
+- **Source**: `h04_SPEC.md:116-119` at 8b1514d4; Vague_Decisions.md §6 row "AMS E.1, E.2".
 - **Rule**: VAMS E.1.2 item 1: "whether a particular Verilog-AMS simulator is SPICE compatible, and with which particular variant of SPICE it is compatible, is solely determined by the authors of the simulator."
 - **Why vague**: the standard leaves the dialect to the tool. VerA has stated parse limits but no claim, and it skips every card it cannot read without saying so.
 - **Options**: (a) claim nothing and skip silently (today); (b) claim a named subset and refuse what falls outside it inside a definition; (c) adopt a full dialect (HSPICE/Spectre `PARAMS:`, `{expr}`, nested `.SUBCKT`).
 - **Decision**: `DECIDED:` (b). VerA claims SPICE3 card syntax for `.MODEL` and for flat `.SUBCKT` bodies made of numeric-valued R/C/L/V/I/E/F/G/H cards. `PARAMS:`, `{expr}` values, nested `.SUBCKT`, `.INCLUDE`/`.LIB` and model-referenced body devices (`R1 A B RMOD`) are not claimed. Cards outside a definition (`.tran`, top-level devices) are not module definitions and may still be skipped. A card that cannot be read inside a `.SUBCKT` body is refused with a named E.1.2 diagnostic. Skipping it changes the circuit, for example a dropped R becomes an open, and that is the silent wrong answer AGENTS.md §4 forbids.
-- **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in Vague_Decisions.md §6; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame (ROADMAP §5.3) is fixed by the same diagnostic.
+- **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in Vague_Decisions.md §6; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame is fixed by the same diagnostic.
 - **Measure impact**: A (new fixtures), C (E.1.2 refusal evidence).
 - **Status**: DONE. The `.MODEL` half (e7900531): a `.MODEL` of a type with no Table E.1 row is recorded and its instance is E0952. The `.SUBCKT` half (aeb2b5cc): unreadable body cards, `PARAMS:`, `{}` and nesting are E0928, reported at the card's line in the netlist.
 - **Extended (#9, 2026-10-06)**: the Pam4 project hands VerA transistor-level netlists (schematic and post-layout) whose devices are M cards naming PDK models: `Ma outn inp tail vss nmos_lvt L=21n NFIN=26`, with ASAP7's `.model nmos_lvt bsimcmg type=1 ...` reached through `.lib "asap7.lib" tt`, whose entry `.hdl`s the BSIM-CMG Verilog-A. The claim now also covers: an M/Q/J/D card inside a `.SUBCKT` naming a model, which instantiates (a) the `.MODEL`'s type when that is no Table E.1 row (a Verilog-A module or paramset of the design: the model card's parameters, then the card's own over them, `M=` as E.4.1's `$mfactor`, a positional area as `area`), or (b) the name itself as a module or paramset when no `.MODEL` has it; `.INCLUDE file`, `.LIB file entry` (the lines between `.LIB entry` and `.ENDL`; a library entry met any other way is unread until called) and HSPICE's `.HDL file` (a Verilog-A source of the design, read after the compilation unit) anywhere in the netlist, each relative name looked for beside the file that names it (VD-091's rule); and HSPICE's `k = v`. The netlist's lower-cased names reach a Verilog-AMS module, paramset or parameter regardless of case when nothing matches exactly (E.2.1 from the netlist's side; `elaborate.names.spiceCase`). Refused: a card whose model is a `.MODEL` of a Table E.1 semiconductor type (nmos, pmos, npn, pnp, d, njf, pjf, nmf, pmf), E0953, because those rows have no Behavior and the card would be an open; a binned model (`.MODEL name.N`), a file that cannot be read, a missing `.LIB` entry, an unclosed `.LIB` entry, nesting past 16 files, a non-numeric parameter value and a field after the model or the parameters, E0928. `PARAMS:`, `{expr}`/`.PARAM`, nested `.SUBCKT` and X cards stay refused: none of the Pam4 netlists uses them. Semver: minor (source VerA refused now compiles; `Q` cards that were E0928 now instantiate their model). Fixtures: `annex_e_spice/spice_fet_card_instantiates_model_module.va`, `spice_lib_include_hdl.va`; `reject_spice_fet_card_model_has_no_behaviour.va`, `reject_spice_binned_model.va`, `reject_spice_lib_entry_missing.va`; `reject_spice_unread_device_card.va` moved from a Q card to an S card.
 - **Extended (#9 leftovers, 2026-10-08)**: the claim now also covers (`lib/frontend/spice_cards.zig`): HSPICE's subcircuit parameters, `.SUBCKT name ports [PARAMS:] k=v ...` (`PARAMS:` may be unwritten), each a `parameter real` of the module with `v` as its default; `{expr}` and `'expr'` values in a subcircuit's cards and parameter defaults, over the subcircuit's parameters (a default over those before it), translated by `expression`: SPICE numbers (written as real literals, so `{1/3}` is a third, not §4.2.1's integer 0), `+ - * /`, HSPICE's `**` (binding tighter than a unary minus on its left, `-2**2` = -4), parentheses, and the functions whose meaning SPICE and §4.3.1-4.3.2 share (sqrt, exp, abs, min, max, pow, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, floor, ceil); a `.MODEL` card's values may be expressions over numbers; X cards, `Xname nodes... subckt [PARAMS:] [k=v ...]`, an instance of any module or paramset of that name with `M=` as `$mfactor`; binned models, `.MODEL name.N type ... LMIN= LMAX= WMIN= WMAX=`: a card naming `name` takes the first bin in card order with LMIN <= L < LMAX and WMIN <= W < WMAX (SPICE's rule; an unwritten bound is open), without the four bounds, which only select (the bin is chosen in the reader, so L and W must be numbers on the card); and node 0 inside a subcircuit body is the ground (`ground \0 ;`, §3.6.4), where it was a local net and a card on it an open. Still refused at the card (E0928): `.PARAM` anywhere in a body and any name an expression reads that is no parameter in scope (a top-level `.PARAM` is not read, so the reference has nothing to resolve to); `log` (natural in SPICE, base 10 in §4.3.1), `^`, comparisons, `?:` and every other function; a binned card whose L or W is missing or an expression, or that no bin holds; nested `.SUBCKT`. Semver: minor. Fixtures: `annex_e_spice/spice_subckt_params_expressions.va`, `spice_x_card_subcircuit_instance.va`, `spice_binned_model_selects_by_l_and_w.va`; `reject_spice_expression_value.va` (now a name out of scope), `reject_spice_subckt_params.va` (now `log`), `reject_spice_binned_model.va` (now no bin holds L), each `reject-only` with a neighbour.
 
 ### VD-013: "Shall be controlled by a simulator option" (F.2.2)
-- **Source**: ROADMAP §5.1 item 13; `annex_f_resolution/COVERAGE.md:16-21` at 8b1514d4.
+- **Source**: `annex_f_resolution/COVERAGE.md:16-21` at 8b1514d4.
 - **Rule**: VAMS F.2.2 (Annex F is normative): "The selection of this algorithm instead of the default shall be controlled by a simulator option." VAMS F.1: "This annex provides a possible algorithm for achieving the semantics of" 7.4.
 - **Why vague**: VerA is a compiler, not a simulator, so the standard does not say what form a "simulator option" takes for it. F.1 also lets an implementation use a different algorithm, which raises the question of whether VerA's single fold of step 5's top-down re-pass is allowed.
 - **Options**: (a) declare F.2.2 out of scope; (b) add a compiler option.
@@ -289,7 +288,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (4735daab, detail mode: `segment.zig`). `vera --discipline-resolution=basic|detail` and the fixture directive `//! discipline-resolution`. No device metadata row: the mode decides only where connect modules go, which is the device text itself. Folding is not used: `segment.zig` runs the two passes as F.2.2 writes them, step 5 as the walk descends. E0929 is narrowed to an upper connection the pre-insertion pass cannot read; since #11 (2026-10-08) that pass reads the subtree a first walk elaborated (generate blocks, instance arrays, paramsets at any depth, out-of-context declarations below the planned level), so only a generate scheme that does not fold, or a subtree that walk could not elaborate, is left.
 
 ### VD-014: UTF-8 bytes above 0x7F in string literals
-- **Source**: ROADMAP §5.1 item 14; `annex_a_syntax/COVERAGE.md:332-335` at 8b1514d4.
+- **Source**: `annex_a_syntax/COVERAGE.md:332-335` at 8b1514d4.
 - **Rule**: VAMS A.8.8: `string_literal ::= " { Any_ASCII_Characters } "`. IEEE 1364-2005 3.6: a string is "a sequence of 8-bit ASCII values, with one 8-bit ASCII value representing one character".
 - **Why vague**: ASCII is 7-bit, but 1364 3.6 describes strings as "8-bit ASCII values". Bytes 0x80-0xFF are therefore excluded by the production and included by the storage model.
 - **Options**: (a) refuse bytes above 0x7F; (b) accept them as opaque bytes, one byte per character; (c) decode UTF-8 so that a code point is one character.
@@ -299,21 +298,21 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (9d434792): `ch02_lexical/string_bytes_above_7f.va` pins `"°C"` as three bytes (0xC2B043); Vague_Decisions.md §6 row added.
 
 ### VD-015: `$limit(typ*V(a,k), ...)`
-- **Source**: ROADMAP §5.1 item 15 (found 2026-09-27).
+- **Source**: found 2026-09-27.
 - **Rule**: VAMS 9.17.3, Syntax 9-12: every form is `$limit ( access_function_reference ... )`. The prose says it "returns a real value that is derived from its first argument (the access function reference, such as a branch voltage)".
 - **Why vague**: A.8.2's generic `analog_system_function_call` takes any expression, while Syntax 9-12 narrows the first argument. The question was whether to refuse or to warn (W0853).
 - **Options**: (a) W0853, with the site declined; (b) an error.
 - **Decision**: `DECIDED:` (b). The clause's own syntax is the narrower and more specific rule. The legal way to write it is `$limit(V(a,k), "pnjlim", vte, vcrit, typ)`, with the polarity as VerA's frame-sign argument (AGENTS.md §6), so no expressible model loses anything.
-- **VerA today**: already decided and implemented as E0891. `lib/ir/lower/sysfunc.zig:160` enforces it, `ch09_system_tasks/232_limit_scaled_probe_rejected.va` pins it (`//! reject E0891`), and `231_limit_polarity_sign_argument_honoured.va` is the legal neighbour. ROADMAP §5.1 item 15 is stale. CHANGE NEEDED: close the ROADMAP row only (documentation).
+- **VerA today**: already decided and implemented as E0891. `lib/ir/lower/sysfunc.zig:160` enforces it, `ch09_system_tasks/232_limit_scaled_probe_rejected.va` pins it (`//! reject E0891`), and `231_limit_polarity_sign_argument_honoured.va` is the legal neighbour.
 - **Measure impact**: none (already counted).
 - **Status**: DONE (4ef087d6). Nothing to change in code or fixtures; the stale open-question row was in a document since removed.
 
 ### VD-016: A `.v` design as a contract device
-- **Source**: ROADMAP §5.1 item 16.
-- **Rule**: not an LRM reading. Project scope (ROADMAP §5.1).
+- **Source**: project scope.
+- **Rule**: not an LRM reading. Project scope.
 - **Why vague**: it was an open product decision, not a reading of the standard.
 - **Options**: n/a.
-- **Decision**: `DECIDED:` implemented, as recorded in ROADMAP §5.1 item 16. The device runtime is in `src/sim/rt/device.zig`, and host tests pass at `15bb97ca` (2026-09-29). Remaining extensions are tracked as GitHub issues.
+- **Decision**: `DECIDED:` implemented. The device runtime is in `src/sim/rt/device.zig`, and host tests pass at `15bb97ca` (2026-09-29). Remaining extensions are tracked as GitHub issues.
 - **VerA today**: `src/sim/rt/device.zig`, `tests/vdev_host.zig`, `tests/vdev_so_host.zig`. No change.
 - **Measure impact**: none.
 
@@ -357,10 +356,10 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none (documentation).
 - **Status**: DONE (4ef087d6). 17.1-12's analog half re-scored on `s01_05`/`s01_06` (both pass, strict suite 0 FAIL at `ae9633f1`); the row is now `partial` (digital governs). No other CLAUSE-AUDIT row rests on a kernel test alone. §7.5 item 5 closed.
 
-## 2. Readings the standards leave open: Verilog-AMS (ROADMAP §5.6)
+## 2. Readings the standards leave open: Verilog-AMS
 
 ### VD-021: Multiline string literals
-- **Source**: ROADMAP §5.6 bullet 1 (`conformance-strings-ledger-independent-review.md` at 8b1514d4, STR-REVIEW-01).
+- **Source**: `conformance-strings-ledger-independent-review.md` at 8b1514d4, STR-REVIEW-01.
 - **Rule**: VAMS 2.7: "A string literal is a sequence of characters enclosed by double quotes (") and contained on a single line." VAMS A.8.8: `string_literal ::= " { Any_ASCII_Characters } "`. Annex G change 2535: "Corrected definition for multiline strings" (A.8.8). IEEE 1364-2005 3.6 has the same single-line sentence, and its A.8.8 reads `Any_ASCII_Characters_except_new_line`.
 - **Why vague**: the AMS prose keeps the inherited single-line rule, while the AMS production dropped the `_except_new_line` qualifier, and the change log calls that a correction "for multiline strings" without saying which direction it corrects in. Neither text says it overrides the other.
 - **Options**: (a) refuse a raw newline inside a string (2.7, 1364 3.6); (b) accept it (A.8.8 as printed); (c) also accept the IEEE 1800 `\`-newline continuation.
@@ -369,7 +368,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none (pins existing behaviour; the fixtures' headers may cite this entry).
 
 ### VD-022: A raw TAB inside a string literal
-- **Source**: ROADMAP §5.6 bullet 2 (STR-REVIEW-02).
+- **Source**: STR-REVIEW-02.
 - **Rule**: VAMS 2.3: "However, spaces and tabs shall be considered significant characters in strings (see 2.7)." VAMS 2.7: "Certain characters can only be used in a string literal when preceded by an introductory character called an escape character", and Table 2-2 lists `\t`.
 - **Why vague**: read literally, 2.7 would require a tab to be escaped. 2.3 says that a literal tab in a string is significant, which assumes a literal tab can appear there.
 - **Options**: (a) a raw TAB is legal and stands for byte 9; (b) a raw TAB is an error that requires `\t`.
@@ -378,7 +377,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-023: `op` attribute absent: is the value in the operating-point report?
-- **Source**: ROADMAP §5.6 bullet 3, first question (`conformance-attributes-ledger-independent-review.md` ATTR-IR-03).
+- **Source**: `conformance-attributes-ledger-independent-review.md` ATTR-IR-03.
 - **Rule**: VAMS 2.9.2: "If the attribute is specified with the value "no", then the parameter or variable will be omitted from the short report; otherwise, the parameter or variable will be included."
 - **Why vague**: the word "otherwise" covers both an explicit "yes" and no `op` attribute at all. The clause also does not say which objects are eligible for the report.
 - **Options**: (a) absent means included; (b) absent means excluded and only `op="yes"` is reported; (c) left to the tool.
@@ -387,7 +386,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none now; C (2.9) once a report exists and a fixture compares absent, "yes" and "no".
 
 ### VD-024: Keywords as attribute names (`units` is reserved)
-- **Source**: ROADMAP §5.6 bullet 3, second question (ATTR-IR-04).
+- **Source**: ATTR-IR-04.
 - **Rule**: VAMS 2.9 Syntax 2-4 and A.9.1: `attr_name ::= identifier`. Annex B reserves `units`. VAMS 2.9.2 standardizes "The units attribute", and its example writes `(* ... units="Ohms" ... *)` unescaped.
 - **Why vague**: the standard's own attribute name is a keyword the grammar does not allow as `attr_name`. Read literally, the example is ungrammatical. The text does not say whether the exception covers only `units` or all keywords.
 - **Options**: (a) only `units` is exempt and any other keyword is an error; (b) every keyword is accepted as a name; (c) `units` must be escaped.
@@ -397,7 +396,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (8a677e04): E0208 with a keyword note, `ch02_lexical/attribute_keyword_name_rejected.va`; legal neighbour `attribute_keyword_name_escaped.va` (`\module`, `units`).
 
 ### VD-025: Forward parameter references
-- **Source**: ROADMAP §5.6 bullet 4 (`conformance-parameter-core-ledger-review.md:43-45`).
+- **Source**: `conformance-parameter-core-ledger-review.md:43-45`.
 - **Rule**: VAMS 3.4: the initializer "shall be a constant expression, that is, an expression containing only constant numbers and previously defined parameters." IEEE 1364-2005 4.10.1 uses the same words.
 - **Why vague**: "previously defined" could mean earlier in the source text or earlier in dependency order. Some tools resolve parameters lazily and accept a forward reference.
 - **Options**: (a) textual order, and a forward reference is an error; (b) dependency order, with only cycles refused.
@@ -407,7 +406,7 @@ summary and has a **Status** line naming what landed.
 
 ### VD-026: `min`/`max` with NaN or signed zero
 - **Status**: DONE (107333b2)
-- **Source**: ROADMAP §5.6 bullet 5 (`conformance-minmax-ledger-review.md:97-102`).
+- **Source**: `conformance-minmax-ledger-review.md:97-102`.
 - **Rule**: VAMS 4.3.1, Table 4-14: `min(x, y)` has the "Equivalent C function" `fmin(x,y)` and the domain "All x, all y". The same clause says "these functions are defined so: min(x,y) is equivalent to (x < y) ? x : y; max(x,y) is equivalent to (x > y) ? x : y".
 - **Why vague**: C `fmin(NaN, 1)` and `fmin(1, NaN)` both return 1, and C leaves the sign of `fmin(-0, +0)` open. The conditional form returns 1 for `min(NaN, 1)`, NaN for `min(1, NaN)`, and +0 for `min(-0, +0)`. The table and the prose disagree on unordered and signed-zero inputs.
 - **Options**: (a) the conditional form for value and derivative alike; (b) C `fmin`/`fmax` for the value and the conditional form for the derivative only.
@@ -416,7 +415,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (+1 fixture); C (4.3.1 corner cases).
 
 ### VD-027: Nodesets before or after `analog initial`
-- **Source**: ROADMAP §5.6 bullet 6 (`conformance-scheduling.md:35`).
+- **Source**: `conformance-scheduling.md:35`.
 - **Rule**: VAMS 8.2: "Once analog initial blocks are evaluated, analog net declaration assignments and simulator nodeset values are then applied." VAMS 8.4.1: "It is a one time execution of nodeset statements (3.6.3.2), then the procedural statements in analog initial block, and then the procedural statements in the Verilog initial block".
 - **Why vague**: the two clauses give opposite orders for nodesets and `analog initial`.
 - **Options**: (a) follow 8.2; (b) follow 8.4.1; (c) establish that the order cannot be observed.
@@ -425,7 +424,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-028: Does an `@()` body run once per timepoint or once per Newton iteration?
-- **Source**: ROADMAP §5.6 bullet 7 (`a03_SPEC.md:284-291` at 8b1514d4).
+- **Source**: `a03_SPEC.md:284-291` at 8b1514d4.
 - **Rule**: VAMS 5.10.3.3: "At that time point, the event evaluates to True." VAMS 8.3.3: "the behavioral description is evaluated iteratively until the NR method converges."
 - **Why vague**: the event is true for the whole timepoint, and the analog block runs once per iteration, so the body could run several times at one timepoint. The text does not say whether its effects (a held counter, a file write) accumulate per iteration.
 - **Options**: (a) the body's effects take effect once per accepted timepoint; (b) the effects accumulate per iteration.
@@ -434,7 +433,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-029: Chapter 8's "canceling previous event" vs IEEE 9.2.2
-- **Source**: ROADMAP §5.6 bullet 8 (`specification/ch8-scheduling.html` editorial note).
+- **Source**: `specification/ch8-scheduling.html` editorial note.
 - **Rule**: VAMS 8.4.4 Figure 8-6 walkthrough: the nonblocking assign "schedules the actual assignment for 6ns (rounded 1ns delay), canceling previous event." IEEE 1364-2005 9.2.2 performs every queued nonblocking update in order.
 - **Why vague**: the AMS example describes a second nonblocking assignment as cancelling the first, which 1364 never does. The example's inverter source is not printed.
 - **Options**: (a) the example overrides 9.2.2 for this case; (b) 9.2.2 governs, and "canceling" describes what the D2A sees.
@@ -444,7 +443,7 @@ summary and has a **Status** line naming what landed.
 
 ### VD-030: `$simprobe` with a name built at run time
 - **Status**: DONE (b5689fbb)
-- **Source**: ROADMAP §5.6 bullet 9 (`conformance-ch9-review.md:313-316`).
+- **Source**: `conformance-ch9-review.md:313-316`.
 - **Rule**: VAMS 9.16: "The arguments inst_name and param_name are string values, either a string literal, string parameter, or a string variable." Also: "If either the inst_name or param_name cannot be resolved, and the optional expression is not supplied, then an error shall be generated. If the optional expression is supplied, its value will be returned in lieu of raising an error."
 - **Why vague**: a string variable's value is known only at run time. The clause does not say whether a tool may treat a name it cannot fold at compile time as "cannot be resolved" and return the fallback.
 - **Options**: (a) resolve at run time against the sibling's output variables; (b) treat a non-constant name as unresolved and return the fallback, which is VerA today; (c) refuse a non-constant name with a named implementation-limit diagnostic.
@@ -453,7 +452,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (+2 fixtures); C (9.16, refusal with a legal neighbour; the clause stays partial until (a) exists).
 
 ### VD-031: `$table_model` duplicate abscissa that cannot be proved equal
-- **Source**: ROADMAP §5.6 bullet 10 (`MANIFEST.md:529-532` at 8b1514d4).
+- **Source**: `MANIFEST.md:529-532` at 8b1514d4.
 - **Rule**: VAMS 9.21: "Within the data set, each point shall be distinct in terms of its independent variable values. If there are two or more data points with the same independent and dependent values, then the duplicates shall be ignored ... If there are two or more data points with the same independent values but different dependent values then an error is generated."
 - **Why vague**: the clause does not say when the error is diagnosed. A tool might refuse at elaboration any duplicate abscissa whose dependents it cannot prove equal.
 - **Options**: (a) refuse at elaboration whenever equality is unproven; (b) refuse at elaboration only a proven conflict and check the rest when the data is captured (9.21.1, first call); (c) always check at capture.
@@ -462,7 +461,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-032: What counts as a change of a real value (0.0 to -0.0, NaN)
-- **Source**: ROADMAP §5.6 bullet 11, first question (`conformance-wreal.md:15`, WR-006).
+- **Source**: `conformance-wreal.md:15`, WR-006.
 - **Rule**: VAMS 3.7 (wreal is a net, and 1.1 inherits 1364). IEEE 1364-2005 9.7.2: "An implicit event shall be detected on any change in the value of the expression." IEEE 1364-2005 6.1.2: "If the new value is different from the previous value, then the new value shall be assigned".
 - **Why vague**: 1364 defines "change" for four-state bits only. For a real, "different" could be an IEEE 754 `!=` or a bit-pattern compare. The two differ for ±0, where `==` is true but the bits differ, and for NaN, which is unequal to itself.
 - **Options**: (a) IEEE 754 `!=`: ±0 is no change, and a NaN written over a NaN is a change; (b) a bit compare.
@@ -472,7 +471,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (0db0a690; native_real_events corrected in d9ee5d65).
 
 ### VD-033: `m04_01` samples a declaration-assigned wreal at time 0
-- **Source**: ROADMAP §5.6 bullet 11, second question (`conformance-wreal.md:29-34`).
+- **Source**: `conformance-wreal.md:29-34`.
 - **Rule**: VAMS 3.7: "wreal nets shall have an initial value of zero." IEEE 1364-2005 11.3 (event regions): "Active events occur at the current simulation time and can be processed in any order." Those active events include a net declaration assignment's first evaluation and an `initial` block.
 - **Why vague**: at time 0, `wreal seeded = 2.5;` reads 0.0 until its continuous assignment has run. An `initial` that `$display`s it at time 0 races with that assignment.
 - **Options**: (a) keep the fixture's time-0 `2.5` expectation; (b) sample after `#0` (inactive region), when every active continuous-assignment update has been applied.
@@ -482,7 +481,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none (a `test-devices` transcript; the expected output text is unchanged).
 
 ### VD-034: `posedge V(p)` in an analog event control
-- **Source**: ROADMAP §5.6 bullet 12 (`annex_c_analog_subset/COVERAGE.md:192-196`).
+- **Source**: `annex_c_analog_subset/COVERAGE.md:192-196`.
 - **Rule**: VAMS 5.10, Syntax 5-13: `analog_event_expression ::= expression | posedge expression | negedge expression | ...`. VAMS 5.10.5: "analog behavior can be made sensitive to digital events, including posedge events, negedge events". VAMS 7.3.6.2 times the "digital event, such as posedge or negedge".
 - **Why vague**: the grammar derives `posedge` with any operand, including a continuous `V(p)`, but no sentence gives an edge of a continuous signal a meaning. 1364 9.7.2 defines edges only as four-state transitions (0 to 1, x, z and so on).
 - **Options**: (a) refuse an edge whose operand is not discrete; (b) define it as a `cross` with direction ±1 at some threshold; (c) apply 1364's real-to-bit conversion to the operand.
@@ -491,7 +490,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-035: A module-level `string` variable
-- **Source**: ROADMAP §5.6 bullet 13 (`annex_a_syntax/COVERAGE.md:349-358`).
+- **Source**: `annex_a_syntax/COVERAGE.md:349-358`.
 - **Rule**: VAMS A.2.8: `string_declaration` appears only as an arm of `analog_block_item_declaration`. A.2.1.3's `module_or_generate_item_declaration` does not list it. VAMS 3.3 gives "string variable_name [ = initial_value ] ;" and the example `parameter string default_name = "John Smith"; string myName = default_name;`.
 - **Why vague**: Annex A derives no module-level string variable, while 3.3 grants one, and 3.3's example places it at module level next to a parameter.
 - **Options**: (a) legal (3.3 governs, and the Annex A omission is a defect); (b) refused per Annex A.
@@ -500,7 +499,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-036: An undefined escape such as `"\q"`
-- **Source**: ROADMAP §5.6 last bullet, AMS part (`conformance-ams-lexical-core-review.md:170-172`; that file has 82 lines at 8b1514d4, so the cited lines no longer exist and the item is taken from the ROADMAP text).
+- **Source**: `conformance-ams-lexical-core-review.md:170-172`; that file has 82 lines at 8b1514d4, so the cited lines no longer exist.
 - **Rule**: VAMS 2.7 / Table 2-2 lists `\n`, `\t`, `\\`, `\"` and `\ddd` only. IEEE 1364-2005 3.6.3, Table 3-1, lists the same five.
 - **Why vague**: neither standard says what a backslash followed by any other character means, or whether it is an error.
 - **Options**: (a) error; (b) accept, drop the backslash and keep the character; (c) accept and keep both bytes; (d) (b) plus a warning.
@@ -509,10 +508,10 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (+1 fixture); none of B/C (implementation-defined, AGENTS.md: "a fixture here tests VerA's choice").
 - **Status**: DONE (dac6eb2b): W0149, `ch02_lexical/undefined_escape_keeps_character.va`; `08_string_escapes.va` (`//! nowarn`) is the neighbour that warns nothing.
 
-## 3. Readings the standards leave open: IEEE 1364 and VPI (ROADMAP §5.6)
+## 3. Readings the standards leave open: IEEE 1364 and VPI
 
 ### VD-037: A signed x/z operand under bitwise and conditional operators
-- **Source**: ROADMAP §5.6, "IEEE 5.5.4" bullet (`conformance-ieee-expression-width-review.md` at 8b1514d4, "Source tensions").
+- **Source**: `conformance-ieee-expression-width-review.md` at 8b1514d4, "Source tensions".
 - **Rule**: IEEE 1364-2005 5.5.4: "If any bit of a signed value is X or Z, then any nonlogical operation involving the value shall result in the entire resultant value being an X". Against 5.1.10 (bitwise truth tables) and 5.1.13 / Table 5-21 (ambiguous condition results).
 - **Why vague**: "nonlogical" is not defined. Read broadly, it covers `&`, `|`, `^` and `?:`, which would make `4'sb10x1 & 4'sb0000` all x even though 5.1.10's bit tables give 0000. The bitwise and conditional clauses give bit-by-bit rules and do not mention signedness.
 - **Options**: (a) all x for every non-logical operator, bitwise and conditional included; (b) arithmetic, relational and resizing operations get all x, while bitwise, reduction and conditional operators keep their per-bit tables.
@@ -522,7 +521,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B: adds positive evidence to 5.5.4 (already `no-prohibition`), so no verdict change. A: +1 fixture.
 
 ### VD-038: Delay rule for a singleton `[0:0]` vector continuous assignment
-- **Source**: ROADMAP §5.6, "IEEE 6.1.3" bullet (`conformance-vector-delay-fix.md` at 8b1514d4).
+- **Source**: `conformance-vector-delay-fix.md` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 6.1.3: "If the left-hand references a scalar net, then the delay shall be treated in the same way as for gate delays", and "If the left-hand references a vector net, then up to three delays can be applied" (nonzero-to-zero falling, to z turn-off, otherwise rising). 4.3 (p. 28): "A net or reg declaration without a range specification shall be considered 1 bit wide and is known as a scalar. Multibit net and reg data types shall be declared by specifying a range, which is known as a vector."
 - **Why vague**: `wire [0:0] w` is declared with a range, which suggests vector, but it is 1 bit wide, not "multibit". The two rules differ on a transition to x: the gate rule takes the minimum delay, the vector rule takes the rising delay.
 - **Options**: (a) the declaration decides: any range makes it a vector; (b) the width decides: 1 bit takes the scalar (gate) rule.
@@ -532,7 +531,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B: 6.1.3 gains a pinned case. A: +1 fixture.
 
 ### VD-039: A `config` declaration inside a lib.map file
-- **Source**: ROADMAP §5.6, "IEEE 13.2.2 vs A.1.1 and Syntax 13-2" bullet.
+- **Source**: the two clauses quoted under **Rule**.
 - **Rule**: IEEE 1364-2005 13.2.2: "The syntax of a lib.map file is limited to library specifications, include statements, and standard Verilog comment syntax." Against A.1.1 / Syntax 13-2: `library_description ::= library_declaration | include_statement | config_declaration`.
 - **Why vague**: The prose excludes configs from a map file, but the grammar derives one there.
 - **Options**: (a) follow the grammar and accept a config in a map; (b) follow the prose and refuse it.
@@ -542,7 +541,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (14cd4397). `ieee1364/13_configuration/b_13_2_2_config_in_map_rejected.v` over `libmap/bad/config_in_map.map`.
 
 ### VD-040: A `$readmem` file address outside the memory when the task gives no bounds
-- **Source**: ROADMAP §5.6, "IEEE 17.2.9" bullet, first question (`conformance-readmem-validation-edges.md:66-70` at 8b1514d4).
+- **Source**: `conformance-readmem-validation-edges.md:66-70` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 17.2.9: "When addressing information is specified both in the system task and in the data file, the addresses in the data file shall be within the address range specified by the system task arguments; otherwise, an error message is issued, and the load operation is terminated."
 - **Why vague**: The error rule applies only when the task call also gives addresses. With no task bounds, `@8` into `reg [7:0] m[0:3]` matches no rule.
 - **Options**: (a) silently drop the words; (b) treat the declared range as the implied range and apply the error, terminating the load; (c) warn, drop the out-of-range words, and keep loading at later in-range addresses.
@@ -552,7 +551,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (418338cf).
 
 ### VD-041: x, z and `_` in a `$readmem` file address
-- **Source**: ROADMAP §5.6, "IEEE 17.2.9" bullet, second question.
+- **Source**: `conformance-readmem-validation-edges.md` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 17.2.9: "the format is an at character (@) followed by a hexadecimal number ... @hh...h". For data words: "The unknown value (x or X), the high-impedance value (z or Z), and the underscore (_) can be used in specifying a number as in a Verilog HDL source description." 3.5.1: "The underscore character (_) shall be legal anywhere in a number except as the first character."
 - **Why vague**: The x/z/_ permission is stated for data numbers. Addresses are "a hexadecimal number" with no statement either way.
 - **Options**: (a) accept x/z/_ in addresses as in data; (b) accept `_` only, under 3.5.1; (c) hex digits only.
@@ -562,7 +561,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (22fb2c50).
 
 ### VD-042: Extended VCD strength 5, "large" or "pull"
-- **Source**: ROADMAP §5.6, "IEEE 18.4.3.2" bullet (`conformance-vcd-review.md:137`, EVCD-017).
+- **Source**: `conformance-vcd-review.md:137`, EVCD-017.
 - **Rule**: IEEE 1364-2005 18.4.3.2: "Strength supply 7 to 5 (large): strong strength / Strength 4 to 1: weak strength". 18.4.3's list: "4 large, 5 pull, 6 strong, 7 supply".
 - **Why vague**: The parenthetical calls 5 "large", while the numeric list makes 5 pull and 4 large.
 - **Options**: (a) the numbers rule: 5..7 (pull, strong, supply) is the strong range and 1..4 weak; (b) the name rules: large (4) joins the strong range.
@@ -572,7 +571,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B: 18.4.3.2 boundary pinned. Otherwise none.
 
 ### VD-043: Does `` `resetall `` reset `` `begin_keywords ``?
-- **Source**: ROADMAP §5.6, "IEEE 19.6, 19.11" bullet (`d10_SPEC.md:192-194` at 8b1514d4).
+- **Source**: `d10_SPEC.md:192-194` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 19.6: "When `resetall compiler directive is encountered during compilation, all compiler directives are set to the default values." 19.11: "Each `begin_keywords directive must be paired with an `end_keywords directive. The pair of directives define a region of source code".
 - **Why vague**: "all compiler directives" would include the keyword version, but 19.11 defines `` `begin_keywords `` as a paired, nested region. A reset in the middle would leave the following `` `end_keywords `` unmatched.
 - **Options**: (a) `` `resetall `` pops the keyword stack to the default; (b) the keyword region is unaffected.
@@ -582,7 +581,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (ead894ee): `ieee1364/19_compiler_directives/b_19_6_resetall_keeps_begin_keywords.v` (uwire under "1364-1995" across a `` `resetall ``); `b_19_11_uwire_in_2005_rejected.v` is the refusal it would hit.
 
 ### VD-044: Walking the design inside `vlog_startup_routines`
-- **Source**: ROADMAP §5.6, "IEEE 26.2.4 vs AMS 12.33.2" bullet (`conformance-ieee-vpi-interface-review.md:24-31` at 8b1514d4).
+- **Source**: `conformance-ieee-vpi-interface-review.md:24-31` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 26.2.4: "when the routines within the vlog_startup_routines[ ] array are executed, there is very little functionality available. Only two routines can be called at this time: vpi_register_systf() [and] vpi_register_cb()". VAMS 12.33.2 (= IEEE 27.34.2): "A means of initializing system task/function callbacks and performing any other desired task just after the simulator is invoked shall be provided by placing routines in ... vlog_startup_routines."
 - **Why vague**: "any other desired task" reads as permission, while 26.2.4 restricts the same phase. The same sentence appears in IEEE 27.34.2, so the clash is inside 1364, not an AMS relaxation. VAMS 12.33.2 adds "This array of C functions shall be for registering system tasks and functions."
 - **Options**: (a) allow every routine at startup (VerA today); (b) require phase-correct applications (register at startup, walk at `cbEndOfCompile`/`cbStartOfSimulation`), and have VerA refuse other routines during startup with an error status.
@@ -592,17 +591,17 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B: 26.2.4 gains two-way evidence. C: AMS 12.33.2 fixtures become portable. A: every `vpi_runs` fixture touched.
 
 ### VD-045: `vpiIsProtected` (prose) vs `vpiProtected` (Annex G)
-- **Source**: ROADMAP §5.6, "IEEE 26.3.5 vs Annex G" bullet.
+- **Source**: the two clauses quoted under **Rule**.
 - **Rule**: IEEE 1364-2005 26.3.5: "All objects have a vpiIsProtected property ... Access to the vpiType property and the vpiIsProtected property of a protected object shall be permitted for all objects." Annex G vpi_user.h: `#define vpiProtected 10 /* source protected module (boolean) */`, and there is no `vpiIsProtected`. 26.6.1 lists `vpiProtected` as a module property.
 - **Why vague**: The property every object must answer has no number in the normative header. The only number belongs to a differently named module property.
 - **Options**: (a) leave it undefined and answer only on modules; (b) invent a new constant; (c) treat `vpiIsProtected` as `vpiProtected` (10) and answer it on every object.
 - **Decision**: `DECIDED:` (c). Annex G is the ABI, and a made-up number (b) would make applications non-portable. A module "in a decryption envelope" is exactly a "source protected module", so the two coincide where both apply, and (c) makes 26.3.5's "all objects" true. VerA refuses `pragma protect` (E0146), so every object answers FALSE.
-- **VerA today**: `src/vpi/vpi_user.h:381` defines `vpiProtected 10` (ROADMAP's "Neither is declared" is stale). `src/vpi/property.zig:158-161` answers 0 for modules and `propFail`s every other kind. `CHANGE NEEDED:` add `#define vpiIsProtected vpiProtected` (with a comment citing 26.3.5/Annex G) to `vpi_user.h`. Make `property.zig` answer 0 for every object kind. Add a `.c` fixture asserting `vpi_get(vpiIsProtected, h) == 0` on a net, a reg, a port and a module, and move the 26.3.5 `CLAUSES.tsv` row off `not-supported` for its FALSE half. Patch by AGENTS.md §3 (VPI result, not source or device text).
+- **VerA today**: `src/vpi/vpi_user.h:381` defines `vpiProtected 10`. `src/vpi/property.zig:158-161` answers 0 for modules and `propFail`s every other kind. `CHANGE NEEDED:` add `#define vpiIsProtected vpiProtected` (with a comment citing 26.3.5/Annex G) to `vpi_user.h`. Make `property.zig` answer 0 for every object kind. Add a `.c` fixture asserting `vpi_get(vpiIsProtected, h) == 0` on a net, a reg, a port and a module, and move the 26.3.5 `CLAUSES.tsv` row off `not-supported` for its FALSE half. Patch by AGENTS.md §3 (VPI result, not source or device text).
 - **Status**: DONE (2b569378). `vpi_user.h` defines `vpiIsProtected` as `vpiProtected`; `vpi_get` answers 0 for every live handle and refuses a non-object. `ieee_pli/b_26_3_5_protected.c`; 26.3.5 is `-` in `CLAUSES.tsv`.
 - **Measure impact**: B: 26.3.5 `not-supported` -> partial/verified for the FALSE half.
 
 ### VD-046: Is the current time queue in a `vpiTimeQueue` iteration?
-- **Source**: ROADMAP §5.6, "IEEE 26.6.40(c) vs AMS 11.6.25 note 5" bullet (`conformance-ieee-vpi-objects-review.md:179-186` at 8b1514d4).
+- **Source**: `conformance-ieee-vpi-objects-review.md:179-186` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 26.6.40(c): "The current time queue shall only be returned as part of the iteration if there are events that precede read only sync." VAMS 11.6.25 NOTE 5: "If any events after read only sync remain in the current queue, then it shall not be returned as part of the iteration."
 - **Why vague**: The two conditions differ when the current time holds both an active-region event and a `cbReadOnlySynch`. IEEE returns the queue, while VAMS read literally does not.
 - **Options**: (a) IEEE: return the queue iff some pending current-time event precedes read-only sync; (b) VAMS literal: omit the queue iff any read-only-sync-or-later item is pending.
@@ -612,7 +611,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B: 26.6.40 (`-`) gains evidence. C: VAMS 11.6.25 NOTE 5 pinned.
 
 ### VD-047: A callback wake-up at an eventless time is a `vpiTimeQueue` entry
-- **Source**: ROADMAP §5.6, "AMS 11.6.25, 12.16, 12.27: p02 conventions", the time-33 entry (`p02_SPEC.md:382-395` at 8b1514d4).
+- **Source**: `p02_SPEC.md:382-395` at 8b1514d4.
 - **Rule**: VAMS 11.6.25 NOTE 4: "vpi_iterate() shall return NULL if there is nothing left in the simulation queue", and the diagram relates callback to time queue (`vpiParent`). VAMS 12.31.2: "A callback can be set for any time, even if no event is present."
 - **Why vague**: No sentence says whether a time that holds only a callback is a time queue.
 - **Options**: (a) yes, a time callback is a scheduled wake-up and its time is a queue; (b) only HDL events make a queue.
@@ -621,7 +620,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-048: `vpi_mcd_printf`'s return value for a multi-channel write
-- **Source**: ROADMAP §5.6, p02 conventions, `vpi_mcd_printf` (`p02_SPEC.md:341-343` at 8b1514d4).
+- **Source**: `p02_SPEC.md:341-343` at 8b1514d4.
 - **Rule**: VAMS 12.27 / IEEE 1364-2005 27.26: "Returns: PLI_INT32 The number of characters written." and "Several channels can be written to simultaneously".
 - **Why vague**: For an mcd with k channels, the characters "written" could be one expansion or k times it.
 - **Options**: (a) the length of the formatted text, once; (b) the length times the number of channels written.
@@ -630,7 +629,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-049: `vpiIntVal` read of an object wider than 32 bits
-- **Source**: ROADMAP §5.6, p02 conventions, `vpiIntVal` on a 64-bit object (`p02_SPEC.md:426-427` at 8b1514d4).
+- **Source**: `p02_SPEC.md:426-427` at 8b1514d4.
 - **Rule**: VAMS 12.16 Table 12-4 / IEEE 1364-2005 27.14: "vpiIntVal ... Integer value of the handle. Any bits x or z in the value of the object are mapped to a 0". `value.integer` is `PLI_INT32`.
 - **Why vague**: Nothing says what a 64-bit `time` or `reg [63:0]` gives when it does not fit in a `PLI_INT32`.
 - **Options**: (a) the low 32 bits, two's complement; (b) an error (`vpiBadFormat`); (c) saturate.
@@ -640,7 +639,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B/C: 27.14 / 12.16 gain a pinned edge.
 
 ### VD-050: `$q_exam` with a `q_stat_code` outside Table 17-15
-- **Source**: ROADMAP §5.6, last bullet (`conformance-ieee-queue-review.md:26-47` at 8b1514d4). ROADMAP cites "17.6.4", but `$q_exam` is IEEE 1364-2005 17.6.5 and its status table is 17.6.6.
+- **Source**: `conformance-ieee-queue-review.md:26-47` at 8b1514d4, which cites "17.6.4"; `$q_exam` is IEEE 1364-2005 17.6.5 and its status table is 17.6.6.
 - **Rule**: IEEE 1364-2005 17.6.5, Table 17-15 defines codes 1-6. 17.6.6: "All of the queue management tasks and functions return an output status code", and Table 17-16 (0-7) has no "bad statistic code" row.
 - **Why vague**: An unknown code has no defined status and no defined value.
 - **Options**: (a) status 2 "Undefined q_id"; (b) a new status 8; (c) status 0 with no value; (d) refuse a constant out-of-range code at compile time and give a nonzero status at run time.
@@ -650,7 +649,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (99a70532).
 
 ### VD-051: `$q_exam` code 3, "Maximum queue length"
-- **Source**: ROADMAP §5.6, last bullet ("code 3 reports the observed peak").
+- **Source**: `conformance-ieee-queue-review.md` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 17.6.5, Table 17-15: "3 Maximum queue length". The clause introduces the task as providing "statistical information about activity at the queue q_id".
 - **Why vague**: "Maximum queue length" may mean the `max_length` given to `$q_initialize` or the largest length the queue has reached.
 - **Options**: (a) the configured `max_length`; (b) the observed peak.
@@ -660,7 +659,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (259c554a).
 
 ### VD-052: `$q_exam` mean statistics (codes 2 and 6) in an integer result
-- **Source**: ROADMAP §5.6, last bullet ("means use integer division").
+- **Source**: `conformance-ieee-queue-review.md` at 8b1514d4.
 - **Rule**: IEEE 1364-2005 17.6.5, Table 17-15: "2 Mean interarrival time", "6 Average wait time in the queue". No rounding rule is given. IEEE 1364-2005 3.5.3: "Real numbers shall be converted to integers by rounding the real number to the nearest integer, rather than by truncating it."
 - **Why vague**: A mean is generally not an integer, but `q_stat_value` is an integer argument, and the clause gives no conversion.
 - **Options**: (a) truncating integer division (VerA today); (b) the exact mean converted by the language's real-to-integer rule, rounding to nearest with ties away from zero.
@@ -896,8 +895,8 @@ summary and has a **Status** line naming what landed.
 - **Why vague**: the primitive warning is optional.
 - **Options**: warn; stay silent.
 - **Decision**: `DECIDED:` silent for primitives, and W0951 for the required model/subcircuit case. Writing one's own `resistor` or `capacitor` module is routine Verilog-AMS (the LRM's own examples do it), so a warning would fire on ordinary libraries and teach users to ignore warnings. The required half is already implemented.
-- **VerA today**: `lib/ir/elaborate/names.zig` `warnSpiceShadows`. Fixtures `annex_e_spice/spice_paramset_primitive_shadow.va`, `spice_module_shadow_warning.va` and `spice_paramset_shadow_warning.va`. No change in code. `CHANGE NEEDED:` documentation only. ROADMAP §5.2's AMS E.3.3 row ("No warning when a module shadows a SPICE model or subcircuit") is stale now that W0951 exists; delete it. Patch.
-- **DONE**: re-checked 2026-10-04 on branch w-bugs1: `spice_module_shadow_warning.va` (model), `h04_10_verilog_module_wins_over_netlist_subckt.va` (subcircuit) and `spice_paramset_shadow_warning.va` each require W0951 and pass. The ROADMAP row goes with ROADMAP.md itself.
+- **VerA today**: `lib/ir/elaborate/names.zig` `warnSpiceShadows`. Fixtures `annex_e_spice/spice_paramset_primitive_shadow.va`, `spice_module_shadow_warning.va` and `spice_paramset_shadow_warning.va`. No change in code. No change needed.
+- **DONE**: re-checked 2026-10-04 on branch w-bugs1: `spice_module_shadow_warning.va` (model), `h04_10_verilog_module_wins_over_netlist_subckt.va` (subcircuit) and `spice_paramset_shadow_warning.va` each require W0951 and pass.
 - **Measure impact**: none.
 - **Status**: DONE (4ef087d6). Nothing to change in code or IMPLEMENTATION (its E.3.3 row was already right); the stale row was in a document since removed.
 

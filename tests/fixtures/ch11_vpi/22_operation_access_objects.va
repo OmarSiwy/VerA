@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.19 expressions: an operation object over access-function operands.
 // §4.3.1 makes abs() the absolute value (real result for a real operand), so a
 // NEGATIVE branch potential separates it from the identity: at V(p)=0.25,

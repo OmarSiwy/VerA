@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.25 callback: the class relates a callback to the `stmt` it fires, and
 // §11.2.1 says "VPI callbacks shall be registered ... with vpi_register_cb()"
 // — from C. There is no Verilog-A spelling that registers one, so the closest

@@ -33,7 +33,7 @@
 // source `v[3]`.
 //
 // WHAT IS NOT CLAIMED. VerA reads the block and applies none of it (W0251,
-// pinned below): no path delay is scheduled. ROADMAP §1 B keeps §14 in scope
+// pinned below): no path delay is scheduled. §14 is in scope
 // only as parsed and visible to VPI, and CLAUSES.tsv classifies the delay
 // clauses not-supported. So nothing here observes a delay. 1364-2005 §14.1:
 // "the specify block is the vehicle for describing paths between a source and

@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.6 branch object: a branch reaches its two nodes and the quantities it
 // carries. §5.4.1 fixes the potential of `branch (p,n) path` as V(p) - V(n), and
 // Table 2-1 of §2.6.2 makes `1k` the real number 1 scaled by k = 1e3, 1000.0.
