@@ -35,7 +35,21 @@ fn compileOne(gpa: std.mem.Allocator, src: []const u8, target: vera.Target) !voi
 }
 
 fn oom(comptime path: []const u8, target: vera.Target) !void {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, compileOne, .{ @embedFile("fixtures/" ++ path), target });
+    const src = @embedFile("fixtures/" ++ path);
+    // The sweep assumes every clean compile makes the same allocations; say
+    // so by count when one does not (macOS CI, annex_g 23, 2026-10-08),
+    // rather than as std's bare NondeterministicMemoryUsage.
+    var counts: [3]usize = undefined;
+    for (&counts) |*c| {
+        var fa: std.testing.FailingAllocator = .init(std.testing.allocator, .{});
+        try compileOne(fa.allocator(), src, target);
+        c.* = fa.alloc_index;
+    }
+    if (counts[0] != counts[1] or counts[1] != counts[2]) {
+        std.debug.print("oom {s}: three clean compiles allocate {any} times\n", .{ path, counts });
+        return error.NondeterministicMemoryUsage;
+    }
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, compileOne, .{ src, target });
 }
 
 test "OOM .lint ch01_intro" {

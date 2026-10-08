@@ -2,7 +2,8 @@
 
 **A Verilog-AMS compiler: analog device models in, exact and fast Zig device code out, for any circuit simulator.**
 
-[![CI](https://github.com/OmarSiwy/VerA/actions/workflows/bench.yaml/badge.svg?branch=main)](https://github.com/OmarSiwy/VerA/actions/workflows/bench.yaml)
+[![test](https://github.com/OmarSiwy/VerA/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/OmarSiwy/VerA/actions/workflows/test.yaml)
+[![conformance](https://github.com/OmarSiwy/VerA/actions/workflows/conformance.yaml/badge.svg?branch=main)](https://github.com/OmarSiwy/VerA/actions/workflows/conformance.yaml)
 [![Release](https://img.shields.io/github/v/release/OmarSiwy/VerA)](https://github.com/OmarSiwy/VerA/releases/latest)
 [![Docs](https://img.shields.io/badge/docs-book-blue)](https://omarsiwy.github.io/VerA/)
 [![Conformance](https://img.shields.io/badge/conformance-live%20report-brightgreen)](https://omarsiwy.github.io/VerA/report/)

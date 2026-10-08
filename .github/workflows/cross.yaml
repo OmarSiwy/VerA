@@ -1,0 +1,28 @@
+# Cross-platform builds hold because VerA calls no OS but through `std`
+# (tests/exhaustive.zig's portability guard; lib/dynlib.zig is the one
+# allowlisted file). `build-all` compiles every artifact `test` builds, the
+# emitted test devices and the VPI host and applications included, for the
+# target, and runs none: a foreign binary cannot run on this runner.
+name: cross
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-linux-gnu, aarch64-linux-gnu, x86_64-macos, aarch64-macos, x86_64-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build every artifact for ${{ matrix.target }}
+        run: zig build build-all -Dtarget=${{ matrix.target }}

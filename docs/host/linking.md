@@ -69,9 +69,7 @@ default (`--optimize`, `--zig-backend`, `--debug-info` change that).
 
 `tests/arpice_dyn.zig` is a real `dyn` module: it exports one `evalQ` over
 the sparse reference family with every operand from the caller.
-`tests/vdev_dyn.zig` exports a digital device's transient as one C call. The
-CI job `arpice-consumer` builds ARPice ([OmarSiwy/ESPice](https://github.com/OmarSiwy/ESPice))
-against every VerA commit, compiling its model corpus through its own `dyn`.
+`tests/vdev_dyn.zig` exports a digital device's transient as one C call.
 
 ### Large devices
 

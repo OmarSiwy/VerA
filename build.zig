@@ -169,17 +169,21 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&r.step);
     }
     // ReleaseSafe whatever -Doptimize says: zCReal expands every double
-    // exactly, and 10^5 of them take minutes in Debug.
-    const printf_ref = b.createModule(.{
-        .root_source_file = b.path("tests/printf_reference.zig"),
-        .target = target,
-        .optimize = .ReleaseSafe,
-        .link_libc = true,
-        .imports = &.{.{ .name = "kernels", .module = kernels }},
-    });
-    const printf_run = testRun(b, "printf_reference", printf_ref, runner);
-    b.step("test-printf-reference", "Compare str_kernels.zCReal's %e/%f/%g with the C library's snprintf").dependOn(printf_run);
-    test_step.dependOn(printf_run);
+    // exactly, and 10^5 of them take minutes in Debug. glibc only: the oracle
+    // must itself be conforming (tests/printf_reference.zig's header).
+    const printf_step = b.step("test-printf-reference", "Compare str_kernels.zCReal's %e/%f/%g with glibc's snprintf");
+    if (target.result.isGnuLibC()) {
+        const printf_ref = b.createModule(.{
+            .root_source_file = b.path("tests/printf_reference.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+            .link_libc = true,
+            .imports = &.{.{ .name = "kernels", .module = kernels }},
+        });
+        const printf_run = testRun(b, "printf_reference", printf_ref, runner);
+        printf_step.dependOn(printf_run);
+        test_step.dependOn(printf_run);
+    }
 
     // The suite runner's options are only the absolute paths it cannot compute
     // itself; defaults (the foreign compiler's command line, the fixture

@@ -1,0 +1,92 @@
+# The external suites, every reference tool from `nix develop .#external`
+# (the reference tools of `.#benchmarking`, without its GPU toolchains).
+# Each gates by NAME (AGENTS.md §0 rule 3): a disagreement passes only when
+# a row of its suite's TRIAGE.md (tests/fixtures/external/<suite>/) names it
+# with a verdict, and a row that names nothing is STALE and fails too, as an
+# XPASS does. Upstream sources are fetched at their pinned commits into
+# .zig-cache/external, never committed.
+name: external
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Analog (tools/external_analog.py): VerA's `--emit-osdi` libraries in
+  # ngspice against hand-derived values, OpenVAF-Reloaded, the CMC and TU
+  # Dresden QA references and Xyce.
+  external-analog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build vera
+        run: nix develop .#external -c zig build -Doptimize=ReleaseFast install
+      - name: External analog suites (osdi, va-models, cmcqa, hicum-qa, xyce)
+        run: |
+          nix develop .#external -c python3 tools/external_analog.py --out external-out 2>&1 | tee external.txt
+          exit "${PIPESTATUS[0]}"
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## External analog suites'
+            echo '```'; tail -1 external.txt; echo '```'
+            echo '### FAIL and STALE names'
+            echo '```'; grep -E '^(FAIL|STALE) ' external.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-analog
+          path: |
+            external.txt
+            external-out/fail.txt
+
+  # Digital (tools/external_digital.py): ivtest and the Verilog-2005 subset
+  # of sv-tests by their own verdicts, and iverilog + vvp against `vera --run`
+  # transcript for transcript.
+  external-digital:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build vera
+        run: nix develop .#external -c zig build -Doptimize=ReleaseFast install
+      # Every tool call is capped (address space, file size), so a runaway
+      # case fails by name instead of taking the runner down; the monitor
+      # says what was using the machine if it goes down anyway.
+      - name: External digital suites (ivtest, sv-tests, iverilog-diff)
+        env:
+          EXT_WRAP: prlimit --as=6442450944 --fsize=1073741824 --
+        run: |
+          (while sleep 10; do
+             echo "monitor $(date +%T): $(free -m | awk 'NR==2 { print $3 "M used, " $7 "M available" }'), disk $(df -h --output=avail / | tail -1)"
+             ps -eo rss=,etime=,args= --sort=-rss | head -3 | cut -c1-160
+           done) &
+          status=0
+          nix develop .#external -c python3 tools/external_digital.py zig-out/bin/vera --names external-digital-names.txt > external-digital.tsv 2> external-digital.txt || status=$?
+          cat external-digital.tsv
+          exit "$status"
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## External digital suites'
+            echo '```'; cat external-digital.tsv; echo '```'
+            echo '### FAIL and STALE names'
+            echo '```'; grep -E '^(FAIL|STALE) ' external-digital.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-digital
+          path: |
+            external-digital.tsv
+            external-digital.txt
+            external-digital-names.txt
+

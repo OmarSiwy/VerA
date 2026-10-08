@@ -1,0 +1,38 @@
+# THE GATE: `zig build` and `zig build test` on each OS a release ships for.
+# Gate on $?, not on reading the tail of a log: `zig build test 2>&1 | tail`
+# swallows the exit code and this has produced a green report over a failing
+# build before (AGENTS.md §0 rule 2).
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      # `test` does not analyse every path of the CLI (AGENTS.md §9).
+      - name: Build (gate)
+        run: zig build
+      - name: Unit tests (gate)
+        shell: bash
+        run: |
+          zig build test --summary all 2>&1 | tee unit.txt
+          exit "${PIPESTATUS[0]}"
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          { echo '## Unit tests (${{ matrix.os }})'; echo '```'; tail -20 unit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

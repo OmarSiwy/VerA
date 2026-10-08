@@ -45,7 +45,6 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `git show ae9633f1:docs/ROADMAP.md` | the old v1.0.0 roadmap (deleted 2026-10-04 as outdated; a citation of `ROADMAP.md` means this revision) | history only. v1.0.0 is §2 below; open decisions and their work items are `specification/Vague_Decisions.md` |
 | `CHANGELOG.md` | every change since v1.0.0, one bullet each (fixes cite their GitHub issue); at each release, `tools/conformance.py`'s measured table under the version heading | what changed and where the project stands; where to add your own bullet (§9) |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
@@ -53,7 +52,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | `specification/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
 | `specification/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
 | `specification/Vague_Decisions.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
-| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `ROADMAP.md` §5 (at ae9633f1) and from there into `specification/Vague_Decisions.md` |
+| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `specification/Vague_Decisions.md` |
 
 Measurements in older documents are superseded by the latest `CHANGELOG.md`
 entry, or by running the commands in §2. When two disagree, the newest wins and
@@ -123,11 +122,14 @@ in `build.zig`'s `module_specs`. A **patch** (`0.N.M`) closes rows without
 changing any of those. Every `ARCHITECTURE.md §6` refactor phase is therefore a
 patch, because it is byte-identical by construction.
 
-`.github/workflows/bench.yaml` runs on every push and PR. It writes the
-torture suite, clause coverage, digital transcripts and the footprint/speed
-sweep into the job summary, and uploads the verdicts as an artifact. It **gates** on `zig build test`, `test-1364`, `test-devices`,
-`test-vpi-fixtures`, `test-spice`, the cross builds, and the fixture suite
-with 0 FAIL and 0 unasserted. Every verdict is gated by **name**: the
+Every push and PR runs one workflow per concern, each with its own status:
+`test.yaml` (`zig build` and `zig build test` on Linux, macOS and Windows),
+`cross.yaml`, `nix.yaml`, `conformance.yaml` (the fixture suite, clause
+coverage, `test-1364`, `test-devices`, `test-vpi-fixtures`, `test-spice`,
+the emitted Verilog and the footprint/speed sweep, one job each),
+and `external.yaml` (the external suites). `pages.yaml` publishes the website after `conformance`
+finishes on main. The gates: `test`, `cross`, `nix`, and `conformance`'s
+fixture suite with 0 FAIL and 0 unasserted. Every verdict is gated by **name**: the
 ratchet (`tools/conformance.py ratchet`) compares each fixture's verdict with
 `tests/fixtures/VERDICTS.tsv`, so a new failure fails, and so does a fixed one
 until `ratchet --update` records it. Only the
