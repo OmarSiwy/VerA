@@ -669,7 +669,7 @@ const Interp = struct {
 // it hands `emit`. The expected values follow from the header's formulas:
 // F = -S(0)·VDD/(S(VDD)-S(0)), tau = ΔQ/ΔS, delay = tau·ln2 + td.
 
-const Fixture = @import("codegen/plan/fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 /// Pins `a`, `y`, `vdd`, `vss`, in that order, all ports.
 const four = [_][]const u8{ "a", "y", "vdd", "vss" };

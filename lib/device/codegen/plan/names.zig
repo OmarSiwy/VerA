@@ -181,7 +181,7 @@ fn uNameTaken(lowered: *const Lowered, nm: []const u8, extra: []const []const u8
     return false;
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 const Lower = @import("ir").Lowered;
 
 test "a potential source gets a branch current; two on one branch get two" {

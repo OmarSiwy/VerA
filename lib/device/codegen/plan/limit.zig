@@ -561,7 +561,7 @@ fn algOf(g: Input, args: []const Mir.Value) ?Alg {
     return std.meta.stringToEnum(Alg, strArg(g, args, 1) orelse return null);
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "an honoured pnjlim, and the declines that say why" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

@@ -39,7 +39,7 @@
 //! tests are `test.zig`, which this root's `test` block pulls in. No
 //! device imports this root. `zig build test-kernels` runs them.
 
-/// `tools/contract.zig`'s `abi_version`, re-exported for `backend`, which
+/// `tools/contract.zig`'s `abi_version`, re-exported for `device`, which
 /// cannot import `contract` itself: codegen stamps it into every device.
 pub const abi_version = @import("contract").abi_version;
 /// §9.5.3/§9.5.4.2 string formatting and scanning; the digital engine's

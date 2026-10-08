@@ -6,7 +6,7 @@
 //! out. In: a derived and set-up device `Model`/`Instance` and a deck's
 //! analysis card; out: one stderr row per accepted point or frequency. The
 //! generated testbench calls `deck` for `//! tran` and `//! onoise`
-//! (`lib/backend/tb/runner.zig`); `zig build test-spice` grades the result.
+//! (`lib/exe/tb/runner.zig`); `zig build test-spice` grades the result.
 //! Host-side only: nothing here reaches the device text, which stays
 //! GPU-compilable. The LRM clauses each file implements are in its header.
 //!

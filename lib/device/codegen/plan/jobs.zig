@@ -494,7 +494,7 @@ fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
     };
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "jobs queue in insert-tolerant order: contributions, operator inputs, held values" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

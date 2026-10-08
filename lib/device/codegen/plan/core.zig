@@ -283,7 +283,7 @@ const Mark = struct {
     }
 };
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "live-outs are deduplicated in job order; display stays out; held values index them" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

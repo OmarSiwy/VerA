@@ -6,8 +6,8 @@
 //! deletes it. A row whose violation is gone fails too, and so does a count
 //! that fell below its row, so an allowlist only shrinks: when a phase lands,
 //! it deletes or lowers its rows in the same commit. The rules are read from
-//! text, like `exhaustive.zig`'s guards: R1 from the rows, R2 from the file
-//! `@import` graph (`import_graph.zig`), R3-R7 from production lines, that is
+//! text, like `exhaustive.zig`'s guards: R1 and R2 from the rows, R3-R7
+//! from production lines (files listed by `import_graph.zig`), that is
 //! outside top-level `test` blocks and `test.zig` files, with `//` comment
 //! lines skipped. R5 and R6 also read `\\` lines, the emitted text.
 
@@ -122,34 +122,47 @@ fn isWord(c: u8) bool {
 
 // ---------------------------------------------------------------------------
 // R1: a runtime row's closure contains no compiler row.
+// R2: no backend row's closure contains another backend row.
+// Both are read from the rows: an edge the build does not have cannot be
+// written, since `defineModules` hands a module only its row's imports.
 // ---------------------------------------------------------------------------
 
-const r1_allow = [_]struct { from: []const u8, to: []const u8, phase: []const u8 }{
+/// A row that may reach another, and the phase that deletes the allowance.
+const Reach = struct { from: []const u8, to: []const u8, phase: []const u8 };
+
+const r1_allow = [_]Reach{
     .{ .from = "sim", .to = "diag", .phase = "B4" },
     .{ .from = "sim", .to = "frontend", .phase = "B4" },
 };
 
-test "R1: a runtime row's closure contains no compiler row" {
-    var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena_state.deinit();
-    const a = arena_state.allocator();
+/// Empty since Phase 8 split `backend` into `device`, `verilog` and `exe`:
+/// no backend reaches another (the testbench reads a device only through
+/// its text and the contract, AGENTS.md §11.8).
+const r2_allow = [_]Reach{};
+
+/// The rows' roles, from the tag names `repo_options` carries.
+fn rowRoles(a: Allocator) ![]Role {
     const names = repo.module_names;
     try std.testing.expectEqual(names.len, repo.module_roles.len);
     try std.testing.expectEqual(names.len, repo.module_imports.len);
-
     const roles = try a.alloc(Role, names.len);
     for (repo.module_roles, roles) |tag, *r| r.* = std.meta.stringToEnum(Role, tag) orelse return error.UnknownRole;
-    var used: [r1_allow.len]bool = @splat(false);
+    return roles;
+}
+
+/// Every `to`-role row the closure of a `from`-role row reaches (the row
+/// itself aside) that `allow` does not name, printed under `rule`, plus every
+/// `allow` row that no longer reaches; returns how many.
+fn reachBreaches(a: Allocator, rule: []const u8, from_role: Role, to_role: Role, allow: []const Reach) !usize {
+    const names = repo.module_names;
+    const roles = try rowRoles(a);
+    const used = try a.alloc(bool, allow.len);
+    @memset(used, false);
     var bad: usize = 0;
-    // A `leaf` imports only std (ARCHITECTURE.md §1).
-    for (names, roles, repo.module_imports) |name, role, imports| if (role == .leaf and imports.len != 0) {
-        std.debug.print("R1: leaf `{s}` imports `{s}`\n", .{ name, imports });
-        bad += 1;
-    };
     const in = try a.alloc(bool, names.len);
     var stack: std.ArrayList(usize) = .empty;
     for (names, roles, 0..) |from, role, i| {
-        if (role != .runtime) continue;
+        if (role != from_role) continue;
         @memset(in, false);
         try stack.append(a, i);
         while (stack.pop()) |m| {
@@ -163,103 +176,44 @@ test "R1: a runtime row's closure contains no compiler row" {
                 try stack.append(a, j);
             }
         }
-        for (names, roles, in) |to, r, reached| {
-            if (!reached or r != .compiler) continue;
-            for (r1_allow, &used) |row, *u| {
+        for (names, roles, in, 0..) |to, r, reached, j| {
+            if (!reached or r != to_role or j == i) continue;
+            for (allow, used) |row, *u| {
                 if (std.mem.eql(u8, row.from, from) and std.mem.eql(u8, row.to, to)) {
                     u.* = true;
                     break;
                 }
             } else {
-                std.debug.print("R1: runtime `{s}` reaches compiler `{s}`\n", .{ from, to });
+                std.debug.print("{s}: {t} `{s}` reaches {t} `{s}`\n", .{ rule, from_role, from, to_role, to });
                 bad += 1;
             }
         }
     }
-    for (r1_allow, used) |row, u| if (!u) {
-        std.debug.print("R1: `{s}` no longer reaches `{s}`: delete its row ({s})\n", .{ row.from, row.to, row.phase });
+    for (allow, used) |row, u| if (!u) {
+        std.debug.print("{s}: `{s}` no longer reaches `{s}`: delete its row ({s})\n", .{ rule, row.from, row.to, row.phase });
         bad += 1;
     };
-    try std.testing.expectEqual(@as(usize, 0), bad);
+    return bad;
 }
 
-// ---------------------------------------------------------------------------
-// R2: backend closures are pairwise disjoint. Until Phase 8 there is one
-// `backend` row, so the check is file-level: the closure of lib/backend/tb/**
-// reaches no file of codegen (codegen.zig, codegen/**, cg_*.zig). An
-// allowlisted edge is cut from the walk.
-// ---------------------------------------------------------------------------
-
-// Empty since Phase 8 moved naming.zig to lib/ir/names.zig, whose tests
-// build their own fixture.
-const r2_allow = [_]struct { from: []const u8, to: []const u8, phase: []const u8 }{};
-
-fn isCodegen(p: []const u8) bool {
-    return std.mem.eql(u8, p, "lib/backend/codegen.zig") or
-        std.mem.startsWith(u8, p, "lib/backend/codegen/") or
-        std.mem.startsWith(u8, p, "lib/backend/cg_");
-}
-
-fn indexOf(g: *const import_graph.Graph, path: []const u8) ?u32 {
-    for (g.files, 0..) |f, i| if (std.mem.eql(u8, f, path)) return @intCast(i);
-    return null;
-}
-
-/// The codegen file the tb/ closure reaches with every `r2_allow` edge but
-/// `keep` cut, printing the chain that reaches it; null when none is reached.
-fn tbReach(a: Allocator, g: *const import_graph.Graph, keep: ?usize, print: bool) !?u32 {
-    const none = std.math.maxInt(u32);
-    const parent = try a.alloc(u32, g.files.len);
-    @memset(parent, none);
-    var queue: std.ArrayList(u32) = .empty;
-    for (g.files, 0..) |f, i| if (std.mem.startsWith(u8, f, "lib/backend/tb/")) {
-        parent[i] = @intCast(i);
-        try queue.append(a, @intCast(i));
-    };
-    var head: usize = 0;
-    while (head < queue.items.len) : (head += 1) {
-        const v = queue.items[head];
-        next: for (g.edges[v]) |t| {
-            if (parent[t] != none) continue;
-            for (r2_allow, 0..) |row, k| {
-                if (keep) |kept| if (kept == k) continue;
-                if (std.mem.eql(u8, g.files[v], row.from) and std.mem.eql(u8, g.files[t], row.to)) continue :next;
-            }
-            parent[t] = v;
-            if (isCodegen(g.files[t])) {
-                if (print) {
-                    std.debug.print("R2: lib/backend/tb/ reaches {s}:", .{g.files[t]});
-                    var x = t;
-                    while (parent[x] != x) : (x = parent[x]) std.debug.print(" <- {s}", .{g.files[parent[x]]});
-                    std.debug.print("\n", .{});
-                }
-                return t;
-            }
-            try queue.append(a, t);
-        }
-    }
-    return null;
-}
-
-test "R2: the testbench closure reaches no codegen file" {
+test "R1: a runtime row's closure contains no compiler row" {
     var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
-    var s = try openSource(a);
-    defer s.root.close(s.io);
-    const g = try import_graph.buildGraph(&s);
-
     var bad: usize = 0;
-    if (try tbReach(a, &g, null, true) != null) bad += 1;
-    for (r2_allow, 0..) |row, k| {
-        const f = indexOf(&g, row.from);
-        const t = indexOf(&g, row.to);
-        const has_edge = f != null and t != null and std.mem.findScalar(u32, g.edges[f.?], t.?) != null;
-        if (has_edge and try tbReach(a, &g, k, false) != null) continue;
-        std.debug.print("R2: {s} -> {s} no longer reaches codegen: delete its row ({s})\n", .{ row.from, row.to, row.phase });
+    // A `leaf` imports only std (ARCHITECTURE.md §1).
+    for (repo.module_names, try rowRoles(a), repo.module_imports) |name, role, imports| if (role == .leaf and imports.len != 0) {
+        std.debug.print("R1: leaf `{s}` imports `{s}`\n", .{ name, imports });
         bad += 1;
-    }
+    };
+    bad += try reachBreaches(a, "R1", .runtime, .compiler, &r1_allow);
     try std.testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "R2: no backend row's closure contains another backend row" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena_state.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try reachBreaches(arena_state.allocator(), "R2", .backend, .backend, &r2_allow));
 }
 
 // ---------------------------------------------------------------------------
@@ -420,15 +374,15 @@ test "R5: each name-spelling literal has one owner" {
 
 // ---------------------------------------------------------------------------
 // R6: no emitted `std.debug.print`/`process.exit` in device-emitting files
-// (codegen.zig, codegen/**, cg_*.zig, and lib/kernels/*_kernels.zig, whose
+// (lib/device/**, and lib/kernels/*_kernels.zig, whose
 // source is device text; the module's other files are host Zig). Matched as `debug.print(` and `process.exit(`, since a kernel names
 // `std` through its own alias (`zstd`, `zhs`, ...).
 // ---------------------------------------------------------------------------
 
 const r6_rows = [_]Row{
-    .{ .path = "lib/backend/cg_display.zig", .n = 3, .phase = "B2" },
-    .{ .path = "lib/backend/codegen/kernel_text.zig", .n = 5, .phase = "B2" },
-    .{ .path = "lib/backend/codegen/render.zig", .n = 1, .phase = "B2" },
+    .{ .path = "lib/device/cg_display.zig", .n = 3, .phase = "B2" },
+    .{ .path = "lib/device/codegen/kernel_text.zig", .n = 5, .phase = "B2" },
+    .{ .path = "lib/device/codegen/render.zig", .n = 1, .phase = "B2" },
     .{ .path = "lib/kernels/file_kernels.zig", .n = 4, .phase = "B2" },
     .{ .path = "lib/kernels/hist_kernels.zig", .n = 1, .phase = "B2" },
     .{ .path = "lib/kernels/rng_kernels.zig", .n = 2, .phase = "B2" },
@@ -443,7 +397,7 @@ const PrintsOrExits = struct {
 };
 
 fn emitsDevice(p: []const u8) bool {
-    return isCodegen(p) or (std.mem.startsWith(u8, p, "lib/kernels/") and std.mem.endsWith(u8, p, "_kernels.zig"));
+    return std.mem.startsWith(u8, p, "lib/device/") or (std.mem.startsWith(u8, p, "lib/kernels/") and std.mem.endsWith(u8, p, "_kernels.zig"));
 }
 
 test "R6: no emitted print or exit in device-emitting files" {
@@ -481,19 +435,16 @@ const r7_rows = [_]Row{
     .{ .path = "lib/analog/lower/systask.zig", .n = 10 },
     .{ .path = "lib/analog/lower/var.zig", .n = 5 },
     .{ .path = "lib/analog/lower/wide.zig", .n = 1 },
-    .{ .path = "lib/backend/beh_verilog.zig", .n = 4 },
-    .{ .path = "lib/backend/cg_filters.zig", .n = 1 },
-    .{ .path = "lib/backend/codegen/call.zig", .n = 12 },
-    .{ .path = "lib/backend/codegen/cfg.zig", .n = 1 },
-    .{ .path = "lib/backend/codegen/file.zig", .n = 1 },
-    .{ .path = "lib/backend/codegen/instance.zig", .n = 2 },
-    .{ .path = "lib/backend/codegen/plan/names.zig", .n = 2 },
-    .{ .path = "lib/backend/codegen/setup.zig", .n = 2 },
-    .{ .path = "lib/backend/codegen/setup_chunk.zig", .n = 6 },
-    .{ .path = "lib/backend/codegen/unit.zig", .n = 1 },
-    .{ .path = "lib/backend/tb/directive.zig", .n = 31 },
-    .{ .path = "lib/backend/tb/runner.zig", .n = 9 },
     .{ .path = "lib/base/interner.zig", .n = 2 },
+    .{ .path = "lib/device/cg_filters.zig", .n = 1 },
+    .{ .path = "lib/device/codegen/call.zig", .n = 12 },
+    .{ .path = "lib/device/codegen/cfg.zig", .n = 1 },
+    .{ .path = "lib/device/codegen/file.zig", .n = 1 },
+    .{ .path = "lib/device/codegen/instance.zig", .n = 2 },
+    .{ .path = "lib/device/codegen/plan/names.zig", .n = 2 },
+    .{ .path = "lib/device/codegen/setup.zig", .n = 2 },
+    .{ .path = "lib/device/codegen/setup_chunk.zig", .n = 6 },
+    .{ .path = "lib/device/codegen/unit.zig", .n = 1 },
     .{ .path = "lib/diag/suggest.zig", .n = 1 },
     .{ .path = "lib/digital/emit.zig", .n = 2 },
     .{ .path = "lib/elab/discipline_rules.zig", .n = 1 },
@@ -504,6 +455,8 @@ const r7_rows = [_]Row{
     .{ .path = "lib/elab/elaborate/override.zig", .n = 7 },
     .{ .path = "lib/elab/elaborate/paramset.zig", .n = 3 },
     .{ .path = "lib/elab/elaborate/resolve.zig", .n = 2 },
+    .{ .path = "lib/exe/tb/directive.zig", .n = 31 },
+    .{ .path = "lib/exe/tb/runner.zig", .n = 9 },
     .{ .path = "lib/frontend/ast_decl.zig", .n = 1 },
     .{ .path = "lib/frontend/constfold.zig", .n = 9 },
     .{ .path = "lib/frontend/lexer.zig", .n = 5 },
@@ -525,6 +478,7 @@ const r7_rows = [_]Row{
     .{ .path = "lib/ir/simparam.zig", .n = 2 },
     .{ .path = "lib/prove/setup.zig", .n = 1 },
     .{ .path = "lib/root.zig", .n = 3 },
+    .{ .path = "lib/verilog/beh_verilog.zig", .n = 4 },
     .{ .path = "lib/zigbuild/exe.zig", .n = 1 },
     .{ .path = "lib/zigbuild/orchestrator.zig", .n = 3 },
     .{ .path = "lib/zigbuild/server.zig", .n = 1 },

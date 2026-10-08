@@ -655,7 +655,7 @@ fn runAndCheck(
 /// `acstim`, `acdyn`, `qsite`, `seed`, `limit`, `abstol`) are not the
 /// fixture's: check.vh does not move their wants, and whether they can fail
 /// is the runner's property (its exact or 1e-12 comparisons, pinned by
-/// lib/backend/tb/test.zig and tests/canary), so they are left out.
+/// lib/exe/tb/test.zig and tests/canary), so they are left out.
 fn perturbed(f: Fixture, got: []const u8, w: *Io.Writer) !Result {
     var own: Tally = .{ .total = 0, .failed = 0 };
     var runner_checks: usize = 0;

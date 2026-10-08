@@ -828,7 +828,7 @@ fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
     return null;
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "a unit's slice stops at a value the core carries" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

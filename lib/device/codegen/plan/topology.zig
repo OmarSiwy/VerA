@@ -389,7 +389,7 @@ pub fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
     return out.items;
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "a probed flow no source defines is free; one a potential source drives is not" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

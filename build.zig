@@ -66,10 +66,20 @@ const module_specs = [_]ModuleSpec{
     // No compiler module. `contract`: `Part` is the host's `DevicePart`.
     // `dynlib`: only the tests that load what they built.
     .{ .name = "zigbuild", .path = "lib/zigbuild/root.zig", .role = .tool, .imports = &.{ "contract", "dynlib" } },
-    // `analog`: only codegen's tests, which lower source. `zigbuild`: the
-    // `Output` codegen produces, and the testbench build `tb` re-exports.
-    .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
-    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "backend", "kernels", "zigbuild" } },
+    // The three backends over the proven MIR. None imports another
+    // (fitness R2): a testbench reaches a device only through its text and
+    // the contract (AGENTS.md §11.8).
+    // Codegen, MIR -> device.zig. `zigbuild`: the `Output` it produces.
+    // `analog`: only the tests that lower source; `dynlib`: only the tests
+    // that load what they built.
+    .{ .name = "device", .path = "lib/device/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
+    // `--emit-verilog`, MIR -> a behavioural IEEE 1364 module. `prove`: only
+    // the tests' hand-built `Fixture`.
+    .{ .name = "verilog", .path = "lib/verilog/beh_verilog.zig", .role = .backend, .imports = &.{ "frontend", "ir", "prove" } },
+    // The testbench, `//!` directives -> runner text. `zigbuild`: the
+    // testbench build `tb` re-exports.
+    .{ .name = "exe", .path = "lib/exe/tb.zig", .role = .backend, .imports = &.{ "diag", "frontend", "ir", "zigbuild" } },
+    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "device", "verilog", "exe", "kernels", "zigbuild" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
     // shared AST, not a consumer of the pipeline. It takes `kernels` so the

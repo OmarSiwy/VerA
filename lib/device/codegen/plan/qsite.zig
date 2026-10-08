@@ -182,7 +182,7 @@ fn collapsible(topo: plan_topo.Topology, u: u32) bool {
     return false;
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "two charges on one pin are two slots; a flow contribution stamps +hi and −lo" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

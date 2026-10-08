@@ -17,7 +17,9 @@ pub const ir = @import("ir");
 pub const analog = @import("analog");
 pub const prove = @import("prove");
 pub const zigbuild = @import("zigbuild");
-pub const backend = @import("backend");
+pub const device = @import("device");
+pub const verilog = @import("verilog");
+pub const exe = @import("exe");
 pub const sim = @import("sim");
 pub const digital = @import("digital");
 pub const vera = @import("vera");
@@ -96,21 +98,21 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
     const gpa = std.testing.allocator;
     var res = try vera.compileSource(gpa, wide_device, .build);
     defer res.deinit();
-    const device = try res.generateDevice();
+    const src = try res.generateDevice();
 
     var missing: usize = 0;
     var i: usize = 0;
-    while (std.mem.findPos(u8, device, i, "contract.")) |hit| {
+    while (std.mem.findPos(u8, src, i, "contract.")) |hit| {
         i = hit + "contract.".len;
         // A comment naming `contract.zig` is prose, not a decl the device
         // resolves.
-        if (inComment(device, hit)) continue;
+        if (inComment(src, hit)) continue;
         // `@import("contract")` and its binding line are followed by nothing
         // identifier-shaped, so the scan skips them.
         var end = i;
-        while (end < device.len and isIdentChar(device[end])) end += 1;
+        while (end < src.len and isIdentChar(src[end])) end += 1;
         if (end == i) continue;
-        const name = device[i..end];
+        const name = src[i..end];
         if (declares(name)) continue;
         std.debug.print(
             "the emitted device spells `contract.{s}`, which tools/contract.zig does not declare\n",
@@ -122,5 +124,5 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
 
     // The scan is evidence only if it found something: a device that stopped
     // emitting the prefix would otherwise pass by matching nothing.
-    try std.testing.expect(std.mem.find(u8, device, "contract.validate(") != null);
+    try std.testing.expect(std.mem.find(u8, src, "contract.validate(") != null);
 }

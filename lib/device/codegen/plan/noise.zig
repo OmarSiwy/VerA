@@ -302,7 +302,7 @@ pub fn psdConst(mir: *const Mir, v: Mir.Value) ?f64 {
     };
 }
 
-const Fixture = @import("fixture.zig").Fixture;
+const Fixture = @import("prove").Fixture;
 
 test "a noise table is sorted, and a repeated frequency is refused" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

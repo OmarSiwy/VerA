@@ -48,7 +48,7 @@ const gmin_start: f64 = 1e-2;
 /// unknown: a nodeset is the user's guess, a seed the model's default, and
 /// ngspice holds nodeset nodes over INITJCT's junction values. A nodeset is
 /// only where Newton starts, as in the testbench host
-/// (`lib/backend/tb/runner.zig` `pointUnknowns`); no rung clamps it
+/// (`lib/exe/tb/runner.zig` `pointUnknowns`); no rung clamps it
 /// (VD-117). Asserts that `x` holds exactly n_u values.
 fn coldStart(ckt: anytype, x: []f64) void {
     @memset(x, 0);
@@ -59,7 +59,7 @@ fn coldStart(ckt: anytype, x: []f64) void {
     };
     // ponytail: mirrors the testbench's loop instead of sharing it: that one
     // is Zig text emitted into each testbench, and src/sim cannot import
-    // lib/backend; a shared contract helper would be new ABI surface.
+    // lib/exe; a shared contract helper would be new ABI surface.
     if (@hasDecl(D, "u_nodeset")) for (D.u_nodeset, x) |ns, *xi| if (ns) |v| {
         xi.* = v;
     };

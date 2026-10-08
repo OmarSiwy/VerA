@@ -1,5 +1,5 @@
 //! A SPICE deck's one analysis on a generated testbench's device: the entry
-//! points `lib/backend/tb/runner.zig` emits a call to for `//! tran` and
+//! points `lib/exe/tb/runner.zig` emits a call to for `//! tran` and
 //! `//! onoise`. Each prints one full-precision row per accepted point or
 //! frequency to stderr, for `zig build test-spice` to grade against the
 //! deck's oracle, and exits 1 naming the failure.

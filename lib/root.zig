@@ -42,14 +42,14 @@ pub const KeywordSet = token.KeywordSet;
 /// Diagnostic codes, the `Bag` every stage reports into, and rendering.
 pub const diag = @import("diag");
 /// MIR to device.zig (`CompileResult.generateOutput`).
-pub const codegen = @import("backend").codegen;
+pub const codegen = @import("device").codegen;
 /// MIR to a behavioural Verilog module for digital simulation (`--emit-verilog`).
-pub const beh_verilog = @import("backend").beh_verilog;
+pub const beh_verilog = @import("verilog");
 /// The `zigbuild` module under its pre-Phase-7 name: device.zig to a
 /// versioned `.so` (`buildArtifact`), and the testbench build `tb` re-exports.
 pub const orchestrator = @import("zigbuild");
 /// The fixture testbench: `//!` directives, runner text and its build.
-pub const tb = @import("backend").tb;
+pub const tb = @import("exe");
 // What `ir` exported until ARCHITECTURE.md Phase 5 moved lowering to `analog`
 // and the MIR passes to `prove`; `ir` cannot re-export either, since both
 // import it.
@@ -75,8 +75,8 @@ const Mir = @import("ir").Mir;
 const Elaborate = @import("elab").Elaborate;
 const Lowered = @import("ir").Lowered;
 const naming = @import("ir").names;
-const cg_display = @import("backend").cg_display;
-const cg_filters = @import("backend").cg_filters;
+const cg_display = @import("device").cg_display;
+const cg_filters = @import("device").cg_filters;
 
 /// How far the pipeline runs. The Zig optimize mode and backend are
 /// `orchestrator.Options.optimize` and `.backend`, set independently.
