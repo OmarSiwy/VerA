@@ -1696,7 +1696,13 @@ def png_size(data):
 
 class SourceFigures(unittest.TestCase):
     """figures: structural guards for the PDF figure assets; visual fidelity is
-    reviewed separately."""
+    reviewed separately. The figures are not committed (they are 8 MB and the
+    `figures` subcommand re-crops them from the pinned PDF), so every check but
+    the PDF's own revision skips until they are generated."""
+
+    def setUp(self):
+        if self._testMethodName != "test_source_revision" and not (ROOT / "specification/figures").is_dir():
+            self.skipTest("specification/figures not generated: run tools/conformance.py figures")
 
     def test_source_revision(self):
         self.assertEqual(hashlib.sha256(LRM_PDF.read_bytes()).hexdigest(), LRM_SHA256)
