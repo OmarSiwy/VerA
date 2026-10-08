@@ -379,7 +379,7 @@ build fails keeps the `.va`-attributed message.
   sema 4.3 s (the 900 `settleN` functions, ~70-130 ms each), LLVM 32 s (85%;
   ISel 4.2, InstCombine 3.3, SROA 2.6 s). `--state=auto` 61.4 Gi, `--state=4`
   52.0 Gi, `--state=2` 45.5 Gi: the second phase adds 18%, not 2x as
-  FUTURE_PLANS §5 says. ReleaseSmall: 56.8 Gi (−7.5%) but runtime cycles
+  FUTURE_PLANS §5 (since removed) said. ReleaseSmall: 56.8 Gi (−7.5%) but runtime cycles
   +12-28% (0.102 → 0.113-0.131 Gcyc for 20,000 vectors; same checksum). The
   lever here is the emitted `settle` shape, not flags; not explored further.
 
