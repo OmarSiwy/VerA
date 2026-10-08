@@ -74,16 +74,22 @@ Exit status: 0 on success, 1 on a diagnosed error, 2 on a usage error.
 flag; [VerA devices in your own simulator](https://omarsiwy.github.io/VerA/host/why.html)
 builds a host step by step.
 
-## Limitations
+## Scope
 
-- `vera --run` checks models; it is not a circuit simulator: fixed-step
-  backward Euler with no truncation-error control (it does honour a device's
-  `$vera_reject_step`), and an event fires at the next declared time point (W0750).
-- `--emit-osdi` refuses `$vera_reject_step` (E1099) and warns when one noise
-  generator feeds two rows (W1098); OSDI has no slot for operating-point
-  variables, an acceptance callback or display output.
-- SystemVerilog (E1104) and VHDL are refused.
-- Known gaps are listed by name in [`specification/known-gaps.txt`](specification/known-gaps.txt); CI fails if the list changes.
+- **`vera --run` checks models; it is not a circuit simulator.** It steps
+  fixed-step backward Euler over the time points a fixture declares, so an
+  event lands on the next declared point (W0750). For transient analysis, load
+  the device into a simulator (ESPice, or ngspice through `--emit-osdi`).
+- **`--emit-osdi` carries what the OSDI 0.4 interface can describe.** OSDI's
+  model struct has no field for a request to reject a time step, correlated
+  noise, a step-accepted callback or printed output, so VerA refuses the first
+  (E1099) and warns on the second (W1098) rather than drop them silently.
+  VerA's own device contract carries all four.
+- **Languages:** Verilog-AMS and IEEE 1364-2005 Verilog. SystemVerilog (E1104)
+  and VHDL are out of scope.
+- **Known gaps** are listed by name in
+  [`specification/known-gaps.txt`](specification/known-gaps.txt), and CI fails
+  if the list changes. Operating-point variables are not exported to OSDI yet.
 
 ## Conformance
 
