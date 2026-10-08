@@ -6,7 +6,7 @@
 //! declaration (§6.7), clones the body (`clone.zig`) and recurses.
 //! LRM §3.6.2, §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.5, §6.5.7.1,
 //! §6.6, §6.7.1, §7.1, §7.8.4, §9.15, §9.19, A.4.1, A.5.4, Annex E.3.2;
-//! IEEE 1364-2005 §12.3.3, §12.3.6, §19.9.
+//! IEEE 1364-2005 §5.2.1, §12.3.3, §12.3.6, §19.9.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -552,27 +552,27 @@ fn inlineInstance(
     // rename map: an actual naming a net of a mid-level module has already
     // been flattened to `u.n`.
     // At most one of each per child port.
-    var concats: std.ArrayList(struct { port: Ast.Port, elems: []const []const u8, tok: u32 }) = try .initCapacity(self.ctx.arena, child.ports.len);
+    var concats: std.ArrayList(struct { port: Ast.Port, parts: []const elaborate.NetPart, tok: u32 }) = try .initCapacity(self.ctx.arena, child.ports.len);
     var widths: std.ArrayList(struct { port: Ast.Port, net: Ast.StrId, tok: u32 }) = try .initCapacity(self.ctx.arena, child.ports.len);
     for (child.ports, 0..) |p, i| {
         const conn = connectionFor(inst, p, i);
         try unit.connected.put(self.ctx.arena, p.name, conn != null and conn.?.expr != .none);
         // §6.5.7.1 a concatenated net expression, and §6.5.5's "scalar
         // member, sub-range" of a parent net: each a list of the parent's net
-        // bits, bound element by element once the child's range is known.
+        // parts, bound element by element once the child's range is known.
         if (conn) |c| if (c.expr != .none and switch (self.ctx.file.exprs.tag(c.expr)) {
             .concat, .index => true,
             else => false, // else: a whole net (joined below) or not a net expression (E0906 below)
         }) {
-            var elems: std.ArrayList([]const u8) = .empty;
+            var parts: std.ArrayList(elaborate.NetPart) = .empty;
             const is_concat = self.ctx.file.exprs.tag(c.expr) == .concat;
             var ok = true;
             if (is_concat) {
-                for (self.ctx.file.exprs.args(c.expr)) |o| if (!try netBits(self, &parent, o, &elems)) {
+                for (self.ctx.file.exprs.args(c.expr)) |o| if (!try netPart(self, &parent, o, &parts)) {
                     ok = false;
                     break;
                 };
-            } else ok = try netBits(self, &parent, c.expr, &elems);
+            } else ok = try netPart(self, &parent, c.expr, &parts);
             if (!ok) {
                 try self.err(c.main_tok, .E0906, "a port connection lists scalar nets, constant bit-selects and constant part-selects of nets", .{});
                 continue;
@@ -585,7 +585,7 @@ fn inlineInstance(
             try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
             const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
             if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
-            try concats.append(self.ctx.arena, .{ .port = p, .elems = elems.items, .tok = c.main_tok });
+            try concats.append(self.ctx.arena, .{ .port = p, .parts = parts.items, .tok = c.main_tok });
             continue;
         };
         const actual: ?Ast.StrId = if (conn) |c| elab_names.netRefName(self, c.expr) else null;
@@ -676,7 +676,7 @@ fn inlineInstance(
         try self.port_concats.append(self.ctx.arena, .{
             .name = self.ctx.file.str(name),
             .range = try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range),
-            .elems = cc.elems,
+            .parts = cc.parts,
             .main_tok = cc.tok,
         });
         try elab_resolve.noteSignalDiscipline(self, name, elab_resolve.oocDiscipline(self, path, cc.port.name) orelse cc.port.discipline);
@@ -802,33 +802,34 @@ fn inlineInstance(
     self.unit = parent;
 }
 
-/// Appends the parent net bits `e` names, MSB first, as flat element names:
-/// a scalar net `x` as `x`, §6.5.5's scalar member `bus[1]` as `bus[1]` and
-/// its sub-range `bus[3:2]` as `bus[3]`, `bus[2]` (IEEE 1364-2005 12.3.9.2
-/// pairs a port's bits left to right). The indices fold in the parent's
-/// names. Returns false for anything else: an indexed part-select, a
-/// non-constant index, or an expression that is not a net.
-///
-/// ponytail: a whole vector net inside a concatenation stays one name, as it
-/// did; its width is lowering's to know.
-fn netBits(self: *Flatten, parent: *const Unit, e: Ast.ExprId, out: *std.ArrayList([]const u8)) Error!bool {
+/// Appends the parent net part `e` names: a net `x` whole, §6.5.5's scalar
+/// member `bus[1]`, its sub-range `bus[3:2]`, or IEEE 1364-2005 §5.2.1's
+/// `bus[i +: 2]` (a sub-range by A.2.1.3's constant_range_expression). The
+/// bounds fold in the parent's names, a genvar's value included; whether
+/// they lie in the net's declared range is lowering's to judge (E0352).
+/// Returns false for anything else: a non-constant bound, or an expression
+/// that is not a net.
+fn netPart(self: *Flatten, parent: *const Unit, e: Ast.ExprId, out: *std.ArrayList(elaborate.NetPart)) Error!bool {
     const ex = &self.ctx.file.exprs;
     const base = if (ex.tag(e) == .index) ex.lhs(e) else e;
     const n = elab_names.netRefName(self, base) orelse return false;
     const net = self.ctx.file.str(parent.rename.get(n) orelse n);
     if (base == e) {
-        try out.append(self.ctx.arena, net);
+        try out.append(self.ctx.arena, .{ .net = net });
         return true;
     }
     const sel = ex.rhs(e);
+    const two = ex.tag(sel) == .range or ex.tag(sel) == .indexed_range;
     // `constInt` folds in `self.unit`, which is still the parent here.
-    const msb = elab_names.constInt(self, if (ex.tag(sel) == .range) ex.lhs(sel) else sel) orelse return false;
-    const lsb = if (ex.tag(sel) == .range) elab_names.constInt(self, ex.rhs(sel)) orelse return false else msb;
-    var k: i128 = msb;
-    while (true) : (k += if (msb > lsb) -1 else 1) {
-        try out.append(self.ctx.arena, try self.ctx.arena.print("{s}[{d}]", .{ net, k }));
-        if (k == lsb) return true;
-    }
+    const a = elab_names.constInt(self, if (two) ex.lhs(sel) else sel) orelse return false;
+    const b = if (two) elab_names.constInt(self, ex.rhs(sel)) orelse return false else a;
+    try out.append(self.ctx.arena, .{
+        .net = net,
+        .sel = if (!two) .bit else if (ex.tag(sel) == .range) .range else if (ex.extraOf(sel) != 0) .down else .up,
+        .a = a,
+        .b = b,
+    });
+    return true;
 }
 
 /// Appends one analog block of unit `unit_id`. §6.6 an instance a generate
