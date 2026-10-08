@@ -152,6 +152,7 @@ pub const Code = enum(u16) {
     E0256,
     E0257,
     E0258,
+    E0295,
     E0296,
     E0297,
     W0250,
@@ -2093,6 +2094,27 @@ fn infoOf(c: Code) Info {
             \\`.name = value;` statements alone is not a paramset_declaration.
             \\Declare the parameter the statements are written in terms of, or
             \\any one parameter, e.g. `parameter real unused_item = 0;`.
+            ,
+        },
+        .E0295 => .{
+            .title = "a min:typ:max expression is not an analog expression",
+            .lrm = "A.8.4",
+            .explain =
+            \\IEEE 1364-2005 5.3's `( min : typ : max )` is a primary of a digital
+            \\or constant expression only:
+            \\
+            \\    primary          ::= ... | ( mintypmax_expression )
+            \\    constant_primary ::= ... | ( constant_mintypmax_expression )
+            \\    analog_primary   ::= ... | ( analog_expression )
+            \\
+            \\An analog block's statements and an analog function's body are
+            \\written in analog_expression (A.6.4, A.8.3), whose parenthesised
+            \\primary holds one expression. A parameter default keeps the form
+            \\anywhere, analog blocks included, as A.2.4's param_assignment
+            \\takes a constant_mintypmax_expression:
+            \\
+            \\    parameter real td = 1.0 : 2.0 : 3.0;   // typical, 2.0
+            \\    analog V(out) <+ td * V(in);
             ,
         },
         .E0296 => .{

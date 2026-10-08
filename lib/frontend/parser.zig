@@ -63,6 +63,17 @@ pub const Parser = struct {
     /// restrict statements the ordinary statement parser also accepts at
     /// module scope, so only the position tells them apart (E0226, E0227).
     in_analog_fn: bool = false,
+    /// Parsing an analog block's or analog function's statements, whose
+    /// expressions are A.8.3 analog_expressions: A.8.4's analog_primary is
+    /// `( analog_expression )`, with no IEEE 1364-2005 §5.3 min:typ:max
+    /// (E0295). A parameter declaration inside clears it (`parseParamDecl`).
+    analog_expr: bool = false,
+    /// The statement being parsed is an A.6.4 `analog_event_statement`: the
+    /// body of an analog `@(...)`, or a statement of an
+    /// `analog_event_seq_block` in it, where `{ attribute_instance } ;` is an
+    /// alternative (no E0219). `parseStmtBody` clears it for every statement
+    /// but a block, whose own statements are event statements again.
+    analog_event_block: bool = false,
     /// Parsing for the digital executor (`--run`): admits the digital-only
     /// forms everywhere and keeps digital expression shapes unfolded.
     digital: bool = false,

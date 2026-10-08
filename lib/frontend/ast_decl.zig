@@ -108,6 +108,9 @@ pub const VarDecl = struct {
     storage: enum { variable, reg, time } = .variable,
     packed_range: ?Dim = null,
     is_signed: bool = true,
+    /// A.2.1.3 `reg [ discipline_identifier ] ...`: the discrete discipline
+    /// a `reg` names (E0371 when nothing declares it); `.none` otherwise.
+    discipline: StrId = .none,
     /// §6.4.3 / §3.2.1 declared with a `(* desc = ... *)` attribute, which is
     /// what makes a variable an output variable. Recorded for paramset
     /// variables, where §6.4.3's hiding rule turns on it.
@@ -275,6 +278,12 @@ pub const Port = struct {
     /// shall also be considered signed."
     is_signed: bool = false,
     main_tok: u32 = 0,
+
+    /// The name a §6.5.5 named connection `.name(expr)` binds by: the
+    /// external name of a `.ext(...)` port (A.1.3), else the net's own.
+    pub fn connName(p: Port) StrId {
+        return if (p.external_name != .none) p.external_name else p.name;
+    }
 };
 
 /// Analog function argument. LRM §4.7.2 (A.2.6 analog_function_item_declaration

@@ -29,7 +29,7 @@ pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) s
             for (inst.ports, 0..) |conn, i| {
                 if (conn.expr == .none or ex.tag(conn.expr) != .ident) continue;
                 const port = if (conn.name == .none) (if (i < child.ports.len) child.ports[i] else continue) else for (child.ports) |p| {
-                    if (p.name == conn.name) break p;
+                    if (p.connName() == conn.name) break p;
                 } else continue;
                 // A name the parent never declared as a net is a variable
                 // (a real expression, which 3.7 allows) or an implicit wire.

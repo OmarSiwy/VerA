@@ -333,7 +333,7 @@ fn ident(self: *Flatten, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
 pub fn connIndex(inst: *const Ast.Instance, p: Ast.Port, pi: usize) ?usize {
     const named = inst.ports.len != 0 and inst.ports[0].name != .none;
     if (!named) return if (pi < inst.ports.len) pi else null;
-    for (inst.ports, 0..) |c, i| if (c.name == p.name) return i;
+    for (inst.ports, 0..) |c, i| if (c.name == p.connName()) return i;
     return null;
 }
 

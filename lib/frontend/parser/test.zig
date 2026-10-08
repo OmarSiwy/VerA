@@ -977,6 +977,21 @@ test "4.7.1's bullet list and 4.7.2.2 are checked at the declaration" {
         const res = try parseForTest(arena, src);
         try std.testing.expectEqual(@as(usize, 0), res.count());
     }
+
+    // A function without `analog` is IEEE 1364-2005's (§4.7), whose A.2.6/A.2.7
+    // forms the bullet list does not govern: an untyped `input x;` is a 1-bit
+    // reg, and `automatic`, `signed [range]`, `realtime`, `time` and `reg`
+    // formals parse.
+    for ([_][]const u8{
+        "function integer g; input x; g = x; endfunction",
+        "function automatic signed [7:0] g(input reg [7:0] x); g = -x; endfunction",
+        "function realtime g; input realtime t; g = t; endfunction",
+        "function time g; input time t; reg [3:0] r; g = t; endfunction",
+    }) |decl| {
+        const src = try std.mem.concat(arena, u8, &.{ "module m(p); inout p; electrical p; ", decl, " analog I(p) <+ V(p); endmodule" });
+        const res = try parseForTest(arena, src);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
+    }
 }
 
 test "casex/casez and reduction xor PARSE, so lowering owns the annex C rule" {
@@ -1008,6 +1023,9 @@ test "A.6.4 has no null statement outside a conditional, case or event body" {
     for ([_][]const u8{
         "module m(p); inout p; electrical p; analog begin ; I(p) <+ 1.0; end endmodule",
         "module m(p); inout p; electrical p; analog ; endmodule",
+        // An event block's `if` arm is analog_statement_or_null, but a block
+        // in that arm is a plain analog_seq_block again.
+        "module m(p); inout p; electrical p; integer c; analog begin @(initial_step) begin if (c) begin ; end end I(p) <+ 1.0; end endmodule",
     }) |bad| {
         const res = try parseForTest(arena, bad);
         try std.testing.expect(res.count() > 0);
@@ -1017,6 +1035,9 @@ test "A.6.4 has no null statement outside a conditional, case or event body" {
         "module m(p); inout p; electrical p; integer c; analog begin if (c) ; else I(p) <+ 1.0; end endmodule",
         "module m(p); inout p; electrical p; integer c; analog begin case (c) 0: ; default: I(p) <+ 1.0; endcase end endmodule",
         "module m(p); inout p; electrical p; analog begin @(initial_step) ; I(p) <+ 1.0; end endmodule",
+        // A.6.3's analog_event_seq_block takes analog_event_statements, nested
+        // event blocks included, and those have the null alternative.
+        "module m(p); inout p; electrical p; integer n; analog begin @(initial_step) begin ; n = 1; begin ; end ; end I(p) <+ 1.0; end endmodule",
     }) |good| {
         const res = try parseForTest(arena, good);
         try std.testing.expectEqual(@as(usize, 0), res.count());
@@ -1224,4 +1245,44 @@ test "§2.6.1 AST preserves exact digital literals and known literal metadata" {
     try copy.seedFrom(arena, &res.file);
     try std.testing.expect(copy.exprs.logic.items[0].planes.ptr != res.file.exprs.logic.items[0].planes.ptr);
     try std.testing.expectEqualSlices(u64, res.file.exprs.logic.items[0].planes, copy.exprs.logic.items[0].planes);
+}
+
+test "A.8.3 min:typ:max reads its typical member, and no analog expression has one (E0295)" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A.2.4 param_assignment: bare, and A.8.4's parenthesised constant
+    // primary in a parameter declared inside an analog block.
+    const ok = try parseForTest(arena,
+        \\module m(p); inout p; electrical p;
+        \\  parameter real a = 1.0 : 2.0 : 3.0;
+        \\  analog begin : b
+        \\    parameter real c = (4.0 : 5.0 : 6.0);
+        \\    I(p) <+ a * c * V(p);
+        \\  end
+        \\endmodule
+    );
+    try std.testing.expectEqual(@as(usize, 0), ok.count());
+    try std.testing.expectEqual(@as(f64, 2.0), ok.file.exprs.realValue(ok.file.modules[0].params[0].default));
+
+    // A.8.4's analog_primary is `( analog_expression )`.
+    const bad = try parseForTest(arena, "module m(p); inout p; electrical p; real x; analog begin x = (1.0 : 2.0 : 3.0); I(p) <+ x; end endmodule");
+    try std.testing.expectEqual(@as(usize, 1), bad.count());
+    try std.testing.expectEqual(diag.Code.E0295, bad.code(0));
+}
+
+test "A.1.3 a null port keeps its position under a name no source spells" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const res = try parseForTest(arena, "module m(a, , .x(), b); inout a, b; electrical a, b; endmodule");
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    const ports = res.file.modules[0].ports;
+    try std.testing.expectEqual(@as(usize, 4), ports.len);
+    try std.testing.expectEqualStrings("\tnull2", res.file.str(ports[1].name));
+    try std.testing.expectEqualStrings("\tnull3", res.file.str(ports[2].name));
+    try std.testing.expectEqualStrings("x", res.file.str(ports[2].connName()));
+    try std.testing.expectEqualStrings("b", res.file.str(ports[3].connName()));
 }

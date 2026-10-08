@@ -58,6 +58,23 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
     }
 }
 
+/// A.9.3's `$root . path`, written anywhere: §6.2.1 "used to unambiguously
+/// refer to a top-level instance or to an instance path starting from the
+/// root of the instantiation tree". The flattened namespace is rooted at the
+/// device, the one top-level instance, so `$root.<top>.` drops. A path that
+/// does not open with the top's name keeps its `$root.` spelling, which
+/// names nothing (E0907 for a defparam). Null when `p` has no `$root.`.
+pub fn rootedPath(self: *const Flatten, p: []const u8) ?[]const u8 {
+    const root = "$root" ++ [_]u8{elaborate.sep};
+    if (!std.mem.startsWith(u8, p, root)) return null;
+    const rest = p[root.len..];
+    const top = for (self.unit_paths.items) |u| {
+        if (u.path.len == 0) break u.module;
+    } else return p;
+    if (rest.len > top.len and rest[top.len] == elaborate.sep and std.mem.startsWith(u8, rest, top)) return rest[top.len + 1 ..];
+    return p;
+}
+
 /// The flat key of defparam path `dp` written in `module` at instance
 /// prefix `path` (IEEE 1364-2005 §12.6, as §12.2.1 applies it to a defparam).
 /// A first segment naming an instance of `module`, its generate blocks'
@@ -67,6 +84,7 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
 /// of the path runs down from there. A top-level module's instance name is
 /// its module name. Nothing matching leaves the path downward, for E0907.
 fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, dp: []const u8) Error![]const u8 {
+    if (rootedPath(self, dp)) |r| return r;
     const downward = try self.ctx.arena.print("{s}{s}", .{ path, dp });
     const dot = std.mem.indexOfScalar(u8, dp, elaborate.sep) orelse return downward;
     const first = dp[0..dot];

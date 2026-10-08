@@ -101,7 +101,8 @@ pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride 
                     // parameter is admitted as a parameter_identifier.
                     const pname = try self.expectIdentOrSys();
                     _ = try self.expect(.lparen);
-                    const v = if (self.peek() == .rparen) Ast.ExprId.none else try parse_expr.parseExpr(self);
+                    // A.4.1 `. parameter_identifier ( [ mintypmax_expression ] )`.
+                    const v = if (self.peek() == .rparen) Ast.ExprId.none else try parse_expr.parseMinTypMax(self);
                     _ = try self.expect(.rparen);
                     try params.append(self.arena, .{ .name = pname, .value = v, .main_tok = tok });
                 } else {
@@ -347,7 +348,7 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
         // the name tells the two apart, as in `parseGates`.
         if (self.identLike(self.pos)) self.pos += 1;
         _ = try self.expect(.lparen);
-        const out = try parse_expr.parseNetRef(self); // A.3.3 output_terminal ::= net_lvalue
+        const out = try parse_expr.parseNetLvalue(self); // A.3.3 output_terminal ::= net_lvalue
         try b.pulls.append(self.arena, .{ .out = out, .one = side == 1, .strength = strength, .main_tok = main_tok });
         _ = try self.expect(.rparen);
         if (!self.eat(.comma)) break;
@@ -440,7 +441,7 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
             // `ncontrol_terminal` and `pcontrol_terminal` are all
             // `expression`, so `cmos (o, d, ~g, g)` is derivable and
             // `cmos (~o, d, ng, g)` is not.
-            t.* = if (i < arm.lvalues) try parse_expr.parseNetRef(self) else try parse_expr.parseExpr(self);
+            t.* = if (i < arm.lvalues) try parse_expr.parseNetLvalue(self) else try parse_expr.parseExpr(self);
         }
         _ = try self.expect(.rparen);
         try b.switches.append(self.arena, .{ .kind = kind, .terms = terms, .delay = delay, .main_tok = inst_tok });

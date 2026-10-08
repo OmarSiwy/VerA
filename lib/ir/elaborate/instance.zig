@@ -838,7 +838,7 @@ fn appendAnalog(self: *Flatten, unit: *const Unit, unit_id: u32, is_initial: boo
 pub fn connectionFor(inst: *const Ast.Instance, port: Ast.Port, i: usize) ?Ast.PortConn {
     const named = inst.ports.len != 0 and inst.ports[0].name != .none;
     if (!named) return if (i < inst.ports.len) inst.ports[i] else null;
-    for (inst.ports) |c| if (c.name == port.name) return c;
+    for (inst.ports) |c| if (c.name == port.connName()) return c;
     return null;
 }
 
@@ -915,7 +915,7 @@ fn checkConnectionShape(self: *Flatten, inst: *const Ast.Instance, child: *const
             continue;
         }
         const found = for (child.ports) |p| {
-            if (p.name == c.name) break true;
+            if (p.connName() == c.name) break true;
         } else false;
         if (!found) {
             try self.err(c.main_tok, .E0906, "`{s}` is not a port of `{s}`", .{

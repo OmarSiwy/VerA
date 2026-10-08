@@ -63,6 +63,10 @@ pub const Stmt = union(enum) {
         /// IEEE 1364-2005 §9.7.7 `repeat ( count ) @ ...`: the event control
         /// waits for `count` occurrences; `.none` without `repeat`.
         timing_repeat: ExprId = .none,
+        /// A.6.5's `@*` / `@ (*)` as the event control: `timing` is `.none`
+        /// and the list is what this assignment reads (IEEE 1364-2005
+        /// §9.7.5), as for the statement form `event_control.event = .none`.
+        timing_implicit: bool = false,
         /// IEEE 1364-2005 §9.3 procedural continuous assignments, which only
         /// a digital parse makes: `assign`/`force` (with a `value`) and
         /// `deassign`/`release` (whose `value` is `.none`).

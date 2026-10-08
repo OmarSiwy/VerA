@@ -1,7 +1,6 @@
 XFAIL annex_a_syntax/b8_child_output_reg_drives_parent_wire.va
 XFAIL annex_a_syntax/b8_net_decl_assignment_refused.va
 XFAIL annex_a_syntax/b8_output_time_port_written_mixed.va
-XFAIL annex_a_syntax/b8_specify_path_delay_mintypmax_list.va
 XFAIL annex_a_syntax/b8_system_task_null_argument_space.va
 XFAIL annex_e_spice/primitive_segment_discipline.va
 XFAIL annex_f_resolution/b5_net_read_by_digital_code_resolves_digital.va

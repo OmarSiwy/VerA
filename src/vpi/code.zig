@@ -1053,7 +1053,9 @@ pub const Builder = struct {
                     var dc = none;
                     var ec = none;
                     var rc = none;
-                    if (a.timing != .none) {
+                    // An intra-assignment `@*` is the statement form's
+                    // event control: its vpiCondition is NULL.
+                    if (a.timing != .none or a.timing_implicit) {
                         const e = try b.expr(a.timing);
                         if (a.timing_is_delay) {
                             dc = try b.code(vpiDelayControl, &.{ .{ .tag = vpiDelay, .to = e }, .{ .tag = vpiStmt, .to = none } }, &.{}, &.{});
