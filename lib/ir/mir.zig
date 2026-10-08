@@ -3,7 +3,7 @@
 //! Instructions, values and blocks are SoA columns addressed by typed
 //! `enum(u32)` handles; tables grow by append, so equal input gives equal
 //! indices. A Value index renumbers when the source changes, so it must never
-//! reach an emitted name or a content hash (naming.zig canonicalizes).
+//! reach an emitted name or a content hash (names.zig canonicalizes).
 
 const std = @import("std");
 const base = @import("base");

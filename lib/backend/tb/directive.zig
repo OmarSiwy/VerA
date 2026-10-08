@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const tb = @import("../tb.zig");
-const naming = @import("../naming.zig");
+const naming = @import("ir").names;
 const Lexer = @import("frontend").Lexer;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;

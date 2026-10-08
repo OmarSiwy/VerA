@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
-const naming = @import("../naming.zig");
+const naming = @import("ir").names;
 const kernels = @import("kernels");
 
 // ===========================================================================

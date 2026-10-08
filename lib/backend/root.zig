@@ -9,8 +9,6 @@
 //! `test` block does not reach them (`docs/seams/s1-codegen.md` at 6e59b3d4^,
 //! proposal 1).
 
-/// Stable declaration names and the canonical unit order.
-pub const naming = @import("naming.zig");
 /// MIR to device.zig source.
 pub const codegen = @import("codegen.zig");
 /// MIR to a behavioural Verilog module (`--emit-verilog`).

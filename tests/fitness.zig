@@ -190,11 +190,9 @@ test "R1: a runtime row's closure contains no compiler row" {
 // allowlisted edge is cut from the walk.
 // ---------------------------------------------------------------------------
 
-const r2_allow = [_]struct { from: []const u8, to: []const u8, phase: []const u8 }{
-    // A test-only import (naming.zig's `Fixture`); tb/runner.zig and
-    // tb/directive.zig import naming.zig.
-    .{ .from = "lib/backend/naming.zig", .to = "lib/backend/codegen/plan/fixture.zig", .phase = "Phase 8" },
-};
+// Empty since Phase 8 moved naming.zig to lib/ir/names.zig, whose tests
+// build their own fixture.
+const r2_allow = [_]struct { from: []const u8, to: []const u8, phase: []const u8 }{};
 
 fn isCodegen(p: []const u8) bool {
     return std.mem.eql(u8, p, "lib/backend/codegen.zig") or
@@ -358,26 +356,20 @@ test "R4: no *Lowered mutated outside lowering" {
 
 // ---------------------------------------------------------------------------
 // R5: each of the `__xz`/`__w{d}`/`__1b`/`__held__` literals has one owner:
-// the one file whose production lines (emitted text included) spell it.
+// the one file whose production lines (emitted text included) spell it,
+// lib/ir/names.zig, whose spellers lowering, codegen and the testbench call.
 // ---------------------------------------------------------------------------
 
 const r5_owners = [_]struct { lit: []const u8, owner: []const u8 }{
-    .{ .lit = "__xz", .owner = "lib/analog/lower/context.zig" },
-    .{ .lit = "__w{", .owner = "lib/analog/lower/context.zig" },
-    .{ .lit = "__1b", .owner = "lib/analog/lower/context.zig" },
-    .{ .lit = "__held__", .owner = "lib/backend/codegen/plan/names.zig" },
+    .{ .lit = "__xz", .owner = "lib/ir/names.zig" },
+    .{ .lit = "__w{", .owner = "lib/ir/names.zig" },
+    .{ .lit = "__1b", .owner = "lib/ir/names.zig" },
+    .{ .lit = "__held__", .owner = "lib/ir/names.zig" },
 };
 
-/// The second spellers, which Phase 8 replaces with calls to one speller each.
-const r5_allow = [_]struct { lit: []const u8, path: []const u8, phase: []const u8 }{
-    .{ .lit = "__xz", .path = "lib/analog/lower/expr.zig", .phase = "Phase 8" },
-    .{ .lit = "__w{", .path = "lib/analog/lower/expr.zig", .phase = "Phase 8" },
-    .{ .lit = "__1b", .path = "lib/analog/lower/expr.zig", .phase = "Phase 8" },
-    .{ .lit = "__xz", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
-    .{ .lit = "__w{", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
-    .{ .lit = "__1b", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
-    .{ .lit = "__held__", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
-};
+/// Empty since Phase 8 replaced each second speller with a call to the one
+/// speller.
+const r5_allow = [_]struct { lit: []const u8, path: []const u8, phase: []const u8 }{};
 
 const Spells = struct {
     lit: []const u8,
@@ -499,7 +491,6 @@ const r7_rows = [_]Row{
     .{ .path = "lib/backend/codegen/setup.zig", .n = 2 },
     .{ .path = "lib/backend/codegen/setup_chunk.zig", .n = 6 },
     .{ .path = "lib/backend/codegen/unit.zig", .n = 1 },
-    .{ .path = "lib/backend/naming.zig", .n = 1 },
     .{ .path = "lib/backend/tb/directive.zig", .n = 31 },
     .{ .path = "lib/backend/tb/runner.zig", .n = 9 },
     .{ .path = "lib/base/interner.zig", .n = 2 },
@@ -530,6 +521,7 @@ const r7_rows = [_]Row{
     .{ .path = "lib/frontend/spice_cards.zig", .n = 31 },
     .{ .path = "lib/frontend/token.zig", .n = 3 },
     .{ .path = "lib/ir/callee.zig", .n = 1 },
+    .{ .path = "lib/ir/names.zig", .n = 1 },
     .{ .path = "lib/ir/simparam.zig", .n = 2 },
     .{ .path = "lib/prove/setup.zig", .n = 1 },
     .{ .path = "lib/root.zig", .n = 3 },

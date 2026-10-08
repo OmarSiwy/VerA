@@ -12,7 +12,7 @@
 const std = @import("std");
 const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
-const naming = @import("../naming.zig");
+const naming = @import("ir").names;
 const Lowered = @import("ir").Lowered;
 const HeldVar = @import("ir").Lowered.HeldVar;
 const Mir = @import("ir").Mir;
@@ -541,7 +541,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
             if (std.mem.eql(u8, x, name)) break true;
         } else false;
         if (xz) {
-            const field = try naming.sanitizeAlloc(arena, try arena.print("{s}__xz", .{name}));
+            const field = try naming.sanitizeAlloc(arena, try naming.xzField(arena, name));
             try out.print(arena, ", .xz = \"{s}\"", .{field});
         }
         // §7.3.1 a `reg` wider than 32 bits: word 0 exactly, then one port
@@ -552,13 +552,13 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         if (n_words != 0 and !xz) try out.appendSlice(arena, ", .word = 0");
         try out.appendSlice(arena, " },");
         for (1..@max(n_words, 1)) |k| {
-            const field = try naming.sanitizeAlloc(arena, try arena.print("{s}__w{d}", .{ name, k }));
+            const field = try naming.sanitizeAlloc(arena, try naming.wordField(arena, name, k));
             try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\", .word = {d} }},", .{ std.zig.fmtString(name), field, k });
         }
     }
     try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
     for (mx.snaps) |name| {
-        const field = try naming.sanitizeAlloc(arena, try arena.print("{s}__1b", .{name}));
+        const field = try naming.sanitizeAlloc(arena, try naming.snapField(arena, name));
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), field });
     }
     try out.appendSlice(arena, " };\nconst event_ports = [_]EventPort{");
@@ -578,13 +578,11 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     // the §5.10 held `Instance` field its value is copied from. A variable
     // that is not held is left out, and the digital half refuses the read.
     try out.appendSlice(arena, "const a2d_ports = [_]Port{");
-    const mod = try naming.sanitizeAlloc(arena, mx.top);
     for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
-        const leaf = try naming.sanitizeAlloc(arena, name);
-        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\", .free = {}", .{ std.zig.fmtString(name), mod, leaf, h.why != .event });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\", .free = {}", .{ std.zig.fmtString(name), try naming.heldField(arena, mx.top, name), h.why != .event });
         // §7.3.6.1 its assignment count, when it has one.
         for (mx.held) |c| if (std.mem.startsWith(u8, c.name, HeldVar.assign_count_prefix) and std.mem.eql(u8, c.name[HeldVar.assign_count_prefix.len..], name)) {
-            try out.print(arena, ", .count = \"{s}__held__{s}\"", .{ mod, try naming.sanitizeAlloc(arena, c.name) });
+            try out.print(arena, ", .count = \"{s}\"", .{try naming.heldField(arena, mx.top, c.name)});
         };
         try out.appendSlice(arena, " },");
         break;
@@ -594,8 +592,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     // §8.5.3.6 the held fields only explicit D2A event statements assign.
     try out.appendSlice(arena, " };\nconst d2a_held = [_][]const u8{");
     for (mx.held) |h| if (h.d2a) {
-        const leaf = try naming.sanitizeAlloc(arena, h.name);
-        try out.print(arena, " \"{s}__held__{s}\",", .{ mod, leaf });
+        try out.print(arena, " \"{s}\",", .{try naming.heldField(arena, mx.top, h.name)});
     };
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
     for (d.params) |p| try out.print(arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });

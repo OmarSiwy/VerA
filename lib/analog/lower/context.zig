@@ -18,6 +18,7 @@ const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const diag = @import("diag");
 const Mir = @import("ir").Mir;
+const naming = @import("ir").names;
 const Oom = Lower.Oom;
 
 // ---- §7.2.2 the discrete context -------------------------------------------
@@ -409,7 +410,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         if (reads.guarded.contains(name) and !self.out.discrete_snaps.contains(name)) {
             // §8.5.3.6: the guarded read's region-1b snapshot.
             try self.out.discrete_snaps.put(self.arena, name, t.tok);
-            const snap = try self.arena.print("{s}__1b", .{name});
+            const snap = try naming.snapField(self.arena, name);
             try lower_param.addParam(self, snap, ty, zero, folded, &.{}, false, t.tok);
         }
         if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
@@ -429,7 +430,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
             if (width <= 32) break;
             const n_words: u32 = (width + 31) / 32;
             try self.out.discrete_words.put(self.arena, name, n_words);
-            for (1..n_words) |k| try lower_param.addParam(self, try self.arena.print("{s}__w{d}", .{ name, k }), .integer, zero, folded, &.{}, false, t.tok);
+            for (1..n_words) |k| try lower_param.addParam(self, try naming.wordField(self.arena, name, k), .integer, zero, folded, &.{}, false, t.tok);
             break;
         };
         if (!real and reads.fourStateOnly(name)) {
@@ -437,7 +438,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
             // A name also read any other way keeps the x/z error at every
             // solve (the runner's `mixedInput`), and compares two-state.
             try self.out.discrete_xz.put(self.arena, name, {});
-            const xz = try self.arena.print("{s}__xz", .{name});
+            const xz = try naming.xzField(self.arena, name);
             try lower_param.addParam(self, xz, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, t.tok);
         }
     }

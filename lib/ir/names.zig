@@ -7,12 +7,19 @@
 //! Units are §5.6 contributions (named by their §4.4 access and node pair,
 //! §1.3.1.1 ground as `0`) and §4.5 operator, §5.10 event and §9.17
 //! kernel-control calls (named by their callee).
+//!
+//! It is also the one speller of the field names two stages must agree on:
+//! the `Model` fields of a §7.3 discrete input (`snapField`, `wordField`,
+//! `xzField`), which lowering declares and the testbench writes, and the
+//! §5.10 held `Instance` field (`heldField`), which codegen declares and the
+//! testbench reads (ARCHITECTURE.md Phase 8). Clauses: §1.3.1.1, §2.7,
+//! §2.8.1, §4.4, §4.5, §5.6, §5.10, §7.3.1, §7.3.2, §8.5.3.6, §9.17.
 
 const std = @import("std");
-const Mir = @import("ir").Mir;
-const Lower = @import("ir").Lowered;
-const Lowered = @import("ir").Lowered;
-const opdb = @import("ir").op;
+const Mir = @import("mir.zig");
+const Lower = @import("lowered.zig");
+const Lowered = @import("lowered.zig");
+const opdb = @import("op.zig");
 
 /// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.
 /// One row per unit, built once per compilation by `enumerateUnits` (18 on
@@ -127,6 +134,48 @@ test "sanitize escapes Zig keywords and primitives" {
     // that `Z` escaped, so it cannot collide with the keyword marker.
     const pubZ_src = try sanitize(&buf, "pubZ");
     try std.testing.expect(!std.mem.eql(u8, "pubZ", pubZ_src));
+}
+
+// The cross-stage field names. Each returns the source-level name, which the
+// declaring and the reading site pass through `sanitize` like any other
+// name, except `heldField`, whose two leaves it sanitizes itself.
+
+/// §8.5.3.6 the region-1b snapshot of discrete input `name`: its `Model` field.
+pub fn snapField(a: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![]u8 {
+    return a.print("{s}__1b", .{name});
+}
+
+/// §7.3.1 word `k` (`k >= 1`) of a `reg` input wider than 32 bits: its `Model`
+/// field. Word 0 is the input's own field, `name`.
+pub fn wordField(a: std.mem.Allocator, name: []const u8, k: usize) std.mem.Allocator.Error![]u8 {
+    std.debug.assert(k != 0);
+    return a.print("{s}__w{d}", .{ name, k });
+}
+
+/// §7.3.2 the unknown (x/z) plane of a four-state discrete input: its `Model` field.
+pub fn xzField(a: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![]u8 {
+    return a.print("{s}__xz", .{name});
+}
+
+/// §5.10 held variable `name` of module `module`: its `Instance` field,
+/// `<module>__held__<name>`, both leaves `sanitize`d. The grammar `unitName`
+/// builds, with `held` where a role word would go: `Role` deliberately
+/// excludes it (a held variable is not an emitted source unit), and no
+/// enumerated unit can spell that segment, so the two name spaces cannot
+/// meet. A leaf is injective and a module variable's name is unique in its
+/// scope, so the whole key is.
+pub fn heldField(a: std.mem.Allocator, module: []const u8, name: []const u8) std.mem.Allocator.Error![]u8 {
+    return a.print("{s}__held__{s}", .{ try sanitizeAlloc(a, module), try sanitizeAlloc(a, name) });
+}
+
+test "the cross-stage field names" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("myZ20mod__held__pubZ", try heldField(a, "my mod", "pub"));
+    try std.testing.expectEqualStrings("x__1b", try snapField(a, "x"));
+    try std.testing.expectEqualStrings("x__w2", try wordField(a, "x", 2));
+    try std.testing.expectEqualStrings("x__xz", try xzField(a, "x"));
 }
 
 /// Writes `<module>__<role>__<target>[__<disambig>]` into `buf` and returns it.
@@ -253,7 +302,30 @@ fn assignDisambig(units: []Unit) void {
 // take disambig 0..N-1 and inserting one renames the later ones. Qualifying the
 // target with the enclosing contribution needs lower.zig to record that link.
 
-const Fixture = @import("codegen/plan/fixture.zig").Fixture;
+/// The part of `prove.Fixture` these tests read, a hand-built `Mir` and
+/// `Lowered`: `prove` imports `ir`, so its fixture is out of reach here.
+const Fixture = struct {
+    arena: std.heap.ArenaAllocator,
+    mir: Mir = .{ .name = "mymod" },
+    file: @import("frontend").Ast.SourceFile = .empty,
+    lowered: Lowered = undefined,
+
+    fn init(f: *Fixture, net_names: []const []const u8) !void {
+        f.lowered = .{ .file = &f.file };
+        const a = f.arena.allocator();
+        for (net_names) |n|
+            try f.lowered.nodes.append(a, .{ .name = n, .kind = .net, .disc = "", .dir = .unspecified });
+        _ = try f.mir.addBlock(a);
+    }
+
+    fn deinit(f: *Fixture) void {
+        f.arena.deinit();
+    }
+
+    fn alloc(f: *Fixture) std.mem.Allocator {
+        return f.arena.allocator();
+    }
+};
 const nets = [_][]const u8{ "drain", "gate", "source" };
 
 fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {

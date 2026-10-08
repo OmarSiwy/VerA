@@ -6,7 +6,7 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("prove").Analysis;
 const Lowered = @import("ir").Lowered;
-const naming = @import("../../naming.zig");
+const naming = @import("ir").names;
 const Input = @import("prove").Input;
 
 /// Allocation only: a name has no length bound (VAMS 2.8, VD-054).
@@ -123,21 +123,9 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
         self.a_names[i] = try naming.sanitizeAlloc(a, al.name);
     }
 
-    // §5.10 held variables. Same `<module>__<role>__<target>` grammar
-    // `naming.unitName` builds, with `held` where a role word would go:
-    // `naming.Role` deliberately excludes it (a held variable is not an
-    // emitted source unit), and no enumerated unit can spell that segment, so
-    // the two name spaces cannot meet. The target is one `sanitize`d leaf,
-    // which is injective, and a module variable's name is unique in its
-    // scope, so the whole key is.
+    // §5.10 held variables (`naming.heldField` says why the key is unique).
     self.held_names = try a.alloc([]const u8, lowered.held_vars.items.len);
-    if (self.held_names.len != 0) {
-        const mod = try naming.sanitizeAlloc(a, mir.name);
-        for (lowered.held_vars.items, 0..) |h, i| {
-            const leaf = try naming.sanitizeAlloc(a, h.name);
-            self.held_names[i] = try a.print("{s}__held__{s}", .{ mod, leaf });
-        }
-    }
+    for (lowered.held_vars.items, self.held_names) |h, *n| n.* = try naming.heldField(a, mir.name, h.name);
     self.p_given = try a.alloc(bool, lowered.params.items.len);
     @memset(self.p_given, false);
     // A non-local parameter whose default reads another parameter is a

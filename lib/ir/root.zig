@@ -16,6 +16,9 @@ pub const Elaborate = @import("elab").Elaborate;
 pub const Lowered = @import("lowered.zig");
 /// §9.15 simulation parameters: compile-time value, host field, run-time rows.
 pub const simparam = @import("simparam.zig");
+/// Stable emitted names, the canonical unit order, and the one speller of
+/// each field name two stages share (`__1b`, `__w<k>`, `__xz`, `__held__`).
+pub const names = @import("names.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

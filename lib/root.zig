@@ -74,7 +74,7 @@ const deep_stack = @import("base").deep_stack;
 const Mir = @import("ir").Mir;
 const Elaborate = @import("elab").Elaborate;
 const Lowered = @import("ir").Lowered;
-const naming = @import("backend").naming;
+const naming = @import("ir").names;
 const cg_display = @import("backend").cg_display;
 const cg_filters = @import("backend").cg_filters;
 
