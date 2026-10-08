@@ -39,6 +39,12 @@
 //
 // Both are read as §6.7.1 hierarchical flows of the instance's own branch.
 //
+// WHY `\cell`. The netlist names its subcircuit CELL, and `cell` is an annex B
+// keyword (Table B.1; "an escaped identifier shall not be treated as a
+// keyword"), so the instance spells the name as a §2.8.1 escaped identifier,
+// as spice_keyword_names.va does for `\wire`. A bare `cell x1(...)` is a
+// syntax error in any conforming reader.
+//
 //! lrm E.2
 //! lrm E.1.1
 //! lrm E.2.1
@@ -69,7 +75,7 @@ endmodule
 
 module annex_e_spice_fet_card(d, g, s, b);
   inout d, g, s, b; electrical d, g, s, b;
-  cell x1(d, g, s, b);
+  \cell x1(d, g, s, b);
   analog begin
     `CHECKR("M1 = 3 * KP 2e-3 (model) * W/L 2/0.25 (card) * Vgs 0.5 * Vds 0.75",
             I(x1.m1.d, x1.m1.s), 0.018, 1e-12);

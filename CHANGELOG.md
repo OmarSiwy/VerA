@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: a `--spice` card value with a scale suffix (`50n`, `2.2p`) is the double nearest the literal, as a §2.6.2 literal is, not one ulp off (#9).
 - Nix: `nix run github:OmarSiwy/VerA`, release binaries as `.#"1.0.0"`/`latest` (`sources.json`), `overlays.default`, and `nix flake check` in CI.
 - `tools/external_analog.py`: the external analog suites under `tests/fixtures/external/` (hand-derived OSDI decks, VA-Models against OpenVAF-Reloaded, the CMC and TU Dresden QA references, Xyce), run in `nix develop .#benchmarking`; CI job `external-analog` reports their FAIL names.
 - `` `include "discipline.h" `` and `"constants.h"`, the Verilog-A 1.0 names of the Annex D headers, now resolve to the built-ins (VD-093) (#4).

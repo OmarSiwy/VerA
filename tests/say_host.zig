@@ -16,7 +16,9 @@ fn sayAt(v: f64, out: *contract.Say) void {
     var x: [n_u]f64 = @splat(0.0);
     x[@backingInt(D.U.p)] = v;
     const m: D.Model = .{};
-    const inst: D.Instance = .{};
+    // `say` takes `contract.InstancePtr(D)`, as `eval` does: say_ops's
+    // `$error` makes it `mutable_eval`.
+    var inst: D.Instance = .{};
     D.say(S, &x, &m, &inst, .{ .t = 1e-9, .dt = 1e-9, .kind = .tran }, out);
 }
 

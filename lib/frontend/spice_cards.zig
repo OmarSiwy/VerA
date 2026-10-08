@@ -939,41 +939,49 @@ fn spiceNumber(t: []const u8) ?f64 {
         while (i < t.len and std.ascii.isDigit(t[i])) i += 1;
     }
     if (i == digits or (i == digits + 1 and t[digits] == '.')) return null;
+    const mant_end = i;
     // An exponent only if it is complete: `1E-18` is a number, the `E` of a bare
     // `1EXP` is the start of unit noise.
+    var own: i32 = 0;
     if (i < t.len and t[i] == 'e') {
         var j = i + 1;
         if (j < t.len and (t[j] == '+' or t[j] == '-')) j += 1;
         if (j < t.len and std.ascii.isDigit(t[j])) {
             while (j < t.len and std.ascii.isDigit(t[j])) j += 1;
+            own = std.fmt.parseInt(i32, t[i + 1 .. j], 10) catch return null;
             i = j;
         }
     }
-    const mant = std.fmt.parseFloat(f64, t[0..i]) catch return null;
-    return mant * spiceScale(t[i..]);
+    const scale = spiceScale(t[i..]);
+    if (scale.exp == 0) return (std.fmt.parseFloat(f64, t[0..i]) catch return null) * scale.mul;
+    // Rounds once, as `Lexer.scaleExp`'s callers do: `50n` is
+    // parseFloat("50e-9"), while 50 * 1e-9 is a different double.
+    var buf: [128]u8 = undefined;
+    const joined = std.fmt.bufPrint(&buf, "{s}e{d}", .{ t[0..mant_end], own + scale.exp }) catch return null;
+    return std.fmt.parseFloat(f64, joined) catch null;
 }
 
-/// Berkeley SPICE's ten scale factors. `meg` and `mil` are tested before `m`
-/// because they share its first letter and mean 1e6 and 25.4e-6, not 1e-3 with
-/// unit noise. SPICE and §2.6.2 Table 2-1 disagree on `M` (milli in SPICE,
-/// mega in Verilog), which is why a card's number is converted to plain
-/// decimal here rather than handed on with its suffix. SPICE has no atto, so
-/// `1A` is one ampere.
-fn spiceScale(rest: []const u8) f64 {
-    const scales = [_]struct { suffix: []const u8, mul: f64 }{
-        .{ .suffix = "meg", .mul = 1e6 },
-        .{ .suffix = "mil", .mul = 25.4e-6 },
-        .{ .suffix = "t", .mul = 1e12 },
-        .{ .suffix = "g", .mul = 1e9 },
-        .{ .suffix = "k", .mul = 1e3 },
-        .{ .suffix = "m", .mul = 1e-3 },
-        .{ .suffix = "u", .mul = 1e-6 },
-        .{ .suffix = "n", .mul = 1e-9 },
-        .{ .suffix = "p", .mul = 1e-12 },
-        .{ .suffix = "f", .mul = 1e-15 },
+/// Berkeley SPICE's ten scale factors, as a power of ten (`exp`) or, for
+/// `mil`, a factor. `meg` and `mil` are tested before `m` because they share
+/// its first letter and mean 1e6 and 25.4e-6, not 1e-3 with unit noise. SPICE
+/// and §2.6.2 Table 2-1 disagree on `M` (milli in SPICE, mega in Verilog),
+/// which is why a card's number is converted to plain decimal here rather
+/// than handed on with its suffix. SPICE has no atto, so `1A` is one ampere.
+fn spiceScale(rest: []const u8) struct { exp: i32 = 0, mul: f64 = 1.0 } {
+    if (std.mem.startsWith(u8, rest, "meg")) return .{ .exp = 6 };
+    if (std.mem.startsWith(u8, rest, "mil")) return .{ .mul = 25.4e-6 };
+    const scales = [_]struct { suffix: u8, exp: i32 }{
+        .{ .suffix = 't', .exp = 12 },
+        .{ .suffix = 'g', .exp = 9 },
+        .{ .suffix = 'k', .exp = 3 },
+        .{ .suffix = 'm', .exp = -3 },
+        .{ .suffix = 'u', .exp = -6 },
+        .{ .suffix = 'n', .exp = -9 },
+        .{ .suffix = 'p', .exp = -12 },
+        .{ .suffix = 'f', .exp = -15 },
     };
-    for (scales) |s| if (std.mem.startsWith(u8, rest, s.suffix)) return s.mul;
-    return 1.0;
+    if (rest.len != 0) for (scales) |s| if (rest[0] == s.suffix) return .{ .exp = s.exp };
+    return .{};
 }
 
 /// Reports whether `t` has the §2.7 shape of a simple identifier. `$` is not
@@ -1143,6 +1151,11 @@ test "SPICE's scaled notation, including the three suffixes §2.6.2 does not sha
     try std.testing.expectEqual(@as(?f64, 25.4e-6), spiceNumber("1mil"));
     try std.testing.expectEqual(@as(?f64, 1e-18), spiceNumber("1e-18"));
     try std.testing.expectEqual(@as(?f64, -2.5), spiceNumber("-2.5"));
+    // The scale rounds once, as the lexer's §2.6.2 factors do: 50 * 1e-9 is
+    // 5.0000000000000004e-8, one ulp off the card's 50n.
+    try std.testing.expectEqual(@as(?f64, 5e-8), spiceNumber("50n"));
+    try std.testing.expectEqual(@as(?f64, 2.2e-9), spiceNumber("2.2n"));
+    try std.testing.expectEqual(@as(?f64, 1.5e-6), spiceNumber("1.5e-3m"));
     // SPICE has no atto, so a bare `1A` is one ampere and the letter is noise.
     try std.testing.expectEqual(@as(?f64, 1.0), spiceNumber("1a"));
     // Not a number at all.

@@ -586,9 +586,9 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     if (net) |n| self.nets[n].strength_read = true;
                     if (allocator) |a| {
                         const n = if (net) |k| self.nets[k] else null;
+                        // §7.6: a pass switch drives a net with no driver of its own.
                         const sig: Signal = if (n == null)
                             .of((try evaluate.eval(self, a, args[arg], 0)).bit(0), .strong, .strong)
-                        // §7.6: a pass switch drives a net with no driver of its own.
                         else if (self.netDrivers(net.?).len == 0 and self.netCold(n.?).trans.len == 0) netPull(n.?.kind) else self.signals[n.?.signal];
                         try strength(self.out, sig);
                     }
