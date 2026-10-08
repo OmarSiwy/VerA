@@ -1,7 +1,0 @@
-diode: values 134050, differ 928, nonfinite-mismatch 0, max rel diff 2.684e-16 (ulps ~1.2) at (5674, -1.1755710023311402e-14, -1.1755710023311406e-14), max abs diff below floor 0.000e+00
-mos1: values 479378, differ 522, nonfinite-mismatch 0, max rel diff 3.377e-16 (ulps ~1.5) at (20425, -2.3359911681571098e-15, -2.335991168157109e-15), max abs diff below floor 0.000e+00
-bsim4va: values 2271738, differ 2125, nonfinite-mismatch 0, max rel diff 4.437e-16 (ulps ~2.0) at (71309, -1.7069408443097e-13, -1.7069408443097009e-13), max abs diff below floor 1.479e-31
-psp103: values 1037058, differ 29676, nonfinite-mismatch 0, max rel diff 7.148e-13 (ulps ~3219.3) at (2459, 0.17076467734313247, 0.17076467734325454), max abs diff below floor 5.049e-29
-txl: values 280170, differ 0, nonfinite-mismatch 0, max rel diff 0.000e+00 (ulps ~0.0) at None, max abs diff below floor 0.000e+00
-coupled_ltra: values 731674, differ 5037, nonfinite-mismatch 0, max rel diff 1.307e-15 (ulps ~5.9) at (656397, 0.003981328573001031, 0.003981328573001026), max abs diff below floor 0.000e+00
-bsource: values 877730, differ 58, nonfinite-mismatch 0, max rel diff 5.973e-15 (ulps ~26.9) at (9074, 0.07435319069566881, 0.07435319069566837), max abs diff below floor 0.000e+00
