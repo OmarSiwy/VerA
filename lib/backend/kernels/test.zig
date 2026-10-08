@@ -291,3 +291,21 @@ test "§4.5.15 branchless limiters ≡ branchy ngspice oracles, bit for bit" {
             try expectBits(limit.zFetlim(vnew, vold, vto), zFetlimOracle(vnew, vold, vto));
     }
 }
+
+// ---------------------------------------------------------------- held string
+
+test "zStrHeld: a held string owns its bytes, so rewriting the source leaves it (#19)" {
+    const str = @import("str_kernels.zig");
+    var site: [8]u8 = "t=10    ".*;
+    const held = str.zStrHeld(site[0..4]);
+    @memcpy(site[0..4], "t=20");
+    try std.testing.expectEqualStrings("t=10", held.get());
+    // `updateState`'s order: copy out first, then store (the new text may be
+    // a slice of the field it replaces). A copy is a value, which is what
+    // `stateCtl(.revert)` restores.
+    var inst = held;
+    const next = str.zStrHeld(inst.get()[2..]);
+    inst = next;
+    try std.testing.expectEqualStrings("10", inst.get());
+    try std.testing.expectEqualStrings("t=10", held.get());
+}

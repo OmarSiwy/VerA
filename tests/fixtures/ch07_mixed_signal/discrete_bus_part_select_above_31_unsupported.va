@@ -1,18 +1,23 @@
 // §7.3.1 Table 7-1 makes r[38:8] of a 40-bit `reg` legal: it is a 31-bit
-// grouping. VerA's analog context holds a `reg` as its 32-bit §3.2 integer,
-// so bits 32 and up never reach it, and a select that names one is refused
-// by name (E0329) rather than read as zeros. Vague_Decisions.md §7 lists the
-// limit.
+// grouping. VerA carries every bit of a `reg` a digital process owns, and of
+// one the analog context only reads (its literal initial value). This `reg`
+// is assigned in the analog context, where VerA computes it as its 32-bit
+// §3.2 integer, so it has no bits above 31 to read: a select that names one
+// is refused by name (E0329) rather than read as copies of bit 31.
+// Vague_Decisions.md §7 lists the limit.
 //
-// Legal neighbour: discrete_bus_part_select_31.va, 31-bit selects within the
-// low 32 bits of the same `reg`.
+// Legal neighbour: discrete_bus_part_select_above_31.va, the same select
+// shape on a `reg` the analog context only reads.
 //
 //! lrm 7.3.1
-//! reject E0329
+//! reject-only E0329
 //! reject reaches above bit 31
+//! neighbour discrete_bus_part_select_above_31.va
 module ch7_discrete_bus_part_select_above_31(p);
   inout p; electrical p;
   reg [39:0] r;
-  initial r = 40'h1;
-  analog I(p) <+ r[38:8];
+  analog begin
+    r = 1;
+    I(p) <+ r[38:8];
+  end
 endmodule

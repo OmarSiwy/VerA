@@ -14,3 +14,7 @@ neighbour_missing.va	normal	no such file
 neighbour_negative.va	normal	is not a positive fixture
 loose_tolerance.va	perturb	LOOSE
 tight_checks.va	perturb	pass
+reject_run_clean_exit.va	normal	holds "E0601"
+reject_run_wrong_code.va	normal	holds "E0816"
+meta_wrong_units.va	normal	assertion(s) reported ok=0
+noise_corr_wrong_sign.va	normal	assertion(s) reported ok=0

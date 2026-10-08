@@ -535,10 +535,18 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     .monitor => |sh| {
                         for (self.monitor_slots.items) |at| self.watch[at].remove(.monitor);
                         self.monitor_slots.clearRetainingCapacity();
+                        var probes = false;
                         for (s.args) |arg| if (arg != .none and self.file.exprs.tag(arg) != .str_literal)
-                            try compile.sensitivity(self, arg, &self.monitor_slots);
+                            try compile.sensitivityProbes(self, arg, &self.monitor_slots, &probes);
                         for (self.monitor_slots.items) |at| self.watch[at].insert(.monitor);
                         self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc };
+                        // VAMS §8.5.1 row 4 after 3b: an argument that probes
+                        // the analog solution is compared at every time step
+                        // (`display.monitorDue`). The first report is due.
+                        self.monitor_probes = probes;
+                        self.monitor_last = if (probes) try self.arena.alloc(u64, s.args.len) else &.{};
+                        @memset(self.monitor_last, 0);
+                        self.monitor_slot_hit = true;
                         try waiters.requestMonitor(self);
                     },
                     // "$monitoron shall produce a display immediately after

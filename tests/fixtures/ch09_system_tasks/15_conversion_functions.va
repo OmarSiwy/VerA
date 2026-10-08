@@ -20,7 +20,7 @@
 //
 //! lrm 9.11
 //! lrm 9.11:1000
-//! fd-exempt open reading (docs/TESTING.md §10): no derivative is carried through $realtobits's integer bit pattern, though the round trip is the identity
+//! fd-exempt docs/Vague_Decisions.md VD-097: $realtobits's result is an integer bit pattern with no derivative, so the Jacobian of the round trip is 0 where a difference sees the identity
 //! bias V(p) = 3.7
 `include "check.vh"
 module ch09_conversion_functions(p, n);

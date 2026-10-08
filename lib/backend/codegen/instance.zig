@@ -112,7 +112,14 @@ pub fn emitInstance(self: *Gen) Error!void {
     for (self.lowered.table_samples.items, 0..) |count, site| {
         try self.w("    table_{d}: [{d}]f64 = @splat(0.0),\n", .{ site, count });
     }
-    if (self.lowered.table_samples.items.len != 0) try self.w("    // §9.21.1 permanent first-call state; not timestep rollback state.\n    table_ready: [{d}]bool = @splat(false),\n", .{self.lowered.table_samples.items.len});
+    // §9.21.1 + §9.3 (VD-095): `table_kept` marks the sites whose capture an
+    // accepted point made (`updateState`, committed and reverted by
+    // `stateCtl`, kept across analyses); `table_ready` the sites captured so
+    // far in the current evaluation, which starts from `table_kept`.
+    if (self.lowered.table_samples.items.len != 0) try self.w(
+        "    table_ready: [{0d}]bool = @splat(false),\n    table_kept: [{0d}]bool = @splat(false),\n",
+        .{self.lowered.table_samples.items.len},
+    );
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
@@ -245,16 +252,14 @@ pub fn emitInstance(self: *Gen) Error!void {
             continue;
         }
         if (h.ty == .string) {
-            // §3.3 a string's initial value is "" unless declared; a slice
-            // of a literal, or of a `$sformat` site's file-scope `zSBuf`.
-            // ponytail: a site buffer is rewritten when its site runs again,
-            // so a held `$sformat` result can change under a rejected step;
-            // an owned [4096]u8 per held string is the upgrade.
+            // §3.3 a string's initial value is "" unless declared. Its own
+            // bytes (`ZStrHeld`, #19), never a slice of a `$sformat` site's
+            // `zSBuf`, which the site rewrites when it runs again.
             const s = switch (self.mir.valueDef(self.an.rv(h.init))) {
                 .str_const => |s| s,
                 else => "", // else: a non-literal initializer starts from §3.3's empty string, as a real starts from its spec default
             };
-            try self.w("    {s}: []const u8 = \"{f}\", // §5.10 held across evaluations\n", .{ self.names.held_names[i], std.zig.fmtString(s) });
+            try self.w("    {s}: ZStrHeld = zStrHeld(\"{f}\"), // §5.10 held across evaluations\n", .{ self.names.held_names[i], std.zig.fmtString(s) });
             continue;
         }
         const init = self.an.foldConst(self.an.rv(h.init), true);
@@ -525,6 +530,15 @@ pub fn pathLatches(self: *const Gen) bool {
     return self.core.acc_lo.len != 0 or self.core.prev_lo.len != 0;
 }
 
+/// Returns whether some §5.10 held variable is a string: its `Instance`
+/// field is a `ZStrHeld`, which the string kernels define.
+pub fn heldString(self: *const Gen) bool {
+    for (self.lowered.held_vars.items) |h| {
+        if (h.ty == .string) return true;
+    }
+    return false;
+}
+
 /// Emits `State`'s `stateCtl` twins: the §5.6.1.2 staged path-latch operands
 /// (`wb__k`/`wq__k`, which `updateState` writes and `stateCtl(.commit)` moves
 /// into `Instance.pb__k`/`pq__k`), one twin per `Gen.hist` field, typed and
@@ -536,6 +550,9 @@ pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
     for (0..self.core.acc_lo.len) |k| try self.w("    wq__{d}: f64 = 0.0, // path_acc staged\n", .{k});
     if (t_prev) try self.w("    t_prev__acc: f64 = 0.0,\n", .{});
     for (self.hist.items) |h| try self.w("    {s}: @TypeOf(z_inst0.{s}) = z_inst0.{s},\n", .{ h, h, h });
+    // Not `hist`: `initState` keeps a capture across analyses (VD-095).
+    if (self.lowered.table_samples.items.len != 0)
+        try self.w("    table_kept: [{d}]bool = @splat(false),\n", .{self.lowered.table_samples.items.len});
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay)
             try self.w("    {0s}__t__acc: f64 = 0.0,\n    {0s}__v__acc: f64 = 0.0,\n", .{self.names.unit_names[i]});
@@ -575,13 +592,21 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     // VerA's `vera_timepoint` (§2.9): a commit or a revert moves the held
     // state a cached statement reads.
     const tp_drop = if (self.lowered.timepoints.items.len != 0) "        zTpDrop(inst);\n" else "";
+    // §9.21.1 (VD-095) the kept captures are history; the working ones of
+    // the last evaluation are dropped either way, as the next evaluation
+    // would drop them.
+    const tables = self.lowered.table_samples.items.len != 0;
+    const tbl_commit = if (tables) "        state.table_kept = inst.table_kept;\n        inst.table_ready = inst.table_kept;\n" else "";
+    const tbl_revert = if (tables) "        inst.table_kept = state.table_kept;\n        inst.table_ready = inst.table_kept;\n" else "";
     var first = true;
     for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
         if (h.why != .event) continue;
-        // §3.2.2 a held array compares element by element.
+        // §3.2.2 a held array compares element by element; a string by text.
         if (h.array != none_u32)
             try self.w("{s}!std.meta.eql(inst.{s}, state.{s})", .{ if (first) " " else "\n            or ", n, n })
+        else if (h.ty == .string)
+            try self.w("{s}!std.mem.eql(u8, inst.{s}.get(), state.{s}.get())", .{ if (first) " " else "\n            or ", n, n })
         else
             try self.w("{s}(inst.{s} != state.{s})", .{ if (first) " " else "\n            or ", n, n });
         first = false;
@@ -591,8 +616,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         \\;
         \\    }}
         \\    if (op == .commit) {{
-        \\{s}
-    , .{tp_drop});
+        \\{s}{s}
+    , .{ tp_drop, tbl_commit });
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
@@ -613,7 +638,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         );
     }
     if (t_prev) try self.w("        state.t_prev__acc = state.t_prev;\n", .{});
-    try self.w("    }} else {{\n{s}", .{tp_drop});
+    try self.w("    }} else {{\n{s}{s}", .{ tp_drop, tbl_revert });
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},

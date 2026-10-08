@@ -68,6 +68,8 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .inputs = lowered.discrete_inputs.keys(),
         .snaps = lowered.discrete_snaps.keys(),
         .xz = lowered.discrete_xz.keys(),
+        .wide = lowered.discrete_words.keys(),
+        .words = lowered.discrete_words.values(),
         .events = lowered.discrete_events.values(),
         .inserts = lowered.inserts,
         .reads = lowered.discrete_reads.keys(),
@@ -208,6 +210,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // --- §9.17.3 the published cold start -----------------------------------
     if (d.asserts_seed) try emitSeedCheck(arena, &out, d);
 
+    // --- §2.9.2 the published descriptions and units ------------------------
+    if (d.asserts_meta) try emitMeta(arena, &out, d);
+
     // --- §3.6.1.2 the published tolerances ----------------------------------
     for (d.abstols) |b| try out.print(arena,
         \\    if (comptime std.meta.stringToEnum(D.U, "{0f}")) |u| {{
@@ -320,8 +325,8 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     var out: std.ArrayList(u8) = .empty;
     try head(&out, arena, title, d);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
-    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0 or d.acdyn.len != 0)
-        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed, //! limit and //! acdyn are not read by the mixed-signal runner\"); }\n");
+    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.asserts_meta or d.limits.len != 0 or d.acdyn.len != 0)
+        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed, //! meta, //! limit and //! acdyn are not read by the mixed-signal runner\"); }\n");
 
     try out.print(arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
     try out.print(arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
@@ -368,6 +373,8 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\            const v = dig.values[a.slots[i]];
         \\            setField(a.model, p.field, v.asInt() orelse @as(i64, @bitCast(v.values()[0])));
         \\            setField(a.model, xz, @as(i64, @bitCast(v.unknowns()[0])));
+        \\        } else if (p.word) |k| {
+        \\            setField(a.model, p.field, mixedWord(dig, a.slots[i], p.name, k));
         \\        } else setField(a.model, p.field, mixedInput(dig, a.slots[i], p.name));
         \\        inline for (snap_ports, 0..) |p, i| setField(a.model, p.field, a.snaps[i]);
         \\        inline for (event_ports, 0..) |p, k| setField(a.model, p.field, @intFromBool(fired >> k & 1 != 0));
@@ -481,11 +488,24 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     try out.appendSlice(arena, "const input_ports = [_]Port{");
     for (mx.inputs) |name| {
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
-        for (mx.xz) |x| if (std.mem.eql(u8, x, name)) {
+        const xz = for (mx.xz) |x| {
+            if (std.mem.eql(u8, x, name)) break true;
+        } else false;
+        if (xz) {
             const field = naming.sanitize(&buf, try arena.print("{s}__xz", .{name})) catch return error.OutOfMemory;
             try out.print(arena, ", .xz = \"{s}\"", .{field});
-        };
+        }
+        // §7.3.1 a `reg` wider than 32 bits: word 0 exactly, then one port
+        // per further word, each its own `Model` field.
+        const n_words = for (mx.wide, mx.words) |w, n| {
+            if (std.mem.eql(u8, w, name)) break n;
+        } else 0;
+        if (n_words != 0 and !xz) try out.appendSlice(arena, ", .word = 0");
         try out.appendSlice(arena, " },");
+        for (1..@max(n_words, 1)) |k| {
+            const field = naming.sanitize(&buf, try arena.print("{s}__w{d}", .{ name, k })) catch return error.OutOfMemory;
+            try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\", .word = {d} }},", .{ std.zig.fmtString(name), field, k });
+        }
     }
     try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
     for (mx.snaps) |name| {
@@ -865,9 +885,72 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
                 .{ k, f[0], got, fmtF64(want), got, fmtF64(want), fmtF64(w.rtol) },
             );
         }
+        // §4.6.4.6 the correlation coefficient of rows k and j, from what a
+        // host is handed: one shared `source` is one generator, so the two
+        // contributions move together, scaled by `coeff_k` and `coeff_j`,
+        // and ρ is the sign of their product; a `corr_with` link carries a
+        // partial ρ; anything else is independent. A zero coefficient makes
+        // ρ 0/0, a NaN that compares false.
+        for (w.corrs) |c| try out.print(arena,
+            \\                if (comptime D.noise_gens.len > {1d}) {{
+            \\                    const sgn = (psd[{0d}].coeff * psd[{1d}].coeff) / (@abs(psd[{0d}].coeff) * @abs(psd[{1d}].coeff));
+            \\                    const linked = if (psd[{0d}].corr_with) |o| o == {1d} else false;
+            \\                    const back = if (psd[{1d}].corr_with) |o| o == {0d} else false;
+            \\                    const rho: f64 = if ({0d} == {1d}) 1.0
+            \\                        else if (D.noise_gens[{0d}].source != null and D.noise_gens[{0d}].source == D.noise_gens[{1d}].source) sgn
+            \\                        else if (linked) psd[{0d}].corr * sgn
+            \\                        else if (back) psd[{1d}].corr * sgn
+            \\                        else 0.0;
+            \\                    std.debug.print("noise[{0d}].corr[{1d}] got={{d}} want={{d}} ok={{d}}\n", .{{ rho, @as(f64, {2f}), @intFromBool(nclose(rho, {2f}, {3f})) }});
+            \\                }} else std.debug.print("noise[{0d}].corr[{1d}] got=none want={{d}} ok=0\n", .{{@as(f64, {2f})}});
+            \\
+        , .{ k, c.with, fmtF64(c.rho), fmtF64(w.rtol) });
         try out.appendSlice(arena, "            }\n");
     }
     try out.appendSlice(arena, "        }\n");
+}
+
+/// Emits the comptime §2.9.2 `decl_meta` checks: the row count, then each row
+/// printed as `//! meta` writes it (`tb.Directives.meta`).
+fn emitMeta(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    try out.appendSlice(arena,
+        \\
+        \\    // §2.9.2/§3.2.1/§3.4.3/§3.6.3.1: the `desc` and `units` a host shows
+        \\    // in help messages and operating-point reports. The model's own
+        \\    // text cannot read an attribute back, so `decl_meta` is the only
+        \\    // place the clauses are observable.
+        \\    {
+        \\        const want = [_][]const u8{
+        \\
+    );
+    for (d.meta) |e| try out.print(arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
+    try out.appendSlice(arena,
+        \\        };
+        \\        if (comptime @hasDecl(D, "decl_meta")) {
+        \\            std.debug.print("meta count got={d} want={d} ok={d}\n", .{
+        \\                D.decl_meta.len, want.len, @intFromBool(D.decl_meta.len == want.len),
+        \\            });
+        \\            inline for (D.decl_meta, 0..) |m, i| {
+        \\                const got = comptime row: {
+        \\                    const dsc: []const u8 = if (m.desc) |v| " desc=\"" ++ v ++ "\"" else "";
+        \\                    const uni: []const u8 = if (m.units) |v| " units=\"" ++ v ++ "\"" else "";
+        \\                    break :row @tagName(m.kind) ++ " " ++ m.name ++ dsc ++ uni;
+        \\                };
+        \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
+        \\                std.debug.print("meta[{d}] got={s} want={s} ok={d}\n", .{
+        \\                    i, got, w_i, @intFromBool(std.mem.eql(u8, got, w_i)),
+        \\                });
+        \\            }
+        \\        } else {
+        \\            // No table at all is the empty table, for the reason the
+        \\            // `noise_gens` block gives.
+        \\            std.debug.print("meta count got=0 want={d} ok={d}\n", .{
+        \\                want.len, @intFromBool(want.len == 0),
+        \\            });
+        \\        }
+        \\    }
+        \\
+    );
 }
 
 /// Emits the comptime §4.6.3 `ac_gens` checks: source count, branch and

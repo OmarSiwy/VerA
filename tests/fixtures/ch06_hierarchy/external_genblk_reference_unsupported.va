@@ -24,12 +24,15 @@
 // and becomes `genblk02`. Nothing in this suite can read those names back; what can
 // be pinned is that the HDL path built from them is illegal.
 //
-// VerA refuses both paths with E0901, "names nothing in the elaborated design":
-// the §6.6.3 external names are not scopes a source path can reach.
+// VerA refuses both paths with E0998, "reaches into `genblk1`, an unnamed
+// generate block" (until 2026-10-08 it said E0901, "names nothing in the
+// elaborated design": right refusal, wrong reason, since §6.6.2 is the rule).
+// unnamed_generate_instance_reference_rejected.va refuses the same reach to an
+// instance, whose flat name does exist, beside a named-block neighbour.
 //
 //! lrm 6.6.2
 //! lrm 6.6.3
-//! reject-only E0901
+//! reject-only E0998
 module ch6_external_genblk_reference(p);
   inout p; electrical p;
   parameter integer genblk2 = 0;

@@ -117,6 +117,10 @@ pub fn formatStatus(comptime D: type, inst: *const D.Instance, w: *std.Io.Writer
 /// §9.4.6, "All the display tasks, except $debug, shall not display output
 /// unless an iteration has been accepted", which is also when `$display`
 /// prints, since §9.4.1 gives it "the same capabilities as $strobe".
+/// `$debug` "displays its arguments for each iteration of the analog solver"
+/// (§9.4.1): a host that shows it so also calls `say` after each Newton
+/// iteration, at that iterate, with `Say.pass = .iteration`, and then passes
+/// `.accepted` at the accepted point (`SayPass`).
 /// `$monitor` (it needs change detection a device does not keep) and a task
 /// with a string argument that is not a constant are not recorded (W0850).
 /// Optional: a host that never calls `say` is unaffected, and a GPU host
@@ -144,9 +148,21 @@ pub const Say = struct {
     buf: []f64,
     len: usize = 0,
     lost: usize = 0,
+    /// Which tasks this call records (§9.4.6).
+    pass: SayPass = .all,
 
-    /// Appends one record of site `site`; a device's `say` calls it.
+    /// Appends one record of site `site`, a task other than `$debug`; a
+    /// device's `say` calls it.
     pub fn put(s: *Say, site: u32, args: []const f64) void {
+        if (s.pass != .iteration) s.record(site, args);
+    }
+
+    /// Appends one record of `$debug` site `site`; a device's `say` calls it.
+    pub fn putDebug(s: *Say, site: u32, args: []const f64) void {
+        if (s.pass != .accepted) s.record(site, args);
+    }
+
+    fn record(s: *Say, site: u32, args: []const f64) void {
         if (s.buf.len - s.len < 1 + args.len) {
             s.lost += 1;
             return;
@@ -155,6 +171,21 @@ pub const Say = struct {
         for (args, s.buf[s.len + 1 ..][0..args.len]) |a, *b| b.* = a;
         s.len += 1 + args.len;
     }
+};
+
+/// §9.4.6 which display tasks one `say` call records. "All the display
+/// tasks, except $debug, shall not display output unless an iteration has
+/// been accepted", and §9.4.1's `$debug` "displays its arguments for each
+/// iteration of the analog solver".
+pub const SayPass = enum {
+    /// Every task, `$debug` included: a host that calls `say` only at
+    /// accepted points, which then shows `$debug` at those alone.
+    all,
+    /// `$debug` alone: after a Newton iteration, at its iterate.
+    iteration,
+    /// Every task but `$debug`: the accepted point of a host that runs the
+    /// `.iteration` passes, which already showed it there.
+    accepted,
 };
 
 /// Writes the records `D.say` put in `s`, each as its site's format renders
@@ -1960,6 +1991,10 @@ pub const Systf = struct {
     /// a host that parsed the same source (VerA's VPI host) matches its call
     /// object by it. `maxInt(u32)` when the call has no source token.
     tok: u32 = std.math.maxInt(u32),
+    /// §12.22.2 the arguments the device reads back after the call, bit
+    /// j - 1 for argument j: each is a variable, and its new value is what
+    /// `SystfHost.output` answers. Additive: no `abi_version` change.
+    outs: u64 = 0,
 };
 
 /// The VPI application as the device sees it. The host owns it and writes a
@@ -1975,6 +2010,23 @@ pub const SystfHost = struct {
     /// `partials[j]`. `partials.len == args.len` and it is not zeroed on
     /// entry, so the callee must write every slot.
     call: *const fn (ctx: *anyopaque, k: usize, args: []const f64, partials: []f64) f64,
+    /// §12.22.2/§12.30 argument j (1-based) of `systf_calls[k]` after its
+    /// latest `call`, for an argument in that entry's `outs`: the value
+    /// calltf put on it, with d(it)/d(args[i]) in `partials[i]` (§12.32.2,
+    /// zero where none was put). `args` are that call's. Null: the
+    /// application puts no argument. Read it through `output`. Additive: no
+    /// `abi_version` change.
+    out: ?*const fn (ctx: *anyopaque, k: usize, j: usize, args: []const f64, partials: []f64) f64 = null,
+
+    /// `out`, or, when it is null, argument j unchanged: the value an
+    /// argument calltf did not put keeps (`args[j - 1]`, partial 1 on itself
+    /// and 0 elsewhere). Writes every slot of `partials`.
+    pub fn output(h: *const SystfHost, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
+        if (h.out) |f| return f(h.ctx, k, j, args, partials);
+        @memset(partials, 0);
+        partials[j - 1] = 1;
+        return args[j - 1];
+    }
 };
 
 /// The device's §9.5 descriptor table, for a host whose second context (a
@@ -2041,6 +2093,34 @@ comptime {
     // Budget: `acStim` returns one per stimulus per frequency point.
     std.debug.assert(@sizeOf(AcPhasor) == 16);
 }
+
+/// §2.9.2 one declaration of the device's own module that carries a `desc` or
+/// `units` attribute: what a host shows in a help message (§3.4.3, §3.6.3.1)
+/// or beside an output variable in an operating-point report (§3.2.1). Rows
+/// of the optional `decl_meta` table, parameters, then variables, then nets,
+/// each in declaration order. Comptime data, read by no entry point; a host
+/// that does not read it needs nothing, so the table is additive and changes
+/// no `abi_version`.
+///
+/// What is a row, by the clauses:
+///   `.parameter`  a module-scope parameter, `name` as the card spells it;
+///   `.variable`   a module-scope variable, a §3.2.1 output variable;
+///   `.net`        a module-scope net or port; §2.9.2 gives `units` to
+///                 parameters and variables only, so a net row's `units` is
+///                 null, and §3.6.3.1's port-and-net pair is one row whose
+///                 `desc` is the later declaration's.
+/// "Units and descriptions specified for block-level [variables, parameters]
+/// shall be ignored by the simulator" (§3.2.1, §3.4.3), so a named block's
+/// declarations are never rows; nor is a flattened child instance's.
+pub const DeclMeta = struct {
+    kind: enum(u8) { parameter, variable, net },
+    name: []const u8,
+    /// §2.9.2 `desc`, the last one on the declaration (§2.9); null when absent.
+    desc: ?[]const u8 = null,
+    /// §2.9.2 `units`, likewise. "No dimensional analysis is performed"
+    /// (§3.4.3): the text as written.
+    units: ?[]const u8 = null,
+};
 
 /// Returns the device's `ac_dyn_slots`, or empty. Slot `row * n_u + col` is a
 /// local Jacobian entry whose small-signal value depends on frequency: a
@@ -3445,6 +3525,10 @@ pub fn validate(comptime D: type) void {
     // Optional per-unknown metadata tables.
     if (@hasDecl(D, "u_kinds") and @TypeOf(D.u_kinds) != [n]UnknownKind)
         @compileError(name ++ ".u_kinds must be [|U|]UnknownKind");
+    // §2.9.2 descriptions and units. Optional, and additive: no
+    // `abi_version` change.
+    expectArray(D, "decl_meta", DeclMeta);
+    if (@hasDecl(D, "decl_meta")) if (declMetaError(&D.decl_meta)) |m| @compileError(name ++ ".decl_meta: " ++ m);
 
     // §3.6.1.2 `abstol` of each unknown's nature (§3.6.2.3 discipline
     // overrides included): the absolute half of a Newton stopping test.
@@ -3727,6 +3811,7 @@ const AllowedPubDecl = enum {
     u_kinds,
     u_abstol,
     u_nodeset,
+    decl_meta,
     jac_pattern,
     q_pattern,
     jac_rows,
@@ -3765,6 +3850,17 @@ const AllowedPubDecl = enum {
     vpi_contrib_flow_u,
     lane_masks,
 };
+
+/// The `DeclMeta` rule a row breaks, or null: every row carries a `desc` or
+/// `units`, and a net row no `units` (§2.9.2 gives units to parameters and
+/// variables). Returns the message so the refusal is testable.
+fn declMetaError(comptime table: []const DeclMeta) ?[]const u8 {
+    for (table) |m| {
+        if (m.desc == null and m.units == null) return "a row carries a desc or units (`" ++ m.name ++ "` has neither)";
+        if (m.kind == .net and m.units != null) return "§2.9.2 gives units to parameters and variables, not to net `" ++ m.name ++ "`";
+    }
+    return null;
+}
 
 fn rejectStrayPubDecls(comptime D: type) void {
     const decls = @typeInfo(D).@"struct".decl_names;
@@ -3975,6 +4071,12 @@ fn isDenseEnum(comptime E: type) bool {
 
 const testing = std.testing;
 
+test "§2.9.2 a decl_meta row says something, and a net row has no units" {
+    try testing.expect(comptime declMetaError(&MockAll.decl_meta) == null);
+    try testing.expect(comptime declMetaError(&.{.{ .kind = .parameter, .name = "r" }}) != null);
+    try testing.expect(comptime declMetaError(&.{.{ .kind = .net, .name = "d", .desc = "drain", .units = "V" }}) != null);
+}
+
 const MockR = struct {
     pub const U = enum(u8) { p, n };
     pub const num_ports: usize = 2;
@@ -4098,6 +4200,17 @@ test "formatSay renders each record with its site's format, then what did not fi
     try std.testing.expectEqual(@as(usize, 0), s.len);
 }
 
+test "SayPass: `$debug` records on the iteration pass, the rest on the accepted one" {
+    var store: [8]f64 = undefined;
+    const one = [_]f64{1.0};
+    for ([_]SayPass{ .all, .iteration, .accepted }, [_][]const f64{ &.{ 0, 1, 1, 1 }, &.{ 1, 1 }, &.{ 0, 1 } }) |pass, want| {
+        var s: Say = .{ .buf = &store, .pass = pass };
+        s.put(0, &one);
+        s.putDebug(1, &one);
+        try std.testing.expectEqualSlices(f64, want, store[0..s.len]);
+    }
+}
+
 test "formatC: §9.4.3's conversions as C11 7.21.6.1 prints them" {
     const cases = [_]struct { fmt: []const u8, v: f64, want: []const u8 }{
         .{ .fmt = "%g", .v = 0.1, .want = "0.1" },
@@ -4189,6 +4302,12 @@ const MockAll = struct {
     // §3.6.3.2 one net declared `electrical p = 5.0;`, the other with no
     // initializer; the mock carries both halves so `?f64` is exercised.
     pub const u_nodeset = [n_u]?f64{ 5.0, null };
+    // §2.9.2 one row of each kind; a net row carries no units.
+    pub const decl_meta = [_]DeclMeta{
+        .{ .kind = .parameter, .name = "g", .desc = "conductance", .units = "S" },
+        .{ .kind = .variable, .name = "ids", .units = "A" },
+        .{ .kind = .net, .name = "p", .desc = "positive terminal" },
+    };
     pub const mc_param = "g";
     pub const constant: Constant = .{ .g = true };
     // §4.6.4: a parametric generator and a §4.6.4.4 tabulated one, so the

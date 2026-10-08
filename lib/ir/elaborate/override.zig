@@ -3,7 +3,7 @@
 //! its §9.18 hierarchical system-parameter values and its §9.19
 //! `$param_given` answers. Owns `Flatten.defparams`. LRM §3.4.4, §3.4.5,
 //! §3.4.7, §6.3, §6.3.1, §6.3.3, §9.18 Table 9-29, §9.19; IEEE 1364-2005
-//! §12.2.1, §12.2.2.2, §12.6.
+//! §12.2.1, §12.2.2.2, §12.6, §12.8.1.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
@@ -26,6 +26,11 @@ pub const Defparam = struct {
     /// §6.3.1 a path that named no parameter of the elaborated design is E0907,
     /// and this is how that is noticed: nothing ever claimed it.
     used: bool = false,
+    /// IEEE 1364-2005 §12.8.1: collected by a first walk (`seedDefparams`),
+    /// so it is in force before the walk that binds its target reaches it.
+    seeded: bool = false,
+    /// A seeded defparam's declaring site was reached again by this walk.
+    collected: bool = false,
 };
 
 comptime {
@@ -51,10 +56,73 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
             continue;
         }
         const key = try defparamKey(self, module, path, self.ctx.file.str(dp.path));
-        try self.defparams.put(self.ctx.arena, key, .{
+        const gop = try self.defparams.getOrPut(self.ctx.arena, key);
+        if (gop.found_existing and gop.value_ptr.seeded) {
+            // The first walk's last value for this key is already in force
+            // (§12.2.1: "the last defparam statement encountered"); reaching
+            // the site again only confirms it still exists.
+            gop.value_ptr.collected = true;
+            continue;
+        }
+        gop.value_ptr.* = .{
             .value = try elab_clone.cloneExpr(self, dp.value),
             .tok = dp.main_tok,
-        });
+        };
+    }
+}
+
+/// Whether some module's defparam may name a parameter the one-pass flatten
+/// binds before reaching it: a path whose first identifier is not one of
+/// that module's own instances (IEEE 1364-2005 §12.6's upward forms, a
+/// generate block's, or the module's own parameter). Over-approximate: such
+/// a design pays for `seedDefparams`' second walk.
+pub fn mayBindEarly(file: *const Ast.SourceFile) bool {
+    for (file.userModules()) |*m| for (m.defparams) |dp| {
+        const text = file.str(dp.path);
+        const dot = std.mem.indexOfScalar(u8, text, elaborate.sep) orelse return true;
+        for (m.instances) |inst| {
+            if (std.mem.eql(u8, file.str(inst.name), text[0..dot])) break;
+        } else return true;
+    };
+    return false;
+}
+
+/// IEEE 1364-2005 §12.8.1 b): "any defparam statement whose target can be
+/// resolved within the hierarchy elaborated so far must have its target
+/// resolved and its value applied" before parameters take their final
+/// values. The flatten binds an instance's parameters as it inlines it, so a
+/// defparam to an ancestor, to the declaring instance or to a sibling
+/// written earlier is reached after its target was bound. `first` is a
+/// complete walk of the same design: every defparam it collected, with its
+/// key and its last value, is in force from the start of this one.
+pub fn seedDefparams(self: *Flatten, first: *const Flatten) Error!void {
+    var it = first.defparams.iterator();
+    while (it.next()) |dp| {
+        var row = dp.value_ptr.*;
+        row.used = false;
+        row.seeded = true;
+        row.collected = false;
+        try self.defparams.put(self.ctx.arena, dp.key_ptr.*, row);
+    }
+    self.seed_params = first.params.items;
+}
+
+/// §6.3.1 on the top's own parameters: a seeded defparam (`seedDefparams`)
+/// naming one replaces its value, and the parameter becomes local: "the
+/// parameter in the module shall take the value specified by the defparam",
+/// so the host's model card, which stands where an instance override would,
+/// no longer sets it. Runs once the top's parameters are `self.params`.
+pub fn applyTopDefparams(self: *Flatten) Error!void {
+    if (self.defparams.count() == 0) return;
+    for (self.params.items) |*p| {
+        if (p.is_local) continue;
+        const local = self.ctx.file.str(p.name);
+        const dp = self.defparams.getPtrAdapted(PathKey{ .path = "", .local = local }, PathKey.Context{}) orelse continue;
+        const value = try seededValue(self, "", local, dp) orelse continue;
+        dp.used = true;
+        p.default = value;
+        p.is_override = true;
+        p.is_local = true;
     }
 }
 
@@ -73,6 +141,66 @@ pub fn rootedPath(self: *const Flatten, p: []const u8) ?[]const u8 {
     } else return p;
     if (rest.len > top.len and rest[top.len] == elaborate.sep and std.mem.startsWith(u8, rest, top)) return rest[top.len + 1 ..];
     return p;
+}
+
+/// The first identifier `e` reads that names no parameter the flat module
+/// declares yet, or null. Lowering reads the flat parameters in order, so a
+/// defparam value applied before its declaring instance is inlined may read
+/// only those.
+fn readsUndeclared(self: *Flatten, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const x = &self.ctx.file.exprs;
+    if (x.tag(e) == .ident) {
+        const name = x.strOf(e);
+        for (self.params.items) |p| if (p.name == name) return null;
+        for (self.aliasparams.items) |a| if (a.alias == name) return null;
+        return e;
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (x.children(e, &buf)) |c| if (readsUndeclared(self, c)) |hit| return hit;
+    return null;
+}
+
+/// The value seeded defparam `dp` (key `path ++ local`) applies now. Its
+/// value was cloned in the declaring instance's names, and that instance may
+/// not be inlined yet (an upward defparam). IEEE 1364-2005 §12.2.1 lets it
+/// read "only numbers and references to parameters ... declared in the same
+/// module as the defparam statement", so each parameter it reads that the
+/// flat module does not declare yet is replaced by that parameter's final
+/// expression: the value another seeded defparam gives it, else its value in
+/// the first walk (`seed_params`), which is an expression in flat names and so
+/// the same in this one. Null after E0907, when no such value exists or the
+/// replacement does not end (a defparam whose value reads, through the
+/// declaring module's parameters, its own target).
+pub fn seededValue(self: *Flatten, path: []const u8, local: []const u8, dp: *Defparam) Error!?Ast.ExprId {
+    if (!dp.seeded or dp.collected) return dp.value;
+    var v = dp.value;
+    var n: u32 = 0;
+    while (readsUndeclared(self, v)) |hit| : (n += 1) {
+        const name = self.ctx.file.exprs.strOf(hit);
+        const with = seedValueOf(self, name);
+        if (with == null or n == max_substitutions) {
+            dp.used = true;
+            try self.err(dp.tok, .E0907, "`{s}{s}` is applied before its declaring instance is elaborated, and its value reads `{s}`, {s} (IEEE 1364-2005 12.8.1)", .{
+                path,                                                                                                                     local, self.ctx.file.str(name),
+                if (with == null) "which names no parameter of the elaborated design" else "whose value reads the defparam's own target",
+            });
+            return null;
+        }
+        v = try @import("instance.zig").substIdent(self, v, name, with.?);
+    }
+    return v;
+}
+
+/// Bound on `seededValue`'s replacements: past it the chain is a cycle.
+const max_substitutions = 64;
+
+/// The final expression of flat parameter `name` in this design: a seeded
+/// defparam's value, else its first-walk value (scalars only).
+fn seedValueOf(self: *Flatten, name: Ast.StrId) ?Ast.ExprId {
+    if (self.defparams.get(self.ctx.file.str(name))) |dp| if (dp.seeded) return dp.value;
+    for (self.seed_params) |p| if (p.name == name and p.dims.len == 0) return p.default;
+    return null;
 }
 
 /// The flat key of defparam path `dp` written in `module` at instance
@@ -120,7 +248,11 @@ fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, 
 /// defparam is written in.
 pub fn reportUnusedDefparams(self: *Flatten) Error!void {
     var it = self.defparams.iterator();
-    while (it.next()) |dp| if (!dp.value_ptr.used) {
+    while (it.next()) |dp| if (dp.value_ptr.seeded and !dp.value_ptr.collected) {
+        // §12.8.2's hazard in another form: the first walk's hierarchy held
+        // this defparam and the one its values produced does not.
+        try self.err(dp.value_ptr.tok, .E0907, "`{s}`: this defparam's own instance does not exist once the defparams are applied (IEEE 1364-2005 12.8.1)", .{dp.key_ptr.*});
+    } else if (!dp.value_ptr.used) {
         const key = dp.key_ptr.*;
         if (boundEarlier(self, key)) try self.err(
             dp.value_ptr.tok,
@@ -133,10 +265,8 @@ pub fn reportUnusedDefparams(self: *Flatten) Error!void {
 
 /// Whether flat parameter name `key` is a parameter of an inlined instance:
 /// a §12.6 upward defparam (`defparamKey`) found its target already bound.
-/// ponytail: the flatten binds an instance's parameters as it inlines it,
-/// one pass top-down, so such a defparam (to an ancestor, or a sibling
-/// written earlier) is refused rather than applied; IEEE 1364-2005 §12.8.1's
-/// collect-everything-first order would need a second walk.
+/// `seedDefparams`' second walk applies every defparam the first collected,
+/// so this is reached only by one that `mayBindEarly` did not foresee.
 fn boundEarlier(self: *Flatten, key: []const u8) bool {
     const k = (std.mem.lastIndexOfScalar(u8, key, elaborate.sep) orelse return false) + 1;
     for (self.unit_paths.items) |u| if (std.mem.eql(u8, u.path, key[0..k])) {
@@ -204,13 +334,16 @@ pub fn parameterBinding(self: *Flatten, inst: *const Ast.Instance, params: []con
 }
 
 fn parameterDefparam(self: *Flatten, path: []const u8, original: Ast.StrId, spelling: Ast.StrId, consume: bool, found: *?ParamBinding) Error!void {
-    const dp = self.defparams.getPtrAdapted(PathKey{ .path = path, .local = self.ctx.file.str(spelling) }, PathKey.Context{}) orelse return;
+    const key = PathKey{ .path = path, .local = self.ctx.file.str(spelling) };
+    const dp = self.defparams.getPtrAdapted(key, PathKey.Context{}) orelse return;
+    var value = dp.value;
     if (consume) {
+        value = try seededValue(self, path, key.local, dp) orelse return;
         dp.used = true;
         if (found.*) |before| if (before.spelling != .none and before.spelling != spelling)
             try self.err(dp.tok, .E0908, "`{s}` and its alias are both given a value", .{self.ctx.file.str(original)});
     }
-    found.* = .{ .value = dp.value, .spelling = spelling, .flat = true };
+    found.* = .{ .value = value, .spelling = spelling, .flat = true };
 }
 
 /// Folds `e` to a real, or null: §2.6 literals, the A.2.5 infinities, and

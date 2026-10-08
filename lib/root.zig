@@ -315,7 +315,8 @@ fn compileInArena(
     // at the token after it; `Preprocessor.preludeAst` carries the soundness
     // argument. Both seeds come from one snapshot gated on the same
     // `std_defs`, so `tags` begins with the prelude's tokens here too.
-    var p = try Parser.Parser.initSeeded(arena, text, tags, starts, bag, try Preprocessor.preludeAst(opts.std_defs));
+    const seed = try Preprocessor.preludeAst(opts.std_defs);
+    var p = try Parser.Parser.initSeeded(arena, text, tags, starts, bag, seed);
     p.setLanguage(opts.language);
     const file = try arena.create(Ast.SourceFile);
     // The Table E.1 primitives (annex E) are the first declarations in `text`,
@@ -340,6 +341,8 @@ fn compileInArena(
         },
     };
     file.builtin_modules = builtins;
+    file.builtin_natures = if (seed) |sd| @intCast(sd.file.natures.len) else 0;
+    file.annex_d_included = pp.annex_d_included;
     file.netlist_modules = netlist_modules;
     file.netlist_unsupported = pp.netlist_unsupported;
     try Elaborate.spiceCase(arena, file);

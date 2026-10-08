@@ -49,6 +49,7 @@ pub const NodeKind = Lowered.NodeKind;
 pub const FlowKey = Lowered.FlowKey;
 pub const PortProbe = Lowered.PortProbe;
 pub const Nodeset = Lowered.Nodeset;
+pub const DeclMeta = Lowered.DeclMeta;
 pub const VecRange = Lowered.VecRange;
 pub const DisciplineInfo = Lowered.DisciplineInfo;
 pub const Access = Lowered.Access;
@@ -108,7 +109,10 @@ pub const VarSlot = struct {
 /// A `reg`'s packed range: its right-hand bound (the LSB in either
 /// direction) and whether it ascends (`[0:39]`), where a bit- or part-select
 /// lands (`lower_expr.lowerRegSelect`).
-pub const RegRange = struct { right: i64, asc: bool };
+/// A `reg`'s packed range as a select reads it (§7.3.1): the right-hand
+/// bound (its LSB in either direction, IEEE 1364-2005 §4.2.1), the direction,
+/// and the width.
+pub const RegRange = struct { right: i64, asc: bool, width: u32 };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
@@ -247,8 +251,16 @@ vars: std.StringHashMapUnmanaged(VarSlot) = .empty,
 /// §5.4.1 each instance's share of an unnamed-branch contribution row
 /// (`lower_contrib.unitAccum`), keyed by the row and the owning unit.
 unit_accum: std.AutoHashMapUnmanaged(struct { row: u32, unit: u32 }, Accum) = .empty,
-/// Every scalar `reg` with a constant packed range, by the name in `vars`.
+/// Every scalar `reg` with a constant packed range, by the name in `vars`,
+/// and every such `reg` a mixed module's analog block reads as a discrete
+/// input (`Lowered.discrete_inputs`).
 reg_ranges: std.StringHashMapUnmanaged(RegRange) = .empty,
+/// §7.3.1 a `reg` wider than 32 bits whose analog-context value is its
+/// literal initializer (`.none`: none, so zero) for the whole analysis: the
+/// analog context assigns it nowhere. Its bits above 31 fold from the
+/// literal (`lower_expr.lowerRegSelect`); any other such `reg` holds only
+/// what a §3.2 integer computes.
+reg_consts: std.StringHashMapUnmanaged(Ast.ExprId) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
 scope_log: std.ArrayList(lower_var.ScopeEntry) = .empty,
 /// §3.4 parameters and §3.5 genvars visible to constant evaluation.
@@ -343,6 +355,13 @@ int_systfs: []const []const u8 = &.{},
 /// `Ast.AnalogBlock.unit` of the block being lowered: the module instance that
 /// wrote it. Read by `discardOpposite` only; see `newContrib`.
 cur_unit: u32 = 0,
+/// §6.6.2 the flat prefixes of every unnamed generate block in the design
+/// (`Elaborate.unnamedGenScopes`), built on the first hierarchical name
+/// `lower_expr.refuseUnnamedGen` judges.
+unnamed_gen: ?[]const []const u8 = null,
+/// Index into the flat module's `analog` of the block being lowered, so a
+/// read can tell which blocks are already behind it (`instancePortFlow`).
+cur_block: usize = 0,
 /// True while lowering the body of an `@(...)`, where the statement position is
 /// A.6.4 `analog_event_statement` rather than `analog_statement`. The two
 /// productions differ in both directions: `disable_statement`/`event_trigger` are legal only when it
@@ -420,6 +439,9 @@ gen_iter: ?i64 = null,
 /// §6.4.3 `Elaborate.Design.ps_hidden`: module output variables a paramset
 /// makes unavailable, by flat name. Read by `lowerSimprobe`.
 ps_hidden: []const []const u8 = &.{},
+/// §6.8 `Elaborate.Design.port_vars`: output-port variables renamed onto
+/// the parent's net. Read by `lower_var.checkOneItemPerScope`.
+port_vars: []const Ast.StrId = &.{},
 /// §6.4.3 `Elaborate.Design.ps_outputs`: paramset output variables, reported
 /// under the instance's name by §9.16's `$simprobe`.
 ps_outputs: []const Elaborate.PsOutput = &.{},
@@ -549,6 +571,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     self.ps_hidden = design.ps_hidden; // §6.4.3
+    self.port_vars = design.port_vars; // §6.8
     self.ps_outputs = design.ps_outputs;
     self.paramset_defparams = design.paramset_defparams;
     self.selection_params = design.selection_params;
@@ -661,6 +684,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // `integer x = 3;` therefore lower to one write, and the AST edit below is
     // the whole of the difference.
     try lower_context.collectInitialState(self, module);
+    const analog_writes = try lower_var.analogWrites(self, module);
     for (module.vars) |*v| {
         if (self.out.discrete_inputs.contains(self.file.str(v.name))) continue;
         var d = v.*;
@@ -675,6 +699,14 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                 d.init = a.value;
         }
         try lower_var.declareVarDecl(self, &d, .module);
+        // §7.3.1: a wide `reg` the analog context only reads holds its
+        // literal for the whole analysis, so every bit of it is known.
+        const name = self.file.str(d.name);
+        if (self.reg_ranges.get(name)) |rr| if (rr.width > 32 and !analog_writes.contains(d.name) and
+            (d.init == .none or switch (self.file.exprs.tag(d.init)) {
+                .int_literal, .logic_literal => true,
+                else => false, // else: anything else is computed in §3.2's 32-bit integer
+            })) try self.reg_consts.put(self.arena, name, d.init);
     }
     // §6.8: an `initial` block that assigns a name this module never declared.
     // Reported here because it is only knowable once every declaration is in,
@@ -709,6 +741,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // question about the scopes, and before the analog block, so an attribute is
     // reported at its own token rather than after a body that may not compile.
     try lower_param.checkAttributes(self, module.attrs);
+    try lower_param.collectDeclMeta(self, module);
     try lower_var.checkScratchOwners(self, module);
 
     // §7.2.2 the DISCRETE context. Before the analog blocks because the rules
@@ -728,8 +761,9 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     self.runtime_error_phase = .core;
-    for (module.analog) |blk| {
+    for (module.analog, 0..) |blk, bi| {
         self.cur_unit = blk.unit;
+        self.cur_block = bi;
         if (blk.is_initial) {
             // §5.2.1 executed once per analysis, before a matrix solution
             // exists. Guarded rather than split into a second CFG so codegen

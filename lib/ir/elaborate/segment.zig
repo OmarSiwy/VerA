@@ -3,8 +3,9 @@
 //! resolution gives it, before flattening joins a signal's segments into one
 //! node. `insert.plan` reads both connections of a port from here, so a
 //! connect module lands at the level §7.4 resolution puts the meeting of the
-//! two domains. LRM §3.6.2.4, §7.4.4, §7.4.4.1, §7.4.4.2, §7.4.4.3, §7.7.2,
-//! §7.8.1, Annex F.2.1 step 4, F.2.2 steps 4 and 5.
+//! two domains. LRM §3.6.2.4, §6.4, §6.6, §7.4.4, §7.4.4.1, §7.4.4.2,
+//! §7.4.4.3, §7.7.2, §7.8.1, §7.8.4, Annex F.2.1 steps 3 and 4, F.2.2 steps
+//! 4 and 5; IEEE 1364-2005 §12.1.2.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -49,12 +50,15 @@ fn ofDiscipline(file: *const Ast.SourceFile, d: Ast.StrId, declared: bool) Seg {
 /// Memoized per segment. `depth` stops a recursive instantiation, which the
 /// walk itself reports (E0905, E1018).
 ///
-/// ponytail: a child reached through a §6.4 paramset is read only directly
-/// below the module `insert.plan` is planning (`depth == 0`), where its
-/// overrides can be evaluated; deeper ones, generate-block instances and
-/// instance arrays are not visited. The walk's own resolution
-/// (`resolve.resolveDiscipline`) still sees them, and a port this pass could
-/// not decide is judged after it (`insert.checkUnbridged`).
+/// The children are the ones the walk that inserts nothing elaborated below
+/// `path` (`Flatten.tree`): every generate block's instances whose scheme
+/// holds, every element of an instance array, a §6.4 paramset instance as
+/// the module it selected, at any depth, with every out-of-context
+/// declaration (`resolve.oocDisciplineBelow`). Without that walk (no
+/// `connectrules`, so nothing to plan) the source instance list is read, a
+/// paramset instance only where `insert.plan` is planning (`depth == 0`). A
+/// port this pass could not decide is judged after the walk
+/// (`insert.checkUnbridged`, E0929).
 pub fn up(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net: Ast.StrId, depth: u32) Error!Seg {
     const file = self.ctx.file;
     const key = try self.ctx.arena.print("{s}{s}", .{ path, file.str(net) });
@@ -66,27 +70,23 @@ pub fn up(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net: 
 
 fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net: Ast.StrId, depth: u32) Error!Seg {
     const file = self.ctx.file;
-    if (elab_resolve.oocDiscipline(self, path, net) orelse declaredIn(module, net)) |d|
+    if (elab_resolve.oocDisciplineBelow(self, path, net) orelse declaredIn(module, net)) |d|
         return ofDiscipline(file, d, true);
     // §3.6.2.4: "If the net is referenced in behavioral code, then it shall
     // be treated as having no discipline with a domain binding of discrete."
     const behavioral = digitalUse(file, module, net);
     if (depth >= elaborate.max_depth) return .{ .domain = if (behavioral) .discrete else .unspecified, .behavioral = behavioral };
     var below: std.ArrayList(Seg) = .empty;
-    for (module.instances) |*inst| {
+    if (self.tree.get(path)) |kids| {
+        for (kids.items) |*kid| try visitChild(self, &kid.inst, kid.module, kid.path, net, depth, &below);
+    } else for (module.instances) |*inst| {
         if (inst.range != null) continue;
         const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, file.str(inst.name), sep });
-        const child = (if (depth == 0)
+        const m = (if (depth == 0)
             try elab_insert.moduleOf(self, inst, child_path)
         else
             elab_names.findModule(self, inst.module)) orelse continue;
-        if (child.is_connect) continue;
-        for (child.ports, 0..) |p, pi| {
-            const ci = elab_insert.connIndex(inst, p, pi) orelse continue;
-            if (elab_names.netRefName(self, inst.ports[ci].expr) != net) continue;
-            const s = try up(self, child, child_path, p.name, depth + 1);
-            if (s.domain != .unspecified) try below.append(self.ctx.arena, s);
-        }
+        try visitChild(self, inst, m, child_path, net, depth, &below);
     }
     var domain: Ast.DisciplineDecl.Domain = if (behavioral) .discrete else .unspecified;
     if (!behavioral) for (below.items) |s| {
@@ -101,6 +101,18 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
             try cands.append(self.ctx.arena, s.disc);
     }
     return .{ .disc = try elab_resolve.levelCandidates(self, cands.items), .domain = domain, .behavioral = behavioral };
+}
+
+/// Appends to `below` the answer of each port of `inst` (elaborated as `m`
+/// at `child_path`) that `net` connects, when it has a domain.
+fn visitChild(self: *Flatten, inst: *const Ast.Instance, m: *const Ast.ModuleDecl, child_path: []const u8, net: Ast.StrId, depth: u32, below: *std.ArrayList(Seg)) Error!void {
+    if (m.is_connect) return;
+    for (m.ports, 0..) |p, pi| {
+        const ci = elab_insert.connIndex(inst, p, pi) orelse continue;
+        if (elab_names.netRefName(self, inst.ports[ci].expr) != net) continue;
+        const s = try up(self, m, child_path, p.name, depth + 1);
+        if (s.domain != .unspecified) try below.append(self.ctx.arena, s);
+    }
 }
 
 /// Is `net` read or written by `module`'s digital behavioral code: a

@@ -137,7 +137,11 @@ static P03_UNUSED int p03_saw_error(const char *what)
 
 static P03_UNUSED void p03_no_error(const char *what)
 {
-  if (vpi_chk_error(NULL) != 0) P03_FAIL("%s unexpectedly set an error", what);
+  s_vpi_error_info info;
+  if (vpi_chk_error(&info) != 0)
+    P03_FAIL("%s unexpectedly set an error: %s: %s", what,
+             info.code ? info.code : "(no code)",
+             info.message ? info.message : "(no message)");
 }
 
 /* IEEE 1364-2005 26.2.4: a startup routine may call only

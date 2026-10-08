@@ -109,6 +109,16 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         const horizon = tickAtOrBefore(target, opts.tick);
         s.target = target;
         s.dc = i == 0;
+        // §8.4.1 "a one time execution of nodeset statements (3.6.3.2), then
+        // the procedural statements in analog initial block, and then the
+        // procedural statements in the Verilog initial block for time zero":
+        // a tentative solution runs the analog initial block before any
+        // digital process, so a digital read of a continuous variable or a
+        // probe at time zero sees it. No digital value exists yet (no
+        // `setInputs`: the inputs keep their defaults, and §5.2.1 keeps them
+        // out of the analog initial block). `acc` stays null: the DC point is
+        // still solved below, with the time-zero digital values (§8.4.2).
+        if (i == 0 and dig.has_probes) try a.solveAt(target, 0.0, true, target == s.final);
         if (sync and i > 0) {
             while (s.acc.? < target) {
                 var t_end = target;
@@ -867,11 +877,14 @@ test "§5.10.3.4 absdelta interpolates digital events without forcing analog poi
     // The fake's 0.1 V/ns ramp has delta crossings at 2.5, 5 and 7.5 ns;
     // at 10 ns the remaining change equals delta, rather than exceeding it.
     // No watchAnalog: none of these A2D events causes a D2A. The only analog
-    // solves must therefore be the two times the host supplied.
+    // solves must therefore be at the two times the host supplied: §8.4.1's
+    // initialization (the analog initial block, before the digital ones) and
+    // the DC point at 0, then 10 ns.
     var f: Fake = .{ .slot = dig.slotOf("n").?, .gpa = arena, .slope = 1e8 };
     try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9 }, .tick = 1e-12 });
     try testing.expectEqual(@as(?i64, 4), dig.values[f.slot].asInt());
-    try testing.expectEqual(@as(usize, 2), f.solves.items.len);
+    try testing.expectEqual(@as(usize, 3), f.solves.items.len);
+    try testing.expectEqual(@as(f64, 0), f.solves.items[1].t);
     try testing.expectEqual(@as(usize, 2), f.points.items.len);
     try testing.expectEqual(@as(f64, 0), f.points.items[0].t);
     try testing.expectEqual(@as(f64, 10e-9), f.points.items[1].t);

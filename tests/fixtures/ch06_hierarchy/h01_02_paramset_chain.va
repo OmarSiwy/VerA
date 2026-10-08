@@ -56,9 +56,8 @@
 // the far link only `.j = 2.0;`, which made the file ill-formed under that
 // production. The far link now declares a variable, `real slow_tag;`, which
 // changes nothing it assigns; j is still 2.0. (A far link whose statement READS
-// its own parameter, `.j = jval;`, is refused by VerA with E0314 — that is
-// pinned as an xfail in rc_h01_paramset_chain_far_link_parameter.va, kept out of
-// this file so the chain itself stays observable.)
+// its own parameter, `.j = jval;`, is rc_h01_paramset_chain_far_link_parameter.va,
+// kept out of this file so the chain itself stays observable.)
 //
 // GROUND TRUTH TODAY: green, both checks. It was refused at line 68 with E0904,
 // "`h01_slow`, the module this paramset specializes": `Flatten` resolved

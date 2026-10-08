@@ -56,6 +56,10 @@ pub const Output = struct {
     directives: Directives = .{},
     /// Where each of `Options.more` begins in `text`.
     more_starts: []const u32 = &.{},
+    /// An `include resolved to the built-in annex D.1 (`disciplines.vams`, or
+    /// VD-093's `discipline.h`): the source asked for annex D itself, so its
+    /// natures join §3.13.2's uniqueness rule (docs/Vague_Decisions.md VD-096).
+    annex_d_included: bool = false,
 };
 
 /// Every directive whose state outlives its own line, as `Region` event lists
@@ -440,6 +444,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         .netlist_unsupported = netlist_unsupported,
         .directives = directives,
         .more_starts = more_starts,
+        .annex_d_included = pp.annex_d_included,
     };
 }
 
@@ -527,6 +532,8 @@ pub const Pp = struct {
     /// by `out_start` and `SourceMap.resolve` can binary-search it.
     segs: std.ArrayList(diag.Segment) = .empty,
     events: Events = .{},
+    /// `Output.annex_d_included`, set by `directive.builtin`.
+    annex_d_included: bool = false,
 
     // ---- scan state ------------------------------------------------------
     macros: std.StringHashMapUnmanaged(Macro) = .empty,

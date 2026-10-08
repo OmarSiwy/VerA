@@ -122,6 +122,12 @@ pub const Parser = struct {
     /// makes `bindingsFrom` a binary search instead of a scan of the file.
     /// Not part of `Seed`: `initSeeded` rebuilds it from the seeded bindings.
     attr_at: std.ArrayList(u32) = .empty,
+    /// The first token of the module item being parsed: the declaration owner
+    /// `skipAttributes` bound the item's §2.9 prefix to. `parseNetNames`
+    /// copies that prefix to a header port its declaration types, the one
+    /// declaration that appends no row of its own (§3.6.3.1: a port's net
+    /// takes the attributes of both lines).
+    item_tok: u32 = 0,
     /// Stacks for the lists a construct collects while nested constructs
     /// collect theirs: a user pushes above the mark it took, copies its run
     /// out (into the expression pool, or one exact-size arena slice) and

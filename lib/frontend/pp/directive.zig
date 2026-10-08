@@ -320,7 +320,9 @@ fn readAt(pp: *Pp, base: []const u8, path: []const u8, span: diag.Span) Error!?I
 }
 
 fn builtin(pp: *Pp, path: []const u8) Error!?Included {
-    const text = builtin_includes.get(std.fs.path.basename(path)) orelse return null;
+    const name = std.fs.path.basename(path);
+    const text = builtin_includes.get(name) orelse return null;
+    if (std.mem.eql(u8, name, "disciplines.vams") or std.mem.eql(u8, name, "discipline.h")) pp.annex_d_included = true;
     // `path` may slice a macro body on scratch, and the bag keeps the name.
     return .{ .text = text, .path = try pp.arena.dupe(u8, path) };
 }

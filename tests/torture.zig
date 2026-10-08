@@ -616,14 +616,29 @@ fn runAndCheck(
         return .unmet;
     }
 
+    // `//! reject-run`: the run refused, by name, and only for the named
+    // rules (`reject-only`'s test, on the run's `error[...]` lines).
+    for (d.reject_run) |pattern| if (!digital.errorSays(got, &.{pattern}, .any)) {
+        try w.print("FAIL {s}: `//! reject-run`: no run-time `error[` line holds \"{s}\":\n{s}\n", .{ f.path, pattern, got });
+        return .unmet;
+    };
+    if (d.reject_run.len != 0 and !digital.errorSays(got, d.reject_run, .every)) {
+        try w.print("FAIL {s}: `//! reject-run`, and a second run-time error fired:\n{s}\n", .{ f.path, got });
+        return .unmet;
+    }
+
     // A fixture may also report failure in prose — a §9.7.3 severity task, or a
-    // computed verdict that is not an `ok=` column.
-    if (std.mem.indexOf(u8, got, "FAIL") != null) {
+    // computed verdict that is not an `ok=` column. A run-time refusal's run
+    // may say FAIL about itself (the mixed runner's "the digital half did not
+    // run"); it is judged by its status and `error[` lines above, so only
+    // `capture`'s status line counts against it.
+    if (std.mem.indexOf(u8, got, if (d.reject_run.len != 0) "FAIL: <testbench" else "FAIL") != null) {
         try w.print("FAIL {s}: the testbench itself reported a failure:\n{s}\n", .{ f.path, got });
         return .unmet;
     }
 
-    if (tally.total == 0) {
+    // A run-time refusal is its own assertion (`decide` lets it through lint).
+    if (tally.total == 0 and d.reject_run.len == 0) {
         try w.print(
             "{s}: compiled and ran, but asserted nothing.\n",
             .{f.path},
@@ -669,7 +684,7 @@ fn perturbed(f: Fixture, got: []const u8, w: *Io.Writer) !Result {
 /// Whether a verdict line is one the runner prints for a device-table
 /// directive (`tb/runner.zig`), not a check the fixture wrote.
 fn directiveCheck(line: []const u8) bool {
-    const tags = [_][]const u8{ "noise[", "noise count", "acstim[", "acstim count", "acdyn[", "qsite[", "qsite count", "seed[", "limit[", "abstol[" };
+    const tags = [_][]const u8{ "noise[", "noise count", "acstim[", "acstim count", "acdyn[", "qsite[", "qsite count", "seed[", "limit[", "abstol[", "meta[", "meta count" };
     for (tags) |t| if (std.mem.startsWith(u8, line, t)) return true;
     return false;
 }

@@ -73,7 +73,8 @@ pub fn emitFile(self: *Gen) Error!void {
         // artifact needs the string kernels too: §9.4.3's real conversions
         // (Table 9-23, "the full formatting capabilities available in the C
         // language") are `zCReal`, which lives in the same file.
-        .strs = self.lowered.uses.contains(.str_tasks) or self.display == .emit,
+        // A §5.10 held string is a `ZStrHeld` (#19), which lives there too.
+        .strs = self.lowered.uses.contains(.str_tasks) or self.display == .emit or gen_instance.heldString(self),
         // §9.21, set at the call for the same reason `strs` is: the lookup may
         // land in any unit once the MIR is sliced.
         .tbl = self.lowered.uses.contains(.table_model),
@@ -125,6 +126,7 @@ pub fn emitFile(self: *Gen) Error!void {
 
     try emitTopology(self);
     try emitModel(self);
+    try emitDeclMeta(self);
     try emitDerive(self);
     try emitShapeCheck(self);
     try emitCardCheck(self);
@@ -322,6 +324,8 @@ pub fn hasStatefulOps(self: *const Gen) bool {
     if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0) return true;
     // VerA's `$vera_reject_step`: `updateState` is where the request is read.
     if (self.lowered.reject_step != .undef) return true;
+    // §9.21.1 (VD-095): `updateState` keeps a `$table_model` capture.
+    if (self.lowered.table_samples.items.len != 0) return true;
     for (self.names.units) |u| {
         if (u.role == .analog_op and u.op != .none) return true;
     }
@@ -461,6 +465,23 @@ fn emitNodesets(self: *Gen) Error!void {
             if (ns.node == i) v = ns.value;
         }
         if (v) |x| try self.w("    {s},\n", .{try fmtF64(self, x)}) else try self.w("    null,\n", .{});
+    }
+    try self.w("}};\n\n", .{});
+}
+
+/// Emits `decl_meta`, §2.9.2's `desc` and `units` on the module's own
+/// declarations (`contract.DeclMeta`), in `Lowered.decl_meta` order. Only
+/// when the module writes one: its absence means no such attribute.
+fn emitDeclMeta(self: *Gen) Error!void {
+    if (self.lowered.decl_meta.items.len == 0) return;
+    try self.w("/// §2.9.2 `desc`/`units` of this module's own declarations, for a\n", .{});
+    try self.w("/// host's help messages and operating-point reports (§3.2.1, §3.4.3, §3.6.3.1).\n", .{});
+    try self.w("pub const decl_meta = [_]contract.DeclMeta{{\n", .{});
+    for (self.lowered.decl_meta.items) |m| {
+        try self.w("    .{{ .kind = .{t}, .name = \"{f}\"", .{ m.kind, std.zig.fmtString(m.name) });
+        if (m.desc) |v| try self.w(", .desc = \"{f}\"", .{std.zig.fmtString(v)});
+        if (m.units) |v| try self.w(", .units = \"{f}\"", .{std.zig.fmtString(v)});
+        try self.w(" }},\n", .{});
     }
     try self.w("}};\n\n", .{});
 }

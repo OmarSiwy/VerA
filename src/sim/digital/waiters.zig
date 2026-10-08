@@ -150,7 +150,10 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     // Most slots have no watcher, so one test skips them all.
     const watchers = self.watch[target];
     if (watchers.count() != 0) {
-        if (watchers.contains(.monitor)) try requestMonitor(self);
+        if (watchers.contains(.monitor)) {
+            self.monitor_slot_hit = true;
+            try requestMonitor(self);
+        }
         if (watchers.contains(.analog)) try requestAnalog(self);
         if (watchers.contains(.vcd) or watchers.contains(.ports)) try requestVcd(self);
         if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));

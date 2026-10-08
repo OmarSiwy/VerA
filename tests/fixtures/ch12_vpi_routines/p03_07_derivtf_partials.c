@@ -52,19 +52,24 @@
  * with the VPI. Here the cold-start derivative is 3 and Newton on u^3 = 8 from
  * u = 1 runs 1, 3.333, 2.462, 2.081, 2.0031, 2.0000073, 2 — monotone.
  *
+ * KNOWN GAP. i1 (gnd, q) and c1 (q, gnd) are two instances' unnamed branches
+ * over one node pair, which VerA stamps as ONE residual row (the node
+ * equation only sees the sum), and the device publishes rows, not each
+ * instance's share; so 11.6.7's flow of c1's own branch is refused (SHARED,
+ * src/vpi/analog.zig `quantityValue`). Every other assertion runs first and
+ * passes; build.zig's vpi_runs pins the refusal as `.xfail` until the device
+ * publishes per-instance shares (`Lowered.contrib_sharers`). While it is an
+ * xfail, only the sentence it fails is cited (12.10:1, the value of a vpiFlow
+ * quantity): a vpi_runs entry counts whatever it cites. When it passes,
+ * restore the clause cites 12.16, 12.22, 12.22.1, 12.22.2, 12.30, 12.32,
+ * 12.32.1 and 12.32.2.
+ *
  *! design   p03_systf_devices.va
  *! analysis op
  *! expect   07_derivtf_partials.expected.txt
  */
 
-//! lrm 12.16
-//! lrm 12.22
-//! lrm 12.22.1
-//! lrm 12.22.2
-//! lrm 12.30
-//! lrm 12.32
-//! lrm 12.32.1
-//! lrm 12.32.2
+//! lrm 12.10:1
 
 #include "p03_vpi_analog.h"
 
@@ -188,18 +193,17 @@ static PLI_INT32 on_final(p_cb_data cb)
 
   vr = p03_real_of(vres, NULL);
   ir = p03_real_of(ires, NULL);
-  vc = p03_real_of(vcub, NULL);
-  ic = p03_real_of(icub, NULL);
-
   P03_NEAR(vr, 1.0,    1e-12, "V across the 12.22.2 $resistor");
   P03_NEAR(ir, 1.0e-3, 1e-15, "current through the 12.22.2 $resistor");
   P03_NEAR(last_res_g, 1.0e-3, 0.0, "d(curr)/dV handed to the solver");
 
-  /* The discriminating pair. */
+  /* The discriminating pair. c1's flow is read last: see KNOWN GAP. */
+  vc = p03_real_of(vcub, NULL);
   P03_NEAR(vc, 1.0, 1e-9,  "V at the $cube node: (V+1)^3 = 8");
-  P03_NEAR(ic, 7.0, 1e-9,  "current into the $cube node");
   P03_NEAR(last_cub_g, 12.0, 1e-6,
            "d(icube)/dV at the converged point: 3*(1+1)^2");
+  ic = p03_real_of(icub, NULL);
+  P03_NEAR(ic, 7.0, 1e-9,  "current into the $cube node");
 
   printf("p03-07: vres=%g ires=%g dres=%g vcube=%g icube=%g dcube=%g\n",
          vr, ir, last_res_g, vc, ic, last_cub_g);

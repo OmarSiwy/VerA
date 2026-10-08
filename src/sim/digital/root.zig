@@ -485,6 +485,18 @@ pub const Run = struct {
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
+    /// VAMS §7.3.6.3: an argument of the standing monitor probes the analog
+    /// solution, which no slot holds. Such a monitor is checked at every time
+    /// step (`runUntil`), after the step's region-3b solve (§8.5.1 row 4),
+    /// and reports when a probing argument's value moved
+    /// (`display.monitorDue`).
+    monitor_probes: bool = false,
+    /// A watched slot changed since the monitor last reported, so the report
+    /// is due without a comparison (§17.1.3). The first report is due too.
+    monitor_slot_hit: bool = false,
+    /// Per monitor argument, the f64 bits of its value at the last report;
+    /// read only for arguments that probe (`monitor_probes`).
+    monitor_last: []u64 = &.{},
     /// The slots the standing monitor's arguments read: §17.1.3's "variable
     /// or an expression in the argument list". Clock queries read no slot,
     /// which is the clause's `$time`/`$stime`/`$realtime` exception.
@@ -747,6 +759,10 @@ pub const Run = struct {
             if (event.time != r.budget_time) {
                 r.budget_time = event.time;
                 r.budget_used = 0;
+                // §8.5.1: monitor events "are continuously re-enabled in
+                // every successive time step"; one that probes the analog
+                // solution has no slot to wake it, so each step asks.
+                if (r.monitor_probes) try waiters.requestMonitor(r);
             }
             r.budget_used += 1;
             if (r.budget_used > r.budget)
@@ -782,7 +798,7 @@ pub const Run = struct {
                 },
                 .monitor_tick => {
                     r.monitor_pending = false;
-                    try display.monitorPrint(r, scratch.allocator());
+                    if (try display.monitorDue(r, scratch.allocator())) try display.monitorPrint(r, scratch.allocator());
                 },
                 .vcd_tick => try @import("vcd.zig").tick(r, scratch.allocator()),
                 .tran_switch => |at| {

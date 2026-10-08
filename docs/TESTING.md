@@ -869,6 +869,7 @@ Every item below runs; numbers come from the commands, never from this file.
 | Step inventory (§3.6) | `tests/STEPS.txt` | `conformance.py steps [--update]` |
 | Canaries (§3.6) | `tests/canary/`, `EXPECT.tsv`; `tests/harness/canary.zig` | `zig build test-canary` (on `test`) |
 | `reject-only`, `neighbour`, sentence cites (§3.2-§3.3) | `lib/backend/tb/directive.zig`; harness, digital runner, `test-1364` all honour them | the strict suite |
+| Run-time refusals (§3.3 c for a refusal the run makes) | `//! reject-run <code>`: the testbench exits nonzero and every `error[` line it prints is a named one (`tests/torture.zig`, `harness/digital.zig` `errorSays`); counted as `reject-only` by the metric | the strict suite |
 | Promotions and links | `conformance.py promote-reject-only`, `link-neighbours`, `link-sentences` | after `benchmark -- --probe-reject-only` |
 | Want perturbation (L2b) | `tests/fixtures/check.vh` (`VERA_PERTURB`), `tests/torture.zig` | `benchmark -- --perturb [--verdicts=F]` |
 | Derivative certificate (L4a) | `fdCheck` in `lib/backend/tb/runner_text.zig`; `//! fd-exempt <reason>` | `benchmark -- --certify` |

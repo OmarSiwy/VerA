@@ -3,7 +3,7 @@
 //! In: discipline/nature declarations and net declarations. Out: `Lower.disciplines`,
 //! per-node disciplines, and the §3.11 compatibility diagnostics. The AST-only rules
 //! live in `ir/discipline_rules.zig`.
-//! LRM: §3.6, §3.6.1, §3.6.1.2-§3.6.1.4, §3.6.2.1, §3.6.2.2, §3.11, §3.11.1, §3.13.1, §4.4, §5.5.1.
+//! LRM: §3.6, §3.6.1, §3.6.1.2-§3.6.1.4, §3.6.2.1, §3.6.2.2, §3.11, §3.11.1, §3.13.1, §3.13.2, §4.4, §5.5.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -102,10 +102,12 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
 /// Checks the rules the nature and discipline declarations must satisfy on their
 /// own, before a module refers to them (LRM §3.6.1, §3.6.1.2, §3.13).
 ///
-/// The uniqueness rules compare within one source file. §3.13.1 gives natures and
-/// disciplines one global scope, but VerA prepends annex D's `disciplines.vams` to
-/// every compilation, so comparing across that prelude would reject a model's own
-/// `nature My_Voltage; access = V;` for a declaration its author did not write.
+/// The name-uniqueness rules (E0336, E0342) compare within one source file.
+/// §3.13.1 gives natures and disciplines one global scope, but VerA prepends
+/// annex D's `disciplines.vams` to every compilation, so comparing across that
+/// prelude would reject a declaration its author did not write. §3.13.2's
+/// access rule (E0335) compares globally, with the prelude's natures in only
+/// when the source includes annex D.1 (docs/Vague_Decisions.md VD-096).
 pub fn checkNatureTable(self: *Lower) Oom!void {
     const natures = self.file.natures;
     // §3.6.1.4 access identifier per nature, `.none` when it declares no
@@ -201,17 +203,25 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
         }
     }
 
-    // §3.13.2 "the access function of each base nature shall be unique". Keyed
-    // on the nature NAME, so one nature declared twice (annex D's own headers
-    // arrive that way when a fixture restates them) is one claim, not two.
-    for (natures, access, 0..) |*a, a_acc, i| {
+    // §3.13.2 "the access function of each base nature shall be unique", over
+    // §3.13.1's one global scope. Keyed on the nature NAME, so one nature
+    // declared twice (annex D's own headers arrive that way when a fixture
+    // restates them) is one claim, not two. The preloaded annex D natures
+    // (the first `builtin_natures`) count only when the source includes D.1
+    // itself (docs/Vague_Decisions.md VD-096): VerA supplies them to every
+    // compilation, and a model that never asked for them may declare its own
+    // `access = V` nature.
+    const builtin = if (self.file.annex_d_included) 0 else @min(self.file.builtin_natures, natures.len);
+    for (natures[builtin..], access[builtin..], builtin..) |*a, a_acc, i| {
         if (a.parent != .none or a_acc == .none) continue;
         for (natures[i + 1 ..], access[i + 1 ..]) |*b, b_acc| {
             if (b.parent != .none or b_acc != a_acc or b.name == a.name) continue;
-            if (fileOf(self, a.main_tok) != fileOf(self, b.main_tok)) continue;
-            try self.err(b.main_tok, .E0335, "`{s}` and `{s}` both access `{s}`", .{
+            var eb = self.errWith(b.main_tok, .E0335);
+            eb.msg("`{s}` and `{s}` both access `{s}`", .{
                 self.file.str(a.name), self.file.str(b.name), self.file.str(b_acc),
             });
+            if (i < self.file.builtin_natures) eb.note("`{s}` is annex D's, which this source includes (`disciplines.vams`)", .{self.file.str(a.name)});
+            try eb.emit();
         }
     }
 

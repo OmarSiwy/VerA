@@ -210,6 +210,10 @@ pub const Callee = enum(u8) {
     @"$rng$t_next",
     @"$rng$erlang",
     @"$rng$erlang_next",
+    // §12.22.2 `Lower.lowerSysTask`: argument j of a user system task call
+    // that is a variable, read back after the call as the value its calltf
+    // put there: (call, j, the call's arguments...).
+    @"$systf$out",
     /// Any other name: a user system function. The raw name is the call's.
     systf,
 
@@ -612,6 +616,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$rng$t_next",
         .@"$rng$erlang",
         .@"$rng$erlang_next",
+        .@"$systf$out",
         .systf,
         => .none,
     };

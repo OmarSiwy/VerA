@@ -1,7 +1,7 @@
 //! Fixture `//!` directive parsing: raw .va source in, `tb.Directives` out
 //! (analysis, bias, time, sweeps, expected noise/acstim/qsite tables, ...).
-//! LRM: §1.3.1.1, §2.4, §2.6, §3.6.3, §4.6.3, §4.6.4.3, §4.6.4.4, §4.6.4.6,
-//! §5.4.2, §5.4.3, §6.5.2.
+//! LRM: §1.3.1.1, §2.4, §2.6, §2.9.2, §3.2.1, §3.4.3, §3.6.3, §3.6.3.1, §4.6.3,
+//! §4.6.4.3, §4.6.4.4, §4.6.4.6, §5.4.2, §5.4.3, §6.5.2.
 
 const std = @import("std");
 const tb = @import("../tb.zig");
@@ -37,6 +37,7 @@ const Keyword = enum {
     plusargs,
     reject,
     @"reject-only",
+    @"reject-run",
     neighbour,
     warn,
     nowarn,
@@ -45,6 +46,7 @@ const Keyword = enum {
     acdyn,
     qsite,
     seed,
+    meta,
     abstol,
     limit,
     spice,
@@ -72,6 +74,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var waves: std.ArrayList(Sweep) = .empty;
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
+    var reject_run: std.ArrayList([]const u8) = .empty;
+    var exit_set = false;
     var neighbours: std.ArrayList([]const u8) = .empty;
     var warn: std.ArrayList([]const u8) = .empty;
     var plusargs: std.ArrayList([]const u8) = .empty;
@@ -79,6 +83,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var spice: std.ArrayList([]const u8) = .empty;
     var noise: std.ArrayList(NoiseWant) = .empty;
     var qsites: std.ArrayList([]const u8) = .empty;
+    var meta: std.ArrayList([]const u8) = .empty;
     var acstim: std.ArrayList(AcWant) = .empty;
     var acdyn: std.ArrayList(AcDynWant) = .empty;
     var seeds: std.ArrayList(Binding) = .empty;
@@ -133,7 +138,10 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 if (std.mem.indexOfAny(u8, name, " \t\"\\") != null) return error.BadSyntax;
                 if (name.len != 0) d.analysis_name = try arena.dupe(u8, name);
             },
-            .exit => d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber,
+            .exit => {
+                d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber;
+                exit_set = true;
+            },
             .checks => {
                 if (d.expected_checks != null) return error.BadSyntax;
                 if (!digits(rest)) return error.BadNumber;
@@ -159,6 +167,11 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 if (rest.len == 0) return error.BadSyntax;
                 try reject.append(arena, try arena.dupe(u8, rest));
                 if (kw == .@"reject-only") d.reject_only = true;
+            },
+            .@"reject-run" => {
+                // One verbatim substring of an `error[...]` line, as `reject`.
+                if (rest.len == 0) return error.BadSyntax;
+                try reject_run.append(arena, try arena.dupe(u8, rest));
             },
             .neighbour => {
                 // A path, relative to the fixture's directory; the harness
@@ -198,6 +211,11 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 if (rest.len == 0) return error.BadSyntax;
                 if (!std.mem.eql(u8, rest, "none")) try qsites.append(arena, try arena.dupe(u8, rest));
                 d.asserts_qsite = true;
+            },
+            .meta => {
+                // `none` is the empty table, for the reason `noise none` is.
+                if (!std.mem.eql(u8, rest, "none")) try meta.append(arena, try parseMetaEntry(arena, rest));
+                d.asserts_meta = true;
             },
             .seed => {
                 if (rest.len == 0) return error.BadSyntax;
@@ -278,10 +296,19 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.waves = waves.items;
     d.psweeps = psweeps.items;
     d.reject = reject.items;
+    d.reject_run = reject_run.items;
+    // A construct is refused by the compiler or by the run, never both.
+    if (d.reject.len != 0 and d.reject_run.len != 0) return error.BadSyntax;
+    // A run-time refusal ends the run with a failure status: 1, the one every
+    // run-time `error[...]` exits with, unless `//! exit` names another.
+    if (d.reject_run.len != 0) {
+        if (!exit_set) d.expected_exit = 1;
+        if (d.expected_exit == 0) return error.BadSyntax;
+    }
     d.neighbours = neighbours.items;
     // A legal neighbour is the other half of a refusal; a fixture that is
     // not one has none.
-    if (d.neighbours.len != 0 and d.reject.len == 0) return error.BadSyntax;
+    if (d.neighbours.len != 0 and d.reject.len == 0 and d.reject_run.len == 0) return error.BadSyntax;
     d.plusargs = plusargs.items;
     if (d.expected_checks != null and d.reject.len != 0) return error.BadSyntax;
     d.warn = warn.items;
@@ -291,6 +318,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.lrm = lrm.items;
     d.noise = noise.items;
     d.qsites = qsites.items;
+    d.meta = meta.items;
     d.acstim = acstim.items;
     d.acdyn = acdyn.items;
     d.seeds = seeds.items;
@@ -370,6 +398,7 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     if (!validNoiseEntry(topo)) return error.BadSyntax;
 
     var w: NoiseWant = .{ .topo = try arena.dupe(u8, topo) };
+    var corrs: std.ArrayList(NoiseWant.Corr) = .empty;
     var fields = std.mem.tokenizeAny(u8, s[end..], " \t");
     while (fields.next()) |f| {
         const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
@@ -397,9 +426,51 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
             }
             if (pts.items.len == 0) return error.BadSyntax;
             w.points = pts.items;
+        } else if (std.mem.eql(u8, key, "corr")) {
+            // `<j>:<rho>`: the other row by its table index, then ρ.
+            const colon = std.mem.indexOfScalar(u8, val, ':') orelse return error.BadSyntax;
+            if (!digits(val[0..colon])) return error.BadSyntax;
+            try corrs.append(arena, .{
+                .with = std.fmt.parseInt(u16, val[0..colon], 10) catch return error.BadNumber,
+                .rho = try number(val[colon + 1 ..]),
+            });
         } else return error.BadSyntax;
     }
+    w.corrs = corrs.items;
     return w;
+}
+
+/// Parses one `//! meta` line into the row text the runner prints:
+/// `<kind> <name>`, then ` desc="..."` and ` units="..."` when given, in that
+/// order whatever order the line wrote them in. A value is any text without
+/// a `"`, so a description may hold spaces; it cannot hold a quote.
+fn parseMetaEntry(arena: Allocator, s: []const u8) Error![]const u8 {
+    var it = std.mem.tokenizeAny(u8, s, " \t");
+    const kind = it.next() orelse return error.BadSyntax;
+    const kinds = [_][]const u8{ "parameter", "variable", "net" };
+    for (kinds) |k| {
+        if (std.mem.eql(u8, kind, k)) break;
+    } else return error.BadSyntax;
+    const name = it.next() orelse return error.BadSyntax;
+    var desc: ?[]const u8 = null;
+    var units: ?[]const u8 = null;
+    var rest = std.mem.trim(u8, it.rest(), " \t");
+    while (rest.len != 0) {
+        const eq = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
+        const key = rest[0..eq];
+        if (eq + 1 >= rest.len or rest[eq + 1] != '"') return error.BadSyntax;
+        const close = std.mem.indexOfScalarPos(u8, rest, eq + 2, '"') orelse return error.BadSyntax;
+        const val = rest[eq + 2 .. close];
+        const slot = if (std.mem.eql(u8, key, "desc")) &desc else if (std.mem.eql(u8, key, "units")) &units else return error.BadSyntax;
+        if (slot.* != null) return error.BadSyntax;
+        slot.* = val;
+        rest = std.mem.trimStart(u8, rest[close + 1 ..], " \t");
+    }
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(arena, "{s} {s}", .{ kind, name });
+    if (desc) |v| try out.print(arena, " desc=\"{s}\"", .{v});
+    if (units) |v| try out.print(arena, " units=\"{s}\"", .{v});
+    return out.items;
 }
 
 /// Splits a leading `(<row>,<col>)` off `s`: both names trimmed, and the text

@@ -594,6 +594,9 @@ pub fn checkOneItemPerScope(self: *Lower, params: []const Ast.ParamDecl, vars: [
     for (vars, 0..) |v, i| {
         if (declares(vars[0..i], v.name) or declares(params, v.name))
             try dupItem(self, v.main_tok, v.name);
+        // A child's output-port variable renamed onto this net is the
+        // child's declaration, not a second one here (`Design.port_vars`).
+        if (std.mem.indexOfScalar(Ast.StrId, self.port_vars, v.name) != null) continue;
         for (nets) |n| if (n.name == v.name and n.discipline == .none) try dupItem(self, v.main_tok, v.name);
     }
     for (nets) |n| {
@@ -728,7 +731,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     self.vars.getPtr(name).?.reg_width = reg_width;
     if (decl.storage == .reg) if (decl.packed_range) |range| if (lower_constfold.constEval(self, range.msb)) |m| if (lower_constfold.constEval(self, range.lsb)) |l| {
         const right = l.asIntExact() orelse 0;
-        try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right });
+        try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right, .width = reg_width.? });
     };
     const init_val: Mir.Value = if (decl.init == .none)
         zeroOf(ty)
@@ -973,6 +976,32 @@ pub fn writeElem(self: *Lower, name: []const u8, info: ArrayInfo, idx: []const i
     var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     const slot = self.vars.get(try lower_shape.elemKey(self, &key_buf, name, idx)) orelse return;
     try self.builder.writeVariable(slot.place, self.cur, v);
+}
+
+/// §7.2.2 every name an `analog` or `analog initial` block of `module`
+/// writes (an assignment target, an output actual, a `$random` seed), as
+/// `Ast.SourceFile.stmtWrites` finds them.
+pub fn analogWrites(self: *Lower, module: *const Ast.ModuleDecl) Oom!std.AutoHashMapUnmanaged(Ast.StrId, void) {
+    var out: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    var writes: std.ArrayList(Ast.ExprId) = .empty;
+    const Walk = struct {
+        l: *Lower,
+        funcs: []const Ast.FuncDecl,
+        writes: *std.ArrayList(Ast.ExprId),
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            if (s == .none) return;
+            try w.l.file.stmtWrites(w.funcs, s, w.l.arena, w.writes);
+            try w.l.file.stmtEdges(s, w);
+        }
+    };
+    const walk: Walk = .{ .l = self, .funcs = module.functions, .writes = &writes };
+    for (module.analog) |blk| try walk.stmt(blk.body);
+    for (writes.items) |w| {
+        const t = self.file.lvalueBase(w);
+        if (t != .none) try out.put(self.arena, self.file.exprs.strOf(t), {});
+    }
+    return out;
 }
 
 // ---- after every declaration -----------------------------------------------

@@ -16,7 +16,10 @@
 // Every paramset declares at least one item (Syntax 6-4 / A.1.9,
 // `paramset_item_declaration { paramset_item_declaration }`); both links do.
 //
-//! xfail VerA refuses the far link's `.j = jval;` with E0314 "unknown identifier: `jval`" when the paramset is reached through a chain (§6.4.1 allows the paramset's own parameters on the right-hand side)
+// Until 2026-10-08 VerA refused `.j = jval;` with E0314 "unknown identifier":
+// it evaluated a far link's statements in the near link's scope. Each link
+// now has its own (`elaborate/paramset.zig` `paramsetOverrides`).
+//
 //! lrm 6.4
 //! lrm 6.4.1
 //! bias V(p) = 0.5

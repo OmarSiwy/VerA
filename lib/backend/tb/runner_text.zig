@@ -699,10 +699,27 @@ pub const runner_body =
     \\
     \\/// §9.4 a device built `--display=record` prints nothing itself: what its
     \\/// `say` records at this accepted point, rendered by `contract.formatSay`.
+    \\/// Its `$debug` records were printed per iteration (`sayIteration`) when
+    \\/// the point took any; a point `solve` returned at once shows them here.
     \\fn sayPoint(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    if (comptime !@hasDecl(D, "say")) return;
+    \\    defer say_iterations = 0;
+    \\    sayPass(x, model, inst, if (say_iterations != 0) .accepted else .all);
+    \\}
+    \\
+    \\/// §9.4.1 `$debug` "displays its arguments for each iteration of the analog
+    \\/// solver": a `--display=record` device's iteration pass at the iterate
+    \\/// `x` (`contract.SayPass`), after each Newton iteration of `solve`.
+    \\var say_iterations: usize = 0;
+    \\fn sayIteration(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime !@hasDecl(D, "say")) return;
+    \\    say_iterations += 1;
+    \\    sayPass(x, model, inst, .iteration);
+    \\}
+    \\
+    \\fn sayPass(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D), pass: contract.SayPass) void {
     \\    var store: [4096]f64 = undefined;
-    \\    var s: contract.Say = .{ .buf = &store };
+    \\    var s: contract.Say = .{ .buf = &store, .pass = pass };
     \\    D.say(Dual, x, model, inst, sim_state, &s);
     \\    var text: [65536]u8 = undefined;
     \\    var w: std.Io.Writer = .fixed(&text);
@@ -1044,6 +1061,7 @@ pub const runner_body =
     \\        }
     \\        previous = x.*;
     \\        var r = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
+    \\        sayIteration(x, model, inst);
     \\        // §5.6.1.2 backward Euler — see the header. Value and derivative
     \\        // both, so the capacitance matrix reaches the Jacobian too.
     \\        if (comptime @hasDecl(D, "q")) if (sim_state.dt > 0.0) {
@@ -1206,6 +1224,13 @@ pub const vpi_lib_body =
     \\fn viaHost(_: *anyopaque, k: usize, args: []const f64, partials: []f64) f64 {
     \\    return host_call.?(k, args.ptr, args.len, partials.ptr);
     \\}
+    \\/// §12.22.2 an output argument after its call (`contract.SystfHost.out`),
+    \\/// forwarded the same way.
+    \\const HostOut = *const fn (usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+    \\var host_out: ?HostOut = null;
+    \\fn viaHostOut(_: *anyopaque, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
+    \\    return host_out.?(k, j, args.ptr, args.len, partials.ptr);
+    \\}
     \\var host_systf: contract.SystfHost = .{ .ctx = undefined, .call = viaHost };
     \\const n_systf = if (@hasDecl(D, "systf_calls")) D.systf_calls.len else 0;
     \\export fn vera_vpi_n_systf() callconv(.c) usize {
@@ -1233,8 +1258,15 @@ pub const vpi_lib_body =
     \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
     \\}
     \\
-    \\export fn vera_vpi_systf(h: ?HostCall) callconv(.c) void {
+    \\export fn vera_vpi_systf(h: ?HostCall, o: ?HostOut) callconv(.c) void {
     \\    host_call = h;
+    \\    host_out = o;
+    \\    host_systf.out = if (o != null) viaHostOut else null;
+    \\}
+    \\/// `systf_calls[k].outs`: the arguments the device reads back.
+    \\export fn vera_vpi_systf_outs(k: usize) callconv(.c) u64 {
+    \\    if (comptime n_systf == 0) unreachable;
+    \\    return D.systf_calls[k].outs;
     \\}
     \\export fn vera_vpi_n_u() callconv(.c) usize {
     \\    return n_u;
@@ -1250,6 +1282,88 @@ pub const vpi_lib_body =
     \\    if (@hasDecl(D, "display")) D.display(Dual, &g_x, &g_model, &g_inst, sim_state);
     \\    sayPoint(&g_x, &g_model, &g_inst);
     \\    if (stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved)) |r| retryUnsupported(r);
+    \\}
+    \\/// §4.6.3/§12.8 the small-signal solution at angular frequency `w` around
+    \\/// the last solution, the AC sweep's operating point:
+    \\///
+    \\///     (G + jw·C + acDyn) X = -B
+    \\///
+    \\/// G and C the resistive and reactive Jacobians there, evaluated as
+    \\/// `.ac` (so `ac_dyn_slots` come from `acDyn`), B the `ac_gens` phasors
+    \\/// as the residual carries a contribution (+ at the row, - at the
+    \\/// column, none when row == col, a branch to ground). A forced unknown
+    \\/// is a DC source, so X is 0 there; a column
+    \\/// with no usable pivot is a free direction and reads 0, as in `solve`.
+    \\/// Real parts into `re`, imaginary into `im`. False when nothing pivots.
+    \\export fn vera_vpi_ac(w: f64, re: [*]f64, im: [*]f64) callconv(.c) bool {
+    \\    const C = std.math.Complex(f64);
+    \\    const kind = sim_state.kind;
+    \\    defer sim_state.kind = kind;
+    \\    sim_state.kind = .ac;
+    \\    var a: [n_u][n_u]C = undefined;
+    \\    var b: [n_u]C = @splat(.init(0.0, 0.0));
+    \\    const r = withConst(Dual, D.eval(Dual, &g_x, &g_model, &g_inst, sim_state), &g_model, false);
+    \\    for (0..n_u) |i| for (0..n_u) |j| {
+    \\        a[i][j] = .init(r[i].d[j], 0.0);
+    \\    };
+    \\    if (comptime @hasDecl(D, "q")) {
+    \\        const qq = withConst(Dual, qRowsOf(Dual, &g_x, &g_model, &g_inst), &g_model, true);
+    \\        for (0..n_u) |i| for (0..n_u) |j| {
+    \\            a[i][j].im += w * qq[i].d[j];
+    \\        };
+    \\    }
+    \\    if (comptime @hasDecl(D, "ac_dyn_slots")) {
+    \\        var dyn: [D.ac_dyn_slots.len]C = undefined;
+    \\        D.acDyn(f64, &g_model, &g_inst, &g_x, sim_state, w, &dyn);
+    \\        for (D.ac_dyn_slots, dyn) |s, v| a[s / n_u][s % n_u] = a[s / n_u][s % n_u].add(v);
+    \\    }
+    \\    if (comptime @hasDecl(D, "ac_gens")) {
+    \\        const ph = D.acStim(Val, g_x, &g_model, &g_inst, sim_state);
+    \\        for (D.ac_gens, ph) |g, p| {
+    \\            const v = C.init(p.mag * @cos(p.phase), p.mag * @sin(p.phase));
+    \\            b[g.row] = b[g.row].sub(v);
+    \\            // row == col: a branch to ground, which has no row.
+    \\            if (g.col != g.row) b[g.col] = b[g.col].add(v);
+    \\        }
+    \\    }
+    \\    for (0..n_u) |i| if (g_forced[i] != null) {
+    \\        a[i] = @splat(.init(0.0, 0.0));
+    \\        a[i][i] = .init(1.0, 0.0);
+    \\        b[i] = .init(0.0, 0.0);
+    \\    };
+    \\    // Gaussian elimination with partial pivoting; `luSolve`'s rule for
+    \\    // what is usable, relative to the largest entry.
+    \\    var big: f64 = 0.0;
+    \\    for (a) |row| for (row) |e| {
+    \\        big = @max(big, e.magnitude());
+    \\    };
+    \\    const eps = 1e-14 * big;
+    \\    var used: [n_u]bool = @splat(false);
+    \\    var pivot: [n_u]?usize = @splat(null);
+    \\    var any = false;
+    \\    for (0..n_u) |k| {
+    \\        var best: ?usize = null;
+    \\        var best_v: f64 = eps;
+    \\        for (0..n_u) |i| if (!used[i] and a[i][k].magnitude() > best_v) {
+    \\            best = i;
+    \\            best_v = a[i][k].magnitude();
+    \\        };
+    \\        const p = best orelse continue;
+    \\        used[p] = true;
+    \\        pivot[k] = p;
+    \\        any = true;
+    \\        for (0..n_u) |i| if (i != p and a[i][k].magnitude() != 0.0) {
+    \\            const f = a[i][k].div(a[p][k]);
+    \\            for (0..n_u) |j| a[i][j] = a[i][j].sub(f.mul(a[p][j]));
+    \\            b[i] = b[i].sub(f.mul(b[p]));
+    \\        };
+    \\    }
+    \\    for (0..n_u) |k| {
+    \\        const x = if (pivot[k]) |p| b[p].div(a[p][k]) else C.init(0.0, 0.0);
+    \\        re[k] = x.re;
+    \\        im[k] = x.im;
+    \\    }
+    \\    return any or n_u == 0;
     \\}
     \\const n_rows = if (@hasDecl(D, "vpiContribs")) D.vpi_contrib_access.len else 0;
     \\export fn vera_vpi_n_rows() callconv(.c) usize {
@@ -1286,6 +1400,19 @@ pub const mixed_body =
     \\/// the continuous context as an integer. §7.3.2: "It is an error if these
     \\/// operands return x or z bit values when solved" — and a solve is exactly
     \\/// where this is read, so an x or z bit fails the run by name.
+    \\/// VAMS §7.3.1 word `k` (bits 32k to 32k + 31) of a `reg` input wider
+    \\/// than 32 bits, exact at any width (`mixedInput` passes an f64).
+    \\fn mixedWord(dig: *sim.digital.Run, slot: u32, name: []const u8, k: u32) i64 {
+    \\    const v = dig.values[slot];
+    \\    if (v.hasUnknown()) {
+    \\        std.debug.print("{s}: FAIL §7.3.2: the discrete input `{s}` holds an x or z bit when the analog block reads it\n", .{ title, name });
+    \\        std.process.exit(1);
+    \\    }
+    \\    const words = v.values();
+    \\    const w64: u64 = if (k / 2 < words.len) words[k / 2] else 0;
+    \\    return @intCast((w64 >> @intCast(32 * (k % 2))) & 0xffff_ffff);
+    \\}
+    \\
     \\fn mixedInput(dig: *sim.digital.Run, slot: u32, name: []const u8) f64 {
     \\    // Table 7-1's real row: "no conversion".
     \\    if (dig.reals.contains(slot)) return @bitCast(dig.values[slot].values()[0]);
@@ -1321,7 +1448,7 @@ pub const mixed_body =
     \\/// or an analog variable a digital expression reads, its `Instance` field,
     \\/// whether no event statement assigns it (`free`), and its §7.3.6.1
     \\/// assignment count's field (`count`).
-    \\const Port = struct { name: []const u8, field: []const u8, xz: ?[]const u8 = null, free: bool = false, count: ?[]const u8 = null };
+    \\const Port = struct { name: []const u8, field: []const u8, xz: ?[]const u8 = null, free: bool = false, count: ?[]const u8 = null, word: ?u32 = null };
     \\
     \\/// Some digital expression reads a free continuous variable.
     \\const has_free_reads = for (a2d_ports) |p| {

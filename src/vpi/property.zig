@@ -287,7 +287,7 @@ pub const vpiEndFrequency: c_int = 746;
 /// So it answers only inside a callback of an analog system task or function
 /// (`systf.active`). There the five properties are the analysis's
 /// (`analog_run.analysis`), asked of a NULL object; with no analysis, or for
-/// the AC-only frequencies, the answer is the error.
+/// the AC-only frequencies outside an AC sweep, the answer is the error.
 pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
     if (refused("vpi_get_real")) return @floatFromInt(vpiUndefined);
     const undef: f64 = @floatFromInt(vpiUndefined);
@@ -315,7 +315,7 @@ pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
                 vpiTransientMaxStep => a.max_step,
                 // §12.18 "for the start/end frequency of AC analysis": a
                 // transient or operating point has none.
-                else => {
+                else => if (a.kind == .ac) (if (prop == vpiStartFrequency) a.fstart else a.fstop) else {
                     fail("NOANALYSIS", "vpi_get_real: property {d} is an AC analysis's, and none is running", .{prop});
                     return undef;
                 },

@@ -766,11 +766,8 @@ const VpiRun = struct {
     refuse: ?[]const u8 = null,
 };
 
-/// Not here, each for a reason outside the routine it exercises:
-///   p03_07/90, p02_11  an analog system TASK whose calltf writes an output
-///           argument (§12.22.2's $resistor): the device calls user system
-///           FUNCTIONS only (`contract.SystfHost` returns one value)
-///   p03_09  an `ac` analysis: no small-signal solve runs in this process
+/// Every `.c` fixture under tests/fixtures runs here except
+/// ch11_vpi/vpi_app.c, the acceptance test `test-vpi` runs above.
 const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p06_01_specify_objects.c",
@@ -1254,6 +1251,35 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ch12_vpi_routines/b7_calltf_sites.c",
         .design = "tests/fixtures/ch12_vpi_routines/b7_two_sites.va",
         .stdout = "b7-calltf-sites: sites=2 v=2\n",
+    },
+    // §12.22.2 an analog system task's output arguments (#20).
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_11_systf_analog.c",
+        .design = "tests/fixtures/ch11_vpi/p02_analog.va",
+        .stdout = "p02: 11_systf_analog checks=35\n",
+    },
+    // Every assertion but the last passes; c1's own flow shares a row with
+    // i1's (the fixture's KNOWN GAP).
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_07_derivtf_partials.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_systf_devices.va",
+        .xfail = "vpi_get_analog_value(vpiRealVal) unexpectedly set an error: SHARED",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_90_reject_underivative_handle.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_systf_devices.va",
+        .stdout = "p03-90: declared=1 undeclared=0 undeclared_wrt_param=0 put_null=0 errs=3 vres=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_95_task_output_jacobian.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_cube_solve.va",
+        .stdout = "p03-95: v=1 dcube=12 refused=1\n",
+    },
+    // §12.8/§12.10 an `ac` sweep (#20).
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_09_ac_freq_and_imaginary.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_rc_ac.va",
+        .stdout = "p03-09: f_dc=0 f_ac=1000 re=500 im=-500 dc_re=0\n",
     },
 };
 

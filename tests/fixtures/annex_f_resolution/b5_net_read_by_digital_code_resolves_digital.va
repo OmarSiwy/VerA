@@ -37,7 +37,6 @@
 //! lrm 7.6
 //! lrm 7.8.4
 //! solve
-//! xfail n now resolves discrete and the a2d is inserted, but the inserted connect module's `reg cm` lands on n's flat name and is refused as a second declaration of n (E0362, reported at `reg cm`)
 `include "check.vh"
 
 connectmodule b5_nrd_a2d(el, cm);

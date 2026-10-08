@@ -523,6 +523,95 @@ pub fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
     }
 }
 
+/// §2.9.2's `desc` and `units` on the device module's own module-scope
+/// declarations, into `Lowered.decl_meta` (`contract.DeclMeta`): parameters
+/// (§3.4.3), variables (§3.2.1's output variables), then nets and ports
+/// (§3.6.3.1, `desc` only: §2.9.2 gives `units` to parameters and variables).
+/// A named block's declarations "shall be ignored" (§3.2.1, §3.4.3) and live
+/// in the block, not in `module`; a flattened child's carry its instance path
+/// (`Elaborate.sep`) and are not the device's own. Runs after
+/// `checkAttributes`, so a value that is not a string was already refused
+/// (E0358) and is skipped here.
+pub fn collectDeclMeta(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // Declaration token -> its last `desc` and `units` spec. "Last" is source
+    // order (§2.9), not binding order: a declaration list copies an earlier
+    // prefix after a later one was parsed.
+    var last: std.AutoHashMapUnmanaged(u32, MetaSpecs) = .empty;
+    for (self.file.attributes.items) |b| {
+        if (b.owner.kind != .declaration) continue;
+        for (b.specs) |s| {
+            const n = self.file.str(s.name);
+            const is_desc = std.mem.eql(u8, n, "desc");
+            if (!is_desc and !std.mem.eql(u8, n, "units")) continue;
+            const g = try last.getOrPut(self.arena, b.owner.tok);
+            if (!g.found_existing) g.value_ptr.* = .{};
+            laterSpec(if (is_desc) &g.value_ptr.desc else &g.value_ptr.units, s);
+        }
+    }
+    if (last.count() == 0) return;
+    for (module.params) |p| try metaRow(self, &last, .parameter, p.name, &.{p.main_tok});
+    for (module.vars) |v| try metaRow(self, &last, .variable, v.name, &.{v.main_tok});
+    // A port typed by a later net declaration owns both lines' prefixes
+    // (`parseNetNames`); a port or net declared twice is one row whose
+    // tokens are every declaration of the name.
+    var toks: std.ArrayList(u32) = .empty;
+    var seen: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    for (module.ports) |p| {
+        if ((try seen.getOrPut(self.arena, p.name)).found_existing) continue;
+        toks.clearRetainingCapacity();
+        try toks.append(self.arena, p.main_tok);
+        for (module.nets) |n| if (n.name == p.name) try toks.append(self.arena, n.main_tok);
+        try metaRow(self, &last, .net, p.name, toks.items);
+    }
+    for (module.nets) |n| {
+        if ((try seen.getOrPut(self.arena, n.name)).found_existing) continue;
+        toks.clearRetainingCapacity();
+        // ponytail: O(nets²) over one module's nets; a map by name when a
+        // device declares thousands.
+        for (module.nets) |m| if (m.name == n.name) try toks.append(self.arena, m.main_tok);
+        try metaRow(self, &last, .net, n.name, toks.items);
+    }
+}
+
+const MetaSpecs = struct { desc: ?Ast.NatureAttr = null, units: ?Ast.NatureAttr = null };
+
+/// Keeps in `slot` whichever of it and `s` comes later in the source.
+fn laterSpec(slot: *?Ast.NatureAttr, s: Ast.NatureAttr) void {
+    if (slot.* == null or slot.*.?.main_tok < s.main_tok) slot.* = s;
+}
+
+/// Appends the `decl_meta` row of declaration `name`, whose declarations sit
+/// at `toks`, when one of them carries a string `desc` or `units`.
+fn metaRow(
+    self: *Lower,
+    last: *const std.AutoHashMapUnmanaged(u32, MetaSpecs),
+    kind: @FieldType(Lower.DeclMeta, "kind"),
+    name_id: Ast.StrId,
+    toks: []const u32,
+) Oom!void {
+    const name = self.file.str(name_id);
+    if (std.mem.indexOfScalar(u8, name, Elaborate.sep) != null) return;
+    var specs: MetaSpecs = .{};
+    for (toks) |t| if (last.get(t)) |l| {
+        if (l.desc) |s| laterSpec(&specs.desc, s);
+        if (l.units) |s| laterSpec(&specs.units, s);
+    };
+    const desc = metaString(self, specs.desc);
+    const units = if (kind == .net) null else metaString(self, specs.units);
+    if (desc == null and units == null) return;
+    try self.out.decl_meta.append(self.arena, .{ .kind = kind, .name = name, .desc = desc, .units = units });
+}
+
+/// The folded string of `spec`, or null when absent or not a string.
+fn metaString(self: *Lower, spec: ?Ast.NatureAttr) ?[]const u8 {
+    const s = spec orelse return null;
+    if (s.value == .none) return null; // §2.9's implicit 1, E0358
+    return switch (lower_constfold.constEval(self, s.value) orelse return null) {
+        .str => |v| v,
+        else => null, // else: E0358 already refused a value that is not a string
+    };
+}
+
 /// `"a", "b" or "c"` — the LRM's own listing style, for E0358's help line.
 fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u8 {
     var out: std.ArrayList(u8) = .empty;

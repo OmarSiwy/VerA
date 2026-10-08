@@ -125,10 +125,10 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     return 0;
 }
 
-/// The banner's `*! analysis <op | tran <start> <stop> [<max step>]>`, one
-/// per line, run in order. Numbers take SPICE's scale suffixes, as the
-/// banners write them (`tran 0 5m`). An `ac` line is refused: no small-signal
-/// analysis runs in this process.
+/// The banner's `*! analysis <op | tran <start> <stop> [<max step>] |
+/// ac <fstart> <fstop> <points>>`, one per line, run in order. Numbers take
+/// SPICE's scale suffixes, as the banners write them (`tran 0 5m`). An `ac`
+/// sweep's points are evenly spaced, both ends included.
 fn readAnalyses(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const vpi.analog_run.Analysis {
     const text = try Io.Dir.cwd().readFileAlloc(io, c_path, arena, .limited(1 << 20));
     var out: std.ArrayList(vpi.analog_run.Analysis) = .empty;
@@ -145,6 +145,12 @@ fn readAnalyses(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const v
             const stop = try spiceNumber(words.next() orelse return error.BadAnalysis);
             const step = if (words.next()) |w| try spiceNumber(w) else 0;
             try out.append(arena, .{ .kind = .tran, .start = start, .stop = stop, .max_step = step });
+        } else if (std.mem.eql(u8, kind, "ac")) {
+            const fstart = try spiceNumber(words.next() orelse return error.BadAnalysis);
+            const fstop = try spiceNumber(words.next() orelse return error.BadAnalysis);
+            const points = try std.fmt.parseInt(u32, words.next() orelse return error.BadAnalysis, 10);
+            if (points == 0 or fstart <= 0 or fstop < fstart) return error.BadAnalysis;
+            try out.append(arena, .{ .kind = .ac, .fstart = fstart, .fstop = fstop, .points = points });
         } else return error.UnsupportedAnalysis;
     }
     return out.items;
