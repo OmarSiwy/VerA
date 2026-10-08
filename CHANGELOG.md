@@ -4,6 +4,30 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+## v1.1.0 — 2026-10-08
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2573 / 2575 — 99.9%** | 2 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 2 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **377 / 808 — 46.7%** | 1 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 430 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| **D** — `ARCHITECTURE.md` §6 phases landed | **9 / 9** (hand-entered: `git show 297e97d^:ARCHITECTURE.md` §6 and §8, read 2026-10-08 against the tree. Phases 0, 1, 3, 4, 5, 6 and 8 are at their planned paths (phase 0's golden step is `zig build golden`; its `support/contract.zig` is `tools/contract.zig` per §8; phase 4 is `lib/backend/codegen/plan/`, phase 5's float concern `lib/backend/codegen/float/`, phase 6's `Lowered` `lib/ir/lower/tables.zig`, phase 8 `src/sim/digital/`). Phase 2's `proof/domain.zig` and `proof/interval.zig` landed as `lib/ir/proof/lattice.zig`. Phase 7: `src/cli/args.zig` is present; `diag/report.zig` and `vpi/entry.zig` are not separate files, and `AGENTS.md` §1 records §4.7's remainder as measured and declined) | 0 | architecture review required |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **1** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them. D is
+hand-entered against its source document; if you change it, say which document
+you read.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
 - Fix: a port connection's bit- or part-select is checked against the net's declared range: out of range or reversed is E0352, a select of a scalar or undeclared net is E0351 (both were an incidental E0337 on a phantom net); `+:`/`-:` selects and a vector net inside a concatenation (`{b, x}`) connect; a width mismatch is one E0925 (6.5.7.1), no longer E0906 plus errors on the child's port (#28).
 - Fix: VPI analog (§12.10): the flow of an instance's unnamed branch over a node pair other instances also drive is that instance's own share of the summed row, no longer refused SHARED; a device built with `Options.vpi_contribs` publishes the shares as the optional `vpiShares`/`vpi_share_row` (`Lowered.contrib_shares`). A flow source's flow in a transient now includes the time derivative of its reactive half, which `vpiContribs` reported as 0, and the flow of a named branch another instance contributes to (§5.6.8.2) reads its row instead of SHARED. `p03_07_derivtf_partials.c` passes; `p03_13_reactive_branch_flow.c` is new (#20).
 - Fix: a `.v` executable built with `--state=2` (`--two-state`) whose runtime reads a watched select's bits (`State.bits`) compiles; it failed with "variable of type 'comptime_int' must be const or comptime" (found by the book's `digital/xstate2` transcript) (#27).
