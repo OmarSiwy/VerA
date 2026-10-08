@@ -68,8 +68,8 @@ jobs:
       # parses the TSV and the name list below comes from the prose.
       # Measure A. The suite binary is run directly: the build runner truncates
       # a failed step's output (AGENTS.md §0 rule 3), and --strict exits 1
-      # while any XFAIL remains. FAIL and unasserted must be 0; the XFAIL
-      # names are gated against specification/known-gaps.txt below.
+      # while any XFAIL remains. FAIL and unasserted must be 0; every verdict,
+      # XFAILs included, is gated by name by the verdict ratchet below.
       - name: Verilog-AMS suite — every fixture, strict (measure A)
         run: |
           cmd=$(zig build benchmark -- --strict zzz-none 2>&1 | grep '^failed command:' | sed 's/^failed command: //')
@@ -97,14 +97,6 @@ jobs:
         run: |
           zig build test-1364 -- --coverage 2>&1 | tee /tmp/coverage1364.txt
           exit "${PIPESTATUS[0]}"
-
-      # The known gaps by name (AGENTS.md §0 rule 3): a new XFAIL or one-way
-      # clause fails, and so does a fixed one until its line is deleted.
-      - name: Known gaps match specification/known-gaps.txt
-        if: always()
-        run: |
-          tools/known_gaps.sh /tmp/strict.err /tmp/coverage.txt /tmp/coverage1364.txt > failing-names.txt
-          diff -u specification/known-gaps.txt failing-names.txt
 
       - name: IEEE 1364-2005 suite
         if: always()
@@ -187,7 +179,6 @@ jobs:
         with:
           name: suite-logs
           path: |
-            failing-names.txt
             /tmp/strict.txt
             /tmp/coverage.txt
             /tmp/coverage1364.txt
