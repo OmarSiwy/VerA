@@ -1,9 +1,10 @@
 //! L10 fault injection: `checkAllAllocationFailures` over
 //! `compileSourceOpts`, `.lint` on one small positive fixture per chapter and
 //! annex directory, `.build` through codegen on two. Each test fails the n-th
-//! allocation for every n the clean compile makes. That is 17-23 sites per
-//! compile (measured 2026-10-08): `BigArena` takes its small blocks from the
-//! gpa in chunks, so a failure lands on whichever allocation grew the arena.
+//! allocation for every n the clean compile makes, over an allocator that
+//! never grows a block in place (`no_grow`), so the count is the same every
+//! run. `BigArena` takes its small blocks from the gpa in chunks, so a
+//! failure lands on whichever allocation grew the arena.
 //!
 //! Oracle: the induced failure surfaces as `error.OutOfMemory` (a success is
 //! `SwallowedOutOfMemoryError`, a diagnostic turned refusal escapes as
@@ -34,14 +35,43 @@ fn compileOne(gpa: std.mem.Allocator, src: []const u8, target: vera.Target) !voi
     }
 }
 
+/// `std.testing.allocator` with every in-place growth refused. An arena grows
+/// its block in place when the pages after it happen to be free (the backing
+/// allocator's `rawResize`; on Linux an `mremap` without MAYMOVE), so whether
+/// a compile allocates 19 or 20 times depended on the address space
+/// (2026-10-08: {19, 20, 19} over three clean compiles of one fixture).
+/// Refused, every growth allocates, and the count is the same every run.
+const no_grow: std.mem.Allocator = .{ .ptr = undefined, .vtable = &.{
+    .alloc = struct {
+        fn f(_: *anyopaque, n: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+            return std.testing.allocator.rawAlloc(n, a, ra);
+        }
+    }.f,
+    .resize = struct {
+        fn f(_: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) bool {
+            return n <= m.len and std.testing.allocator.rawResize(m, a, n, ra);
+        }
+    }.f,
+    .remap = struct {
+        fn f(_: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) ?[*]u8 {
+            return if (n <= m.len) std.testing.allocator.rawRemap(m, a, n, ra) else null;
+        }
+    }.f,
+    .free = struct {
+        fn f(_: *anyopaque, m: []u8, a: std.mem.Alignment, ra: usize) void {
+            std.testing.allocator.rawFree(m, a, ra);
+        }
+    }.f,
+} };
+
 fn oom(comptime path: []const u8, target: vera.Target) !void {
     const src = @embedFile("fixtures/" ++ path);
     // The sweep assumes every clean compile makes the same allocations; say
-    // so by count when one does not (macOS CI, annex_g 23, 2026-10-08),
-    // rather than as std's bare NondeterministicMemoryUsage.
+    // so by count when one does not, rather than as std's bare
+    // NondeterministicMemoryUsage.
     var counts: [3]usize = undefined;
     for (&counts) |*c| {
-        var fa: std.testing.FailingAllocator = .init(std.testing.allocator, .{});
+        var fa: std.testing.FailingAllocator = .init(no_grow, .{});
         try compileOne(fa.allocator(), src, target);
         c.* = fa.alloc_index;
     }
@@ -49,7 +79,7 @@ fn oom(comptime path: []const u8, target: vera.Target) !void {
         std.debug.print("oom {s}: three clean compiles allocate {any} times\n", .{ path, counts });
         return error.NondeterministicMemoryUsage;
     }
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, compileOne, .{ src, target });
+    try std.testing.checkAllAllocationFailures(no_grow, compileOne, .{ src, target });
 }
 
 test "OOM .lint ch01_intro" {
