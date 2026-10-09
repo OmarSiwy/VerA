@@ -1,5 +1,6 @@
-//! The analog model (§11.6): `Lowered`, an elaborated and flattened design,
-//! -> a `Design`. The scope tree is elaboration's (`Lowered.unit_paths`), a
+//! The analog model (§11.6): a `CompileResult`, an elaborated and flattened
+//! design, -> a `Design`. The scope tree is elaboration's
+//! (`CompileResult.unit_paths`, with the AST beside `Lowered`), a
 //! flat declaration belongs to the scope its §6.7 path names, and the analog
 //! classes (§11.6.2, §11.6.5-§11.6.7) and behaviour (§11.6.20/§11.6.21) come
 //! after the declarations. Everything is copied into `Design.arena`, so the
@@ -13,6 +14,7 @@ const Ast = @import("frontend").Ast;
 const Elaborate = @import("ir").Elaborate;
 const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
+const CompileResult = @import("vera").CompileResult;
 const attributes = @import("../attributes.zig");
 const code = @import("../code.zig");
 const model = @import("../model.zig");
@@ -29,12 +31,13 @@ const joinPath = model.joinPath;
 const lastComponent = model.lastComponent;
 const nameTable = model.nameTable;
 
-/// Builds the analog model over `lowered`, whose `module` must be the
+/// Builds the analog model over `res`, whose `module` must be the
 /// elaborated top (`error.NotElaborated` otherwise). The returned `Design`
-/// owns every string and slice it reports (`Design.arena`); `lowered` may be
+/// owns every string and slice it reports (`Design.arena`); `res` may be
 /// freed once this returns. Caller owns the result and frees it with
 /// `Design.deinit`. `model_gpa` holds the `Design`'s tables.
-pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
+pub fn build(model_gpa: std.mem.Allocator, res: *const CompileResult) Error!Design {
+    const lowered = res.lowered;
     var d: Design = .{
         .gpa = model_gpa,
         .arena = .init(model_gpa),
@@ -54,17 +57,17 @@ pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design
     defer scratch.deinit();
     const gpa = scratch.allocator();
 
-    const file = lowered.file;
-    const flat = lowered.module orelse return error.NotElaborated;
+    const file = res.file;
+    const flat = res.module orelse return error.NotElaborated;
     const top_name = try arena.dupe(u8, file.str(flat.name));
 
     // --- the scope tree ----------------------------------------------------
     // §11.6.1's `vpiInternalScope`, read from elaboration rather than walked
-    // again: `Lowered.unit_paths` is one row per inlined instance, depth first
+    // again: `CompileResult.unit_paths` is one row per inlined instance, depth first
     // in source order, with the definition it came from (`vpiDefName`).
     // Instance arrays, §6.4.2 paramsets and Annex E.2.1 were decided there. A
     // tree of one publishes no rows, so it is its own single row.
-    const units = if (lowered.unit_paths.len != 0) lowered.unit_paths else &[_]Elaborate.UnitPath{
+    const units = if (res.unit_paths.len != 0) res.unit_paths else &[_]Elaborate.UnitPath{
         .{ .module = top_name, .path = "", .decl = flat },
     };
     var scopes: std.ArrayList(Building) = try .initCapacity(gpa, units.len);
@@ -223,9 +226,9 @@ pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design
             } else null,
         });
     }
-    const analog = try addAnalog(gpa, arena, &objects, scopes.items, &by_path, lowered, top_name);
+    const analog = try addAnalog(gpa, arena, &objects, scopes.items, &by_path, res, top_name);
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
-    try addAnalogCode(gpa, arena, &objects, scopes.items, lowered, top_name);
+    try addAnalogCode(gpa, arena, &objects, scopes.items, res, top_name);
 
     try freeze(&d, &objects, scopes.items);
     d.disciplines = analog.disciplines;
@@ -247,11 +250,12 @@ fn addAnalog(
     objects: *model.Rows,
     scopes: []Building,
     by_path: *const std.StringHashMapUnmanaged(u32),
-    lowered: *const Lowered,
+    res: *const CompileResult,
     top_name: []const u8,
 ) Error!struct { disciplines: []const u32, natures: []const u32 } {
-    const file = lowered.file;
-    const flat = lowered.module.?;
+    const lowered = res.lowered;
+    const file = res.file;
+    const flat = res.module.?;
 
     // --- natures: one object each, then the vpiParent edge and its inverse.
     const natures = try arena.alloc(u32, file.natures.len);
@@ -377,8 +381,8 @@ fn addAnalog(
     for (flat.branches) |b| {
         const flat_name = file.str(b.name);
         const split = (try splitPath(arena, by_path, flat_name)) orelse continue;
-        const pos = try terminalNode(objects, &net_at, arena, lowered, top_name, b.hi);
-        const neg = if (b.lo == .none) null else try terminalNode(objects, &net_at, arena, lowered, top_name, b.lo);
+        const pos = try terminalNode(objects, &net_at, arena, res, top_name, b.hi);
+        const neg = if (b.lo == .none) null else try terminalNode(objects, &net_at, arena, res, top_name, b.lo);
         const disc = if (pos) |p| objects.coldOf(p).disc else null;
         const at: u32 = @intCast(objects.hot.items.len);
         const full = try joinPath(arena, top_name, flat_name);
@@ -432,9 +436,9 @@ fn addAnalog(
             bc.flow_unknowable = bc.flow_unknowable or twice;
             continue;
         }
-        try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, node_of_row, c, idx, c.unit);
+        try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, res, node_of_row, c, idx, c.unit);
         for (lowered.contrib_sharers.items) |sh| {
-            if (sh.row == idx) try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, node_of_row, c, idx, sh.unit);
+            if (sh.row == idx) try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, res, node_of_row, c, idx, sh.unit);
         }
     }
     return .{ .disciplines = disciplines, .natures = natures };
@@ -455,15 +459,16 @@ fn unnamedBranch(
     scopes: []Building,
     unnamed: *std.AutoHashMapUnmanaged(UnnamedKey, u32),
     by_path: *const std.StringHashMapUnmanaged(u32),
-    lowered: *const Lowered,
+    res: *const CompileResult,
     node_of_row: []const ?u32,
     c: Lower.Contribution,
     idx: u32,
     unit: u32,
 ) Error!void {
+    const lowered = res.lowered;
     {
-        const scope: u32 = if (unit < lowered.unit_paths.len)
-            by_path.get(std.mem.trimEnd(u8, lowered.unit_paths[unit].path, &.{Elaborate.sep})) orelse 0
+        const scope: u32 = if (unit < res.unit_paths.len)
+            by_path.get(std.mem.trimEnd(u8, res.unit_paths[unit].path, &.{Elaborate.sep})) orelse 0
         else
             0;
         const g = try unnamed.getOrPut(gpa, .{ .scope = scope, .hi = c.hi, .lo = c.lo });
@@ -549,11 +554,12 @@ fn terminalNode(
     objects: *const model.Rows,
     net_at: *const std.StringHashMapUnmanaged(u32),
     arena: std.mem.Allocator,
-    lowered: *const Lowered,
+    res: *const CompileResult,
     top_name: []const u8,
     e: Ast.ExprId,
 ) Error!?u32 {
-    const file = lowered.file;
+    const lowered = res.lowered;
+    const file = res.file;
     if (file.exprs.tag(e) != .ident) return null;
     const name = file.str(file.exprs.strOf(e));
     const denoted = lowered.hier_names.get(name) orelse name;
@@ -569,10 +575,11 @@ fn addAnalogCode(
     arena: std.mem.Allocator,
     objects: *model.Rows,
     scopes: []Building,
-    lowered: *const Lowered,
+    res: *const CompileResult,
     top_name: []const u8,
 ) Error!void {
-    const flat = lowered.module.?;
+    const lowered = res.lowered;
+    const flat = res.module.?;
     var an: code.Builder.Analog = .{ .lowered = lowered };
     defer an.branches.deinit(gpa);
     defer an.flow_access.deinit(gpa);
@@ -587,10 +594,10 @@ fn addAnalogCode(
     defer names.deinit(gpa);
     var decls: model.Decls = try .init(gpa, objects.hot.items, scopes.len);
     defer decls.deinit(gpa);
-    var attrs: attributes.ByOwner = try .init(gpa, lowered.file);
+    var attrs: attributes.ByOwner = try .init(gpa, res.file);
     defer attrs.deinit(gpa);
     for (scopes, 0..) |*s, i| {
-        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an, .attrs = &attrs };
+        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = res.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an, .attrs = &attrs };
         try b.attributes(@intCast(i), .{ .kind = .declaration, .tok = s.decl.main_tok }, true);
         for (decls.of(i)) |at|
             try b.attributes(at, .{ .kind = .declaration, .tok = objects.hot.items[at].src_tok }, false);

@@ -115,10 +115,10 @@ pub const Harness = struct {
         out.file.builtin_modules = Preprocessor.spice_module_count;
         // `directives` as `root.compile` passes them: a §10.3
         // `default_transition` reaches §4.5.8 only through it.
-        out.lowered = try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{
+        out.lowered = (try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{
             .param_overrides = over,
             .directives = pp.directives,
-        });
+        })).lowered;
     }
 
     fn gen(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {

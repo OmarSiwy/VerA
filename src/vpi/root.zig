@@ -1,6 +1,6 @@
 //! The VPI object model and its C routines (LRM §11.6, §12.2-§12.35,
 //! §12.33.2): an elaborated flat design, read back as its instance tree
-//! (`Lowered.unit_paths`, `hier_names`) -> one fixed array of `Obj` rows that
+//! (`CompileResult.unit_paths`, `hier_names`) -> one fixed array of `Obj` rows that
 //! every `vpiHandle` points into.
 //!
 //! The spine, in the order a host drives it:
@@ -687,13 +687,13 @@ pub var design: ?Design = null;
 /// Builds the object model over one elaborated design and installs it,
 /// closing any previous one.
 ///
-/// `lowered` is what `Lower.lowerFile` produced: `lowered.module` is the
-/// elaborated top (`Elaborate.Design.top`) and `lowered.hier_names` its §6.7
-/// path table. Everything read out of it is copied, so the caller may free its
-/// `CompileResult` the moment this returns.
-pub fn open(gpa: std.mem.Allocator, lowered: *const Lowered) !void {
+/// `res` is what `vera.compileSource` produced: `res.module` is the
+/// elaborated top (`Elaborate.Design.top`), `res.file` its AST and
+/// `res.lowered.hier_names` its §6.7 path table. Everything read out of it is
+/// copied, so the caller may free the `CompileResult` the moment this returns.
+pub fn open(gpa: std.mem.Allocator, res: *const @import("vera").CompileResult) !void {
     if (design != null) close();
-    design = try analog_model.build(gpa, lowered);
+    design = try analog_model.build(gpa, res);
 }
 
 /// Frees the installed model and resets every sibling registry (run,

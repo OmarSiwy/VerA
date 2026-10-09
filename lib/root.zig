@@ -197,6 +197,16 @@ pub const CompileResult = struct {
     /// Lowering's output. The `Lower` that built it is gone: nothing after
     /// stage 4 can reach a symbol table, a scope or the SSA builder.
     lowered: *const Lowered,
+    /// The parsed and elaborated AST (arena), which `lowered` does not hold:
+    /// the VPI's object model (`vpi.open`) walks it, and no compiler stage
+    /// after lowering reads it.
+    file: *const Ast.SourceFile,
+    /// The module lowered (§6.2), elaboration's flattened top
+    /// (`Lower.Output.module`); null only if lowering never reached it.
+    module: ?*const Ast.ModuleDecl = null,
+    /// §9.15/§9.16 the module and instance path of each inlined analog
+    /// block, by `Ast.AnalogBlock.unit` (`Lower.Output.unit_paths`).
+    unit_paths: []const Elaborate.UnitPath = &.{},
     /// Its `unit_modes` slice is gpa-owned.
     verdict: proof.Verdict,
     /// What the caller asked for; `buildArtifact` refuses a `.lint` result.
@@ -424,7 +434,7 @@ fn lowerAndProve(
     const mir = try arena.create(Mir);
     mir.* = .{};
     const lowered = try arena.create(Lowered);
-    lowered.* = Lower.lower(arena, mir, file, text, starts, bag, .{
+    const out = Lower.lower(arena, mir, file, text, starts, bag, .{
         .directives = directives,
         .include_dirs = opts.include_dirs, // §9.21.1 a $table_model data file
         .param_overrides = opts.param_overrides, // §3.4 `--param`
@@ -439,6 +449,7 @@ fn lowerAndProve(
         },
         error.DiagnosticsReported => return error.CompileFailed,
     };
+    lowered.* = out.lowered;
 
     // The MIR's postcondition after each stage that writes it (Debug and
     // ReleaseSafe only). The proof and codegen take it `*const`.
@@ -475,6 +486,9 @@ fn lowerAndProve(
         .source = text,
         .mir = mir,
         .lowered = lowered,
+        .file = file,
+        .module = out.module,
+        .unit_paths = out.unit_paths,
         .verdict = verdict,
         .target = target,
         .nesting = nesting,

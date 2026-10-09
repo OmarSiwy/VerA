@@ -522,6 +522,18 @@ pub const Options = struct {
     int_systfs: []const []const u8 = &.{},
 };
 
+/// What `lower` returns: the tables every later stage reads, and the
+/// elaborated design (§6) only the VPI's object model walks
+/// (`vera.CompileResult` carries it), so `Lowered` holds no Ast.
+pub const Output = struct {
+    lowered: Lowered,
+    /// The module lowered (§6.2): elaboration's flattened top.
+    module: ?*const Ast.ModuleDecl,
+    /// §9.15/§9.16, indexed by `Ast.AnalogBlock.unit`: the module a block was
+    /// written in and the instance path it was inlined at (`Design.units`).
+    unit_paths: []const Elaborate.UnitPath,
+};
+
 /// Lowers `file` into the empty `mir`. Retains nothing: the SSA builder's map
 /// is gone on return, so everything returned lives in `arena`.
 /// Returns `error.DiagnosticsReported` when any error went to `bag`.
@@ -533,7 +545,7 @@ pub fn lower(
     tok_starts: []const u32,
     bag: *diag.Bag,
     opts: Options,
-) Error!Lowered {
+) Error!Output {
     var self = init(arena, mir, file, src, tok_starts, bag);
     self.directives = opts.directives;
     self.include_dirs = opts.include_dirs;
@@ -545,7 +557,8 @@ pub fn lower(
         self.deinit();
         assert(self.builder.dir.items.len == 0);
     }
-    return self.lowerFile();
+    const out = try self.lowerFile();
+    return .{ .lowered = out, .module = self.out.module, .unit_paths = self.out.unit_paths };
 }
 
 /// Elaborates the file (§6.2.2) into one flat module, then lowers it.

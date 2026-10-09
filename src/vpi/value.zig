@@ -1207,7 +1207,7 @@ test "§12.16: an analog parameter reads the value lowering folded" {
         \\endmodule
     , .lint);
     defer res.deinit();
-    try root.open(std.testing.allocator, res.lowered);
+    try root.open(std.testing.allocator, &res);
     defer root.close();
     var v: Value = std.mem.zeroes(Value);
     v.format = vpiRealVal;

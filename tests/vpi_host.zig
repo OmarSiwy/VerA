@@ -52,7 +52,7 @@ fn host(design: ?[]const u8, app: ?[]const u8) !u8 {
     };
     defer res.deinit();
 
-    try vpi.open(std.heap.page_allocator, res.lowered);
+    try vpi.open(std.heap.page_allocator, &res);
     defer vpi.close();
 
     // §12.33.2, then cbEndOfCompile: the acceptance test registers at
@@ -78,7 +78,7 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
         return 1;
     };
     defer res.deinit();
-    try vpi.open(gpa, res.lowered);
+    try vpi.open(gpa, &res);
     defer vpi.close();
 
     // The analyses the application asks for (`*! analysis` lines in its

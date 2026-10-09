@@ -46,7 +46,7 @@ const Harness = struct {
         // The annex E prelude came with `Preprocessor.process` (std_defs is on by
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
-        out.lowered = try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{});
+        out.lowered = (try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{})).lowered;
     }
 
     /// Run the prover against this harness's own bag, so a test can assert on

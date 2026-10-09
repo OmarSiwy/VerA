@@ -121,7 +121,7 @@ const nested_src =
 fn openSource(src: []const u8) !vera.CompileResult {
     var res = try vera.compileSource(std.testing.allocator, src, .lint);
     errdefer res.deinit();
-    try open(std.testing.allocator, res.lowered);
+    try open(std.testing.allocator, &res);
     return res;
 }
 
@@ -609,7 +609,7 @@ test "an instance resolved by Annex E.2.1's case-insensitive netlist match has i
         \\endmodule
     , .lint, .{ .spice_netlist = ".MODEL VERTNPN NPN BF=80 IS=1E-18\n" });
     defer res.deinit();
-    try open(std.testing.allocator, res.lowered);
+    try open(std.testing.allocator, &res);
     defer close();
 
     const q = try scopeAt("q");
@@ -648,7 +648,7 @@ test "the scopes are elaboration's units, one for one" {
     defer res.deinit();
     defer close();
 
-    const units = res.lowered.unit_paths;
+    const units = res.unit_paths;
     try std.testing.expectEqual(@as(usize, 7), units.len);
     try std.testing.expectEqual(units.len, root.design.?.scopes.len);
     for (units, root.design.?.scopes) |u, s| {
