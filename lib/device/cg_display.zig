@@ -1085,7 +1085,7 @@ fn decimalField(g: *Gen, v: Mir.Value) ?usize {
 /// -2^(bits-1) signed (its magnitude's digits plus the sign).
 fn fieldCols(r: WidthRecord) usize {
     assert(r.bits >= 1 and r.bits <= 64);
-    const most: u64 = if (r.signed) @as(u64, 1) << @intCast(r.bits - 1) else std.math.maxInt(u64) >> @intCast(64 - @as(u8, r.bits));
+    const most: u64 = if (r.signed) @as(u64, 1) << @intCast(r.bits - 1) else @as(u64, std.math.maxInt(u64)) >> @intCast(@as(u8, 64) - r.bits);
     const cols = std.math.log10_int(most) + 1 + @intFromBool(r.signed);
     assert(cols <= 20);
     return cols;
