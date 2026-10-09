@@ -23,8 +23,8 @@
 //! §9.15, §9.16, §9.17, §9.18, §9.19, §9.21, §10.3, §11.6.6, §11.6.7.
 
 const std = @import("std");
+const base = @import("base");
 const Ast = @import("frontend").Ast;
-const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
 const Mir = @import("mir.zig");
@@ -56,9 +56,9 @@ pub const ParamInfo = struct {
     source_width: ?u32 = null,
     source_signed: ?bool = null,
     default: Mir.Value,
-    /// §3.4.2 value ranges from `Ast.ParamDecl.ranges`; proof.zig uses them as
-    /// bound evidence.
-    ranges: []const Ast.ValueRange = &.{},
+    /// §3.4.2 value ranges from `Ast.ParamDecl.ranges`, bounds folded
+    /// (`Range`); proof.zig uses them as bound evidence.
+    ranges: []const Range = &.{},
     /// §3.4.5 localparam: not part of the model card ABI.
     is_local: bool = false,
     /// §3.4 the value under the declared defaults, folded over the AST. The
@@ -73,6 +73,24 @@ pub const ParamInfo = struct {
     /// which the device fixes at compile time. Codegen's `checkShape` refuses a card that moves it.
     /// Set by `lower_constfold.shapeEval`.
     shape: bool = false,
+};
+
+/// §3.4.2 one value range of a parameter (`Ast.ValueRange`), as the prover
+/// reads it: each bound folded over literals alone (`constfold.literal_env`,
+/// `lower_param.paramRanges`), so a bound written over another parameter,
+/// whose default the card can override, is no evidence.
+pub const Range = struct {
+    kind: enum(u8) { from, exclude },
+    /// The folded lower bound, or null: it does not fold over literals, it
+    /// folds to a string or a NaN, or the range is the string-set form.
+    lo: ?f64,
+    /// The folded upper bound under the same rule; a single-value `exclude`
+    /// has `lo`'s.
+    hi: ?f64,
+    lo_inclusive: bool = true,
+    hi_inclusive: bool = true,
+    /// A.2.5 `value_range_type '{ string {, string} }`: no numeric bounds.
+    strings: bool = false,
 };
 
 /// §3.4.7 one `aliasparam`: the alias's spelling and the `params` index it names.
@@ -146,6 +164,12 @@ pub const DeclMeta = struct {
     desc: ?[]const u8 = null,
     units: ?[]const u8 = null,
 };
+
+/// §2.9 one attribute_spec on a declaration (`decl_attrs`): the declaration's
+/// token, the attribute's name and its value folded over literals
+/// (`constfold.literal_env`), null when it does not fold. A spec written with
+/// no value is 1 (§2.9).
+pub const DeclAttr = struct { tok: u32, name: []const u8, value: ?Const };
 
 /// One `Lowered.system_checks` row: a §9.18 system parameter's name and kind,
 /// and its value lowered over the parameters.
@@ -688,6 +712,10 @@ pub const simparamIsRuntime = simparam.simparamIsRuntime;
 pub const simparamHostField = simparam.simparamHostField;
 /// The §9.15 simulation parameters a host supplies, in `Model` field order.
 pub const host_simparams = simparam.host_simparams;
+/// §10.3 one `default_transition event (`Preprocessor.DefaultTransition`).
+pub const DefaultTransition = base.Region(?f64);
+/// A `timescale's two operands, in seconds (`Preprocessor.Timescale`).
+pub const Timescale = base.Timescale;
 
 // Row budgets on a 64-bit host. Every table here is per module and short
 // (psp103: 847 params, 12 nodes, 18 contributions), so these pin today's
@@ -712,11 +740,26 @@ file: *const Ast.SourceFile,
 /// index can become a `diag.Span` (`tokenSpan`).
 src: []const u8 = "",
 tok_starts: []const u32 = &.{},
+/// Returns a token's byte range from `src` and `tok_starts`: the lexer's
+/// `tokenSpan`, which lowering sets, so `tokenSpan` re-lexes a token
+/// without `ir` importing the frontend. Diagnostics only (cold).
+token_span: *const fn (src: []const u8, starts: []const u32, tok: u32) diag.Span = &noTokens,
 /// The preprocessor's positional directive events (`Preprocessor.Directives`).
 /// Downstream reads two of them: §10.3's `default_transition (codegen's
 /// `transition()` default) and §9.15's `timescale (`simparamValue`, the
 /// testbench's mixed-signal time unit).
 directives: Preprocessor.Directives = .{},
+/// §10.3 the `default_transition events (`Preprocessor.Directives.transitions`),
+/// in text-stream order: codegen's `transition()` default at a call's offset.
+default_transitions: []const DefaultTransition = &.{},
+/// IEEE 1364 §19.8 the `timescale in force at the end of the stream
+/// (`Preprocessor.Directives.timescale`), or null: §9.15's `timeUnit` and
+/// `timePrecision`, and the testbench's mixed-signal time unit.
+timescale: ?Timescale = null,
+/// §2.9 every attribute_spec on a declaration, in source order (instance,
+/// then spec), over the whole file. `--emit-verilog` reads `vera_pin` and
+/// `vera_delay` from them.
+decl_attrs: []const DeclAttr = &.{},
 
 // ---- the elaborated hierarchy (§6), for the VPI -----------------------------
 /// The module being lowered (§6.2). Set by `lowerModule`.
@@ -894,7 +937,16 @@ system_checks: std.ArrayList(SystemCheck) = .empty,
 
 /// Returns the byte range of token `tok`, for a diagnostic.
 pub fn tokenSpan(self: *const Lowered, tok: u32) diag.Span {
-    return Lexer.tokenSpan(self.src, self.tok_starts, tok);
+    return self.token_span(self.src, self.tok_starts, tok);
+}
+
+/// `token_span` until lowering sets it: a `Lowered` with no token list
+/// (a test's) points every token at the end of `src`, as the lexer's
+/// `tokenSpan` does past its last token. Asserts that there is no list.
+fn noTokens(src: []const u8, starts: []const u32, tok: u32) diag.Span {
+    std.debug.assert(tok >= starts.len);
+    const end: u32 = @intCast(src.len);
+    return .{ .start = end, .end = end };
 }
 
 /// Returns the name codegen prints for a `nodes` row, or "gnd" for `ground`.
@@ -904,7 +956,7 @@ pub fn nodeName(self: *const Lowered, idx: u32) []const u8 {
 
 /// Returns the compile-time value of `$simparam(name)`, or null (LRM §9.15 Table 9-27).
 pub fn simparamValue(self: *const Lowered, name: []const u8) ?f64 {
-    return simparam.simparamValueIn(&self.directives, name);
+    return simparam.simparamValueIn(self.timescale, name);
 }
 
 /// Where a §9.15 `$simparam(name [, expression])` gets its value. One owner,

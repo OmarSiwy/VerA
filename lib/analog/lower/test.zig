@@ -173,7 +173,7 @@ test "lower: contribution splits into resistive and reactive parts" {
     try std.testing.expectEqual(@as(usize, 2), h.low.out.params.items.len);
     try std.testing.expectEqualStrings("r", h.low.out.params.items[0].name);
     try std.testing.expectEqual(@as(usize, 1), h.low.out.params.items[0].ranges.len);
-    try std.testing.expectEqual(Ast.ValueRange.Kind.from, h.low.out.params.items[0].ranges[0].kind);
+    try std.testing.expect(h.low.out.params.items[0].ranges[0].kind == .from);
 
     // §5.6.1.3 both `<+` statements accumulate into ONE target…
     try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);

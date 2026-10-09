@@ -8,7 +8,7 @@
 //! LRM clauses this file's code cites: §9.15.
 
 const std = @import("std");
-const Preprocessor = @import("frontend").Preprocessor;
+const Timescale = @import("base").Timescale;
 const Lowered = @import("lowered.zig");
 
 /// Returns the compile-time value of a §9.15 Table 9-27 simulation parameter, or
@@ -16,13 +16,13 @@ const Lowered = @import("lowered.zig");
 /// Codegen reads the same table, so a name is never both unknown and answered.
 /// Table 9-27 applies to simulators "if they support the parameter", so rows VerA
 /// cannot answer (`gdev`, `simulatorVersion`) stay unknown; run-time rows are in
-/// `simparamIsRuntime`. Takes the directives alone so `Lowered` can answer after
+/// `simparamIsRuntime`. Takes the `timescale in force alone so `Lowered` can answer after
 /// `Lower` is gone.
-pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const u8) ?f64 {
+pub fn simparamValueIn(timescale: ?Timescale, name: []const u8) ?f64 {
     const eq = std.mem.eql;
     // The two rows that come from the source; unknown when no `timescale was given.
-    if (eq(u8, name, "timeUnit")) return if (directives.timescale()) |t| t.unit else null;
-    if (eq(u8, name, "timePrecision")) return if (directives.timescale()) |t| t.precision else null;
+    if (eq(u8, name, "timeUnit")) return if (timescale) |t| t.unit else null;
+    if (eq(u8, name, "timePrecision")) return if (timescale) |t| t.precision else null;
     // `gmin` and `sourceScaleFactor` are host fields: a host steps both
     // (gmin stepping, source-stepping homotopy, Table 9-27's own rows), so
     // these are only the defaults of `Model.gmin__`/`source_scale__`.
@@ -76,14 +76,14 @@ pub fn simparamHostField(name: []const u8) ?[]const u8 {
 
 test simparamValueIn {
     // No `timescale: §9.15's two source rows are unknown.
-    const d: Preprocessor.Directives = .{};
-    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "timeUnit"));
-    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "timePrecision"));
-    try std.testing.expectEqual(@as(?f64, 1e-12), simparamValueIn(&d, "gmin"));
-    try std.testing.expectEqual(@as(?f64, 27.0), simparamValueIn(&d, "tnom"));
-    try std.testing.expectEqual(@as(?f64, 1.0), simparamValueIn(&d, "shrink"));
+    const d: ?Timescale = null;
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(d, "timeUnit"));
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(d, "timePrecision"));
+    try std.testing.expectEqual(@as(?f64, 1e-12), simparamValueIn(d, "gmin"));
+    try std.testing.expectEqual(@as(?f64, 27.0), simparamValueIn(d, "tnom"));
+    try std.testing.expectEqual(@as(?f64, 1.0), simparamValueIn(d, "shrink"));
     // Table 9-27 applies "if they support the parameter"; VerA does not.
-    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "gdev"));
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(d, "gdev"));
 }
 
 test simparamHostField {

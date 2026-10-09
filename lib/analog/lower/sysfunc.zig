@@ -259,7 +259,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const args = ex.args(e);
         if (args.len == 1) {
             if (lower_constfold.constEval(self, args[0])) |c| switch (c) {
-                .str => |s| if (simparamValueIn(&self.directives, s) == null and !simparamIsRuntime(s)) {
+                .str => |s| if (simparamValueIn(self.directives.timescale(), s) == null and !simparamIsRuntime(s)) {
                     var b = self.errWith(self.file.exprs.mainTok(e), .E0811);
                     b.msg("`\"{s}\"`", .{s});
                     b.note("$simparam(\"{s}\", <expression>) supplies the value to use instead, and §9.15 makes that form legal for any name", .{s});

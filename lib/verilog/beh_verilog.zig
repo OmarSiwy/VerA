@@ -45,8 +45,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Mir = @import("ir").Mir;
 const Lowered = @import("ir").Lowered;
-const constfold = @import("frontend").constfold;
-const Const = constfold.Const;
+const Const = Lowered.Const;
 
 /// What `emit` reads besides the model.
 pub const Options = struct {
@@ -114,22 +113,19 @@ const Emitter = struct {
         // Attributes on declarations, by declared name.
         var pin_attr: std.StringHashMapUnmanaged([]const u8) = .empty;
         var delay_attr: std.StringHashMapUnmanaged(f64) = .empty;
-        for (lw.file.attributes.items) |b| {
-            if (b.owner.kind != .declaration) continue;
-            const span = lw.tokenSpan(b.owner.tok);
+        for (lw.decl_attrs) |s| {
+            const span = lw.tokenSpan(s.tok);
             const decl = lw.src[span.start..span.end];
-            for (b.specs) |s| {
-                const an = lw.file.str(s.name);
-                const v: ?Const = if (s.value == .none) .{ .int = 1 } else constfold.fold(lw.file, s.value, constfold.literal_env);
-                if (std.mem.eql(u8, an, "vera_pin")) {
-                    if (v == null or v.? != .str) return self.refuse("`{s}`: vera_pin takes \"digital\", \"analog\", \"power\" or \"ground\"", .{decl});
-                    try pin_attr.put(self.arena, decl, v.?.str);
-                } else if (std.mem.eql(u8, an, "vera_delay")) {
-                    const d = if (v) |c| c.asReal() else -1;
-                    // Finite in ns too: the module prints it in ns (`node`).
-                    if (v == null or v.? == .str or !(d >= 0) or !std.math.isFinite(d * 1e9)) return self.refuse("`{s}`: vera_delay takes a constant delay in seconds, >= 0", .{decl});
-                    try delay_attr.put(self.arena, decl, d);
-                }
+            const an = s.name;
+            const v: ?Const = s.value;
+            if (std.mem.eql(u8, an, "vera_pin")) {
+                if (v == null or v.? != .str) return self.refuse("`{s}`: vera_pin takes \"digital\", \"analog\", \"power\" or \"ground\"", .{decl});
+                try pin_attr.put(self.arena, decl, v.?.str);
+            } else if (std.mem.eql(u8, an, "vera_delay")) {
+                const d = if (v) |c| c.asReal() else -1;
+                // Finite in ns too: the module prints it in ns (`node`).
+                if (v == null or v.? == .str or !(d >= 0) or !std.math.isFinite(d * 1e9)) return self.refuse("`{s}`: vera_delay takes a constant delay in seconds, >= 0", .{decl});
+                try delay_attr.put(self.arena, decl, d);
             }
         }
 

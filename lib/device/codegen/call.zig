@@ -23,7 +23,6 @@ const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
 const cg_strcap = @import("../cg_strcap.zig");
 const Lower = @import("ir").Lowered;
-const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const OpKind = @import("ir").op.OpKind;
@@ -1452,10 +1451,10 @@ fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u
 /// filter") as an f64 literal, or null. Requires `ctrl_tok` set to the
 /// operator call's token.
 pub fn defaultTransition(self: *Gen) Error!?[]const u8 {
-    const list = self.lowered.directives.transitions;
+    const list = self.lowered.default_transitions;
     if (list.len == 0) return null;
     if (self.ctrl_tok == Mir.no_tok or self.ctrl_tok >= self.lowered.tok_starts.len) return null;
-    const t = Preprocessor.DefaultTransition.inForce(list, self.lowered.tok_starts[self.ctrl_tok], null) orelse return null;
+    const t = Lower.DefaultTransition.inForce(list, self.lowered.tok_starts[self.ctrl_tok], null) orelse return null;
     return try gen_file.fmtF64(self, t);
 }
 

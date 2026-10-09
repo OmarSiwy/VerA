@@ -201,7 +201,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         try self.arena.print("{s}{c}{s}", .{ self.scope_path, Elaborate.sep, name })
     else
         name;
-    try addParam(self, card_name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+    try addParam(self, card_name, ty, default, folded, try paramRanges(self, decl.ranges), decl.is_local, decl.main_tok);
     if (card_name.ptr != name.ptr) try self.param_index.put(self.arena, name, @intCast(self.out.params.items.len - 1));
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
     self.out.params.items[self.out.params.items.len - 1].source_width = if (decl.packed_range) |range|
@@ -360,6 +360,45 @@ pub fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom
     return true;
 }
 
+/// Returns `ranges` (§3.4.2) as the prover reads them (`Lowered.Range`).
+/// Each bound folds literally, through the one constant kernel, so a bound
+/// means what lowering enforces (`[1/2:1]` is [0,1], §4.2.4), and never
+/// through `constEval`: a bound written over another parameter would fold
+/// to that parameter's default, which the card can override. A bound that
+/// does not fold, folds to a string, or folds to a NaN (`0.0/0.0`, which
+/// bounds nothing) is null; `inf` (§3.4.2) folds to ±infinity. The
+/// string-set form has no bounds.
+fn paramRanges(self: *Lower, ranges: []const Ast.ValueRange) Oom![]const Lower.Lowered.Range {
+    if (ranges.len == 0) return &.{};
+    const out = try self.arena.alloc(Lower.Lowered.Range, ranges.len);
+    for (ranges, out) |r, *o| {
+        const strings = r.strings != null;
+        const lo = if (strings) null else foldBound(self, r.lo);
+        o.* = .{
+            .kind = switch (r.kind) {
+                .from => .from,
+                .exclude => .exclude,
+            },
+            .lo = lo,
+            .hi = if (strings) null else if (r.hi == .none) lo else foldBound(self, r.hi),
+            .lo_inclusive = r.lo_inclusive,
+            .hi_inclusive = r.hi_inclusive,
+            .strings = strings,
+        };
+    }
+    return out;
+}
+
+/// One `paramRanges` bound: the literal-only fold of `e`, or null.
+fn foldBound(self: *const Lower, e: Ast.ExprId) ?f64 {
+    const c = constfold.fold(self.file, e, constfold.literal_env) orelse return null;
+    if (c == .str) return null;
+    // A NaN bound (`0.0/0.0`) bounds nothing; as an interval end it would
+    // fail every comparison and read as evidence to `@min`/`@max`.
+    const x = c.asReal();
+    return if (std.math.isNan(x)) null else x;
+}
+
 /// Appends a model-card parameter and binds `name` to its index. An integer
 /// localparam with a constant default reads as that constant; everything else
 /// reads the card. Asserts that `out.params` and `param_values` stay parallel.
@@ -369,7 +408,7 @@ pub fn addParam(
     ty: Ast.Type,
     default: Mir.Value,
     folded: ?Const,
-    ranges: []const Ast.ValueRange,
+    ranges: []const Lower.Lowered.Range,
     is_local: bool,
     tok: u32,
 ) Oom!void {
@@ -459,6 +498,7 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
     const elems = try lower_shape.flattenPattern(self, decl.default, dims, false);
 
     try lower_var.declareArray(self, name, .{ .dims = dims, .ty = astTy(ty), .param = true });
+    const ranges = try paramRanges(self, decl.ranges); // one slice, every element's
     var sub: [lower_shape.max_stack_dims]i64 = undefined;
     const idx = try lower_shape.subscriptBuf(self, &sub, dims.len);
     for (elems, 0..) |elem, k| {
@@ -470,7 +510,7 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
             (if (astTy(ty) == .real) Const{ .real = 0 } else Const{ .int = 0 })
         else
             lower_constfold.constEval(self, elem);
-        try addParam(self, try lower_shape.elemName(self, name, idx), ty, default, if (folded) |c| parameterConst(ty, c) else null, decl.ranges, decl.is_local, decl.main_tok);
+        try addParam(self, try lower_shape.elemName(self, name, idx), ty, default, if (folded) |c| parameterConst(ty, c) else null, ranges, decl.is_local, decl.main_tok);
     }
 }
 

@@ -80,7 +80,7 @@ pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u32 {
 /// slices borrow from `lowered` and `mir`.
 pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
     if (!lowered.mixed_signal) return null;
-    const ts = lowered.directives.timescale();
+    const ts = lowered.timescale;
     return .{
         .source = lowered.src,
         .top = mir.name,

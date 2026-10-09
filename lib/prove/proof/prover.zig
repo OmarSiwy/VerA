@@ -7,8 +7,6 @@ const std = @import("std");
 const proof = @import("../proof.zig");
 const proof_lattice = @import("lattice.zig");
 const proof_transfer = @import("transfer.zig");
-const Ast = @import("frontend").Ast;
-const constfold = @import("frontend").constfold;
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
 const Lowered = Lower.Lowered;
@@ -240,9 +238,9 @@ pub const Prover = struct {
     /// the representation has no holes), and `exclude` ranges are subtracted only where they
     /// clip an end, which is the `exclude 0` / `from (0:inf)` evidence a divisor or `ln` needs.
     ///
-    /// Bounds fold literally (`foldBound`), never through `Lower.constEval`: a bound written
-    /// in terms of another parameter would fold to that parameter's default, which the model
-    /// card can override, so using it would be unsound.
+    /// Bounds are folded literally by lowering (`Lower.Range`), never through
+    /// `Lower.constEval`: a bound written in terms of another parameter would fold to that
+    /// parameter's default, which the model card can override, so using it would be unsound.
     fn paramInterval(self: *const Prover, param: u32) proof_lattice.Interval {
         if (param >= self.lowered.params.items.len) return .top;
         const info = self.lowered.params.items[param];
@@ -253,9 +251,9 @@ pub const Prover = struct {
         var iv: proof_lattice.Interval = from: {
             var acc: ?proof_lattice.Interval = null;
             for (info.ranges) |r| {
-                if (r.kind != .from or r.strings != null) continue;
-                const lo = self.foldBound(r.lo) orelse break :from .top;
-                const hi = if (r.hi == .none) lo else (self.foldBound(r.hi) orelse break :from .top);
+                if (r.kind != .from or r.strings) continue;
+                const lo = r.lo orelse break :from .top;
+                const hi = r.hi orelse break :from .top;
                 const one: proof_lattice.Interval = .{
                     .lo = lo,
                     .hi = hi,
@@ -268,9 +266,9 @@ pub const Prover = struct {
         };
 
         for (info.ranges) |r| {
-            if (r.kind != .exclude or r.strings != null) continue;
-            const lo = self.foldBound(r.lo) orelse continue;
-            const hi = if (r.hi == .none) lo else (self.foldBound(r.hi) orelse continue);
+            if (r.kind != .exclude or r.strings) continue;
+            const lo = r.lo orelse continue;
+            const hi = r.hi orelse continue;
             // Only an end-clipping exclusion is representable without holes.
             //
             // §3.4.2: "Parentheses, ( and ), indicate exclusion of the end
@@ -278,7 +276,7 @@ pub const Prover = struct {
             // excluded only when its bracket is square: `exclude (0:5)` still
             // admits 0, and reading `nonzero` from it would hand the unit
             // `.optimized` over a division by a value the range permits.
-            // `exclude 0` works because `hi == .none` copies `lo` and both
+            // `exclude 0` works because a single value's `hi` is `lo`'s and both
             // inclusive flags default to true.
             const zero_excluded = (lo < 0 and hi > 0) or
                 (lo == 0 and r.lo_inclusive) or
@@ -305,19 +303,6 @@ pub const Prover = struct {
         if (info.ty == .integer)
             iv = iv.meet(.{ .lo = -2147483648.0, .hi = 2147483647.0 });
         return iv;
-    }
-
-    /// Literal-only constant fold of a §3.4.2 range bound, through the one
-    /// constant kernel, so a bound means what lowering enforces (`[1/2:1]` is
-    /// [0,1], §4.2.4). Deliberately refuses identifiers (see
-    /// `paramInterval`); `inf` (§3.4.2) folds to ±infinity.
-    fn foldBound(self: *const Prover, e: Ast.ExprId) ?f64 {
-        const c = constfold.fold(self.lowered.file, e, constfold.literal_env) orelse return null;
-        if (c == .str) return null;
-        // A NaN bound (`0.0/0.0`) bounds nothing; as an interval end it would
-        // fail every comparison and read as evidence to `@min`/`@max`.
-        const x = c.asReal();
-        return if (math.isNan(x)) null else x;
     }
 
     // ------------------------------------------------------- guard evidence --
@@ -1155,10 +1140,9 @@ pub const Prover = struct {
         // without admitting it; W0650 covers those.
         const inf = math.inf(f64);
         const side: []const u8 = for (pinfo.ranges) |r| {
-            if (r.kind != .from or r.strings != null) continue;
-            if (r.lo_inclusive and (self.foldBound(r.lo) orelse 0) == -inf) break "lower";
-            const hi = if (r.hi == .none) r.lo else r.hi;
-            if (r.hi_inclusive and (self.foldBound(hi) orelse 0) == inf) break "upper";
+            if (r.kind != .from or r.strings) continue;
+            if (r.lo_inclusive and (r.lo orelse 0) == -inf) break "lower";
+            if (r.hi_inclusive and (r.hi orelse 0) == inf) break "upper";
         } else return;
 
         var b = self.bag.build(.proof, .W0651, self.lowered.tokenSpan(pinfo.tok));

@@ -35,6 +35,7 @@ const Ssa = @import("ssa.zig");
 const Elaborate = @import("elab").Elaborate;
 const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
+const constfold = @import("frontend").constfold;
 const diag = @import("diag");
 const assert = std.debug.assert;
 
@@ -607,12 +608,32 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
 
 /// `out`, plus the inputs lowering read that a later stage still needs. Every
 /// buffer is shared with `self`, not copied.
-fn lowered(self: *Lower) Lowered {
+fn lowered(self: *Lower) Oom!Lowered {
     self.out.src = self.src;
     self.out.tok_starts = self.tok_starts;
+    self.out.token_span = &Lexer.tokenSpan;
     self.out.directives = self.directives;
+    self.out.default_transitions = self.directives.transitions; // §10.3
+    self.out.timescale = self.directives.timescale(); // IEEE 1364 §19.8
+    self.out.decl_attrs = try declAttrs(self);
     self.out.consts = self.consts;
     return self.out;
+}
+
+/// §2.9 every attribute_spec on a declaration in the file, in source order
+/// (`Lowered.decl_attrs`), each value folded over literals alone. Last, so
+/// the AST is complete: nothing after lowering writes it.
+fn declAttrs(self: *Lower) Oom![]const Lowered.DeclAttr {
+    var out: std.ArrayList(Lowered.DeclAttr) = .empty;
+    for (self.file.attributes.items) |b| {
+        if (b.owner.kind != .declaration) continue;
+        for (b.specs) |s| try out.append(self.arena, .{
+            .tok = b.owner.tok,
+            .name = self.file.str(s.name),
+            .value = if (s.value == .none) .{ .int = 1 } else constfold.fold(self.file, s.value, constfold.literal_env),
+        });
+    }
+    return out.items;
 }
 
 /// Sizes the MIR from the elaborated AST (`Mir.reserve`): rows per AST
