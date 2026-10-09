@@ -7,19 +7,17 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("analysis.zig");
 const Lowered = @import("ir").Lowered;
-const Ast = @import("frontend").Ast;
 
 /// A hand-built module for one planner test. Set `arena`, then `init`.
 pub const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     mir: Mir = .{ .name = "mymod" },
-    file: Ast.SourceFile = .empty,
     lowered: Lowered = undefined,
 
     /// `nets` become `Lowered.nodes` (unknowns 0..), and the entry block is
-    /// created. `f` must not move afterwards: `lowered.file` points into it.
+    /// created.
     pub fn init(f: *Fixture, nets: []const []const u8) !void {
-        f.lowered = .{ .file = &f.file };
+        f.lowered = .{};
         const a = f.arena.allocator();
         for (nets) |n|
             try f.lowered.nodes.append(a, .{ .name = n, .kind = .net, .disc = "", .dir = .unspecified });

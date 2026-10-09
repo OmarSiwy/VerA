@@ -117,7 +117,7 @@ pub const Directives = struct {
     spice: []const u8 = "",
     /// `//! discipline-resolution basic|detail`: the §7.4.4 mode the fixture
     /// is compiled in (`vera --discipline-resolution=`).
-    discipline_resolution: @import("ir").Elaborate.DisciplineResolution = .basic,
+    discipline_resolution: @import("ir").Lowered.DisciplineResolution = .basic,
     /// `//! display record`: the testbench is built over a device that
     /// records its §9.4 display tasks (`contract.SaySite`) and prints what
     /// `say` records (`vera --emit-exe --display=record`), not one that prints.

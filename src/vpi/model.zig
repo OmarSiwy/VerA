@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const Elaborate = @import("ir").Elaborate;
+const Elaborate = @import("vera").Elaborate;
 const sim = @import("sim");
 const code = @import("code.zig");
 const root = @import("root.zig");

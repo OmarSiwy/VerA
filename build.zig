@@ -51,15 +51,19 @@ const module_specs = [_]ModuleSpec{
     .{ .name = "dynlib", .path = "lib/dynlib.zig", .role = .leaf },
     .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels" } },
     // Elaboration (§6.2.2) and the rule tables lowering shares with it.
-    // `kernels`: the §9.13 folds use the device's rng.
+    // `kernels`: the §9.13 folds use the device's rng. `base`: the rows it
+    // publishes to `Lowered` (`Inserted`, `ParamOverride`, Table 9-29's kinds).
     .{ .name = "elab", .path = "lib/elab/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels" } },
     // The MIR and the `Lowered` tables: types every stage after lowering reads.
-    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "kernels" } },
+    // No `frontend` or `elab` (ARCHITECTURE.md Phase 11): the AST types the
+    // tables carry are `base`'s, and the AST stays with `vera.CompileResult`.
+    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels" } },
     // Lowering (AST → MIR + `Lowered`) and SSA construction.
     .{ .name = "analog", .path = "lib/analog/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "elab", "ir", "kernels" } },
     // The passes over the MIR: analysis, if-conversion, the proof, `verify`.
-    // `analog`: only the tests that lower source. `contract`: the proof's
-    // transfer functions use the devices' `exp`/`log`/`pow`.
+    // `frontend`, `analog`: only the tests that parse and lower source
+    // (`proof/test.zig`). `contract`: the proof's transfer functions use the
+    // devices' `exp`/`log`/`pow`.
     .{ .name = "prove", .path = "lib/prove/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "ir", "contract", "analog" } },
     // Device and testbench text in, artifacts out, through a spawned `zig`:
     // the `.so` build, its shims, the engine object, the testbench binary.
@@ -70,12 +74,12 @@ const module_specs = [_]ModuleSpec{
     // (fitness R2): a testbench reaches a device only through its text and
     // the contract (AGENTS.md §11.8).
     // Codegen, MIR -> device.zig. `zigbuild`: the `Output` it produces.
-    // `analog`: only the tests that lower source; `dynlib`: only the tests
-    // that load what they built.
+    // `frontend`, `analog`: only the tests that parse and lower source
+    // (`codegen/test.zig`); `dynlib`: only the tests that load what they built.
     .{ .name = "device", .path = "lib/device/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
     // `--emit-verilog`, MIR -> a behavioural IEEE 1364 module. `prove`: only
     // the tests' hand-built `Fixture`.
-    .{ .name = "verilog", .path = "lib/verilog/beh_verilog.zig", .role = .backend, .imports = &.{ "frontend", "ir", "prove" } },
+    .{ .name = "verilog", .path = "lib/verilog/beh_verilog.zig", .role = .backend, .imports = &.{ "ir", "prove" } },
     // The testbench, `//!` directives -> runner text. `zigbuild`: the
     // testbench build `tb` re-exports.
     .{ .name = "exe", .path = "lib/exe/tb.zig", .role = .backend, .imports = &.{ "diag", "frontend", "ir", "zigbuild" } },

@@ -24,12 +24,8 @@
 
 const std = @import("std");
 const base = @import("base");
-const Ast = @import("frontend").Ast;
-const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
 const Mir = @import("mir.zig");
-const Elaborate = @import("elab").Elaborate;
-const constfold = @import("frontend").constfold;
 const simparam = @import("simparam.zig");
 
 /// Lowering's output; later stages read it through `*const Lowered`.
@@ -38,7 +34,9 @@ pub const Lowered = @This();
 // ---- row types: the model card ----------------------------------------------
 
 /// A folded constant (§4.2 constant_expression), the shared kernel's.
-pub const Const = constfold.Const;
+pub const Const = @import("kernels").fold.Const;
+/// §3.1 a parameter's declared type (`base`'s, which `Ast.Type` aliases).
+pub const Type = base.Type;
 
 /// A resolved §3.4 parameter.
 pub const ParamInfo = struct {
@@ -46,7 +44,7 @@ pub const ParamInfo = struct {
     /// Token of the declaration, so a finiteness diagnostic can point a label at
     /// "`k` declared here" and hang a `from (0:inf)` suggestion off it.
     tok: u32 = Mir.no_tok,
-    ty: Ast.Type,
+    ty: Type,
     /// An explicit `integer` declaration converts to signed 32 bits; an
     /// inferred integral parameter retains its initializer's bit pattern.
     integer32: bool = true,
@@ -119,7 +117,7 @@ pub const Node = struct {
     /// §6.5.2.2 port direction (`.unspecified` for an internal net or an undeclared
     /// direction). An `input` or `output` port is a §1.3.4 signal-flow port; which
     /// of the two decides §1.3.4.1's contribution-target rule (E0425).
-    dir: Ast.Direction,
+    dir: base.Direction,
 };
 
 /// What quantity a `nodes` row carries, recorded where the slot is created
@@ -173,7 +171,7 @@ pub const DeclAttr = struct { tok: u32, name: []const u8, value: ?Const };
 
 /// One `Lowered.system_checks` row: a §9.18 system parameter's name and kind,
 /// and its value lowered over the parameters.
-pub const SystemCheck = struct { kind: @import("elab").hier_param.Kind, name: []const u8, v: Mir.Value };
+pub const SystemCheck = struct { kind: base.SystemParam, name: []const u8, v: Mir.Value };
 
 /// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
 /// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
@@ -698,13 +696,16 @@ pub const DiscreteEvent = struct {
 };
 
 /// §7.8.4 one port an automatic connect module was inserted on (`inserts`).
-pub const Inserted = Elaborate.Inserted;
+pub const Inserted = base.Inserted;
 
 // ---- what code after lowering reads beside the tables -------------------------
 
 /// §3.4 a `--param name=value` override of the top module's parameter
 /// `name`; the testbench and `vera` pass it to lowering.
-pub const ParamOverride = Elaborate.ParamOverride;
+pub const ParamOverride = base.ParamOverride;
+/// §7.4.4 basic or detail discipline resolution, which the testbench passes
+/// to lowering (`Elaborate.DisciplineResolution`).
+pub const DisciplineResolution = base.DisciplineResolution;
 /// Reports whether a §9.15 simulation parameter is answered at run time.
 pub const simparamIsRuntime = simparam.simparamIsRuntime;
 /// Returns the `Model` field that answers a §9.15 simulation parameter the
@@ -734,8 +735,8 @@ comptime {
 }
 
 // ---- the source, for diagnostics and host facts -----------------------------
-/// The parsed (and elaborated) file every `Ast` id below indexes.
-file: *const Ast.SourceFile,
+// The AST itself is not here: the VPI, the one reader after lowering, takes it
+// from `vera.CompileResult` (ARCHITECTURE.md Phase 11).
 /// Preprocessed source and the lexer's `.start` column, kept only so a token
 /// index can become a `diag.Span` (`tokenSpan`).
 src: []const u8 = "",
@@ -744,11 +745,6 @@ tok_starts: []const u32 = &.{},
 /// `tokenSpan`, which lowering sets, so `tokenSpan` re-lexes a token
 /// without `ir` importing the frontend. Diagnostics only (cold).
 token_span: *const fn (src: []const u8, starts: []const u32, tok: u32) diag.Span = &noTokens,
-/// The preprocessor's positional directive events (`Preprocessor.Directives`).
-/// Downstream reads two of them: §10.3's `default_transition (codegen's
-/// `transition()` default) and §9.15's `timescale (`simparamValue`, the
-/// testbench's mixed-signal time unit).
-directives: Preprocessor.Directives = .{},
 /// §10.3 the `default_transition events (`Preprocessor.Directives.transitions`),
 /// in text-stream order: codegen's `transition()` default at a call's offset.
 default_transitions: []const DefaultTransition = &.{},
@@ -762,15 +758,9 @@ timescale: ?Timescale = null,
 decl_attrs: []const DeclAttr = &.{},
 
 // ---- the elaborated hierarchy (§6), for the VPI -----------------------------
-/// The module being lowered (§6.2). Set by `lowerModule`.
-module: ?*const Ast.ModuleDecl = null,
 /// §6.7 path → flat name, from elaboration. Lowering reads it in `flatName`,
 /// the VPI to resolve a path.
 hier_names: std.StringHashMapUnmanaged([]const u8) = .empty,
-/// §9.15/§9.16, indexed by `Ast.AnalogBlock.unit`: the module a block was
-/// written in and the instance path it was inlined at. Flattening erases both,
-/// so elaboration publishes them (`Design.units`).
-unit_paths: []const Elaborate.UnitPath = &.{},
 /// §3.4 the constant table as lowering left it: every module parameter's
 /// folded value, by flat name. The VPI's `vpiParameter` values.
 consts: std.StringHashMapUnmanaged(Const) = .empty,
@@ -899,7 +889,7 @@ discrete_inputs: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// control, keyed by the term's expression. Each is a host-written `Model`
 /// flag (`DiscreteEvent.param`), nonzero for the solve at the digital tick the
 /// event occurred in.
-discrete_events: std.AutoArrayHashMapUnmanaged(Ast.ExprId, DiscreteEvent) = .empty,
+discrete_events: std.AutoArrayHashMapUnmanaged(base.ExprId, DiscreteEvent) = .empty,
 /// §8.5.3.6 the digital values read INSIDE a statement guarded by an explicit
 /// D2A event: each is read from a `<name>__1b` `Model` field holding the value
 /// after region 1 of the event's tick, not the live one region 3b sees.
@@ -1014,7 +1004,7 @@ test VecRange {
 
 test nodeName {
     // §1.3.1.1 the reference node is no row, and prints as `gnd`.
-    const l: Lowered = .{ .file = undefined };
+    const l: Lowered = .{};
     try std.testing.expectEqualStrings("gnd", l.nodeName(ground));
 }
 
@@ -1022,7 +1012,7 @@ test simparamAnswer {
     // §9.15: a known name answers whether or not a fallback is written; an
     // unknown one returns the fallback, else is not known. Values are
     // VD-072's (`specification/Vague_Decisions.md`), not this table's.
-    const l: Lowered = .{ .file = undefined };
+    const l: Lowered = .{};
     const t = std.testing;
     for ([_]bool{ false, true }) |fb| {
         try t.expectEqual(SimparamAnswer.runtime, l.simparamAnswer("iteration", fb));

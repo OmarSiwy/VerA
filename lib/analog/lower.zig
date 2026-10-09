@@ -179,6 +179,14 @@ out: Lowered,
 /// names, cloned rows) as the first step of `lowerFile`, before anything
 /// caches an index into them. Lowering itself only reads.
 file: *Ast.SourceFile,
+/// The module being lowered (§6.2), elaboration's flattened top. Set by
+/// `lowerModule`; `lower` hands it out beside `out` (`Output.module`).
+module: ?*const Ast.ModuleDecl = null,
+/// §9.15/§9.16, indexed by `Ast.AnalogBlock.unit`: the module a block was
+/// written in and the instance path it was inlined at. Flattening erases both,
+/// so elaboration publishes them (`Design.units`); `$simparam$str` and the
+/// VPI (`Output.unit_paths`) read them.
+unit_paths: []const Elaborate.UnitPath = &.{},
 builder: Ssa.SsaBuilder,
 /// The block statements are currently being appended to.
 cur: Mir.Block = .entry,
@@ -498,7 +506,7 @@ pub fn init(
         .arena = arena,
         .mir = mir,
         .file = file,
-        .out = .{ .file = file },
+        .out = .{},
         .src = src,
         .tok_starts = tok_starts,
         .bag = bag,
@@ -558,7 +566,7 @@ pub fn lower(
         assert(self.builder.dir.items.len == 0);
     }
     const out = try self.lowerFile();
-    return .{ .lowered = out, .module = self.out.module, .unit_paths = self.out.unit_paths };
+    return .{ .lowered = out, .module = self.module, .unit_paths = self.unit_paths };
 }
 
 /// Elaborates the file (§6.2.2) into one flat module, then lowers it.
@@ -595,7 +603,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         .default_disciplines = self.directives.disciplines,
     });
     self.out.hier_names = design.names;
-    self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
+    self.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     self.ps_hidden = design.ps_hidden; // §6.4.3
     self.port_vars = design.port_vars; // §6.8
     self.ps_outputs = design.ps_outputs;
@@ -625,7 +633,6 @@ fn lowered(self: *Lower) Oom!Lowered {
     self.out.src = self.src;
     self.out.tok_starts = self.tok_starts;
     self.out.token_span = &Lexer.tokenSpan;
-    self.out.directives = self.directives;
     self.out.default_transitions = self.directives.transitions; // §10.3
     self.out.timescale = self.directives.timescale(); // IEEE 1364 §19.8
     self.out.decl_attrs = try declAttrs(self);
@@ -672,7 +679,7 @@ fn reserveMir(self: *Lower) Oom!void {
 /// declarations, then lower each analog block (§5.2) in source order —
 /// multiple analog blocks are executed as if concatenated (§6.9.1).
 fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    self.out.module = module;
+    self.module = module;
     self.mir.name = self.file.str(module.name);
     // IEEE 1364 §19.1 (§10.1 carries it over): the tag of the module keyword's
     // own position, which is what "modules between `celldefine and

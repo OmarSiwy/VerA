@@ -135,7 +135,7 @@ fn scanCallSitesExpr(
 pub fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
-    const m = self.out.module orelse return poison;
+    const m = self.module orelse return poison;
     for (m.functions) |*fd| {
         if (!std.mem.eql(u8, self.file.str(fd.name), name)) continue;
         // §7.3.7: "Digital functions cannot be called from within the analog

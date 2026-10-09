@@ -691,8 +691,8 @@ pub fn checkSourceLoops(self: *Lower) Oom!void {
         d.msg("`V({s},{s})` closes a loop of potential sources with a contribution from `{s}`", .{
             lower_node.nodeName(self, c.hi),
             lower_node.nodeName(self, c.lo),
-            if (theirs < self.out.unit_paths.len and self.out.unit_paths[theirs].path.len != 0)
-                self.out.unit_paths[theirs].path[0 .. self.out.unit_paths[theirs].path.len - 1] // drop the trailing separator
+            if (theirs < self.unit_paths.len and self.unit_paths[theirs].path.len != 0)
+                self.unit_paths[theirs].path[0 .. self.unit_paths[theirs].path.len - 1] // drop the trailing separator
             else
                 "the top-level module",
         });
@@ -855,9 +855,9 @@ fn ownerUnit(self: *Lower, e: Ast.ExprId) Oom!u32 {
     if (ex.extraOf(e) != Ast.branch_ref_hier_unnamed) return self.cur_unit;
     for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |t| {
         if (t == .none or ex.tag(t) != .hier_ident) continue;
-        const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, t);
+        const path = try Elaborate.flatReference(self.file, self.arena, self.module, t);
         const cut = std.mem.findScalarLast(u8, path, Elaborate.sep) orelse continue;
-        for (self.out.unit_paths, 0..) |u, i| {
+        for (self.unit_paths, 0..) |u, i| {
             if (std.mem.eql(u8, u.path, path[0 .. cut + 1])) return @intCast(i);
         }
     }

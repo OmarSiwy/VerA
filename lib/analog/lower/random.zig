@@ -226,6 +226,13 @@ fn internalSeed(self: *Lower, tok: u32) Oom!InternalSeed {
     return entry.value_ptr.*;
 }
 
+test "dist: every §9.13 kernel is one of lowering's own reserved callees" {
+    for (&dist.dists) |*d| {
+        const c = Mir.Callee.fromName(d.kernel);
+        try std.testing.expect(c != .systf and c.synthetic());
+    }
+}
+
 test "§9.13 distributions: the seed and the parameter rules" {
     try Lower.expectBodies(&.{
         // "For each system function, the seed argument shall be an integer."

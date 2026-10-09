@@ -3,10 +3,10 @@
 //! (solve invariance, the §3.2 held-row mask) and the MIR postcondition out.
 //! Re-exports only; the files import each other directly.
 //! `analog` is imported only by tests that lower source (`proof/test.zig`) or
-//! build SSA (`ssa_test.zig`), which Zig cannot scope to tests
-//! (ARCHITECTURE.md §1 row 11). `contract`: the proof's transfer functions
-//! use the devices' `exp`/`log`/`pow` (`contract.gm`). §1 marks `frontend`
-//! [A] until Phase 11.
+//! build SSA (`ssa_test.zig`), and `frontend` only by `proof/test.zig`, which
+//! parses that source; Zig cannot scope either to tests (ARCHITECTURE.md §1
+//! row 11). `contract`: the proof's transfer functions use the devices'
+//! `exp`/`log`/`pow` (`contract.gm`).
 
 /// Dependency and freedom lattices over a finished MIR.
 pub const Analysis = @import("analysis.zig");

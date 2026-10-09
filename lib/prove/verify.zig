@@ -399,8 +399,6 @@ fn held(mir: *const Mir, lowered: *const Lowered, an: *const Analysis) ?Violatio
 
 // -------------------------------------------------------------------------
 
-const Ast = @import("frontend").Ast;
-
 /// The handles a breaker needs from `sample`.
 const Sample = struct {
     then_b: Mir.Block,
@@ -675,8 +673,7 @@ test "verify: a well-formed MIR passes, and each broken invariant is named" {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var file: Ast.SourceFile = .empty;
-        var lw: Lowered = .{ .file = &file };
+        var lw: Lowered = .{};
         var mir: Mir = .{};
         const s = try sample(a, &mir, &lw);
         try case.f(a, &mir, &lw, s);

@@ -349,7 +349,7 @@ fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
     if (lookupFlatNode(self, path)) |h| return h;
     var p = path;
     if (std.mem.startsWith(u8, p, "$root.")) p = p["$root.".len..];
-    if (self.out.module) |m| {
+    if (self.module) |m| {
         const mn = self.file.str(m.name);
         if (p.len > mn.len + 1 and p[mn.len] == Elaborate.sep and std.mem.startsWith(u8, p, mn))
             p = p[mn.len + 1 ..];
@@ -372,8 +372,8 @@ fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
 /// with its last segment dropped, separator included, "" at the top. Joined to
 /// an `inst_name` it gives the flat name of a sibling.
 fn callerParentPath(self: *const Lower) []const u8 {
-    if (self.cur_unit >= self.out.unit_paths.len) return "";
-    const p = self.out.unit_paths[self.cur_unit].path;
+    if (self.cur_unit >= self.unit_paths.len) return "";
+    const p = self.unit_paths[self.cur_unit].path;
     if (p.len == 0) return p;
     // `path` ends with the separator, so the caller's own segment is the text
     // between the previous separator and the last one.
@@ -460,7 +460,7 @@ test callerParentPath {
         .{ .module = "a", .path = "u1.", .decl = undefined },
         .{ .module = "b", .path = "u1.u2.", .decl = undefined },
     };
-    h.low.out.unit_paths = &units;
+    h.low.unit_paths = &units;
     const want = [_][]const u8{ "", "", "u1.", "" };
     for (want, 0..) |w, unit| {
         h.low.cur_unit = @intCast(unit);

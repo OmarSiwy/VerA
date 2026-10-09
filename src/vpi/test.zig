@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const Elaborate = @import("ir").Elaborate;
+const Elaborate = @import("vera").Elaborate;
 const callback = @import("callback.zig");
 const code = @import("code.zig");
 const delays = @import("delays.zig");

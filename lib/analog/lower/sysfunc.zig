@@ -67,7 +67,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // function reads "Supported in analog context of connectmodule: No"
         // ($receiver_count alone reads Yes). This call is in a connect module's
         // analog block, so the fence it hits is §9.2's analog column.
-        const in_cm = self.cur_unit < self.out.unit_paths.len and self.out.unit_paths[self.cur_unit].decl.is_connect;
+        const in_cm = self.cur_unit < self.unit_paths.len and self.unit_paths[self.cur_unit].decl.is_connect;
         if (in_cm and !std.mem.eql(u8, name, "$receiver_count")) {
             var b = self.errWith(self.file.exprs.mainTok(e), .E0806);
             b.msg("`{s}` in the analog block of a connect module", .{name});
@@ -200,22 +200,22 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // `cur_unit`, the instance that wrote this block: "module" is "the name of the
     // module from which $simparam$str is called" and "instance" is "the
     // hierarchical name of the instance". Codegen only sees the flattened module.
-    if (std.mem.eql(u8, name, "$simparam$str") and (self.cur_unit < self.out.unit_paths.len or self.out.module != null)) {
+    if (std.mem.eql(u8, name, "$simparam$str") and (self.cur_unit < self.unit_paths.len or self.module != null)) {
         const a = ex.args(e);
         if (a.len >= 1) if (constStrArg(self, a[0])) |nm| {
             // A design with no instances has no unit table: its one unit is the
             // top module, at the root.
-            const u: struct { module: []const u8, path: []const u8 } = if (self.cur_unit < self.out.unit_paths.len)
-                .{ .module = self.out.unit_paths[self.cur_unit].module, .path = self.out.unit_paths[self.cur_unit].path }
+            const u: struct { module: []const u8, path: []const u8 } = if (self.cur_unit < self.unit_paths.len)
+                .{ .module = self.unit_paths[self.cur_unit].module, .path = self.unit_paths[self.cur_unit].path }
             else
-                .{ .module = self.file.str(self.out.module.?.name), .path = "" };
+                .{ .module = self.file.str(self.module.?.name), .path = "" };
             if (std.mem.eql(u8, nm, "module"))
                 return .{ .v = try self.mir.addStrConst(self.arena, u.module), .ty = .string };
             // §9.15's worked example produces "testbench.dut1": a top-level
             // module's instance name is its module name, and the path is joined
             // to it by §6.7's period. `path` already carries the separator.
             if (std.mem.eql(u8, nm, "instance") or std.mem.eql(u8, nm, "path")) {
-                const top = if (self.out.unit_paths.len != 0) self.out.unit_paths[0].module else u.module;
+                const top = if (self.unit_paths.len != 0) self.unit_paths[0].module else u.module;
                 const inst = if (u.path.len == 0)
                     top
                 else
@@ -526,14 +526,14 @@ fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
 
 /// §9.19's "port identifier": a name in the lowered module's port list.
 fn isPort(self: *const Lower, name: []const u8) bool {
-    const m = self.out.module orelse return false;
+    const m = self.module orelse return false;
     for (m.ports) |p| if (std.mem.eql(u8, self.file.str(p.name), name)) return true;
     return false;
 }
 
 /// Returns `name`'s position in the module's port list, or null.
 fn portOrdinal(self: *const Lower, name: []const u8) ?i64 {
-    const m = self.out.module orelse return null;
+    const m = self.module orelse return null;
     for (m.ports, 0..) |p, k| if (std.mem.eql(u8, self.file.str(p.name), name)) return @intCast(k);
     return null;
 }

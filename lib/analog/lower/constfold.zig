@@ -151,7 +151,7 @@ fn nameWidthFor(self: *const Lower, e: Ast.ExprId, depth: u32, comptime self_det
     if (self_determined and self.clog2_host != 0 and hostSizedParam(self, name) != null) return self.clog2_host;
     if (self_determined) return p.source_width;
     if (!p.is_local) return null;
-    const module = self.out.module orelse return null;
+    const module = self.module orelse return null;
     for (module.params) |decl| {
         if (std.mem.eql(u8, self.file.str(decl.name), p.name)) return constfold.operandWidth(self.file, decl.default, deeper);
     }
@@ -221,7 +221,7 @@ pub fn hostSizedParam(self: *const Lower, name: []const u8) ?usize {
     const pi = self.param_index.get(name) orelse return null;
     const p = self.out.params.items[pi];
     if (p.ty != .integer or p.integer32 or p.is_local) return null;
-    const module = self.out.module orelse return null;
+    const module = self.module orelse return null;
     for (module.params) |decl| {
         if (std.mem.eql(u8, self.file.str(decl.name), name)) return if (decl.packed_range == null) pi else null;
     }
@@ -250,7 +250,7 @@ pub fn clog2WideCarrier(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
             }
             const pi = self.param_index.get(name) orelse return false;
             const p = self.out.params.items[pi];
-            const module = self.out.module orelse return false;
+            const module = self.module orelse return false;
             for (module.params) |decl| {
                 if (std.mem.eql(u8, self.file.str(decl.name), p.name)) return wideParamCarrier(self, decl, depth + 1);
             }
@@ -292,7 +292,7 @@ fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
             if (p.ty != .integer) break :blk null;
             if (p.integer32) break :blk true;
             if (!p.is_local) break :blk null; // host overrides carry no signedness
-            const module = self.out.module orelse break :blk null;
+            const module = self.module orelse break :blk null;
             for (module.params) |decl| {
                 if (std.mem.eql(u8, self.file.str(decl.name), p.name))
                     break :blk integerSourceSigned(self, decl.default, depth + 1);

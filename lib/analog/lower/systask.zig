@@ -763,7 +763,7 @@ fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.contains(name)) break :blk 32; // §3.2 integer variable
             const pi = self.param_index.get(name) orelse return null;
-            const module = self.out.module orelse return null;
+            const module = self.module orelse return null;
             for (module.params) |decl| {
                 if (!std.mem.eql(u8, self.file.str(decl.name), self.out.params.items[pi].name)) continue;
                 if (decl.ty == .integer) break :blk 32;

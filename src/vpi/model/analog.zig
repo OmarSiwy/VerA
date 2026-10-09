@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const Elaborate = @import("ir").Elaborate;
+const Elaborate = @import("vera").Elaborate;
 const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
 const CompileResult = @import("vera").CompileResult;

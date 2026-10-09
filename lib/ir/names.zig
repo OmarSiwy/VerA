@@ -307,11 +307,10 @@ fn assignDisambig(units: []Unit) void {
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     mir: Mir = .{ .name = "mymod" },
-    file: @import("frontend").Ast.SourceFile = .empty,
     lowered: Lowered = undefined,
 
     fn init(f: *Fixture, net_names: []const []const u8) !void {
-        f.lowered = .{ .file = &f.file };
+        f.lowered = .{};
         const a = f.arena.allocator();
         for (net_names) |n|
             try f.lowered.nodes.append(a, .{ .name = n, .kind = .net, .disc = "", .dir = .unspecified });

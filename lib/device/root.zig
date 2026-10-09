@@ -2,10 +2,9 @@
 //! it. Re-export only. The files import each other mutually (`codegen.zig`
 //! calls `cg_*` and `codegen/plan/unit.zig`, which read `codegen.Gen` back),
 //! so the module boundary goes around that cycle. Depends on `ir`, `prove`,
-//! `frontend` (the §10.3 `` `default_transition `` table), `diag`,
-//! `kernels` (the text spliced into every device) and `zigbuild` (`Output`);
-//! the tests also take `analog`, to lower source, and `dynlib`, to load what
-//! they built. Neither the testbench (`exe`) nor `--emit-verilog`
+//! `diag`, `kernels` (the text spliced into every device) and `zigbuild`
+//! (`Output`); the tests also take `frontend` and `analog`, to parse and
+//! lower source, and `dynlib`, to load what they built. Neither the testbench (`exe`) nor `--emit-verilog`
 //! (`verilog`) is reachable from here (ARCHITECTURE.md Phase 8, fitness R2).
 //!
 //! The three `cg_*` entries are here for their tests alone: `codegen.zig`'s

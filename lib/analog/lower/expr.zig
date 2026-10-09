@@ -571,7 +571,7 @@ pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?Typ
 ///
 /// Allocates the result in `self.arena` on every call.
 pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
-    const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, e);
+    const path = try Elaborate.flatReference(self.file, self.arena, self.module, e);
     if (self.scope_path.len != 0) if (try inScope(self, path)) |hit| return hit;
     // The one place the join is NOT the answer: a child port bound to a parent
     // net is the same signal as that net, so `u.a` denotes `p` and there is no
@@ -587,7 +587,7 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
 /// block's own `u1`, which the flatten named `genblk1.u1`: the innermost
 /// enclosing scope whose prefix makes `path` name something, or null.
 fn inScope(self: *Lower, path: []const u8) Oom!?[]const u8 {
-    const unit = if (self.cur_unit < self.out.unit_paths.len) self.out.unit_paths[self.cur_unit].path else "";
+    const unit = if (self.cur_unit < self.unit_paths.len) self.unit_paths[self.cur_unit].path else "";
     var scope = self.scope_path;
     while (scope.len != 0) {
         const cand = try self.arena.print("{s}{s}{c}{s}", .{ unit, scope, Elaborate.sep, path });
@@ -608,15 +608,15 @@ pub fn unnamedGenScope(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
     const scopes = self.unnamed_gen orelse blk: {
         var out: std.ArrayList([]const u8) = .empty;
         // A tree of one has no unit table; its module is the source's own.
-        if (self.out.unit_paths.len == 0) {
-            if (self.out.module) |m| try Elaborate.unnamedGenScopes(self.file, self.arena, m, "", &out);
-        } else for (self.out.unit_paths) |u| try Elaborate.unnamedGenScopes(self.file, self.arena, u.decl, u.path, &out);
+        if (self.unit_paths.len == 0) {
+            if (self.module) |m| try Elaborate.unnamedGenScopes(self.file, self.arena, m, "", &out);
+        } else for (self.unit_paths) |u| try Elaborate.unnamedGenScopes(self.file, self.arena, u.decl, u.path, &out);
         self.unnamed_gen = out.items;
         break :blk out.items;
     };
     if (scopes.len == 0) return null;
-    const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, e);
-    const own = if (self.cur_unit < self.out.unit_paths.len) self.out.unit_paths[self.cur_unit].path else "";
+    const path = try Elaborate.flatReference(self.file, self.arena, self.module, e);
+    const own = if (self.cur_unit < self.unit_paths.len) self.unit_paths[self.cur_unit].path else "";
     for (scopes) |s| if (std.mem.startsWith(u8, path, s) and !std.mem.startsWith(u8, own, s)) return s;
     return null;
 }
@@ -628,7 +628,7 @@ pub fn refuseUnnamedGen(self: *Lower, e: Ast.ExprId) Oom!bool {
     const scope = try unnamedGenScope(self, e) orelse return false;
     var b = self.errWith(self.file.exprs.mainTok(e), .E0998);
     b.msg("`{s}` reaches into `{s}`, an unnamed generate block", .{
-        try Elaborate.flatReference(self.file, self.arena, self.out.module, e), scope[0 .. scope.len - 1],
+        try Elaborate.flatReference(self.file, self.arena, self.module, e), scope[0 .. scope.len - 1],
     });
     b.help("name the block (`begin : g`) and reach it as `g.<item>`", .{});
     try b.emit();
@@ -1350,10 +1350,10 @@ fn instancePortFlow(self: *Lower, e: Ast.ExprId) Oom!?TypedValue {
     const ex = &self.file.exprs;
     const lhs = ex.lhs(e);
     if (ex.tag(lhs) != .hier_ident) return null;
-    const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, lhs);
+    const path = try Elaborate.flatReference(self.file, self.arena, self.module, lhs);
     const cut = std.mem.findScalarLast(u8, path, Elaborate.sep) orelse return null;
     const inst = path[0 .. cut + 1];
-    const units = self.out.unit_paths;
+    const units = self.unit_paths;
     const lo: u32 = for (units, 0..) |u, i| {
         if (std.mem.eql(u8, u.path, inst)) break @intCast(i);
     } else return null;
@@ -1379,8 +1379,8 @@ fn instancePortFlow(self: *Lower, e: Ast.ExprId) Oom!?TypedValue {
     if (refused) return poison;
     try lower_contrib.checkAccessMatch(self, e, name, access, p);
     // Every block of the hierarchy is behind this one.
-    for (self.cur_block..self.out.module.?.analog.len) |j| {
-        const unit = self.out.module.?.analog[j].unit;
+    for (self.cur_block..self.module.?.analog.len) |j| {
+        const unit = self.module.?.analog[j].unit;
         if (unit < lo or unit >= hi) continue;
         var b = self.errWith(ex.mainTok(e), .E0997);
         b.msg("`{s}(<{s}>)` is read before `{s}`'s own analog blocks are lowered", .{ name, path, inst[0 .. inst.len - 1] });
@@ -1560,7 +1560,7 @@ pub fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     b.msg("`{s}`", .{name});
 
     var names: std.ArrayList([]const u8) = .empty;
-    if (self.out.module) |m| {
+    if (self.module) |m| {
         for (m.functions) |*fd| try names.append(self.arena, self.file.str(fd.name));
     }
     try names.appendSlice(self.arena, unary_math.keys());

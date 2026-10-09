@@ -7,7 +7,7 @@
 //! §12.22 vpi_handle_multi is systf.zig's.
 
 const std = @import("std");
-const Elaborate = @import("ir").Elaborate;
+const Elaborate = @import("vera").Elaborate;
 const code = @import("code.zig");
 const root = @import("root.zig");
 const coldOf = root.coldOf;

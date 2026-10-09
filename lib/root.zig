@@ -65,6 +65,10 @@ pub const ifconv = @import("prove").ifconv;
 pub const proof = @import("prove").proof;
 /// The MIR's postcondition, checked after lowering and each MIR pass (`prove`).
 pub const verify = @import("prove").verify;
+/// Hierarchy flattening, AST → one flat module (§6) (`elab`): the type of
+/// `CompileResult.unit_paths` and the §6.7 `sep` the VPI reads, which
+/// `ir.Elaborate` re-exported until Phase 11.
+pub const Elaborate = @import("elab").Elaborate;
 
 const token = @import("frontend").token;
 const Lexer = @import("frontend").Lexer;
@@ -72,7 +76,6 @@ const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;
 const deep_stack = @import("base").deep_stack;
 const Mir = @import("ir").Mir;
-const Elaborate = @import("elab").Elaborate;
 const Lowered = @import("ir").Lowered;
 const naming = @import("ir").names;
 const cg_display = @import("device").cg_display;

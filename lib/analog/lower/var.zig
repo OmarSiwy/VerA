@@ -294,7 +294,7 @@ const Exposed = struct {
         const dropped = s == .sys_task and self.displays_dropped and
             Mir.callee.family(.fromName(self.file.str(s.sys_task.name))) == .display;
         if (!dropped) try self.file.stmtEdges(id, Own{ .x = x });
-        const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
+        const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
         x.ws.clearRetainingCapacity();
         try self.file.stmtWrites(funcs, id, self.arena, &x.ws);
         for (x.ws.items) |w| {
@@ -373,7 +373,7 @@ const Exposed = struct {
         }
         // §4.7.2.3 an `output` actual is written by the call, not read.
         if (ex.tag(e) == .call) {
-            const funcs: []const Ast.FuncDecl = if (x.l.out.module) |m| m.functions else &.{};
+            const funcs: []const Ast.FuncDecl = if (x.l.module) |m| m.functions else &.{};
             for (funcs) |fd| if (fd.name == ex.strOf(e)) {
                 for (ex.args(e), 0..) |a, i| {
                     if (i < fd.args.len and fd.args[i].direction == .output) try x.subscripts(a) else try x.read(a);
@@ -477,7 +477,7 @@ fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
 fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: Body) Oom!void {
     if (id == .none) return;
     if (in_event != .none) {
-        const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
+        const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
         var writes: std.ArrayList(Ast.ExprId) = .empty;
         defer writes.deinit(self.arena);
         try self.file.stmtWrites(funcs, id, self.arena, &writes);

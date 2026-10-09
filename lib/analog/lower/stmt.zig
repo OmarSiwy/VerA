@@ -211,7 +211,7 @@ fn scopeElem(self: *Lower, b: Ast.SeqBlock) Oom!?[]const u8 {
     }
     if (b.name == .none) return null;
     const label = self.file.str(b.name);
-    const unit = if (self.cur_unit < self.out.unit_paths.len) self.out.unit_paths[self.cur_unit].path else "";
+    const unit = if (self.cur_unit < self.unit_paths.len) self.unit_paths[self.cur_unit].path else "";
     return if (std.mem.startsWith(u8, label, unit)) label[unit.len..] else label;
 }
 
@@ -405,7 +405,7 @@ const TpWrites = struct {
     pub fn expr(_: TpWrites, _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
     pub fn stmt(w: TpWrites, s: Ast.StmtId) Oom!void {
         if (s == .none) return;
-        const funcs: []const Ast.FuncDecl = if (w.l.out.module) |m| m.functions else &.{};
+        const funcs: []const Ast.FuncDecl = if (w.l.module) |m| m.functions else &.{};
         try w.l.file.stmtWrites(funcs, s, w.l.arena, w.out);
         try w.l.file.stmtEdges(s, w);
     }

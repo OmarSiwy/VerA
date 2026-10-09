@@ -754,7 +754,7 @@ fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
 /// repeats. `out` grows in `self.arena`.
 pub fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
     if (id == .none) return;
-    const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
+    const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
     var writes: std.ArrayList(Ast.ExprId) = .empty;
     try self.file.stmtWrites(funcs, id, self.arena, &writes);
     for (writes.items) |w| {
@@ -957,7 +957,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
     // output actual and a `$random` seed assign too (`stmtWrites`). The target
     // of `bus[3] = ...` is the array, so `lvalueBase` walks down to the name —
     // §7.2.2's domain is a property of the declaration.
-    const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
+    const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
     var writes: std.ArrayList(Ast.ExprId) = .empty;
     defer writes.deinit(self.arena);
     try self.file.stmtWrites(funcs, id, self.arena, &writes);
@@ -1010,7 +1010,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
     if (discrete and self.file.stmt(id) == .assign) {
         const a = self.file.stmt(id).assign;
         const t = self.file.lvalueBase(a.target);
-        if (a.continuous != .force and a.continuous != .release and t != .none) if (self.out.module) |m| {
+        if (a.continuous != .force and a.continuous != .release and t != .none) if (self.module) |m| {
             if (isNetName(m, ex.strOf(t)))
                 try self.err(ex.mainTok(t), .E0482, "`{s}` is a net, and {s}", .{ self.file.str(ex.strOf(t)), switch (a.continuous) {
                     .assign => "a procedural `assign` (§8.5.3.2) writes a variable",
@@ -1156,7 +1156,7 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
 fn digitalCallsIn(self: *Lower, e: Ast.ExprId) Oom!void {
     if (e == .none) return;
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .call) if (self.out.module) |m| for (m.functions) |*fd| {
+    if (ex.tag(e) == .call) if (self.module) |m| for (m.functions) |*fd| {
         if (fd.name != ex.strOf(e) or fd.is_analog) continue;
         var b = self.errWith(ex.mainTok(e), .E0436);
         b.msg("`{s}`, in the arguments of an analog event, which §7.3.5 puts in the continuous context", .{self.file.str(fd.name)});

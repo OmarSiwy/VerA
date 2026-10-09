@@ -558,7 +558,6 @@ test "if-conversion preserves what the module computes (differential)" {
     // arm of a diamond, every input sign combination. The converted MIR must
     // also still pass `verify`.
     const a = std.testing.allocator;
-    const Ast = @import("frontend").Ast;
     const Lowered = @import("ir").Lowered;
     const verify = @import("verify.zig");
     const T = struct {
@@ -676,8 +675,7 @@ test "if-conversion preserves what the module computes (differential)" {
         const out_plain = try T.build(&plain, @intCast(shape));
         const out_conv = try T.build(&conv, @intCast(shape));
         try std.testing.expect(try run(a, &conv) >= 1);
-        var file: Ast.SourceFile = .empty;
-        var lw: Lowered = .{ .file = &file };
+        var lw: Lowered = .{};
         defer lw.nodes.deinit(a);
         for (0..2) |_| try lw.nodes.append(a, .{ .name = "n", .kind = .net, .disc = "", .dir = .unspecified });
         if (try verify.verify(&conv, &lw)) |v| {

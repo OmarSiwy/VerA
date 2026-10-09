@@ -29,7 +29,7 @@ pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
     const name = self.file.str(ex.strOf(a));
     if (self.vars.contains(name) or self.param_index.contains(name) or self.consts.contains(name))
         return null;
-    const m = self.out.module orelse return null;
+    const m = self.module orelse return null;
     for (m.functions) |*fd| {
         if (std.mem.eql(u8, self.file.str(fd.name), name)) return fd;
     }

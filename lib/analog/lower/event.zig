@@ -423,7 +423,7 @@ pub fn captureTimerArray(self: *Lower, name: []const u8) Oom!void {
 fn timerFunctionPure(self: *Lower, name: Ast.StrId) Oom!bool {
     if (self.event_state.timer_functions.get(name)) |pure| return pure;
     try self.event_state.timer_functions.put(self.arena, name, false); // recursion is already E0510
-    const module = self.out.module orelse return false;
+    const module = self.module orelse return false;
     for (module.functions) |*fd| if (fd.name == name) {
         if (!fd.is_analog) return false;
         for (fd.args) |arg| if (arg.direction != .input) return false;
@@ -533,7 +533,7 @@ fn timerSystemPure(c: Mir.Callee) bool {
 /// A final unconditional assignment/return establishes the value unless an
 /// earlier return can bypass it. Side effects still occur only at the call.
 fn timerFunctionConstant(self: *Lower, name: Ast.StrId) Oom!bool {
-    const module = self.out.module orelse return false;
+    const module = self.module orelse return false;
     for (module.functions) |*fd| if (fd.name == name) {
         var last = fd.body;
         while (last != .none and self.file.stmt(last) == .block) {
@@ -586,7 +586,7 @@ fn captureTimerEffects(self: *Lower, e: Ast.ExprId) Oom!?[]const TimerRead {
     if (ex.tag(e) == .sys_call and timerSystemPure(Mir.Callee.fromName(self.file.str(ex.strOf(e))))) return null;
     var reads: std.ArrayList(TimerRead) = .empty;
     var formals: []const Ast.FuncArg = &.{};
-    if (ex.tag(e) == .call) if (self.out.module) |module| for (module.functions) |*fd| {
+    if (ex.tag(e) == .call) if (self.module) |module| for (module.functions) |*fd| {
         if (fd.name == ex.strOf(e)) {
             formals = fd.args;
             break;

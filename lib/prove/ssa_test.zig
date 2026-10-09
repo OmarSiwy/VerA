@@ -19,7 +19,6 @@ test "ssa: every read agrees with a concrete run of a random structured program"
     // Shapes are the ones lowering builds: §5.8 if/else with a join, §5.9
     // loops whose header is sealed only after the back edge.
     const gpa = std.testing.allocator;
-    const Ast = @import("frontend").Ast;
     const Lowered = @import("ir").Lowered;
     const verify = @import("verify.zig");
     var prng = std.Random.DefaultPrng.init(0x55a_b4a1);
@@ -238,8 +237,7 @@ test "ssa: every read agrees with a concrete run of a random structured program"
             try run.exec(top);
         }
 
-        var file: Ast.SourceFile = .empty;
-        const lw: Lowered = .{ .file = &file };
+        const lw: Lowered = .{};
         if (try verify.verify(&mir, &lw)) |v| {
             std.debug.print("verify: `{s}`: {s}\n", .{ @tagName(v.invariant), v.what });
             return error.TestUnexpectedResult;

@@ -706,13 +706,6 @@ test "Callee.synthetic: lowering's own `$` spellings, never an LRM name" {
     for (std.enums.values(Callee)) |c| if (c.synthetic()) try std.testing.expectEqual('$', @tagName(c)[0]);
 }
 
-test "dist: every §9.13 kernel is one of lowering's own reserved callees" {
-    for (&@import("elab").dist.dists) |*d| {
-        const c = Callee.fromName(d.kernel);
-        try std.testing.expect(c != .systf and c.synthetic());
-    }
-}
-
 test "callee: the task families agree with the descriptor, format and operator facts" {
     for (std.enums.values(Callee)) |c| {
         errdefer std.debug.print("callee `{s}`\n", .{@tagName(c)});

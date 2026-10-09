@@ -9,8 +9,7 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
 const Lowered = Lower.Lowered;
-const Ast = @import("frontend").Ast;
-const Const = @import("frontend").constfold.Const;
+const Const = Lower.Const;
 const op_kind = @import("ir").op;
 
 /// File-as-struct: `@import("analysis.zig")` is both the namespace and the type.
@@ -715,8 +714,7 @@ test "a chain of joins built outer-first types every phi from the integer at its
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
-    var file: Ast.SourceFile = .empty;
-    const lowered: Lowered = .{ .file = &file };
+    const lowered: Lowered = .{};
     var b: [4]Mir.Block = undefined;
     for (&b) |*x| x.* = try mir.addBlock(a);
     for (0..3) |i| _ = try mir.emitJump(a, b[i], b[i + 1]);
@@ -736,8 +734,7 @@ test "a dstop clears the derivative bits and keeps the value varying" {
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
-    var file: Ast.SourceFile = .empty;
-    const lowered: Lowered = .{ .file = &file };
+    const lowered: Lowered = .{};
     _ = try mir.addBlock(a);
     const va = try mir.addBlockParam(a, 0);
     const vb = try mir.addBlockParam(a, 1);
@@ -757,8 +754,7 @@ test "acdyn: an absdelay's input deps reach the value, a direct path does not" {
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
-    var file: Ast.SourceFile = .empty;
-    const lowered: Lowered = .{ .file = &file };
+    const lowered: Lowered = .{};
     _ = try mir.addBlock(a);
     const va = try mir.addBlockParam(a, 0);
     const vb = try mir.addBlockParam(a, 1);
@@ -1001,7 +997,7 @@ pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
 // ---------------------------------------------------------------------------
 
 /// Returns the emitted type of a §3.4 parameter declared with type `t`.
-pub fn tyOfParam(t: Ast.Type) VTy {
+pub fn tyOfParam(t: Lower.Type) VTy {
     return switch (t) {
         .real, .unspecified => .real,
         .integer => .int,
@@ -1136,8 +1132,7 @@ test "analysis: CFG facts agree with their naive definitions on random structure
     // The CFGs are lowering's shapes (if/else, one-armed if, loops, straight
     // jumps), so reducible, plus unreachable blocks jumping into them.
     const gpa = std.testing.allocator;
-    var file: Ast.SourceFile = .empty;
-    const lowered: Lowered = .{ .file = &file };
+    const lowered: Lowered = .{};
     var prng = std.Random.DefaultPrng.init(0xd0_d0);
     const r = prng.random();
 
@@ -1354,8 +1349,7 @@ test "analysis: an unknown at index 64 folds the table and keeps dFree exact" {
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
-    var file: Ast.SourceFile = .empty;
-    const lowered: Lowered = .{ .file = &file };
+    const lowered: Lowered = .{};
     _ = try mir.addBlock(a);
     const far = try mir.addBlockParam(a, 64);
     const near = try mir.addBlockParam(a, 1);
@@ -1381,8 +1375,7 @@ test foldConst {
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
-    var file: Ast.SourceFile = .empty;
-    var lowered: Lowered = .{ .file = &file };
+    var lowered: Lowered = .{};
     defer lowered.params.deinit(a);
     _ = try mir.addBlock(a);
     const k_default = try mir.addFloatConst(a, 2.5);
@@ -1415,8 +1408,7 @@ test "analysis: §3.2.2 array versions, value types and per-instance reads" {
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
-    var file: Ast.SourceFile = .empty;
-    var lowered: Lowered = .{ .file = &file };
+    var lowered: Lowered = .{};
     defer lowered.mem_arrays.deinit(a);
     defer lowered.params.deinit(a);
     try lowered.mem_arrays.append(a, .{ .name = "m", .len = 4, .ty = .integer });

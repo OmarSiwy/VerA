@@ -635,7 +635,7 @@ pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u32 {
 /// unknowns may ask for one name.
 fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u32 {
     if (self.out.nodes.len == max_nodes) {
-        const m = self.out.module.?;
+        const m = self.module.?;
         if (!self.node_state.full) try self.err(m.main_tok, .E1015, "`{s}` needs more than {d} nets and unknowns", .{ self.file.str(m.name), max_nodes });
         self.node_state.full = true;
         return 0; // stands in for the row, so lowering reports the rest
