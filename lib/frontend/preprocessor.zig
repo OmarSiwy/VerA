@@ -217,46 +217,13 @@ pub const DefaultTransition = Region(?f64);
 /// operands exist to be read back by §9.15 Table 9-27.
 pub const TimescaleEvent = Region(?Timescale);
 
-/// A `timescale's two operands, in seconds.
-pub const Timescale = struct {
-    unit: f64,
-    precision: f64,
-};
+/// A `timescale's two operands, in seconds (`base`'s, ARCHITECTURE.md Phase 11).
+pub const Timescale = @import("base").Timescale;
 
-/// One positional directive event: the output offset where its value changed,
-/// and the new value.
-///
-/// §10.1: "The scope of compiler directives extends from the point where it is
-/// processed, across all files processed, to the point where another compiler
-/// directive supersedes it or the processing completes." So nothing resets at
-/// a file boundary, and only another directive (including `resetall, which
-/// writes an event like any other) ends a region.
-///
-/// `at` is an offset into the preprocessed output, the unit every later stage
-/// reports in, so it compares directly against a token start.
-pub fn Region(comptime T: type) type {
-    return struct {
-        at: u32,
-        value: T,
-
-        /// Returns the value in force at output offset `off`, or `initial` (IEEE
-        /// 1364 §19.6's default value) before the first event. O(events).
-        /// `events` must be in text-stream order (`at` non-decreasing), as every
-        /// list `process` publishes is; of two events at one offset the later
-        /// one is in force.
-        ///
-        /// ponytail: backwards linear scan, one entry per directive occurrence;
-        /// `std.sort.upperBound` over `at` if a generated file carries thousands.
-        pub fn inForce(events: []const @This(), off: u32, initial: T) T {
-            var i = events.len;
-            while (i > 0) {
-                i -= 1;
-                if (events[i].at <= off) return events[i].value;
-            }
-            return initial;
-        }
-    };
-}
+/// One positional directive event: the output offset where its value
+/// changed, and the new value (`base`'s, so `Lowered` holds the lists
+/// without importing the frontend, ARCHITECTURE.md Phase 11).
+pub const Region = @import("base").Region;
 
 /// IEEE 1364 §19.2 `default_nettype_value`, a closed list. `supply0` and
 /// `supply1` are net types but not ones §19.2 lets an implicit net have.

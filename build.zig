@@ -52,7 +52,7 @@ const module_specs = [_]ModuleSpec{
     .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels" } },
     // Elaboration (§6.2.2) and the rule tables lowering shares with it.
     // `kernels`: the §9.13 folds use the device's rng.
-    .{ .name = "elab", .path = "lib/elab/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "kernels" } },
+    .{ .name = "elab", .path = "lib/elab/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels" } },
     // The MIR and the `Lowered` tables: types every stage after lowering reads.
     .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "kernels" } },
     // Lowering (AST → MIR + `Lowered`) and SSA construction.

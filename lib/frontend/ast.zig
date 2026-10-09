@@ -22,8 +22,9 @@ const stmt_file = @import("ast_stmt.zig");
 // Handles
 // ---------------------------------------------------------------------------
 
-/// Handle into the expression columns (LRM annex A expression grammar).
-pub const ExprId = enum(u32) { none = std.math.maxInt(u32), _ };
+/// Handle into the expression columns (LRM annex A expression grammar),
+/// `base`'s (ARCHITECTURE.md Phase 11).
+pub const ExprId = @import("base").ExprId;
 /// Handle into the statement pool. LRM §5 behavioral statements.
 pub const StmtId = enum(u32) { none = std.math.maxInt(u32), _ };
 /// Handle into the string intern table. LRM §2.8 identifiers, §2.7 strings.
@@ -31,19 +32,13 @@ pub const StrId = @import("base").StrId;
 /// The §2.7/§2.8 intern table (`base`'s), kept here as the AST's own name.
 pub const StringInterner = @import("base").StringInterner;
 
-/// Scalar data types. LRM §3.1, §3.2, §3.3, §3.4.1.
-/// `realtime` collapses to `.real` and `time` to `.integer` (A.2.1.1
-/// parameter_type); the distinction is meaningless in the analog kernel.
-/// `.unspecified` is `parameter p = <expr>;` with no type keyword: §3.4.1 derives
-/// the type from the default expression, which only lowering can fold. Lowering
-/// resolves it; codegen never sees it.
-pub const Type = enum(u8) { real, integer, string, unspecified };
+/// Scalar data types. LRM §3.1, §3.2, §3.3, §3.4.1 (`base`'s, which
+/// documents the variants).
+pub const Type = @import("base").Type;
 
 /// Port / function-argument direction. LRM §6.5.2.2 (ports), §4.7.2.3
-/// (function output/inout args). `.unspecified` is a port named in
-/// `list_of_ports` whose direction arrives later as a `port_declaration`
-/// (A.1.3 / A.1.4).
-pub const Direction = enum(u8) { unspecified, input, output, inout };
+/// (`base`'s, which documents the variants).
+pub const Direction = @import("base").Direction;
 
 /// LRM §3.6.1 / A.1.7 `potential_or_flow`.
 pub const PotentialOrFlow = enum(u8) { potential, flow };

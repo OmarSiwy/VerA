@@ -442,7 +442,7 @@ pub fn paramsetOverrides(
                 const value = try elab_clone.cloneExpr(self, o.value);
                 if (system) |kind| {
                     if (try elab_override.checkSystemParam(self, kind, o.main_tok, value, path)) continue;
-                    hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
+                    hier.set(kind, try hier_param.compose(kind, self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
                 } else try over.put(self.ctx.arena, target, value);
             },
             // §6.3.6/§9.18: a paramset's system assignment composes with
@@ -460,7 +460,7 @@ pub fn paramsetOverrides(
                 }
                 const value = try elab_clone.cloneExpr(self, o.value);
                 if (try elab_override.checkSystemParam(self, kind, o.main_tok, value, path)) continue;
-                hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
+                hier.set(kind, try hier_param.compose(kind, self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
             },
             .output_var => {}, // §6.4.3, dropped in the parser
         };

@@ -556,7 +556,7 @@ pub fn collectOverrides(
         const value = specified.get(kind);
         unit.hier.set(kind, parent.hier.get(kind));
         if (value == .none or try checkSystemParam(self, kind, self.ctx.file.exprs.mainTok(value), value, path)) continue;
-        unit.hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, parent.hier.get(kind), value, self.ctx.file.exprs.mainTok(value)));
+        unit.hier.set(kind, try hier_param.compose(kind, self.ctx.file, self.ctx.arena, parent.hier.get(kind), value, self.ctx.file.exprs.mainTok(value)));
     }
 
     // §6.3.1 last: "If a defparam assignment conflicts with a module

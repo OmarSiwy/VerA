@@ -1342,33 +1342,6 @@ test "two directives with no text between them publish at one offset, and the la
     try testing.expect(!CellRegion.inForce(r.cells, r.cells[0].at, false));
 }
 
-test "Region.inForce agrees with a forward scan on every small event list" {
-    // Every list of up to four events whose offsets are drawn from 0..3 in
-    // non-decreasing order, queried at every offset 0..4. The reference walks
-    // forward and keeps the last event at or before the query.
-    const values = [_]NetType{ .tri, .wand, .wor, .none };
-    var events: [4]NetTypeRegion = undefined;
-    for (0..events.len + 1) |n| {
-        for (0..std.math.pow(usize, 4, n)) |code| {
-            var c = code;
-            var sorted = true;
-            for (0..n) |k| {
-                events[k] = .{ .at = @intCast(c % 4), .value = values[k] };
-                c /= 4;
-                if (k > 0 and events[k].at < events[k - 1].at) sorted = false;
-            }
-            if (!sorted) continue;
-            for (0..5) |off| {
-                var want: NetType = .default;
-                for (events[0..n]) |e| {
-                    if (e.at <= off) want = e.value;
-                }
-                try testing.expectEqual(want, NetTypeRegion.inForce(events[0..n], @intCast(off), .default));
-            }
-        }
-    }
-}
-
 test "§10.4 definitions: redefinition, empty text, empty lists and the formal list's grammar" {
     // §10.4: a redefinition replaces.
     try expectPp("\n\n2", "`define A 1\n`define A 2\n`A");

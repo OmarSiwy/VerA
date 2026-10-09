@@ -15,8 +15,32 @@ pub const StringInterner = @import("interner.zig").StringInterner;
 /// through to the backing allocator.
 pub const BigArena = @import("big_arena.zig");
 
+/// Handle into the AST's expression columns (`Ast.ExprId`).
+pub const ExprId = @import("syntax.zig").ExprId;
+/// §3.1 scalar data types (`Ast.Type`).
+pub const Type = @import("syntax.zig").Type;
+/// §6.5.2.2 port and argument direction (`Ast.Direction`).
+pub const Direction = @import("syntax.zig").Direction;
+
+/// One positional directive event list's row type, `Region(T)`
+/// (`Preprocessor.Region`).
+pub const Region = @import("directive.zig").Region;
+/// A `timescale's two operands, in seconds (`Preprocessor.Timescale`).
+pub const Timescale = @import("directive.zig").Timescale;
+
+/// §7.8.4 one port re-pointed at a connect module (`Elaborate.Inserted`).
+pub const Inserted = @import("design.zig").Inserted;
+/// §7.4.4 basic or detail discipline resolution (`Elaborate.DisciplineResolution`).
+pub const DisciplineResolution = @import("design.zig").DisciplineResolution;
+/// §3.4 a `--param name=value` override (`Elaborate.ParamOverride`).
+pub const ParamOverride = @import("design.zig").ParamOverride;
+/// §9.18 one Table 9-29 hierarchical system parameter (`hier_param.Kind`).
+pub const SystemParam = @import("design.zig").SystemParam;
+
 test {
     _ = deep_stack;
     _ = @import("interner.zig");
     _ = BigArena;
+    _ = @import("directive.zig");
+    _ = @import("design.zig");
 }

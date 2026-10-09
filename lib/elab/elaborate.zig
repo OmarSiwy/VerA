@@ -234,22 +234,9 @@ pub const NetPart = struct {
     b: i64 = 0,
 };
 
-/// One port §7.8.4 re-pointed at a connect module (`elaborate/insert.zig`), by
-/// name. In the module instance at `path` (instance prefix, separator
-/// included, empty at the top), port `port` of child `inst` is connected to
-/// the bridge `name`'s `lower_port` instead of its upper connection, and the
-/// bridge (an instance of `module`) takes that upper connection on
-/// `upper_port`. Merged ports share a bridge, so `name` repeats. The segment
-/// between the child and the bridge is `name ++ sep ++ lower_port`.
-pub const Inserted = struct {
-    path: []const u8,
-    inst: []const u8,
-    port: []const u8,
-    module: []const u8,
-    name: []const u8,
-    upper_port: []const u8,
-    lower_port: []const u8,
-};
+/// One port §7.8.4 re-pointed at a connect module (`base`'s, which
+/// documents the fields; ARCHITECTURE.md Phase 11).
+pub const Inserted = @import("base").Inserted;
 
 /// One instance the first walk elaborated (`Flatten.tree`): the instance as
 /// its parent wrote it (an array element or a generate copy as the walk
@@ -305,16 +292,12 @@ pub const Ctx = struct {
     default_disciplines: []const @import("frontend").Preprocessor.DefaultDiscipline = &.{},
 };
 
-/// §7.4.4 "There are two modes for this method of resolution, basic (the
-/// default) and detail"; F.2.2: "The selection of this algorithm instead of
-/// the default shall be controlled by a simulator option" (VerA's is
-/// `--discipline-resolution=`). The mode decides where connect modules go
-/// (`segment.down`, read by `insert.plan`).
-pub const DisciplineResolution = enum { basic, detail };
+/// §7.4.4 basic or detail discipline resolution (`base`'s, ARCHITECTURE.md
+/// Phase 11).
+pub const DisciplineResolution = @import("base").DisciplineResolution;
 
-/// §3.4 compile-time overrides, shared with Lower.Options. Elaboration needs
-/// their final values when a §6.4.2 overload choice depends on a top parameter.
-pub const ParamOverride = struct { name: []const u8, value: f64 };
+/// §3.4 compile-time overrides, shared with Lower.Options (`base`'s).
+pub const ParamOverride = @import("base").ParamOverride;
 
 /// Elaborates `ctx.file` into the design lowering walks. Every pointer in the
 /// result points into `ctx.arena`. A top with no instances, defparams or
