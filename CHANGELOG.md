@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Three fixtures that no conforming run could pass now say what they mean: two `//! reject` lines quote E1157's and the `$realtime` refusal's current wording, and `last_crossing_in_creating_step` writes its expected time in digits.
 - Fix: §4.5.10 `last_crossing()` reports a crossing at the point that creates it (V(p) - 0.25 rising from -0.25 at 0 to 0.75 at 1n reads 0.25n at 1n, not -1), in every host; a device using it emits a different `eval` (#54).
 - Fix: a `.v` `--emit-exe` executable that embeds the interpreter (a design not made native) exits 1 after a `$readmem` load §17.2.9 terminated (E1157), as `vera --run` does; it exited 0 (#65).
 - The `backend` `module_specs` row is gone, split into `device` (`lib/device/`: codegen), `verilog` (`lib/verilog/`: `--emit-verilog`) and `exe` (`lib/exe/`: the testbench runner text), none of which imports another (ARCHITECTURE.md Phase 8; a row change, released with 0.10.0). An embedder's `dep.module("backend")` becomes one of the three; `vera.codegen`, `vera.beh_verilog` and `vera.tb` keep every name they had. The stable-name rules are `ir.names` (from `backend.naming`), which also spells every field name lowering, codegen and the testbench share (`__1b`, `__w<k>`, `__xz`, `__held__`). `zig build test-backend` is now `test-device`, `test-verilog` and `test-exe`. No change to emitted text.

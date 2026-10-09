@@ -33,7 +33,7 @@ module last_crossing_in_creating_step(p, n);
         t = last_crossing(V(p) - 0.25, 0);
         `CHECKI("negative before the first crossing", (t < 0.0) || ($abstime > 0.0), 1);
         if ($abstime > 0.0)
-            `CHECK("the crossing at 0.25n is the last one at 1n", t, 0.25n, 1e-18);
+            `CHECK("the crossing at 0.25n is the last one at 1n", t, 0.25e-9, 1e-18);
         I(p, n) <+ V(p, n);
     end
 endmodule

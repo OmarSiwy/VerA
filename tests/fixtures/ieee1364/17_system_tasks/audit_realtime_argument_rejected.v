@@ -5,7 +5,7 @@
 // digital-runner: reject
 //! lrm 9.10
 //! inherited IEEE 1364-2005 17.7.3
-//! reject takes no arguments
+//! reject take no arguments
 
 module audit_realtime_argument_rejected;
   initial begin
