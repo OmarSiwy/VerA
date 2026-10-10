@@ -51,6 +51,7 @@ pub const State = struct {
     /// The `contrib_sharers` rows already recorded.
     sharers: std.AutoHashMapUnmanaged(struct { row: u32, unit: u32 }, void) = .empty,
 
+    /// `direct`'s key: the target's access, (hi, lo) net pair and branch row.
     pub const Key = struct { access: Access, hi: u32, lo: u32, br: u32 };
 };
 
