@@ -80,7 +80,7 @@ pub const Options = struct {
 pub const max_errors = 64;
 
 /// Returns the number of units, the length of `Verdict.unit_modes`.
-/// `naming.assertCanonicalOrder` asserts that codegen agrees.
+/// `names.assertCanonicalOrder` asserts that codegen agrees.
 pub fn unitCount(lowered: *const Lowered) usize {
     return lowered.contributions.items.len;
 }

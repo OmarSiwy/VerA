@@ -687,7 +687,7 @@ test "proof: the §4.2.12 select guard covers `x > 0 ? ln(x) : 0`" {
     try std.testing.expect(v.ok());
 }
 
-test "proof: the unit count is the contribution count (the naming.zig contract)" {
+test "proof: the unit count is the contribution count (the names.zig contract)" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module two(p, n);

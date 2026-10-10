@@ -1,7 +1,7 @@
 //! §5.6 contributions: `<+`, indirect contributions, switch branches.
 //!
 //! In: contribution statements. Out: `Lowered.contributions` (one per access
-//! and branch; the unit order proof.zig and naming.zig index by), their
+//! and branch; the unit order proof.zig and names.zig index by), their
 //! accumulators (`Lower.accum`), the §5.6.1.2 charge sites, the §4.6.4 noise
 //! generators each row carries, and the module-level sweeps
 //! (`checkProbeBranches`, `checkSourceLoops`).

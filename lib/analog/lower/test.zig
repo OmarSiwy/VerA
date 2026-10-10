@@ -358,7 +358,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     _ = try h.low.lowerFile();
 
     // Two entries — the pair received both kinds — but only ONE survives with a
-    // value. `emitResidual` skips a contribution whose value folds to `.f_zero`,
+    // value. `dispatch.emitStamps` skips a contribution whose value folds to `.f_zero`,
     // so the discarded flow source of 2.0 emits no row at all, which is what
     // "the flow being discarded" has to mean in the device.
     try std.testing.expectEqual(@as(usize, 2), h.low.out.contributions.items.len);

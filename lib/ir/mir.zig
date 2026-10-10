@@ -266,7 +266,7 @@ pub const InstData = union(OpClass) {
     /// except for `.systf`, whose name only this carries.
     call: struct { callee: Callee, name: []const u8, args: []const Value },
     /// `tp`: null for a zero or held start; else the `vera_timepoint` cache
-    /// slot it starts from (`Lower.TpBlock`).
+    /// slot it starts from (`Lowered.TpBlock`).
     anew: struct { array: u32, tp: ?struct { block: u32, slot: u32 } = null },
     load: struct { op: Opcode, arr: Value, index: Value },
     store: struct { arr: Value, index: Value, value: Value },
@@ -686,7 +686,7 @@ pub fn emitAnew(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32) !V
 }
 
 /// Returns a version of `array` filled from slot `slot` of `vera_timepoint`
-/// statement `tp`'s cache (`Lower.TpBlock`).
+/// statement `tp`'s cache (`Lowered.TpBlock`).
 pub fn emitAnewCached(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32, tp: u32, slot: u32) !Value {
     return self.addResultInst(gpa, block, .{ .op = .anew, .a = array, .b = tp + 1, .c = slot });
 }

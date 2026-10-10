@@ -157,7 +157,7 @@ pub const Callee = enum(u8) {
     @"$held_int",
     @"$held_real",
     @"$held_str",
-    // VerA's `vera_timepoint` (§2.9, `Lower.TpBlock`): is the cache of
+    // VerA's `vera_timepoint` (§2.9, `Lowered.TpBlock`): is the cache of
     // statement b current, and slot k of it.
     @"$tp_hit",
     @"$tp_int",
@@ -491,7 +491,7 @@ pub fn takesFormat(c: Callee) bool {
 }
 
 /// Returns the §4.5 operator, §5.10.3 event or §9.17 task this callee is
-/// (the unit `naming.enumerateUnits` gives it), or `.none`. Written out with
+/// (the unit `names.enumerateUnits` gives it), or `.none`. Written out with
 /// no `else`, so a new callee must state whether it owns state.
 pub fn opKind(c: Callee) op.OpKind {
     return switch (c) {

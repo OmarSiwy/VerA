@@ -348,7 +348,7 @@ pub const NoiseSrc = struct {
     /// cross-spectrum. Signed: opposite signs are anti-correlation.
     /// `.f_zero` means no contribution has claimed the row yet; the first use
     /// replaces it and later ones add. A row still at zero in codegen is read
-    /// as 1 (`planNoise`).
+    /// as 1 (`plan/noise.zig` `plan`).
     coeff: Mir.Value = .f_zero,
     /// The generator appears in a shape no single factor describes. `coeff` is
     /// then 1 and stays there.
@@ -406,7 +406,7 @@ pub const none_u32 = std.math.maxInt(u32);
 pub const HeldVar = struct {
     /// Source spelling, including the `[i]` of a scalarized array element
     /// (§3.2.2). Unique within the module scope, so codegen's `Instance` field
-    /// name is injective after `naming.sanitize`.
+    /// name is injective after `names.sanitize`.
     name: []const u8,
     ty: Ty,
     /// A `.wide` variable's bits; 0 for every other type.

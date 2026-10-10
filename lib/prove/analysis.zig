@@ -2,7 +2,7 @@
 //! dominator tree, natural loops, flattened per-block instruction pools, and
 //! per-Value tables (type, alias snapshot, derivative dependencies, array
 //! owner, constant fold). Built once, then read-only. Nothing here knows the
-//! target is Zig, so `ir/` never imports `backend/`; per-unit scheduling tables
+//! target is Zig, so `prove` never imports `device`; per-unit scheduling tables
 //! belong to the emitter.
 
 const std = @import("std");

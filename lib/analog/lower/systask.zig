@@ -1305,7 +1305,7 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
 
 /// §9.17.1/§9.17.2. Turns each accumulated kernel-control place into exactly one
 /// synthetic `call`, whose single argument is the value the host must read.
-/// `naming.enumerateUnits` gives that call a unit; `codegen.emitStateMachine`
+/// `names.enumerateUnits` gives that call a unit; `codegen` (`state.zig` `emitStateMachine`)
 /// evaluates the unit once per accepted step and stores it into `Instance`.
 pub fn finishKernelCtl(self: *Lower) Oom!void {
     if (self.systask_state.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);

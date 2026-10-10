@@ -16,7 +16,7 @@ const Lowered = @import("lowered.zig");
 /// Codegen reads the same table, so a name is never both unknown and answered.
 /// Table 9-27 applies to simulators "if they support the parameter", so rows VerA
 /// cannot answer (`gdev`, `simulatorVersion`) stay unknown; run-time rows are in
-/// `simparamIsRuntime`. Takes the `timescale in force alone so `Lowered` can answer after
+/// `simparamIsRuntime`. Takes the `timescale` in force alone so `Lowered` can answer after
 /// `Lower` is gone.
 pub fn simparamValueIn(timescale: ?Timescale, name: []const u8) ?f64 {
     const eq = std.mem.eql;
@@ -56,7 +56,7 @@ pub fn simparamIsRuntime(name: []const u8) bool {
 /// order: the name, its reserved `Model` field (written before `derive()`), and
 /// the `uses` flag that emits the field. Each is SPICE's `.options` entry of that
 /// name, `sourceScaleFactor` the source-stepping factor; `tnom` (degrees Celsius) is the temperature a model card without its own
-/// `TNOM` was extracted at. The `__` suffix cannot collide: `naming.sanitize`
+/// `TNOM` was extracted at. The `__` suffix cannot collide: `names.sanitize`
 /// escapes a trailing `_` and every `__` run in an identifier.
 pub const host_simparams = [_]struct { name: []const u8, field: []const u8, use: Lowered.Kernel }{
     .{ .name = "tnom", .field = "nom_temp__", .use = .host_tnom },
@@ -90,7 +90,7 @@ test simparamHostField {
     try std.testing.expectEqualStrings("nom_temp__", simparamHostField("tnom").?);
     try std.testing.expectEqualStrings("source_scale__", simparamHostField("sourceScaleFactor").?);
     try std.testing.expect(simparamHostField("timeUnit") == null);
-    // Every row's field ends `__`, the suffix `naming.sanitize` never emits.
+    // Every row's field ends `__`, the suffix `names.sanitize` never emits.
     for (host_simparams) |h| try std.testing.expect(std.mem.endsWith(u8, h.field, "__"));
 }
 

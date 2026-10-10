@@ -431,7 +431,7 @@ nodiff_stack: std.ArrayList(bool) = .empty,
 /// `vera_timepoint` adds nothing: the outer statement is cached whole.
 tp_cur: ?u32 = null,
 /// Parallel to `out.timepoints`: the place that is 1 once the statement ran,
-/// read back into `TpBlock.mark` at the end of the block.
+/// read back into `Lowered.TpBlock.mark` at the end of the block.
 tp_marks: std.ArrayList(Ssa.Place) = .empty,
 /// §6.6.1/§5.9.3 genvars currently bound in `consts`, a stack pushed and
 /// popped by `tryUnrollFor`. Exists so `queueDisplay` can snapshot the

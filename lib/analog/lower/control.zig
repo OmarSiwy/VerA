@@ -348,7 +348,7 @@ fn controlStatic(
 }
 
 /// Lowers `if (cond) then_s else else_s` over an already lowered condition as a
-/// runtime diamond; `static` is as for `lowerGuarded`.
+/// runtime diamond; `static` is as for `lowerCondBody`.
 pub fn lowerBranchStmt(
     self: *Lower,
     cond: Mir.Value,

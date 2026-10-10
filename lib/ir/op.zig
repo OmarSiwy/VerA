@@ -2,13 +2,13 @@
 //! the operator set and the facts every stage reads about it (`acDynamic`,
 //! `needsInput`, `enableArg`), one exhaustive switch each. The callee →
 //! `OpKind` mapping is `callee.opKind`; the backend's per-operator rows
-//! (`Instance` fields, `dt`) are `backend/codegen/op_zig.zig`, a table total
+//! (`Instance` fields, `dt`) are `lib/device/codegen/op_zig.zig`, a table total
 //! over this enum.
 
 const std = @import("std");
 
 /// Every operator that owns per-instance state or a monitored event.
-/// `naming.enumerateUnits` gives each occurrence of one a unit; `.none` is the
+/// `names.enumerateUnits` gives each occurrence of one a unit; `.none` is the
 /// answer for every other `call` callee.
 ///
 /// §4.5.13 `limexp` and §4.5.14 `ddx` are not here: they are pure functions of
