@@ -448,12 +448,13 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$discontinuity",
         => return emitOperator(self, inst, args, k),
 
-        // §4.5.13 limexp, user-invoked only.
-        // Pins: zLimexp branches on its argument's `.val()`.
-        .limexp => {
-            if (args.len > 0) float_lanes.pinLanes(self, args[0]);
-            return gen_render.helper1(self, "zLimexp", if (args.len > 0) args[0] else .f_zero);
-        },
+        // §4.5.13 limexp "returns a real value which is the exponential of
+        // its single real argument", and "the simulator can only converge
+        // when the output of limexp() equals the exponential of the input".
+        // `eval` sees one iterate and never the previous one, so the only
+        // limiting it can do that still converges to exp is none: limexp is
+        // `exp`'s own text (specification/Vague_Decisions.md VD-121).
+        .limexp => return gen_render.renderOp(self, .exp, if (args.len > 0) args[0] else .f_zero, .f_zero, .real),
 
         // §4.5.14 ddx(f, V(node)); the unknown index is an int literal. Pins:
         // `.ddxAt` reads one scalar partial.

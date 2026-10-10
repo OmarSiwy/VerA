@@ -840,11 +840,11 @@ pub const Prover = struct {
                 // domain proof.
                 .@"$vt" => return .{ .iv = proof_transfer.combine(a, proof_lattice.Interval.point(8.617333262145179e-5), proof_transfer.mulOp), .finite = af },
                 // §4.5.13: "The apparent behavior of limexp() is not
-                // distinguishable from exp()", so exp's interval; exp(x)
-                // underflows to 0.0 below about -745, so not nonzero. Finite
-                // exactly when its argument is: the linearised side does not
-                // overflow the way exp does (rule 3 covers its slope).
-                .limexp => return .{ .iv = proof_transfer.unaryTransfer(.exp, a, af).iv, .finite = af },
+                // distinguishable from exp()", and the device computes it as
+                // exp (VD-121), so exp's interval and exp's finiteness:
+                // exp(x) underflows to 0.0 below about -745, so not nonzero,
+                // and overflows past ln(DBL_MAX).
+                .limexp => return proof_transfer.unaryTransfer(.exp, a, af),
                 else => {}, // else: every other range is argument-free, `callAbstract`'s
             }
         }
@@ -1099,7 +1099,13 @@ pub const Prover = struct {
                 .{},
             ),
             .inst_result => |inst| {
-                if (self.mir.instOp(inst) == .call) {
+                // `callTransfer` models these two from their argument, so
+                // their argument is what to constrain.
+                const modelled = self.mir.instOp(inst) == .call and switch (self.mir.instData(inst).call.callee) {
+                    .limexp, .@"$vt" => true,
+                    else => false, // else: every other callee's range is `callAbstract`'s, argument-free
+                };
+                if (self.mir.instOp(inst) == .call and !modelled) {
                     b.help("the prover does not model `{s}()`, so its range is unknown", .{
                         self.mir.instData(inst).call.name,
                     });

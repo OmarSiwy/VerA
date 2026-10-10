@@ -161,6 +161,7 @@ summary and has a **Status** line naming what landed.
 | VD-117 | VAMS 4.6.1 (Tables 4-21, 4-22), 4.6.2, 3.6.3.2, 5.10.2 | A §3.6.3.2 nodeset is Newton's starting point, applied before the first evaluation, so no evaluation is in a nodeset phase: `analysis("nodeset")` and `initial_step("nodeset")` are 0 in every host | no (#67) |
 | VD-118 | VAMS 9.15 Table 9-28, 4.6.1 Table 4-21 | `$simparam$str("analysis_type")` is the Table 4-21 name the point evaluates as: "ic" at a transient's t = 0 operating point, "tran" at every later point | no (#67) |
 | VD-119 | IEEE 1364-2005 6.1.3, 7.14 | A vector net's own `delay3` picks one delay for the whole value by §6.1.3's vector rule, as a continuous assignment does; never per bit, never from bit 0 | DONE (#55) |
+| VD-121 | VAMS 4.5.13 | `limexp` limits nothing and is exp at every argument: a device sees one iterate, and the clause requires exp at convergence | DONE (#52) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1349,6 +1350,16 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **Measure impact**: A: +1 fixture (`ieee1364/17_system_tasks/b_17_1_1_3_decimal_of_real_width.v`, with `%0d` and a `$rtoi` contrast), and +1 for the analog half (`ch09_system_tasks/analog_decimal_is_auto_sized.va`, #61). B: none (17.1.1.3 already has positive evidence).
 - **Status**: DONE 2026-10-17 (no issue: the clauses leave the width open and VerA's choice is consistent with its conversion).
 
+### VD-121: What `limexp` limits, and what it returns at a converged point
+- **Source**: bug hunt 2026-10-17, finding clauses-01 (#52).
+- **Rule**: VAMS 4.5.13: limexp "returns a real value which is the exponential of its single real argument; however, it internally limits the change of its output from iteration to iteration"; "On any iteration where the change in the output of the limexp() function is bounded, the simulator is prevented from terminating the iteration. Thus, the simulator can only converge when the output of limexp() equals the exponential of the input"; "The apparent behavior of limexp() is not distinguishable from exp()"; "There are different ways of implementing limiting algorithms for the exponential".
+- **Why vague**: the clause leaves the limiting algorithm open, and names none. It does not leave the value open: at any point a simulator accepts, limexp is exp.
+- **Options**: (a) the SPICE2 tangent continuation as a pure function of the argument, exp(80)·(1 + x − 80) above 80 (VerA until #52, ADMS and others): converges to a wrong current wherever the solution's argument is past 80, with nothing to stop it; (b) a stateful limiter that linearises around the previous iterate's output and holds off convergence while it limits (needs the previous iterate, which `eval` does not have, and a convergence veto the contract does not carry for an expression); (c) no limiting: exp at every argument.
+- **Decision**: `DECIDED:` (c). (a) breaks the one sentence the clause makes normative about the result; (b) is a contract change (per-site iterate history and a hook every host must run) for a convergence aid that `$limit` already provides on the junction voltage, where the host owns the previous iterate (VAMS 9.17.3: "$limit() may be used for the exponential as well"). With (c), limexp has exp's value, derivative, overflow (+inf past ln(DBL_MAX)) and finiteness proof (W0650 for an unbounded argument).
+- **VerA today**: `lib/backend/codegen/call.zig` renders `limexp` as the `exp` opcode's text; `lib/prove/proof/prover.zig` `callTransfer` gives it exp's interval and finiteness. Fixtures `exhaustive/044_limexp.va` (its old `limexp(1000) < 1e300` check tested for the tangent and is withdrawn), `ch04_expressions/limexp_is_exp_at_a_converged_point.va`, `25_limexp.va`.
+- **Measure impact**: A: +1 fixture. C: 4.5.13 gains a positive run past the old knee.
+- **Status**: DONE (#52). Models that leaned on the tangent for convergence (ESPice's `mos2.va`, `vdmos.va`, `hicumL2_va.va`, the `veriloga_diode_clamp` deck's `va_diode.va`) now see exp's slope past 80 Vt.
+
 ## 6. Implementation-defined choices
 
 A fixture here tests VerA's choice, not the clause. A tool that chooses
@@ -1439,7 +1450,7 @@ differently also conforms.
 
 A device's `exp`, `ln`/`log`-based and `pow` values come from the host's
 scalar family (`contract.RefFamily`, the testbench's, a host's own), and
-its scalar paths (`$limit`, `limexp`'s clamp) from `contract.gm`. VerA's
+its scalar paths (`$limit`) from `contract.gm`. VerA's
 own families and `contract.gm` use, on every target (host, NVPTX, AMDGCN):
 
 * `exp`: ARM optimized-routines' design (musl `pow.c` `exp_inline`,

@@ -756,6 +756,31 @@ test "proof: `1.0/$vt(V)` and `1.0/limexp(V)` are .strict with W0650 (§9.15, §
     }
 }
 
+test "proof: limexp of an unbounded probe overflows as exp does (§4.5.13, #52)" {
+    // limexp is exp at every point (VD-121), so limexp(V) with V unbounded
+    // reaches +inf past ln(DBL_MAX) ~ 709.78, exactly as exp(V) does: the
+    // unit is not provably finite. The pre-#52 rule called it finite
+    // whenever V was, which the old tangent kernel did not honour either
+    // (e^80 * (1 + 1e300 - 80) is +inf).
+    for ([_][]const u8{ "exp", "limexp" }) |f| {
+        var h: Harness = undefined;
+        const src = try std.testing.allocator.print(
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  analog I(p,n) <+ {s}(V(p,n));
+            \\endmodule
+        , .{f});
+        defer std.testing.allocator.free(src);
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const v = try h.prove(std.testing.allocator, .{});
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+    }
+}
+
 test "proof: $vt(T) and limexp(x) keep their argument's evidence" {
     // A positive, bounded argument still proves: the fix narrows the claim
     // to what the argument supports, it does not drop to top.

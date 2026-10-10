@@ -3545,8 +3545,8 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
     // history, never x), or it is a lead-protocol decision whose emission
     // site calls `leadLanes` (a batch family's `decide` hooks replace it).
     const pinned = [_][]const u8{
-        "zPow",   "zHypot",  "zFmod", "zFloor",   "zCeil",
-        "zAtan2", "zLimexp", "zWrap", "zLimitUf",
+        "zPow",   "zHypot", "zFmod",    "zFloor", "zCeil",
+        "zAtan2", "zWrap",  "zLimitUf",
     };
     const uniform = [_][]const u8{
         "zIdt",        "zIdtAcc",   "zIdtmod", "zSlew",  "zTransFrac",

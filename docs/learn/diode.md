@@ -28,9 +28,12 @@ V, and Newton's intermediate guesses can go that far.
 
 `limexp(x)` is `exp(x)` with a limit on how fast its output may change from
 one Newton iteration to the next (LRM §4.5.13). The LRM leaves the algorithm
-open. VerA's `limexp` follows `exp` up to an argument of 80 and continues
-along the tangent line above it, so a wild guess produces a large, finite
-current with a sensible derivative instead of an infinity:
+open, but not the answer: "the simulator can only converge when the output
+of limexp() equals the exponential of the input". A limiter needs the
+previous iteration's value, and a VerA device's `eval` sees one iterate at a
+time, so VerA's `limexp` limits nothing: it is `exp`, at every argument.
+Limit the junction voltage with `$limit` instead (below), which the host
+runs between iterations.
 
 ```verilog
 {{#include ../examples/diode/limexp.va}}
@@ -40,11 +43,10 @@ current with a sensible derivative instead of an infinity:
 {{#include ../examples/diode/limexp.out}}
 ```
 
-At 0.7 V the two agree. At 3 V, `exp` has grown to about 10⁵⁰ and `limexp`
-to about 10³⁶. Neither is a plausible diode current; what matters is that the
-next Newton step, guided by `limexp`'s gentler slope, is not thrown as far.
-At a converged solution of a real circuit the argument is far below 80, and
-the two are the same function.
+The two agree at both biases, 3 V included, where both are about 10⁵⁰: a
+point the solver accepts there must carry that current, so a `limexp` that
+answered anything else would converge to the wrong circuit. Like `exp`, the
+unit is not provably finite, and W0650 says so.
 
 ## Series resistance and an internal node
 

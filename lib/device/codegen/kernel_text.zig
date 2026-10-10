@@ -120,7 +120,7 @@ pub const math_txt =
     \\}
     \\
     \\/// Device-routed f64 transcendentals for the SCALAR paths (the
-    \\/// §4.5.15 limiters, zLimexp's clamp constant). Generated devices also
+    \\/// §4.5.15 limiters). Generated devices also
     \\/// compile for NVPTX/AMDGCN (the engine's GPU eval and StateKernel), and
     \\/// those targets have no libm — `@exp`/`@log` on an f64 die at PTX
     \\/// assembly with "no libcall available for fexp". `contract.gm`'s host
@@ -330,11 +330,6 @@ pub const math_txt =
     \\}
     \\fn zStrCmp(a: []const u8, b: []const u8) i64 { // §3.3.1 string relations
     \\    return switch (std.mem.order(u8, a, b)) { .lt => -1, .eq => 0, .gt => 1 };
-    \\}
-    \\fn zLimexp(comptime S: type, a: S) S { // §4.5.13 — user-invoked ONLY
-    \\    const lim = 80.0;
-    \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(zDevExp(lim));
-    \\    return a.exp();
     \\}
     \\
     \\

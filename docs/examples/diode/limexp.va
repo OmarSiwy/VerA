@@ -1,8 +1,8 @@
 // exp and limexp side by side (LRM 4.5.13). At a normal forward bias they
 // agree. At 3 V, a bias Newton can try on its way to a solution, exp(V/$vt)
-// is about e^116; VerA's limexp follows exp only up to an argument of 80 and
-// continues on the tangent line above it, so its value there is
-// e^80 * (1 + 116 - 80), about 2e36: some 1e14 times smaller than exp.
+// is about e^116, about 2e50, and so is limexp: "the simulator can only
+// converge when the output of limexp() equals the exponential of the input",
+// and VerA's limexp is exp at every argument.
 //! sweep V(a) = 0.7, 3
 //! print none
 `include "disciplines.vams"

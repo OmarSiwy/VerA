@@ -1,6 +1,7 @@
-// §4.5.13 limexp in the shape it exists for: the ideal-diode law. Below the
-// linearization threshold limexp IS exp (§4.5.13 only permits limiting for
-// large arguments), so the current is Is*(exp(V/Vt) - 1) exactly.
+// §4.5.13 limexp in the shape it exists for: the ideal-diode law. At a
+// converged point limexp IS exp (§4.5.13: "the simulator can only converge
+// when the output of limexp() equals the exponential of the input"; VerA's is
+// exp at every argument, VD-121), so the current is Is*(exp(V/Vt) - 1) exactly.
 //
 // Vt = kT/q. Annex D lists five vintages of k and q (`P_K_SPICE ... `P_K_NIST2018),
 // and the LRM does not say which a simulator shall use, so the fixture must
