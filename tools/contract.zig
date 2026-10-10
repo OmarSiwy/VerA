@@ -606,6 +606,165 @@ pub const gm = struct {
         return std.math.atan(v)[0];
     }
 
+    // ---- asinh, acosh, atanh, log10, atan2 ----
+    //
+    // Tables 4-14/4-15 name the C function for each. These are musl's
+    // algorithms as `std.math` (asinh, acosh, atanh, atan2) and compiler_rt
+    // (log10) carry them, with `@log` read as `hlog` and `std.math.atan` as
+    // `atan`, so they need no libm (NVPTX, AMDGCN) and one function serves the
+    // compiler's folds (`kernels/fold.zig`), the prover's bounds
+    // (`prove/proof/transfer.zig`) and a device's value (`kernel_text.zig`).
+    // An exact f64 model against mpmath (specification/Vague_Decisions.md
+    // VD-123): under 2 ulp (acosh near 1 the worst, 1.94); log10 0.67 ulp
+    // and exact at every power of ten. `tests/ulp.zig` holds the bounds.
+
+    /// tan(x) as a device's `zTan` computes it from its family's sin and
+    /// cos: the quotient, within 2 ulp of the exact tangent (VD-123).
+    pub fn tan(x: f64) f64 {
+        return sin(x) / cos(x);
+    }
+    /// asinh(x) = sign(x)·ln(|x| + sqrt(x² + 1)), without the cancellation
+    /// (x < 0) or the overflow (|x| > 1e154) of that formula.
+    pub fn asinh(x: f64) f64 {
+        const u: u64 = @bitCast(x);
+        const e = (u >> 52) & 0x7FF;
+        var rx: f64 = @bitCast(u & (std.math.maxInt(u64) >> 1));
+        if (e >= 0x3FF + 26) {
+            rx = hlog(rx) + 0.693147180559945309417232121458176568;
+        } else if (e >= 0x3FF + 1) {
+            rx = hlog(2 * rx + 1 / (@sqrt(rx * rx + 1) + rx));
+        } else if (e >= 0x3FF - 26) {
+            rx = std.math.log1p(rx + rx * rx / (@sqrt(rx * rx + 1) + 1));
+        }
+        return if (u >> 63 != 0) -rx else rx;
+    }
+    /// acosh(x) = ln(x + sqrt(x² − 1)) for x >= 1; NaN below.
+    pub fn acosh(x: f64) f64 {
+        const e = (@as(u64, @bitCast(x)) >> 52) & 0x7FF;
+        if (e < 0x3FF + 1) return std.math.log1p(x - 1 + @sqrt((x - 1) * (x - 1) + 2 * (x - 1)));
+        if (e < 0x3FF + 26) return hlog(2 * x - 1 / (x + @sqrt(x * x - 1)));
+        return hlog(x) + 0.693147180559945309417232121458176568;
+    }
+    /// atanh(x) = ½·ln((1 + x)/(1 − x)) for |x| < 1, ±inf at ±1, NaN past.
+    pub fn atanh(x: f64) f64 {
+        const u: u64 = @bitCast(x);
+        const e = (u >> 52) & 0x7FF;
+        var y: f64 = @bitCast(u & (std.math.maxInt(u64) >> 1));
+        if (y == 1.0) return std.math.copysign(std.math.inf(f64), x);
+        if (e < 0x3FF - 1) {
+            if (e >= 0x3FF - 32) y = 0.5 * std.math.log1p(2 * y + 2 * y * y / (1 - y));
+        } else {
+            y = 0.5 * std.math.log1p(2 * (y / (1 - y)));
+        }
+        return if (u >> 63 != 0) -y else y;
+    }
+    /// log10(x): -inf at ±0, NaN below 0, exact at every power of ten.
+    pub fn log10(x_: f64) f64 {
+        const ivln10hi: f64 = 4.34294481878168880939e-01;
+        const ivln10lo: f64 = 2.50829467116452752298e-11;
+        const log10_2hi: f64 = 3.01029995663611771306e-01;
+        const log10_2lo: f64 = 3.69423907715893078616e-13;
+        const Lg1: f64 = 6.666666666666735130e-01;
+        const Lg2: f64 = 3.999999999940941908e-01;
+        const Lg3: f64 = 2.857142874366239149e-01;
+        const Lg4: f64 = 2.222219843214978396e-01;
+        const Lg5: f64 = 1.818357216161805012e-01;
+        const Lg6: f64 = 1.531383769920937332e-01;
+        const Lg7: f64 = 1.479819860511658591e-01;
+        var x = x_;
+        var ix: u64 = @bitCast(x);
+        var hx: u32 = @intCast(ix >> 32);
+        var k: i32 = 0;
+        if (hx < 0x00100000 or hx >> 31 != 0) {
+            if (ix << 1 == 0) return -std.math.inf(f64); // log(+-0) = -inf
+            if (hx >> 31 != 0) return std.math.nan(f64); // log(-#) = nan
+            // subnormal, scale x
+            k -= 54;
+            x *= 0x1.0p54;
+            hx = @intCast(@as(u64, @bitCast(x)) >> 32);
+        } else if (hx >= 0x7FF00000) {
+            return x;
+        } else if (hx == 0x3FF00000 and ix << 32 == 0) {
+            return 0;
+        }
+        // x into [sqrt(2) / 2, sqrt(2)]
+        hx += 0x3FF00000 - 0x3FE6A09E;
+        k += @as(i32, @intCast(hx >> 20)) - 0x3FF;
+        hx = (hx & 0x000FFFFF) + 0x3FE6A09E;
+        ix = (@as(u64, hx) << 32) | (ix & 0xFFFFFFFF);
+        x = @bitCast(ix);
+        const f = x - 1.0;
+        const hfsq = 0.5 * f * f;
+        const s = f / (2.0 + f);
+        const z = s * s;
+        const w = z * z;
+        const t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
+        const t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
+        const R = t2 + t1;
+        // hi + lo = f - hfsq + s * (hfsq + R) ~ log(1 + f)
+        var hi = f - hfsq;
+        hi = @bitCast(@as(u64, @bitCast(hi)) & (@as(u64, std.math.maxInt(u64)) << 32));
+        const lo = f - hi - hfsq + s * (hfsq + R);
+        // val_hi + val_lo ~ log10(1 + f) + k * log10(2)
+        var val_hi = hi * ivln10hi;
+        const dk: f64 = @floatFromInt(k);
+        const y = dk * log10_2hi;
+        var val_lo = dk * log10_2lo + (lo + hi) * ivln10lo + lo * ivln10hi;
+        const ww = y + val_hi;
+        val_lo += (y - ww) + val_hi;
+        val_hi = ww;
+        return val_lo + val_hi;
+    }
+    /// atan2(y, x) in (-pi, pi], with C99 F.10.1.4's signed zeros and
+    /// infinities: atan2(±0, -0) = ±pi, atan2(±0, +0) = ±0. Table 4-15's
+    /// "atan2(0,0) = 0" is the +0, +0 case.
+    pub fn atan2(y: f64, x: f64) f64 {
+        const pi: f64 = 3.1415926535897931160E+00;
+        const pi_lo: f64 = 1.2246467991473531772E-16;
+        if (std.math.isNan(x) or std.math.isNan(y)) return x + y;
+        const ux: u64 = @bitCast(x);
+        var ix: u32 = @intCast(ux >> 32);
+        const lx: u32 = @intCast(ux & 0xFFFFFFFF);
+        const uy: u64 = @bitCast(y);
+        var iy: u32 = @intCast(uy >> 32);
+        const ly: u32 = @intCast(uy & 0xFFFFFFFF);
+        if ((ix -% 0x3FF00000) | lx == 0) return atan(y); // x = 1.0
+        // 2 * sign(x) + sign(y)
+        const m = ((iy >> 31) & 1) | ((ix >> 30) & 2);
+        ix &= 0x7FFFFFFF;
+        iy &= 0x7FFFFFFF;
+        if (iy | ly == 0) return switch (m) {
+            0, 1 => y, // atan(+-0, +...)
+            2 => pi, // atan(+0, -...)
+            else => -pi, // else: m is 3, atan(-0, -...)
+        };
+        if (ix | lx == 0) return if (m & 1 != 0) -pi / 2.0 else pi / 2.0;
+        if (ix == 0x7FF00000) {
+            if (iy == 0x7FF00000) return switch (m) {
+                0 => pi / 4.0,
+                1 => -pi / 4.0,
+                2 => 3.0 * pi / 4.0,
+                else => -3.0 * pi / 4.0, // else: m is 3
+            };
+            return switch (m) {
+                0 => 0.0,
+                1 => -0.0,
+                2 => pi,
+                else => -pi, // else: m is 3
+            };
+        }
+        // |y / x| > 0x1p64
+        if (ix +% (64 << 20) < iy or iy == 0x7FF00000) return if (m & 1 != 0) -pi / 2.0 else pi / 2.0;
+        // z = atan(|y / x|) with correct underflow
+        const z = if ((m & 2) != 0 and iy +% (64 << 20) < ix) 0.0 else atan(@abs(y / x));
+        return switch (m) {
+            0 => z,
+            1 => -z,
+            2 => pi - (z - pi_lo),
+            else => (z - pi_lo) - pi, // else: m is 3
+        };
+    }
+
     // ---- host exp and log for a scalar or a vector of operating points ----
     //
     // `hexp`/`hlog` take `f64` or `@Vector(n, f64)` (a batch family's value

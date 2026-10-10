@@ -163,6 +163,7 @@ summary and has a **Status** line naming what landed.
 | VD-119 | IEEE 1364-2005 6.1.3, 7.14 | A vector net's own `delay3` picks one delay for the whole value by §6.1.3's vector rule, as a continuous assignment does; never per bit, never from bit 0 | DONE (#55) |
 | VD-121 | VAMS 4.5.13 | `limexp` limits nothing and is exp at every argument: a device sees one iterate, and the clause requires exp at convergence | DONE (#52) |
 | VD-122 | VAMS 4.3.2, 4.3.1 Table 4-14 | A run-time ln/log/ln1p/sqrt/pow argument outside its domain is the prover's code from the executable (exit 1), at every evaluation an analysis makes; not for a value setup speculates, nor at the testbench's perturbed self-check points | DONE (#59) |
+| VD-123 | VAMS 4.3.1 Table 4-14, 4.3.2 Table 4-15, 9.14 | asinh, acosh, atanh, log10, asin, acos and atan2 run the C algorithm (musl's) with the analytic derivative, one function shared by folder, prover and device; tan stays sin/cos, folded the same way | DONE (#60) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1370,6 +1371,16 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **VerA today**: `lib/backend/codegen/kernel_text.zig` `zSqrtD`, `zLnD`, `zLn1pD`, `zLog10D`, `zPowK`, `zPow`, `zDomain`; `lib/backend/codegen/opcode_zig.zig` `Row.checked`; `lib/backend/codegen/render.zig` `renderOp`. Fixtures `ch04_expressions/runtime_{ln,log,sqrt,ln1p,pow,pow_constant_exponent}_domain_rejected.va` (`//! reject-run`) and `runtime_domain_legal_neighbour.va`.
 - **Measure impact**: A: +7 fixtures. C: 4.3.1's domains gain the run-time negative half.
 - **Status**: DONE (#59).
+
+### VD-123: How accurate Table 4-14/4-15's run-time functions are, and that a fold is the same function
+- **Source**: bug hunt 2026-10-17, finding clauses-09 (#60).
+- **Rule**: VAMS 4.3.1 Table 4-14 and 4.3.2 Table 4-15 give each function an "Equivalent C function" (log10, asin, acos, atan2, asinh, acosh, atanh, tan) and a domain; no accuracy. 9.14: the `$`-style and traditional names are one function. VD-026: a fold gives the bits run time gives.
+- **Why vague**: "Equivalent C function" names a function, not its error; C itself promises none.
+- **Options**: (a) the textbook compositions over ln/sqrt/atan (VerA until #60); (b) the C algorithms (musl's, as Zig's `std.math` and compiler_rt carry them) for the value, the analytic derivative grafted on.
+- **Decision**: `DECIDED:` (b) where (a) loses accuracy materially, measured with an exact f64 model of each kernel against mpmath (`#60`, 2026-10-18; C libm, glibc, beside it): asinh (a): every digit below |x| = 1e-8 (relative error 1, `x + sqrt(x²+1) - 1` cancels), -inf below -1e8, +inf above 1e154; (b) 1.47 ulp. acosh (a): 2.5e7 ulp near 1, +inf above 1e154; (b) 1.94 ulp. atanh (a): every digit below 1e-8, 2376 ulp in (-1, 1); (b) 1.46 ulp. acos (a), pi/2 - asin: 4.2e7 ulp near 1; asin (a), atan(x/sqrt(1-x²)): 1023 ulp near 1; (b) `std.math`'s, <= 1 ulp (glibc 0.51). log10 (a), ln·0.4343: 1.56 ulp and not exact at powers of ten (log(1e15) = 14.999999999999998); (b) 0.67 ulp, exact at every 10^k. atan2 (a): signed zeros lost (atan2(-0, -1) = +pi), and no derivative on the y axis; (b) C99 F.10.1.4's quadrants and zeros, 1.33 ulp, slope (x dy - y dx)/(x² + y²) everywhere but the origin. tan, sin/cos: 1.76 ulp against glibc's 0.52, kept (not material), and the folder now computes the same quotient. Each function is one function for the folder (`kernels/fold.zig`), the prover's bounds (`prove/proof/transfer.zig`), a host's f64 path (`opcode_zig.host_f64`) and the device's value: `contract.gm.asinh`, `acosh`, `atanh`, `log10`, `atan2`, `tan` (additive, no `abi_version` change; they need no libm, so NVPTX/AMDGCN compile them too), and `std.math.asin`/`acos`. Table 4-15's "atan2(0,0) = 0" is C's atan2(+0, +0); atan2(±0, -0) = ±pi as C gives.
+- **VerA today**: `lib/backend/codegen/kernel_text.zig` `zGraft`, `zLog10`, `zAsin`, `zAcos`, `zAsinh`, `zAcosh`, `zAtanh`, `zAtan2`; their `opcode_zig` rows pin lanes (a device using one is not `batch_ok`, as `hypot`/`atan2` already were). Bounds in `tests/ulp.zig`; fixture `ch04_expressions/c_math_values_at_run_time.va`.
+- **Measure impact**: A: +1 fixture. C: none (4.3.1/4.3.2 already two-way).
+- **Status**: DONE (#60).
 
 ## 6. Implementation-defined choices
 

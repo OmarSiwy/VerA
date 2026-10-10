@@ -3547,13 +3547,16 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
     const pinned = [_][]const u8{
         "zPow",   "zHypot", "zFmod",    "zFloor", "zCeil",
         "zAtan2", "zWrap",  "zLimitUf",
+        // §4.3 the C-function values (#60): `opcode_zig` pins their rows.
+        "zLog10", "zAsin",
+        "zAcos",  "zAsinh", "zAcosh",   "zAtanh",
     };
     const uniform = [_][]const u8{
         "zIdt",        "zIdtAcc",   "zIdtmod", "zSlew",   "zTransFrac",
-        "zTransition", "zAbsdelay", "zLog10",  "zTan",    "zAsin",
-        "zAcos",       "zAsinh",    "zAcosh",  "zAtanh",  "zPadInt",
+        "zTransition", "zAbsdelay", "zTan",    "zPadInt",
         // §4.3.2 read `.val()` only for `zDomain`'s report, never to steer.
-        "zSqrtD",      "zLnD",      "zLn1pD",  "zLog10D", "zPowK",
+        "zSqrtD",
+        "zLnD",        "zLn1pD",    "zLog10D", "zPowK",
     };
     const lead = [_][]const u8{ "zCmp", "zRoundI", "zStrip", "zMulP", "zAddP", "zSubP" };
     const text = gen_kernel_text.math_txt ++ gen_kernel_text.ops_txt;

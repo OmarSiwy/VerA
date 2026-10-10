@@ -2,14 +2,15 @@
 //! constants in, a `Const` out, or null when the result has no constant
 //! value. Pure: no allocation, no AST. The constant_expression walker
 //! (`frontend/constfold.zig`) and the MIR folder (`ir/opcode.zig`) call
-//! these, so a parameter default and a folded opcode answer alike, and
-//! `exp`/`log`/`pow` are the devices' own (`contract.gm`).
+//! these, so a parameter default and a folded opcode answer alike, and each
+//! §4.3 function is the one a device computes (`contract.gm`, or the
+//! `std.math` call `codegen/kernel_text.zig` makes).
 //! Implements §2.7 (string operands), §3.2's 32-bit integer wrap, §4.2.1.3,
 //! §4.2.4, §4.2.11, §4.2.12, §4.3 and Table 3-3; IEEE 1364-2005 §5.1.5
 //! Table 5-6, §5.1.12 and §17.11.1 (`$clog2`).
 
 const std = @import("std");
-/// The devices' exp/log/pow: a fold gives the bits the device computes.
+/// The devices' math (`contract.gm`): a fold gives the bits the device computes.
 const gm = @import("contract").gm;
 
 /// A.8.6 unary_operator. Stored in the `extra` column of an Ast `.unary` node.
@@ -372,27 +373,27 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
         .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = if (x > y) x else y },
         .pow => .{ .real = gm.pow(x, y) },
         .hypot => .{ .real = std.math.hypot(x, y) },
-        .atan2 => .{ .real = std.math.atan2(x, y) },
+        .atan2 => .{ .real = gm.atan2(x, y) },
         .sqrt => .{ .real = @sqrt(x) },
         .exp => .{ .real = gm.exp(x) },
         .expm1 => .{ .real = std.math.expm1(x) },
         .ln => .{ .real = gm.log(x) },
         .ln1p => .{ .real = std.math.log1p(x) },
-        .log => .{ .real = @log10(x) },
+        .log => .{ .real = gm.log10(x) },
         .floor => .{ .real = @floor(x) },
         .ceil => .{ .real = @ceil(x) },
         .sin => .{ .real = @sin(x) },
         .cos => .{ .real = @cos(x) },
-        .tan => .{ .real = @tan(x) },
+        .tan => .{ .real = gm.tan(x) },
         .asin => .{ .real = std.math.asin(x) },
         .acos => .{ .real = std.math.acos(x) },
         .atan => .{ .real = std.math.atan(x) },
         .sinh => .{ .real = std.math.sinh(x) },
         .cosh => .{ .real = std.math.cosh(x) },
         .tanh => .{ .real = std.math.tanh(x) },
-        .asinh => .{ .real = std.math.asinh(x) },
-        .acosh => .{ .real = std.math.acosh(x) },
-        .atanh => .{ .real = std.math.atanh(x) },
+        .asinh => .{ .real = gm.asinh(x) },
+        .acosh => .{ .real = gm.acosh(x) },
+        .atanh => .{ .real = gm.atanh(x) },
     };
 }
 

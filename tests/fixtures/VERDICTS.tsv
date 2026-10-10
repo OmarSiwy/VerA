@@ -1094,6 +1094,7 @@ pass	ch04_expressions/b2_transition_interrupted_falling_lower.va
 pass	ch04_expressions/b2_transition_interrupted_rising_higher.va
 pass	ch04_expressions/b5_ddt_of_a_ramp_held_in_a_variable.va
 pass	ch04_expressions/bitwise_not_on_real_rejected.va
+pass	ch04_expressions/c_math_values_at_run_time.va
 pass	ch04_expressions/case_equality_real_operand_rejected.va
 pass	ch04_expressions/concatenation_empty_rejected.va
 pass	ch04_expressions/concatenation_real_operand_rejected.va

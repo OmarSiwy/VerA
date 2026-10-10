@@ -36,9 +36,12 @@ pub const header_txt =
     \\
 ;
 
-/// LRM Tables 4-14/4-15 in value form: every function the scalar family does
+/// LRM Tables 4-14/4-15 in value form: a function the scalar family does
 /// not provide (`contract.family_primitives`) is composed from the ones it
-/// does, so forward-mode autodiff carries the analytic derivative.
+/// does, so forward-mode autodiff carries the analytic derivative, or, where
+/// the composition loses accuracy the named C function keeps (#60, VD-123),
+/// takes the folder's own value (`contract.gm`, `std.math`) with the
+/// analytic derivative grafted on (`zGraft`).
 /// File-scope helpers run in the default (strict) float mode, since
 /// `@setFloatMode` does not cross a call: a `.optimized` unit loses fast-math
 /// inside a helper and never gains unsound fast-math.
@@ -169,8 +172,25 @@ pub const math_txt =
     \\fn zTan(comptime S: type, a: S) S { // §4.3.2 tan = sin/cos
     \\    return a.sin().div(a.cos());
     \\}
-    \\fn zLog10(comptime S: type, a: S) S { // §4.3.1 log() is base 10
-    \\    return a.log().scale(0.4342944819032518);
+    \\/// `val`, the value of f(a) at `v = a.val()`, with f's slope `g` grafted
+    \\/// onto a's derivative through a zero-valued carrier (`zHypot`'s idiom).
+    \\/// A non-finite slope (a pole, a branch point) has none worth
+    \\/// propagating. At v = ±0 with f(±0) = ±0 (asin, asinh, atanh) the
+    \\/// value is `a.scale(g)`, since -0 plus a +0 carrier would round to +0.
+    \\fn zGraft(comptime S: type, a: S, v: f64, val: f64, g: f64) S {
+    \\    if (v == 0.0 and val == 0.0) return a.scale(g);
+    \\    var r = S.con(val);
+    \\    if (std.math.isFinite(g) and g != 0.0) r = r.add(a.addC(-v).scale(g));
+    \\    return r;
+    \\}
+    \\// §4.3.1/§4.3.2 the functions Tables 4-14/4-15 name a C equivalent for
+    \\// and the family does not carry: the value is the one function the
+    \\// compiler folds with (`contract.gm`, `std.math`), the derivative the
+    \\// analytic one (#60; the ln/sqrt/atan compositions these replace lost up
+    \\// to every digit, VD-123).
+    \\fn zLog10(comptime S: type, a: S) S { // §4.3.1 log() is base 10, C log10
+    \\    const v = a.val();
+    \\    return zGraft(S, a, v, contract.gm.log10(v), 0.4342944819032518 / v);
     \\}
     \\// §4.3.2 "Input values outside of the valid range for the operator shall
     \\// report an error", for Table 4-14's one-bound domains: each op with its
@@ -225,40 +245,49 @@ pub const math_txt =
     \\        r = r.add(a.addC(-av).scale(av / h)).add(b.addC(-bv).scale(bv / h));
     \\    return r;
     \\}
-    \\fn zAsin(comptime S: type, a: S) S { // §4.3.2 asin = atan(x/sqrt(1-x^2))
+    \\// d asin = dx/sqrt(1-x^2) and d acos its negation, with 1-x^2 as
+    \\// (1-x)(1+x): exact near ±1, where x*x rounds the gap away.
+    \\fn zAsin(comptime S: type, a: S) S { // §4.3.2, C asin
     \\    const v = a.val();
     \\    zDomain("E0605", "asin", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
-    \\    return a.div(a.mul(a).neg().addC(1.0).sqrt()).atan();
+    \\    return zGraft(S, a, v, std.math.asin(v), 1.0 / @sqrt((1.0 - v) * (1.0 + v)));
     \\}
-    \\fn zAcos(comptime S: type, a: S) S { // §4.3.2
+    \\fn zAcos(comptime S: type, a: S) S { // §4.3.2, C acos
     \\    const v = a.val();
     \\    zDomain("E0605", "acos", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
-    \\    return S.con(1.5707963267948966).sub(zAsin(S, a));
+    \\    return zGraft(S, a, v, std.math.acos(v), -1.0 / @sqrt((1.0 - v) * (1.0 + v)));
     \\}
-    \\fn zAsinh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2+1))
-    \\    return a.add(a.mul(a).addC(1.0).sqrt()).log();
+    \\// d asinh = dx/sqrt(x^2+1), as dx/|x| past 1e150 where x^2 overflows.
+    \\fn zAsinh(comptime S: type, a: S) S { // §4.3.2, C asinh
+    \\    const v = a.val();
+    \\    const g = if (@abs(v) > 1e150) 1.0 / @abs(v) else 1.0 / @sqrt(v * v + 1.0);
+    \\    return zGraft(S, a, v, contract.gm.asinh(v), g);
     \\}
-    \\fn zAcosh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2-1))
+    \\fn zAcosh(comptime S: type, a: S) S { // §4.3.2, C acosh
     \\    const v = a.val();
     \\    zDomain("E0607", "acosh", "x >= 1", v, v >= 1.0);
-    \\    return a.add(a.mul(a).addC(-1.0).sqrt()).log();
+    \\    return zGraft(S, a, v, contract.gm.acosh(v), 1.0 / (@sqrt(v - 1.0) * @sqrt(v + 1.0)));
     \\}
-    \\fn zAtanh(comptime S: type, a: S) S { // §4.3.2 0.5*ln((1+x)/(1-x))
+    \\fn zAtanh(comptime S: type, a: S) S { // §4.3.2, C atanh
     \\    const v = a.val();
     \\    zDomain("E0606", "atanh", "-1 < x < 1", v, v > -1.0 and v < 1.0);
-    \\    return a.addC(1.0).div(a.neg().addC(1.0)).log().scale(0.5);
+    \\    return zGraft(S, a, v, contract.gm.atanh(v), 1.0 / ((1.0 - v) * (1.0 + v)));
     \\}
-    \\fn zAtan2(comptime S: type, y: S, x: S) S { // §4.3.2
-    \\    // Value-level branch only: every arm is atan(y/x) plus a CONSTANT, so
-    \\    // each arm carries the exact derivative of atan2 on its quadrant.
-    \\    const xv = x.val();
-    \\    if (xv > 0.0) return y.div(x).atan();
-    \\    if (xv < 0.0) {
-    \\        const c: f64 = if (y.val() >= 0.0) 3.141592653589793 else -3.141592653589793;
-    \\        return y.div(x).atan().addC(c);
-    \\    }
+    \\/// §4.3.2 atan2(y, x), C atan2: C99 F.10.1.4's signed zeros and quadrants
+    \\/// (atan2(-0, -1) = -pi, atan2(+0, -0) = +pi; Table 4-15's "atan2(0,0) =
+    \\/// 0" is +0, +0). d atan2 = (x dy - y dx)/(x^2 + y^2), on every axis,
+    \\/// as (x/h)/h and (y/h)/h with h = hypot(x, y), which does not overflow;
+    \\/// none at the origin. On the +x axis the value is y/x, which keeps
+    \\/// y's signed zero and carries the same slope (dy/x).
+    \\fn zAtan2(comptime S: type, y: S, x: S) S {
     \\    const yv = y.val();
-    \\    return S.con(if (yv > 0.0) 1.5707963267948966 else if (yv < 0.0) -1.5707963267948966 else 0.0);
+    \\    const xv = x.val();
+    \\    if (yv == 0.0 and xv > 0.0) return y.div(x);
+    \\    const h = std.math.hypot(xv, yv);
+    \\    var r = S.con(contract.gm.atan2(yv, xv));
+    \\    if (h != 0.0 and std.math.isFinite(h))
+    \\        r = r.add(y.addC(-yv).scale((xv / h) / h)).sub(x.addC(-xv).scale((yv / h) / h));
+    \\    return r;
     \\}
     \\fn zFloor(comptime S: type, a: S) S { // §4.3.1 — derivative 0 a.e.
     \\    return S.con(@floor(a.val()));
