@@ -4,9 +4,11 @@
 //! (`Gen.sinv`). `pruneHeld` finds the §3.2 held slots a card cannot observe,
 //! rewrites the MIR and returns the rows to keep, which lowering applies
 //! (`Lower.dropHeld`): only lowering writes `Lowered`. The emitter half
-//! (setup roots, `pub fn setup`) is the backend's `codegen/setup.zig`.
-//! Clauses: §2.9, §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10, §5.10.2, §9.10,
-//! §9.15, §9.19.
+//! (setup roots, `pub fn setup`) is `lib/device/codegen/setup.zig`.
+//!
+//! LRM clauses this file's code cites: §2.9, §3.2, §4.4, §5.2.1, §5.6.1.2,
+//! §5.10, §5.10.2, §6.3.6, §9.10, §9.15, §9.19.
+//! IEEE 1364-2005 clauses cited: §17.11.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;

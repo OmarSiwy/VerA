@@ -3,7 +3,13 @@
 //! In: the module AST. Out: per-net and per-statement access/context marks on `Lower`,
 //! and a diagnostic for every analog construct used in a discrete context.
 //!
-//! LRM clauses this file's code cites: §3.2.2, §4.4, §4.5.15, §4.7.1, §4.7.3, §5.2.1, §5.10.3, §7.2.2, §7.3, §7.3.1, §7.3.3, §7.3.5, §7.3.7, §8.5.
+//! LRM clauses this file's code cites: §1.1, §3.2.2, §3.4, §3.6.2.2, §3.7,
+//! §4.3, §4.4, §4.5.15, §4.7.1, §4.7.3, §5.2.1, §5.10, §5.10.3, §5.10.4,
+//! §5.10.5, §6.3.4, §6.5.3, §6.6.1, §6.8, §7.2, §7.2.2, §7.3, §7.3.1, §7.3.2,
+//! §7.3.3, §7.3.4, §7.3.5, §7.3.6.1, §7.3.6.2, §7.3.6.3, §7.3.6.4, §7.3.6.5,
+//! §7.3.7, §7.6, §8.4.3.2, §8.5, §8.5.1, §8.5.3.2, §8.5.3.4, §8.5.3.5,
+//! §8.5.3.6, §9.2, §9.4.3, §9.4.7, §9.5.1.2, §9.7.
+//! IEEE 1364-2005 clauses cited: §6.1, §9.9.1, §10.2, §17.8.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

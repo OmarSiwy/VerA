@@ -7,8 +7,8 @@
 //! per cell of a pattern (`flattenPattern`). Owns no table: everything here is
 //! a pure function of the shape, or allocates its answer in the arena.
 //!
-//! LRM clauses this file's code cites: §2.7, §3.2, §3.2.2, §3.3, §3.4, §3.4.4, §3.4.8,
-//! §4.2.13, §4.2.14.
+//! LRM clauses this file's code cites: §2.7, §3.2, §3.2.2, §3.3, §3.4, §3.4.4,
+//! §3.4.8, §3.6.3.2, §4.2.1.1, §4.2.13, §4.2.14.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

@@ -16,9 +16,11 @@
 //! `pruneHeld` found unobservable: lowering stays the one writer of
 //! `held_vars`.
 //!
-//! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §3.4, §3.4.4, §3.4.8,
-//! §3.5, §4.2.7, §4.7.2.3, §5.2.1, §5.3.2, §5.6.1.3, §5.9, §5.9.2, §5.10, §5.11, §6.6.1,
-//! §6.8, §7, §7.2.2, §7.3.1, §7.3.2, §9.4.
+//! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §3.4, §3.4.4,
+//! §3.4.8, §3.5, §4.2.7, §4.7.2.3, §5.2.1, §5.3.2, §5.6.1.3, §5.9, §5.9.2,
+//! §5.10, §5.11, §6.6.1, §6.8, §7, §7.2.2, §7.3.1, §7.3.2, §7.3.6.1, §7.3.6.4,
+//! §8.5, §9.4.
+//! IEEE 1364-2005 clauses cited: §4.2.2, §5.4.
 //! §9.13.1/§9.13.2 hidden seed storage (`hiddenHeldInt`) uses the same retained SSA mechanism.
 
 const std = @import("std");

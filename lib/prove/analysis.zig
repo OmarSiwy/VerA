@@ -4,6 +4,10 @@
 //! owner, constant fold). Built once, then read-only. Nothing here knows the
 //! target is Zig, so `prove` never imports `device`; per-unit scheduling tables
 //! belong to the emitter.
+//!
+//! LRM clauses this file's code cites: §3.2, §3.4, §4.2, §4.2.1.1, §4.2.1.2,
+//! §4.2.3, §4.2.4, §4.2.12, §4.4, §4.5, §5.9, §5.10, §6.3.4, §9.15.
+//! IEEE 1364-2005 clauses cited: §5.4.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;

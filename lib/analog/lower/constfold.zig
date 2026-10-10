@@ -4,10 +4,11 @@
 //! is not constant. Reads the symbol tables, never writes. The operator rules are
 //! `frontend/constfold.zig`'s; this file supplies identifiers (through `consts`) and §4.2.9 signedness.
 //!
-//! LRM clauses this file's code cites: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1,
-//! §4.2.9, §4.2.11, §4.2.12, §4.3, §4.7.2, §6.6.1, §6.6.2, §9.11, §9.14;
-//! IEEE 1364-2005 §4.10.1, §5.2, §5.4, §5.5, §5.5.1, §12.2, §17.8, §17.11.1
-//! (the `$clog2` operand's width and sign).
+//! LRM clauses this file's code cites: §1.1, §2.7, §3.2, §3.4, §3.5, §4.2,
+//! §4.2.1, §4.2.1.1, §4.2.9, §4.2.10, §4.2.11, §4.2.12, §4.3, §4.7.2, §6.6.1,
+//! §6.6.2, §7.3.1, §9.11, §9.14.
+//! IEEE 1364-2005 clauses cited: §4.2.1, §4.10.1, §5.1.5, §5.2, §5.4, §5.5, §5.5.1, §12.2, §17.8, §17.11.1.
+//! IEEE 1364-2005's §5.5.1 is what the body's bare §5.5.1 (signedness) means.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

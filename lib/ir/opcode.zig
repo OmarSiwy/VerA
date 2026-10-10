@@ -1,8 +1,11 @@
 //! IR facts about each `Mir.Opcode`, one row per opcode: operand class, result
 //! type, LRM domain obligation (Tables 4-14/4-15), comparison relation and
 //! constant fold. `table` is a `std.EnumArray`, so a new opcode does not
-//! compile until its row exists. Target spellings live in the backend's
-//! `codegen/opcode_zig.zig`: lib/ir does not know the target is Zig.
+//! compile until its row exists. Target spellings live in
+//! `lib/device/codegen/opcode_zig.zig`: lib/ir does not know the target is Zig.
+//!
+//! LRM clauses this file's code cites: §2.7, §3.2, §4.2, §4.2.1.1, §4.2.1.2,
+//! §4.2.1.3, §4.2.4, §4.2.5, §4.2.7, §4.2.8, §4.2.9, §4.2.11, §4.3.1, §4.3.2.
 
 const std = @import("std");
 const value_fold = @import("kernels").fold;

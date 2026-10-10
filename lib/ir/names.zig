@@ -14,6 +14,8 @@
 //! §5.10 held `Instance` field (`heldField`), which codegen declares and the
 //! testbench reads (ARCHITECTURE.md Phase 8). Clauses: §1.3.1.1, §2.7,
 //! §2.8.1, §4.4, §4.5, §5.6, §5.10, §7.3.1, §7.3.2, §8.5.3.6, §9.17.
+//!
+//! LRM clauses this file's code cites: §2.8, §3.6.1.2, §5.6.7, §9.4.
 
 const std = @import("std");
 const Mir = @import("mir.zig");

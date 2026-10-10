@@ -4,6 +4,11 @@
 //! `enum(u32)` handles; tables grow by append, so equal input gives equal
 //! indices. A Value index renumbers when the source changes, so it must never
 //! reach an emitted name or a content hash (names.zig canonicalizes).
+//!
+//! LRM clauses this file's code cites: §2.7, §2.9, §3.2, §3.4, §4.2.1.1,
+//! §4.2.1.2, §4.2.3, §4.2.4, §4.2.5, §4.2.7, §4.2.8, §4.2.9, §4.2.10, §4.2.11,
+//! §4.2.12, §4.3.1, §4.3.2, §4.4, §4.5, §4.7, §5.6.1.2, §5.10.
+//! IEEE 1364-2005 clauses cited: §5.1.5, §19.1.
 
 const std = @import("std");
 const base = @import("base");

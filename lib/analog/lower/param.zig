@@ -7,8 +7,10 @@
 //! read of a parameter goes. A row's `ranges` reach proof.zig as bound
 //! evidence.
 //!
-//! LRM clauses this file's code cites: §2.9, §2.9.2, §3.4, §3.4.1, §3.4.2, §3.4.4, §3.4.5,
-//! §3.4.7, §4.2.1.1, §4.2.13, §5.5.3, §6.3, §6.3.4, §6.6.1, §6.7.1, §9.18.
+//! LRM clauses this file's code cites: §2.9, §2.9.2, §3.2.1, §3.4, §3.4.1,
+//! §3.4.2, §3.4.3, §3.4.4, §3.4.5, §3.4.7, §3.6.3.1, §4.2.1.1, §4.2.4, §4.2.13,
+//! §5.3.2, §5.5.3, §6.3, §6.3.4, §6.3.6, §6.4.2, §6.5.2.2, §6.6, §6.6.1,
+//! §6.7.1, §9.18.
 
 const std = @import("std");
 const hier_param = @import("elab").hier_param;

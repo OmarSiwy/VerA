@@ -8,6 +8,9 @@
 //! Layout: this file is the API and the spine (`proveOpts`). `proof/lattice.zig` holds the
 //! interval values, `proof/transfer.zig` the per-opcode transfer functions, `proof/prover.zig`
 //! the walk and the diagnostics, `proof/test.zig` the source-level self-checks.
+//!
+//! LRM clauses this file's code cites: §3.4, §4.2, §4.2.3, §4.2.5, §4.2.8,
+//! §4.2.12, §4.3, §4.4, §5.4.3, §5.6.1.3, §5.6.7.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;

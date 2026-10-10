@@ -1,7 +1,12 @@
 //! The prover: one dominator-order walk that rates every unit `.optimized` or `.strict`.
 //! In: MIR, analysis facts and Lower's parameter ranges. Out: an interval, a finite bit and a
 //! guard set per value, and a compile error only for a provably out-of-domain argument.
-//! LRM §2.7, §3.4.2, §4.2, §4.2.4, §4.2.5, §4.2.8, §4.2.12, §4.3.1, §4.3.2, §4.5.13, §9.5, §9.5.1.
+//!
+//! LRM clauses this file's code cites: §2.7, §3.2, §3.2.1, §3.4.2, §4.2,
+//! §4.2.1.2, §4.2.3, §4.2.4, §4.2.5, §4.2.7, §4.2.8, §4.2.12, §4.3.1, §4.3.2,
+//! §4.4, §4.5, §4.5.13, §5.8, §5.9, §5.10.3.3, §6.6.1, §9.5, §9.5.1, §9.15,
+//! §9.19.
+//! IEEE 1364-2005 clauses cited: §5.1.5.
 
 const std = @import("std");
 const proof = @import("../proof.zig");

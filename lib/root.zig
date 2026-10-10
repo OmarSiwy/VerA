@@ -18,9 +18,10 @@
 //! This file's pub declarations are the `vera` module's API (`src/main.zig`,
 //! `src/vpi`, `tests/*`), so their names and meanings are frozen.
 //!
-//! Clauses its code cites: §3.2, §3.4, §3.6.2, §3.7, §4.2.12, §4.3.2, §4.6.4.6, §6.2,
-//! §6.5.3, §7.4.4, §7.6, §9.4, §9.5, §9.5.1, §9.7.3, §10, §12.32.1, annex D.1,
-//! D.2, E.1 and E.2; IEEE 1364-2005 §19.1 and §19.6.
+//! Clauses its code cites: §3.2, §3.4, §3.6.2, §3.7, §4.2.12, §4.3.2, §4.6.4.6,
+//! §5.6, §6, §6.2, §6.5.3, §6.7, §7.4.4, §7.6, §9.4, §9.4.1, §9.5, §9.5.1,
+//! §9.7.3, §9.15, §9.16, §9.21.1, §10, §10.1, §12.32.1, annex D.1, D.2, E.1
+//! and E.2; IEEE 1364-2005 §19.1 and §19.6.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

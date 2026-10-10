@@ -5,6 +5,8 @@
 //! Since Phase 11 it imports no frontend or elaboration module either: the
 //! AST types `Lowered` carries are `base`'s, and the AST itself stays with
 //! `vera.CompileResult`. `kernels` holds the value folds and kernel tables it reads.
+//!
+//! LRM clauses this file's code cites: §4.5, §5.10.3, §9.15, §9.17.
 
 /// SSA instruction set every stage after lowering reads.
 pub const Mir = @import("mir.zig");

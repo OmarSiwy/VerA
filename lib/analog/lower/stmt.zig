@@ -2,7 +2,11 @@
 //!
 //! In: statement AST. Out: MIR instructions in the current block.
 //!
-//! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §4.2.1.1, §4.2.13, §5, §5.3, §5.3.2, §5.7, §5.9, §5.10.4, §6.6, §6.7.
+//! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §4.2.1.1,
+//! §4.2.1.2, §4.2.13, §4.7.1, §4.7.2.3, §5, §5.3, §5.3.2, §5.6, §5.6.7, §5.7,
+//! §5.8, §5.8.3, §5.9, §5.9.1, §5.9.2, §5.10, §5.10.4, §5.11, §6.3, §6.6,
+//! §6.6.1, §6.6.3, §6.7, §9.7.3, §9.15.
+//! IEEE 1364-2005 clauses cited: §5.5.3.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

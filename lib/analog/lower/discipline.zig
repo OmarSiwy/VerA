@@ -9,9 +9,10 @@
 //! Spine: `collectDisciplines`, then `checkNatureTable`, once per module;
 //! `checkNetCompat` per access function, branch and port connection.
 //!
-//! LRM clauses this file's code cites: §1.3.1.1, §3.6, §3.6.1, §3.6.1.1, §3.6.1.2,
-//! §3.6.1.3, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.2.3, §3.6.2.5, §3.6.2.7, §3.11,
-//! §3.11.1, §3.12, §3.13, §3.13.1, §3.13.2, §4.4, §5.5.1, §7.4.3.
+//! LRM clauses this file's code cites: §1.3.1.1, §2.6.2, §3.6, §3.6.1,
+//! §3.6.1.1, §3.6.1.2, §3.6.1.3, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.2.3,
+//! §3.6.2.5, §3.6.2.7, §3.11, §3.11.1, §3.12, §3.13, §3.13.1, §3.13.2, §4.4,
+//! §5.5.1, §7.4.3.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

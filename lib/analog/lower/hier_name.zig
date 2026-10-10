@@ -3,7 +3,8 @@
 //! In: string-named instance/node references. Out: the flat unknown each one names,
 //! resolved at compile time (the device has no runtime hierarchy).
 //!
-//! LRM clauses this file's code cites: §1.3.1.1, §3.6.3.2, §3.11.1, §5.2.1, §5.4.3, §5.8.3, §6.2.1, §6.7, §9.16, §9.20.
+//! LRM clauses this file's code cites: §1.3.1.1, §3.6.3.2, §3.11.1, §5.2.1,
+//! §5.4.3, §5.8.3, §6.2.1, §6.4.3, §6.7, §9.16, §9.20.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

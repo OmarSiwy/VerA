@@ -1,8 +1,12 @@
 //! The prover's transfer functions: an opcode and its operands' intervals in,
 //! the result's interval and finite bit out (`Abstract`). Pure arithmetic on
 //! `lattice.Interval`: no MIR walk, no allocation, no diagnostics.
-//! LRM §3.2, §4.2.4, §4.2.5, §4.2.8, §4.3.1 (Table 4-14), §4.3.2 (Table 4-15),
-//! §4.5.13, §9.5, §9.10, §9.13, §9.15, §9.18.
+//!
+//! LRM clauses this file's code cites: §2.7, §2.9, §3.2, §3.4.2, §4.2.4,
+//! §4.2.5, §4.2.8, §4.3.1, §4.3.2, §4.5.4, §4.5.13, §4.6.1, §5.2.1, §5.10.2,
+//! §5.10.3, §9.5, §9.5.1, §9.10, §9.13, §9.15, §9.18; Tables 4-14 (§4.3.1) and
+//! 4-15 (§4.3.2).
+//! IEEE 1364-2005 clauses cited: §5.4.
 
 const std = @import("std");
 const proof_lattice = @import("lattice.zig");

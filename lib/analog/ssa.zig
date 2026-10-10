@@ -4,6 +4,8 @@
 //! every Value through `Mir.resolveAlias` (a collapsed phi is aliased, not
 //! rewritten), and must treat `.phi` rows as block headers: a phi is minted on
 //! demand, so its row can sit anywhere in the chain, even after the terminator.
+//!
+//! LRM clauses this file's code cites: §3.4.4, §5.7.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;

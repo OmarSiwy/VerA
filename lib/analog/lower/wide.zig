@@ -29,9 +29,9 @@
 //! that yield x for known operands (`/` or `%` by zero, zero to a negative
 //! power) yield 0, as the analog integer `/` does (W0653).
 //!
-//! LRM clauses this file's code cites: §3.2, §7.3.1, §7.3.2; IEEE 1364-2005
-//! §3.5.1, §4.2.1, §4.8.2, §5.1.5, §5.1.7-§5.1.14, §5.4.1, §5.5.1-§5.5.3,
-//! Table 5-6, Table 5-22.
+//! LRM clauses this file's code cites: §2.6.1, §3.2, §7.3.1, §7.3.2, §9.11.
+//! IEEE 1364-2005 clauses cited: §3.5.1, §4.1, §4.2.1, §4.8.2, §5.1.5, §5.1.7-§5.1.14,
+//! IEEE 1364-2005 §5.4.1, §5.5.1-§5.5.3, Table 5-6 and Table 5-22.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

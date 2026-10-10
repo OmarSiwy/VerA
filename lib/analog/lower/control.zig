@@ -3,7 +3,11 @@
 //! In: if/case/for/while/repeat AST and gated hierarchy restrictions.
 //! Out: MIR control flow (blocks, branches, phis) and selection diagnostics.
 //!
-//! LRM clauses this file's code cites: §3.5, §4.2.7, §5.6.7, §5.8, §5.8.1, §5.8.3, §5.9, §5.9.1, §5.9.2, §6.3.1, §6.4, §6.6, §6.6.1, §6.6.2, §6.9.4.
+//! LRM clauses this file's code cites: §3.4, §3.4.4, §3.5, §4.2.7, §4.4,
+//! §4.5.15, §5.5.3, §5.6.7, §5.8, §5.8.1, §5.8.3, §5.9, §5.9.1, §5.9.2, §5.11,
+//! §6.3.1, §6.4, §6.6, §6.6.1, §6.6.2, §6.8, §6.9.4, §7.3.2, §9.10, §9.15,
+//! §9.18, §9.19, §9.20.
+//! IEEE 1364-2005 clauses cited: §9.5.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

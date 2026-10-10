@@ -4,6 +4,9 @@
 //! (no call, `opt_barrier`, store or domain-restricted op), so §4.2.3's "side
 //! effects shall not occur" holds by construction. Moved rows are relinked;
 //! orphaned terminators and emptied arm blocks stay behind, unreachable.
+//!
+//! LRM clauses this file's code cites: §2.9, §4.2.4, §4.2.5, §4.2.8, §5.2.1,
+//! §5.10.2.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;

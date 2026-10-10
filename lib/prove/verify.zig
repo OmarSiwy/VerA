@@ -3,7 +3,7 @@
 //! lowering and of each MIR pass: lib/root.zig runs `check` after lowering,
 //! `pruneHeld` and if-conversion when the module has runtime safety (Debug,
 //! ReleaseSafe). The proof and codegen take `*const Mir`, so nothing later
-//! can break one. No LRM clause: this checks VerA's own IR.
+//! can break one. The invariants are VerA's own, not an LRM rule.
 //!
 //! It checks only what a consumer relies on (`Invariant`). Left out because
 //! the code does not maintain them: operand types (a real reaching an integer
@@ -15,6 +15,8 @@
 //! argument count against `callee.arity` (the source arity: `$clog2` carries
 //! a width too); and every use in an unreachable block, an orphaned row, or a
 //! row whose result is aliased away, none of which codegen emits.
+//!
+//! LRM clauses this file's code cites: §4.5.14.
 
 const std = @import("std");
 const builtin = @import("builtin");

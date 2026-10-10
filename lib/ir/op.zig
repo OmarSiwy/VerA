@@ -4,6 +4,9 @@
 //! `OpKind` mapping is `callee.opKind`; the backend's per-operator rows
 //! (`Instance` fields, `dt`) are `lib/device/codegen/op_zig.zig`, a table total
 //! over this enum.
+//!
+//! LRM clauses this file's code cites: §4.5.4, §4.5.5, §4.5.7, §4.5.8, §4.5.9,
+//! §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.5.14, §5.10.3.1, §9.17.1, §9.17.2.
 
 const std = @import("std");
 
