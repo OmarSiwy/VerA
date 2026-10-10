@@ -63,13 +63,11 @@ pub const VecRange = Lowered.VecRange;
 pub const DisciplineInfo = Lowered.DisciplineInfo;
 pub const Access = Lowered.Access;
 pub const Kind = Lowered.Kind;
-pub const Contribution = Lowered.Contribution;
 pub const NoiseKind = Lowered.NoiseKind;
 pub const NoiseSrc = Lowered.NoiseSrc;
 pub const ChargeSite = Lowered.ChargeSite;
 pub const Ty = Lowered.Ty;
 pub const HeldVar = Lowered.HeldVar;
-pub const TpBlock = Lowered.TpBlock;
 pub const TpSlot = Lowered.TpSlot;
 pub const Const = Lowered.Const;
 
