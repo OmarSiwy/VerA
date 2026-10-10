@@ -339,6 +339,10 @@ pub const runner_body =
     \\
     \\/// The analysis in force, as every entry point reads it.
     \\var sim_state: contract.SimState = .{};
+    \\/// True while `point`'s self-checks evaluate the device around the
+    \\/// point: the printing artifact's `zDomain` (§4.3.2) reads it from the
+    \\/// root module and stays quiet, since no analysis asked for those inputs.
+    \\pub var vera_domain_muted: bool = false;
     \\/// The analysis this run is (§4.6.1 Table 4-21): the `//! analysis` kind,
     \\/// or the one the VPI host opened. `sim_state.kind` is the part of it a
     \\/// point evaluates as, which `atPoint` decides.
@@ -777,7 +781,13 @@ pub const runner_body =
     \\            std.debug.print("  next_bp = none\n", .{});
     \\    }
     \\
-    \\    // Differential gates — silent on success, fail the run loudly.
+    \\    // Differential gates — silent on success, fail the run loudly. They
+    \\    // evaluate at points around `x` that no analysis asked for, so a
+    \\    // §4.3.2 domain error there is muted (`vera_domain_muted`, read by
+    \\    // the printing artifact's `zDomain`); `x` itself is evaluated first,
+    \\    // unmuted, so its own error still reports.
+    \\    _ = D.eval(Val, x, model, inst, sim_state);
+    \\    vera_domain_muted = true;
     \\    laneCheck(x, model, inst);
     \\    fusedCheck(x, model, inst);
     \\    patternCheck(x, model, inst);
@@ -786,6 +796,7 @@ pub const runner_body =
     \\    constCheck(x, model, inst);
     \\    fdCheck(x, model, inst);
     \\    finiteCheck(n, model, inst);
+    \\    vera_domain_muted = false;
     \\
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.

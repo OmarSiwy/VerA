@@ -43,6 +43,13 @@ pub const Row = struct {
     /// The op is a libm call on the host, costly enough that evaluating it
     /// eagerly is a price (`lanes.eagerCostly`).
     libm: bool,
+    /// §4.3.2 "Input values outside of the valid range for the operator
+    /// shall report an error": `s` with the Table 4-14 domain check
+    /// (`zDomain`) in front, for an op `setup` may compute outside its guard
+    /// (`prove/setup.zig` `speculable`), where `s` is spelled instead. Null
+    /// for an op whose `s` already checks (asin, acos, acosh, atanh: never
+    /// speculated) or that has no restricted domain.
+    checked: ?Spell = null,
 };
 
 /// Every opcode's row.
@@ -81,12 +88,12 @@ pub const table = std.EnumArray(Mir.Opcode, Row).init(.{
     .bitnot = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .shl = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .shr = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
-    .sqrt = .{ .s = .{ .method = "sqrt" }, .pins_lanes = false, .host_f64 = &.{ "@sqrt(", ")" }, .dev_safe = true, .libm = false },
+    .sqrt = .{ .s = .{ .method = "sqrt" }, .pins_lanes = false, .host_f64 = &.{ "@sqrt(", ")" }, .dev_safe = true, .libm = false, .checked = .{ .helper_s = "zSqrtD" } },
     .exp = .{ .s = .{ .method = "exp" }, .pins_lanes = false, .host_f64 = &.{ "contract.gm.exp(", ")" }, .dev_safe = false, .libm = true },
     .expm1 = .{ .s = .{ .method = "expm1" }, .pins_lanes = false, .host_f64 = &.{ "std.math.expm1(", ")" }, .dev_safe = false, .libm = true },
-    .ln = .{ .s = .{ .method = "log" }, .pins_lanes = false, .host_f64 = &.{ "contract.gm.log(", ")" }, .dev_safe = false, .libm = true },
-    .ln1p = .{ .s = .{ .method = "log1p" }, .pins_lanes = false, .host_f64 = &.{ "std.math.log1p(", ")" }, .dev_safe = false, .libm = true },
-    .log10 = .{ .s = .{ .helper = "zLog10" }, .pins_lanes = false, .host_f64 = &.{ "@log10(", ")" }, .dev_safe = false, .libm = true },
+    .ln = .{ .s = .{ .method = "log" }, .pins_lanes = false, .host_f64 = &.{ "contract.gm.log(", ")" }, .dev_safe = false, .libm = true, .checked = .{ .helper_s = "zLnD" } },
+    .ln1p = .{ .s = .{ .method = "log1p" }, .pins_lanes = false, .host_f64 = &.{ "std.math.log1p(", ")" }, .dev_safe = false, .libm = true, .checked = .{ .helper_s = "zLn1pD" } },
+    .log10 = .{ .s = .{ .helper = "zLog10" }, .pins_lanes = false, .host_f64 = &.{ "@log10(", ")" }, .dev_safe = false, .libm = true, .checked = .{ .helper = "zLog10D" } },
     .pow = .{ .s = .custom, .pins_lanes = false, .host_f64 = &.{ "contract.gm.pow(", ", ", ")" }, .dev_safe = false, .libm = true },
     .hypot = .{ .s = .{ .helper = "zHypot" }, .pins_lanes = true, .host_f64 = &.{ "std.math.hypot(", ", ", ")" }, .dev_safe = false, .libm = true },
     .floor = .{ .s = .{ .helper = "zFloor" }, .pins_lanes = true, .host_f64 = &.{ "@floor(", ")" }, .dev_safe = true, .libm = false },
@@ -155,5 +162,13 @@ test "opcode_zig: every row agrees with the IR table's shape" {
             try std.testing.expect(r.host_f64 != null);
         }
         if (r.libm) try std.testing.expect(!r.dev_safe);
+        // §4.3.2: every one-bound Table 4-14 domain `setup` may speculate
+        // over has its checked spelling; pow's two-argument rule is
+        // `renderOp`'s own (`zPowK`, `zPow`).
+        const spec_bounded = switch (Mir.opcode.get(op).domain) {
+            .positive, .gt_neg_one, .non_negative => true,
+            .all, .pow_sign, .tan_poles, .unit_closed, .unit_open, .ge_one, .nonzero_divisor => false,
+        };
+        try std.testing.expectEqual(spec_bounded, r.checked != null);
     }
 }

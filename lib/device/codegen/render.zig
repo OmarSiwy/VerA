@@ -593,6 +593,16 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 float_lanes.pinLanes(self, a);
                 if (binary) float_lanes.pinLanes(self, b2);
             }
+            // §4.3.2 a domain error is reported where the op runs, not where
+            // `setup` speculates it outside its guard (`Setup.spec`).
+            if (comptime r.checked) |c| {
+                if (binary) @compileError("renderOp: a `checked` spelling is unary, `" ++ @tagName(o) ++ "` is binary");
+                if (!self.su.spec) return switch (c) {
+                    .helper => |h| helper1(self, h, a),
+                    .helper_s => |h| helperS(self, h, a),
+                    .method, .custom => @compileError("renderOp: `" ++ @tagName(o) ++ "`'s checked spelling is a kernel"),
+                };
+            }
             switch (r.s) {
                 .method => |m| if (binary) try method2(self, a, m, b2) else try method1(self, a, m),
                 .helper => |h| if (binary) try helper2(self, h, a, b2) else try helper1(self, h, a),
@@ -611,14 +621,13 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 try gen_host.f64Const(self, b2, 1, true)
             else
                 null;
-            if (self.an.foldConst(b2, false)) |k| {
-                try self.b("(", .{});
+            // §4.3.2 the domain check (`zPowK`) wherever the op runs, and
+            // the bare method where `setup` speculates it (`Setup.spec`).
+            const k_text: ?[]const u8 = if (self.an.foldConst(b2, false)) |k| try gen_file.fmtF64(self, k.f) else par_exp;
+            if (k_text) |k| {
+                if (self.su.spec) try self.b("(", .{}) else try self.b("zPowK(S, ", .{});
                 try renderVal(self, a, .real);
-                try self.b(").pow({s})", .{try gen_file.fmtF64(self, k.f)});
-            } else if (par_exp) |s| {
-                try self.b("(", .{});
-                try renderVal(self, a, .real);
-                try self.b(").pow({s})", .{s});
+                if (self.su.spec) try self.b(").pow({s})", .{k}) else try self.b(", {s})", .{k});
             } else {
                 // zPow linearizes around `.val()` of both operands
                 // (including §4.3.1's negative-base steering): a batch

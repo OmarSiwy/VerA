@@ -38,6 +38,11 @@ pub const Setup = struct {
     /// Set while `setup` is being emitted: `emitReturn` stores the roots and
     /// `emitTerm` takes a per-eval branch `then`.
     mode: bool = false,
+    /// Set while `setup` emits a value it computes at its `home`, outside
+    /// the guard `eval` runs it under (`prove/setup.zig` `speculable`): a
+    /// Table 4-14 op there takes its unchecked spelling (`opcode_zig.Row.checked`),
+    /// since §4.3.2's error belongs to an evaluation that runs it.
+    spec: bool = false,
     /// `setup` referenced its `zs_stop` flag (a per-eval branch or loop).
     stop: bool = false,
     /// Emitting text only a false `zs_stop` reaches: a per-eval branch's

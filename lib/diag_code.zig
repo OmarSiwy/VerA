@@ -5123,6 +5123,13 @@ fn infoOf(c: Code) Info {
             \\cannot decide is accepted and costs the unit its finiteness
             \\proof (W0650), never a rejection.
             \\
+            \\An accepted argument that IS outside the domain when it runs is
+            \\the same error at run time: the executable (`--run`,
+            \\`--emit-exe`, `--check`) prints this code with the value and
+            \\exits 1. A solver device has no transcript, so it returns the
+            \\IEEE value (NaN, or -inf for ln(0)). The same holds for E0603
+            \\to E0607 and E0609.
+            \\
             \\Constrain the parameter with `from (0:inf)` (LRM 3.4.2), or guard
             \\the call with `if (x > 0)`.
             ,
@@ -5194,6 +5201,10 @@ fn infoOf(c: Code) Info {
             \\Table 4-14 constrains pow(x, y): with x < 0, y must be an
             \\integer, because a negative base raised to a fractional power has
             \\no real value; and with x == 0, y must be non-negative.
+            \\
+            \\Proved like E0602, and reported at run time like it: an
+            \\argument pair outside the domain when it runs is E0609 from the
+            \\executable, with exit status 1.
             \\
             \\Use `pow(abs(x), y)` with an explicit sign, or constrain the base
             \\with `from [0:inf)`.

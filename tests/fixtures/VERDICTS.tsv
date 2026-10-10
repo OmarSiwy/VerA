@@ -1165,6 +1165,13 @@ pass	ch04_expressions/reject_vera_nodiff_parameter.va
 pass	ch04_expressions/replication_negative_count_rejected.va
 pass	ch04_expressions/replication_real_count.va
 pass	ch04_expressions/replication_real_count_negative_rejected.va
+pass	ch04_expressions/runtime_domain_legal_neighbour.va
+pass	ch04_expressions/runtime_ln1p_domain_rejected.va
+pass	ch04_expressions/runtime_ln_domain_rejected.va
+pass	ch04_expressions/runtime_log_domain_rejected.va
+pass	ch04_expressions/runtime_pow_constant_exponent_rejected.va
+pass	ch04_expressions/runtime_pow_domain_rejected.va
+pass	ch04_expressions/runtime_sqrt_domain_rejected.va
 pass	ch04_expressions/select_on_probe_call_rejected.va
 pass	ch04_expressions/spice_noise_rc_white.va
 pass	ch04_expressions/spice_noise_shared_pair.va

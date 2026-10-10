@@ -172,6 +172,43 @@ pub const math_txt =
     \\fn zLog10(comptime S: type, a: S) S { // §4.3.1 log() is base 10
     \\    return a.log().scale(0.4342944819032518);
     \\}
+    \\// §4.3.2 "Input values outside of the valid range for the operator shall
+    \\// report an error", for Table 4-14's one-bound domains: each op with its
+    \\// check in front (`opcode_zig.Row.checked`; the unchecked spelling is for
+    \\// a value `setup` speculates outside its guard). The code is the one the
+    \\// prover gives the same argument when it can see it.
+    \\fn zSqrtD(comptime _: type, a: anytype) @TypeOf(a) {
+    \\    const v = a.val();
+    \\    zDomain("E0604", "sqrt", "x >= 0", v, v >= 0.0);
+    \\    return a.sqrt();
+    \\}
+    \\fn zLnD(comptime _: type, a: anytype) @TypeOf(a) {
+    \\    const v = a.val();
+    \\    zDomain("E0602", "ln", "x > 0", v, v > 0.0);
+    \\    return a.log();
+    \\}
+    \\fn zLn1pD(comptime _: type, a: anytype) @TypeOf(a) {
+    \\    const v = a.val();
+    \\    zDomain("E0603", "ln1p", "x > -1", v, v > -1.0);
+    \\    return a.log1p();
+    \\}
+    \\fn zLog10D(comptime S: type, a: S) S {
+    \\    const v = a.val();
+    \\    zDomain("E0602", "log", "x > 0", v, v > 0.0);
+    \\    return zLog10(S, a);
+    \\}
+    \\/// §4.3.1 Table 4-14 pow's domain, "if x > 0, all y; if x = 0, y > 0; if
+    \\/// x < 0, all integer y", with the prover's E0609 leniency at x = 0,
+    \\/// y = 0 (IEEE pow(0, 0) = 1).
+    \\fn zPowOk(x: f64, y: f64) bool {
+    \\    return x > 0.0 or (x == 0.0 and y >= 0.0) or (x < 0.0 and y == @trunc(y));
+    \\}
+    \\/// `a.pow(k)` for an exponent that does not move with the solve, checked.
+    \\fn zPowK(comptime _: type, a: anytype, k: f64) @TypeOf(a) {
+    \\    const v = a.val();
+    \\    zDomain("E0609", "pow", "x > 0, or x = 0 with y >= 0, or x < 0 with integer y", v, zPowOk(v, k));
+    \\    return a.pow(k);
+    \\}
     \\/// §4.3.1 Table 4-14 hypot names the C library function, which is
     \\/// overflow-free — a²+b² composed in S overflowed for legs ≳1e154. The
     \\/// value is the libm one; the derivative (a/h)·da + (b/h)·db is grafted on
@@ -190,12 +227,12 @@ pub const math_txt =
     \\}
     \\fn zAsin(comptime S: type, a: S) S { // §4.3.2 asin = atan(x/sqrt(1-x^2))
     \\    const v = a.val();
-    \\    zDomain("asin", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
+    \\    zDomain("E0605", "asin", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
     \\    return a.div(a.mul(a).neg().addC(1.0).sqrt()).atan();
     \\}
     \\fn zAcos(comptime S: type, a: S) S { // §4.3.2
     \\    const v = a.val();
-    \\    zDomain("acos", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
+    \\    zDomain("E0605", "acos", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
     \\    return S.con(1.5707963267948966).sub(zAsin(S, a));
     \\}
     \\fn zAsinh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2+1))
@@ -203,12 +240,12 @@ pub const math_txt =
     \\}
     \\fn zAcosh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2-1))
     \\    const v = a.val();
-    \\    zDomain("acosh", "x >= 1", v, v >= 1.0);
+    \\    zDomain("E0607", "acosh", "x >= 1", v, v >= 1.0);
     \\    return a.add(a.mul(a).addC(-1.0).sqrt()).log();
     \\}
     \\fn zAtanh(comptime S: type, a: S) S { // §4.3.2 0.5*ln((1+x)/(1-x))
     \\    const v = a.val();
-    \\    zDomain("atanh", "-1 < x < 1", v, v > -1.0 and v < 1.0);
+    \\    zDomain("E0606", "atanh", "-1 < x < 1", v, v > -1.0 and v < 1.0);
     \\    return a.addC(1.0).div(a.neg().addC(1.0)).log().scale(0.5);
     \\}
     \\fn zAtan2(comptime S: type, y: S, x: S) S { // §4.3.2
@@ -266,6 +303,7 @@ pub const math_txt =
     \\fn zPow(comptime S: type, a: S, b: S, comptime varying_exponent: bool) S {
     \\    const x = a.val();
     \\    const y = b.val();
+    \\    zDomain("E0609", "pow", "x > 0, or x = 0 with y >= 0, or x < 0 with integer y", x, zPowOk(x, y));
     \\    const v = S.con(x).pow(y).val();
     \\    // y·x^(y−1) = y·v/x — algebraically exact for x != 0, the negative-base
     \\    // integral-y clause included, and ONE pow instead of two. A second
@@ -338,13 +376,14 @@ pub const math_txt =
 /// `zDomain` for a solver device: an empty guard. §4.3.2: "Input values
 /// outside of the valid range for the operator shall report an error."
 /// `proof.checkDomain` refuses what it can prove from the source
-/// (E0605/E0606/E0607); `math_txt`'s restricted-domain functions call
-/// `zDomain` for the rest. A device has no transcript (it also compiles for
-/// NVPTX), so only the executable reports; one call site keeps both artifacts
-/// agreeing on which values are out of range. `zModZero` (§4.2.4 real `%`
-/// by zero) traps, as `render.imodFn` does for the integer `%`.
+/// (E0602-E0607, E0609); `math_txt`'s restricted-domain functions call
+/// `zDomain` with that code for the rest. A device has no transcript (it
+/// also compiles for NVPTX), so only the executable reports; one call site
+/// keeps both artifacts agreeing on which values are out of range.
+/// `zModZero` (§4.2.4 real `%` by zero) traps, as `render.imodFn` does for
+/// the integer `%`.
 pub const domain_quiet_txt =
-    \\fn zDomain(comptime _: []const u8, comptime _: []const u8, _: f64, _: bool) void {}
+    \\fn zDomain(comptime _: []const u8, comptime _: []const u8, comptime _: []const u8, _: f64, _: bool) void {}
     \\fn zModZero() noreturn { @trap(); }
     \\
     \\
@@ -353,12 +392,18 @@ pub const domain_quiet_txt =
 /// `zDomain` for the printing executable: reports and stops, on the §9.21.2
 /// `E` precedent, since the clause names no in-range value and libm's quiet
 /// NaN would look like a converged answer. A NaN argument reports too. `tan`
-/// is unguarded: its poles are irrational, so no f64 is ever at one.
+/// is unguarded: its poles are irrational, so no f64 is ever at one. `code`
+/// is the prover's for the same argument, so `//! reject-run` names it. The
+/// testbench mutes it (`vera_domain_muted`, `tb/runner_text.zig` `point`)
+/// while its self-checks evaluate perturbed points no analysis asked for.
 pub const domain_report_txt =
-    \\fn zDomain(comptime name: []const u8, comptime rule: []const u8, x: f64, in_range: bool) void {
+    \\fn zDomain(comptime code: []const u8, comptime name: []const u8, comptime rule: []const u8, x: f64, in_range: bool) void {
     \\    if (in_range) return;
+    \\    if (comptime @hasDecl(@import("root"), "vera_domain_muted")) {
+    \\        if (@import("root").vera_domain_muted) return;
+    \\    }
     \\    std.debug.print(
-    \\        "error: LRM 4.3.2: " ++ name ++ "() input value is outside the valid range " ++ rule ++ ": {d}\n",
+    \\        "error[" ++ code ++ "]: LRM 4.3.2: " ++ name ++ "() input value is outside the valid range " ++ rule ++ ": {d}\n",
     \\        .{x},
     \\    );
     \\    std.process.exit(1);

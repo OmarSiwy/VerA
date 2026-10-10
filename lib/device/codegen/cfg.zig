@@ -62,6 +62,8 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
         try emitStmt(self, inst, depth, decl);
     }
     if (self.su.mode) for (self.sinv.movedTo(bi)) |v| {
+        self.su.spec = true;
+        defer self.su.spec = false;
         try emitStmt(self, self.mir.valueDef(v).inst_result, depth, decl);
     };
 }

@@ -330,8 +330,12 @@ const Scan = struct {
     /// `home`, and the core reads it only where it would have computed it.
     /// Sound only for an op that cannot fault when its guard is false: a real
     /// outside its domain is NaN or inf. So no integer arithmetic (a zero
-    /// divisor traps), no `%`, and none of the four functions whose domain
-    /// check reports when `display == .emit` (`zDomain`).
+    /// divisor traps), no `%`, and none of the four functions whose every
+    /// spelling reports a domain error when `display == .emit` (`zDomain`).
+    /// ln, log, ln1p, sqrt and pow report too, but have an unchecked
+    /// spelling codegen uses for the values this admits
+    /// (`opcode_zig.Row.checked`, `Setup.spec`). The cost: such a value,
+    /// out of its domain, reaches `eval` as the IEEE NaN or inf unreported.
     fn speculable(s: *const Scan, inst: Mir.Inst, blk: u32) bool {
         const in = s.in;
         if (in.an.loop_of[blk] != none_u32 or s.homeOf(blk) == none_u32) return false;

@@ -813,7 +813,7 @@ test "codegen: §5.6.1.2 reactive split emits q(), §4.2.12 select stays lazy" {
     const unit = src[std.mem.find(u8, src, "fn cap__common__core(").?..];
     const body = unit[0..std.mem.find(u8, unit, "\n}\n").?];
     const guard = std.mem.find(u8, body, "if (").?;
-    const lg = std.mem.find(u8, body, ".log()").?;
+    const lg = std.mem.find(u8, body, "zLnD(").?;
     try std.testing.expect(lg > guard);
 }
 
@@ -991,8 +991,8 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
     // Scoped to the unit body: the emitted math prelude also spells `.log()`.
     const unit = src[std.mem.find(u8, src, "fn lg__").?..];
     const body = unit[0..std.mem.find(u8, unit, "\n}\n").?];
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, ".log()"));
-    const lg2 = std.mem.find(u8, body, ".log()").?;
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "zLnD("));
+    const lg2 = std.mem.find(u8, body, "zLnD(").?;
     // The nearest `if (` before the `.log()` opens the arm holding it, and no
     // `else` between them makes that the THEN arm, the one `V > vmin` takes.
     const guard = std.mem.findLast(u8, body[0..lg2], "if (").?;
@@ -1030,7 +1030,7 @@ test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
     try std.testing.expectEqual(@as(u32, 0), n);
     // Still compiles and proves through the CFG dominance path.
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.find(u8, src, ".log()") != null);
+    try std.testing.expect(std.mem.find(u8, src, "zLnD(") != null);
 }
 
 test "codegen: a §5.6 potential contribution gets its own branch-current unknown" {
@@ -3549,9 +3549,11 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
         "zAtan2", "zWrap",  "zLimitUf",
     };
     const uniform = [_][]const u8{
-        "zIdt",        "zIdtAcc",   "zIdtmod", "zSlew",  "zTransFrac",
-        "zTransition", "zAbsdelay", "zLog10",  "zTan",   "zAsin",
-        "zAcos",       "zAsinh",    "zAcosh",  "zAtanh", "zPadInt",
+        "zIdt",        "zIdtAcc",   "zIdtmod", "zSlew",   "zTransFrac",
+        "zTransition", "zAbsdelay", "zLog10",  "zTan",    "zAsin",
+        "zAcos",       "zAsinh",    "zAcosh",  "zAtanh",  "zPadInt",
+        // §4.3.2 read `.val()` only for `zDomain`'s report, never to steer.
+        "zSqrtD",      "zLnD",      "zLn1pD",  "zLog10D", "zPowK",
     };
     const lead = [_][]const u8{ "zCmp", "zRoundI", "zStrip", "zMulP", "zAddP", "zSubP" };
     const text = gen_kernel_text.math_txt ++ gen_kernel_text.ops_txt;
@@ -3759,6 +3761,11 @@ test "codegen: the setup split computes a probe-guarded card value, and lists it
     const su = src[std.mem.find(u8, src, "pub fn setup(").?..];
     const su_end = std.mem.find(u8, su, "\n}\n").?;
     try std.testing.expect(std.mem.find(u8, su[0..su_end], "log") != null);
+    // Speculated, so unchecked (`Setup.spec`): with r = -1 on the card and
+    // the arm never taken, no evaluation runs ln(r), so §4.3.2 has no error
+    // to report (#59).
+    try std.testing.expect(std.mem.find(u8, su[0..su_end], ".log()") != null);
+    try std.testing.expect(std.mem.find(u8, su[0..su_end], "zLnD(") == null);
     const core_at = std.mem.find(u8, src, "__common__core(comptime S").?;
     try std.testing.expect(std.mem.find(u8, src[core_at..], "log") == null);
     try std.testing.expect(std.mem.find(u8, src, "pub const setup_simparams = [_][]const u8{ \"gmin\" };") != null);
@@ -3805,7 +3812,10 @@ test "codegen: §5.10.2 a held variable written only by @(initial_step) is compu
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     const su = src[std.mem.find(u8, src, "pub fn setup(").?..];
-    try std.testing.expect(std.mem.find(u8, su[0..std.mem.find(u8, su, "\n}\n").?], ".log()") != null);
+    // `zLnD` where setup runs ln on its own path, the bare `.log()` where it
+    // speculates it (`Setup.spec`): either is setup computing it.
+    const su_body = su[0..std.mem.find(u8, su, "\n}\n").?];
+    try std.testing.expect(std.mem.find(u8, su_body, "zLnD(") != null or std.mem.find(u8, su_body, ".log()") != null);
     const core = src[std.mem.find(u8, src, "__common__core(comptime S").?..];
     const body = core[0..std.mem.find(u8, core, "\n}\n").?];
     try std.testing.expect(std.mem.find(u8, body, ".scale(model.su.r[0])") != null);

@@ -162,6 +162,7 @@ summary and has a **Status** line naming what landed.
 | VD-118 | VAMS 9.15 Table 9-28, 4.6.1 Table 4-21 | `$simparam$str("analysis_type")` is the Table 4-21 name the point evaluates as: "ic" at a transient's t = 0 operating point, "tran" at every later point | no (#67) |
 | VD-119 | IEEE 1364-2005 6.1.3, 7.14 | A vector net's own `delay3` picks one delay for the whole value by §6.1.3's vector rule, as a continuous assignment does; never per bit, never from bit 0 | DONE (#55) |
 | VD-121 | VAMS 4.5.13 | `limexp` limits nothing and is exp at every argument: a device sees one iterate, and the clause requires exp at convergence | DONE (#52) |
+| VD-122 | VAMS 4.3.2, 4.3.1 Table 4-14 | A run-time ln/log/ln1p/sqrt/pow argument outside its domain is the prover's code from the executable (exit 1), at every evaluation an analysis makes; not for a value setup speculates, nor at the testbench's perturbed self-check points | DONE (#59) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1359,6 +1360,16 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **VerA today**: `lib/backend/codegen/call.zig` renders `limexp` as the `exp` opcode's text; `lib/prove/proof/prover.zig` `callTransfer` gives it exp's interval and finiteness. Fixtures `exhaustive/044_limexp.va` (its old `limexp(1000) < 1e300` check tested for the tangent and is withdrawn), `ch04_expressions/limexp_is_exp_at_a_converged_point.va`, `25_limexp.va`.
 - **Measure impact**: A: +1 fixture. C: 4.5.13 gains a positive run past the old knee.
 - **Status**: DONE (#52). Models that leaned on the tangent for convergence (ESPice's `mos2.va`, `vdmos.va`, `hicumL2_va.va`, the `veriloga_diode_clamp` deck's `va_diode.va`) now see exp's slope past 80 Vt.
+
+### VD-122: Which run-time evaluations report a Table 4-14 domain error
+- **Source**: bug hunt 2026-10-17, finding clauses-08 (#59).
+- **Rule**: VAMS 4.3.2: "Input values outside of the valid range for the operator shall report an error." Table 4-14's Domain column: ln and log "x > 0", ln1p "x > -1", sqrt "x >= 0", pow "if x > 0, all y; if x = 0, y > 0; if x < 0, all integer y". The sentence is printed in 4.3.2, above Table 4-15.
+- **Why vague**: the sentence sits in 4.3.2, so it can be read as Table 4-15's alone; and it gives no form for the error, nor says which evaluations count (a Newton iterate, a speculative computation, a test harness probing nearby points).
+- **Options**: (a) Table 4-15 only (VerA until #59: asin, acos, acosh, atanh reported, ln(0) printed -inf); (b) both tables, at every evaluation of the op; (c) both tables, at every evaluation an analysis makes.
+- **Decision**: `DECIDED:` (c). VerA already reads the sentence for Table 4-14 at compile time (E0602-E0604, E0609, `114_standard_math_domain_rejected.va`), and a constant refused while the same value at run time is silent is the inconsistency #59 names. The executable reports the prover's code with the argument (`error[E0602]: LRM 4.3.2: ln() input value is outside the valid range x > 0: 0`) and exits 1, at a solved point and at a Newton iterate alike; a solver device returns the IEEE value (no transcript, GPU targets included). Not reported: a value `setup` computes outside the guard `eval` runs it under (`prove/setup.zig` `speculable`, unchecked spelling `opcode_zig.Row.checked`), since no evaluation asked for it; such a value out of its domain reaches `eval` as NaN or inf; and the testbench's self-checks at perturbed points (`runner_text.zig` `point`, `vera_domain_muted`), which are not inputs of the analysis. pow at x = 0, y = 0 is admitted, as the prover admits it (IEEE pow(0, 0) = 1).
+- **VerA today**: `lib/backend/codegen/kernel_text.zig` `zSqrtD`, `zLnD`, `zLn1pD`, `zLog10D`, `zPowK`, `zPow`, `zDomain`; `lib/backend/codegen/opcode_zig.zig` `Row.checked`; `lib/backend/codegen/render.zig` `renderOp`. Fixtures `ch04_expressions/runtime_{ln,log,sqrt,ln1p,pow,pow_constant_exponent}_domain_rejected.va` (`//! reject-run`) and `runtime_domain_legal_neighbour.va`.
+- **Measure impact**: A: +7 fixtures. C: 4.3.1's domains gain the run-time negative half.
+- **Status**: DONE (#59).
 
 ## 6. Implementation-defined choices
 
