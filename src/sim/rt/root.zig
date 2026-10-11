@@ -1947,7 +1947,6 @@ pub const State = struct {
     pub const finishFileScan = rt_system.finishFileScan;
     pub const fshow = rt_system.fshow;
     pub const Format = rt_system.Format;
-    pub const Spec = rt_system.Spec;
     pub const formatOf = rt_system.formatOf;
     pub const nextSpec = rt_system.nextSpec;
     pub const endFormat = rt_system.endFormat;
