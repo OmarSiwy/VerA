@@ -202,7 +202,7 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
     while (true) {
         const tok = self.pos;
         // A.3.1 makes `name_of_gate_instance` optional; `(` after the name
-        // tells the two apart, as in `parsePassSwitch`. A.3.1's
+        // tells the two apart, as in `parseSwitch`. A.3.1's
         // `name_of_gate_instance ::= gate_instance_identifier [ range ]` is
         // §7.1.5's instance array.
         var range: ?Ast.Dim = null;

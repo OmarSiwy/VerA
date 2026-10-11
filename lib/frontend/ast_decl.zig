@@ -84,6 +84,7 @@ pub const ParamDecl = struct {
 };
 
 // Budget: 64 bytes (948 rows on psp103); see docs/seams/s1-frontcore.md
+// (removed from the tree; `git show 6e59b3d4^:docs/seams/s1-frontcore.md`)
 // before adding a field.
 comptime {
     std.debug.assert(@sizeOf(ParamDecl) <= 64);

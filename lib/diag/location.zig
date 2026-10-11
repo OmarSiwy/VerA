@@ -122,8 +122,7 @@ pub const StripMark = struct {
 
 /// An EMPTY map is legal and means "the preprocessed text is the source": every
 /// offset resolves to `root` unchanged. That is exactly right for the unit
-/// tests and for `compilePreprocessed`, and it means no stage needs a null
-/// check.
+/// tests, and it means no stage needs a null check.
 pub const SourceMap = struct {
     /// Borrowed: the preprocessor's arena, or `Bag.detach`'s gpa copy.
     segs: []const Segment = &.{},

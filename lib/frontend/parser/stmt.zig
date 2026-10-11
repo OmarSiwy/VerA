@@ -108,7 +108,7 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     // never suspend).
     //
     // Recorded as `while (1) body`: §9.6 gives the two the same meaning, so
-    // no walk over `Ast.StmtKind` needs a separate arm. The `1` is an
+    // no walk over `Ast.Stmt` needs a separate arm. The `1` is an
     // unsized decimal (§2.6.1: signed, 32-bit) anchored on `forever`.
     if (self.peek() == .kw_forever) {
         if (!self.discreteGrammar()) try self.report(tok, .E0256, "", .{});
@@ -396,7 +396,7 @@ fn parseEventControl(self: *Parser) Error!Ast.StmtId {
     self.pos += 1; // '@'
     // A.6.5 `event_control ::= … | @* | @ (*)`. Both spellings mean the
     // same implicit list and carry no expression, so the statement records
-    // `.none` (`Ast.StmtKind.event_control`). The §2.9 attribute tokens split
+    // `.none` (`Ast.Stmt.event_control`). The §2.9 attribute tokens split
     // `(*)` three ways: `(*` `)`, `(` `*)`, `(` `*` `)`.
     if (eatImplicitEvent(self))
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try parseStmt(self) } }, tok);
