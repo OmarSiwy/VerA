@@ -14,7 +14,6 @@ const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
 const parse_generate = @import("generate.zig");
-const parse_source = @import("source.zig");
 const parse_inst = @import("inst.zig");
 const parse_specify = @import("specify.zig");
 const parse_function = @import("function.zig");

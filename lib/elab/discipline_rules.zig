@@ -179,9 +179,6 @@ test "discipline rules: §3.6 lookups and §3.11.1 compatibility on a hand-built
     const a = arena.allocator();
     var file: Ast.SourceFile = .empty;
     const n = struct {
-        fn id(f: *Ast.SourceFile, al: std.mem.Allocator, s: []const u8) !Ast.StrId {
-            return f.intern(al, s);
-        }
         fn ident(f: *Ast.SourceFile, al: std.mem.Allocator, s: []const u8) !Ast.ExprId {
             return f.exprs.add(al, .{ .tag = .ident, .str = try f.intern(al, s) });
         }
@@ -189,29 +186,29 @@ test "discipline rules: §3.6 lookups and §3.11.1 compatibility on a hand-built
             return f.exprs.add(al, .{ .tag = .str_literal, .str = try f.intern(al, s) });
         }
     };
-    const voltage = try n.id(&file, a, "Voltage");
-    const current = try n.id(&file, a, "Current");
-    const milli = try n.id(&file, a, "MilliVolt");
-    const volt2 = try n.id(&file, a, "Volt2");
-    const odd = try n.id(&file, a, "Odd");
-    const cyc1 = try n.id(&file, a, "Cyc1");
-    const cyc2 = try n.id(&file, a, "Cyc2");
-    const via = try n.id(&file, a, "ViaDisc");
-    const dcur = try n.id(&file, a, "DerivCur");
-    const flux = try n.id(&file, a, "Flux");
-    const units = try n.id(&file, a, "units");
-    const access = try n.id(&file, a, "access");
-    const idt_nature = try n.id(&file, a, "idt_nature");
-    const ddt_nature = try n.id(&file, a, "ddt_nature");
-    const electrical = try n.id(&file, a, "electrical");
-    const logic = try n.id(&file, a, "logic");
-    const bare = try n.id(&file, a, "bare");
-    const mv = try n.id(&file, a, "mv");
-    const v2 = try n.id(&file, a, "v2");
-    const oddp = try n.id(&file, a, "oddp");
-    const oddf = try n.id(&file, a, "oddf");
-    const halfway = try n.id(&file, a, "halfway");
-    const nowhere = try n.id(&file, a, "nowhere");
+    const voltage = try file.intern(a, "Voltage");
+    const current = try file.intern(a, "Current");
+    const milli = try file.intern(a, "MilliVolt");
+    const volt2 = try file.intern(a, "Volt2");
+    const odd = try file.intern(a, "Odd");
+    const cyc1 = try file.intern(a, "Cyc1");
+    const cyc2 = try file.intern(a, "Cyc2");
+    const via = try file.intern(a, "ViaDisc");
+    const dcur = try file.intern(a, "DerivCur");
+    const flux = try file.intern(a, "Flux");
+    const units = try file.intern(a, "units");
+    const access = try file.intern(a, "access");
+    const idt_nature = try file.intern(a, "idt_nature");
+    const ddt_nature = try file.intern(a, "ddt_nature");
+    const electrical = try file.intern(a, "electrical");
+    const logic = try file.intern(a, "logic");
+    const bare = try file.intern(a, "bare");
+    const mv = try file.intern(a, "mv");
+    const v2 = try file.intern(a, "v2");
+    const oddp = try file.intern(a, "oddp");
+    const oddf = try file.intern(a, "oddf");
+    const halfway = try file.intern(a, "halfway");
+    const nowhere = try file.intern(a, "nowhere");
 
     const voltage_attrs = [_]Ast.NatureAttr{
         .{ .name = units, .value = try n.str(&file, a, "V") },
