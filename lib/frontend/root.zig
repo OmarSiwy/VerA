@@ -1,7 +1,7 @@
 //! The frontend's public API: Verilog-AMS source text in, AST out
 //! (preprocessor, lexer, parser; LRM clauses 2 to 10 and annexes D and E).
-//! Depends on `base`, `diag` and `kernels`; `ir/` and
-//! `backend/` import this layer, never the reverse.
+//! Depends on `base`, `diag` and `kernels`; `elab`, `analog` and the backends
+//! import this layer, never the reverse (`ir` does not import it at all).
 
 /// §2.6.1 integer literals and the IEEE 1364-2005 §5 four-state operations
 /// on them: `kernels.Integer`, re-exported for callers that reach it
