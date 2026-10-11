@@ -383,7 +383,7 @@ fn libraries(
     for (paths[1..], libs[1..], more) |p, l, *u| u.* = .{
         .name = p,
         .text = vera.Preprocessor.readText(io, .cwd(), p, arena) catch |e| {
-            try cli_report.readFailed(err, p, e);
+            try vera.readFailed(err, p, e);
             return false;
         },
         .lib = l,

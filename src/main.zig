@@ -31,7 +31,6 @@ const digital_cli = @import("cli/digital.zig");
 const lsp = @import("cli/lsp.zig");
 const cli_report = @import("cli/report.zig");
 const report = cli_report.report;
-const readFailed = cli_report.readFailed;
 
 /// Returns the process exit status (see the file header).
 pub fn main(init: std.process.Init) !u8 {
@@ -101,7 +100,7 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     const source = vera.Preprocessor.readText(io, .cwd(), in_path, gpa) catch |e| {
-        try readFailed(err, in_path, e);
+        try vera.readFailed(err, in_path, e);
         return 2;
     };
     defer gpa.free(source);

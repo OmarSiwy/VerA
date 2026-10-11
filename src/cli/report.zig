@@ -1,7 +1,6 @@
-//! `vera`'s stderr reports shared by `main.zig` and `cli/digital.zig`: a
-//! diagnostic bag -> rendered text or JSON, and a source that could not be
-//! read -> its one-line error (`vera.readFailed`). The messages are
-//! user-visible and frozen.
+//! `vera`'s stderr report shared by `main.zig` and `cli/digital.zig`: a
+//! diagnostic bag -> rendered text or JSON. A source that could not be read
+//! is `vera.readFailed`'s. The messages are user-visible and frozen.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -19,10 +18,6 @@ pub fn report(bag: *diag.Bag, w: *Io.Writer, json: bool, color: bool) !void {
     }
     try w.flush();
 }
-
-/// Reports that `path` could not be read (`vera.readFailed`, which the
-/// spine reports through too).
-pub const readFailed = vera.readFailed;
 
 test report {
     const gpa = std.testing.allocator;
