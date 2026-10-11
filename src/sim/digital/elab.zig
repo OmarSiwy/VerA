@@ -380,7 +380,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             // `unconnected_drive` region is pulled to a logic level through a
             // pull-strength driver: one driver among drivers, meeting the net's
             // own type in §7.9 resolution. The analog half
-            // (`lib/ir/lower/node.zig`'s `applyUnconnectedDrive`) cannot tie
+            // (`lib/analog/lower/node.zig`'s `applyUnconnectedDrive`) cannot tie
             // with a `tri0` or lose to a `supply0`.
             .open => if (p.direction == .input) {
                 const drive = Front.Preprocessor.DriveRegion.inForce(r.drives, r.starts[@min(p.main_tok, r.starts.len - 1)], .default);

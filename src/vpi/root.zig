@@ -1057,8 +1057,9 @@ pub export fn vpi_release_handle(obj: vpiHandle) c_int {
 /// Bound on a §6.7 name, both for the upward search above and for
 /// `vpi_get_str`'s §12.12 buffer.
 ///
-/// ponytail: 4 KiB, truncating. That is far past what a 64-deep instance tree
-/// (`Elaborate.max_depth`) makes out of §2.8 identifiers. In the search a name
+/// ponytail: 4 KiB, truncating. That is far past the hierarchical names real
+/// designs make out of §2.8 identifiers (the instance tree itself has no depth
+/// bound). In the search a name
 /// that overflows simply fails that one scope's attempt and the walk continues,
 /// so the ceiling costs a lookup rather than correctness. Upgrade path: `open`
 /// already sees every `vpiFullName`, so it could size this from the longest.

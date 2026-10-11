@@ -2047,7 +2047,8 @@ test "nested unsupported forms fail preflight even in unselected conditional arm
 }
 
 test "an expression or statement of any depth: 256, one past the old bound, and 900" {
-    // The parser still bounds nesting at 1024 (`max_depth`, the frontend's).
+    // The parser bounds nesting by memory only: past `caller_levels` it runs
+    // on `deep_stack` segments (`lib/frontend/parser.zig`).
     for ([_]usize{ 256, 900 }) |n| {
         var source = std.Io.Writer.Allocating.init(std.testing.allocator);
         defer source.deinit();

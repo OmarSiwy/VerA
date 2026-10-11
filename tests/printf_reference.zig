@@ -6,7 +6,7 @@
 //! language"). In: special doubles (±0, subnormals, inf, NaN, the largest
 //! double, 1234.5678) under every flag set, several widths and precisions;
 //! the ties that round across a power of ten; 10^5 seeded random doubles.
-//! Out: byte-equal text. `src/sim/fmt.zig` has no real conversion of its own
+//! Out: byte-equal text. `lib/kernels/fmt.zig` has no real conversion of its own
 //! (the digital path is zCReal with its flags, its field padded as it streams
 //! by `display.real`, whose test holds that padding to zCReal's), so this is
 //! its oracle too.

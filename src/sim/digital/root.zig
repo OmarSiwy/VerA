@@ -362,7 +362,7 @@ pub const Run = struct {
     /// the scope it runs in and its statement (`blockScope`).
     block_scopes: std.AutoHashMapUnmanaged(struct { scope: u32, stmt: Ast.StmtId }, u32) = .empty,
     /// IEEE 1364 §19.9's regions, in text-stream order. Read once per
-    /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
+    /// unconnected input port; `lib/analog/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
     drives: []const Front.Preprocessor.DriveRegion = &.{},
     /// IEEE 1364 §19.2's `default_nettype regions, in text-stream order: the

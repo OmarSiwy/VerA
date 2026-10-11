@@ -2470,7 +2470,7 @@ fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {
     text.clearRetainingCapacity();
 }
 
-/// One `%b %o %h %d` operand, or an argument with no format (`emitValue`).
+/// One `%b %o %h %d` operand, or an argument with no format.
 fn operand(self: *Emitter, e: Ast.ExprId, radix: fmt.Radix, width: ?u64) Error!void {
     try self.print("            try s.value(", .{});
     const t = try expr.selfDetermined(self, e);
