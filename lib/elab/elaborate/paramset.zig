@@ -462,7 +462,6 @@ pub fn paramsetOverrides(
                 if (try elab_override.checkSystemParam(self, kind, o.main_tok, value, path)) continue;
                 hier.set(kind, try hier_param.compose(kind, self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
             },
-            .output_var => {}, // §6.4.3, dropped in the parser
         };
     }
     try paramsetStatements(self, chain.items, units, child, path, stmts);

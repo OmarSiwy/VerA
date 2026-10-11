@@ -929,7 +929,7 @@ pub const ParamsetOverride = struct {
 
     /// A.1.9 `.module_parameter_identifier = ...` or its
     /// `.system_parameter_identifier` sibling (§9.18, `.$mfactor`).
-    pub const Kind = enum(u8) { module_param, output_var, system_param };
+    pub const Kind = enum(u8) { module_param, system_param };
 };
 
 /// Connect specification block. LRM §7.7 (A.1.8 connectrules_declaration),
