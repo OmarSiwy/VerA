@@ -11,7 +11,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 /// A module's §19.8 time scale, which the emitted code passes to `$time` and delays.
 pub const Scale = @import("../time.zig").Scale;
 /// §17.1 value text, shared with the interpreter.
-pub const fmt = @import("kernels").fmt;
+const fmt = @import("kernels").fmt;
 /// The four-state operators the emitted expressions call (`L`).
 pub const logic = @import("logic.zig");
 /// §7.9 net resolution of the native design.
