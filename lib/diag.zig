@@ -12,6 +12,8 @@
 //! which sort the rows and resolve spans through `Bag.map` and `Bag.files`.
 //!
 //! This file only aliases what other modules call; that list IS the API.
+//! The diagnostic system cites no LRM clause: the clause a diagnostic
+//! enforces is cited where the stage reports it, and in its `--explain` entry.
 
 const code_table = @import("diag_code.zig");
 

@@ -2,6 +2,7 @@
 //!
 //! In: a `Builder`'s parts. Out: one fixed-size `Record` per diagnostic, whose text
 //! lives in `Bag.string_bytes`, and the by-value `Entry`/`Label`/`Note` views of it.
+//! Cites no LRM clause (the stage that reports a diagnostic cites it).
 
 const std = @import("std");
 const diag = @import("../diag.zig");

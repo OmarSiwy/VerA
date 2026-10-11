@@ -1,5 +1,6 @@
 //! Rendering: a bag -> terminal text with source snippets (rustc style), JSON
-//! Lines, or a code's `--explain` entry.
+//! Lines, or a code's `--explain` entry. Cites no LRM clause: the output
+//! format is VerA's own.
 
 const std = @import("std");
 const diag = @import("../diag.zig");

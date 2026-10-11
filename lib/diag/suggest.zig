@@ -1,6 +1,7 @@
 //! Name suggestions: an unknown name and the names in scope -> the nearest
 //! one, for the did-you-mean help line of every "unknown name" diagnostic.
-//! Pure functions over borrowed strings: no allocation, no bag.
+//! Pure functions over borrowed strings: no allocation, no bag. Cites no LRM
+//! clause: a suggestion is help text, not a language rule.
 
 const std = @import("std");
 

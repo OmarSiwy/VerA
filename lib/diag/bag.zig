@@ -1,6 +1,7 @@
 //! The bag: every diagnostic of one compilation, collected, deduplicated and
 //! sorted. In: `Builder` commits from every stage. Out: an ordered table of
-//! `Record` rows whose text lives in one string pool.
+//! `Record` rows whose text lives in one string pool. Cites no LRM clause
+//! (the stage that reports a diagnostic cites it).
 
 const std = @import("std");
 const diag = @import("../diag.zig");

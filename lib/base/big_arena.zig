@@ -18,6 +18,8 @@
 //!
 //! Owners: `vera.CompileResult` (one per compilation) and `src/main.zig`'s
 //! `.v` design arena.
+//!
+//! Cites no LRM clause: memory management, which no standard governs.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

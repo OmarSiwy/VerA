@@ -6,6 +6,8 @@
 //! (`tests/exhaustive.zig` allowlists it): Zig 0.17's `std.DynLib` has no
 //! Windows loader, so Windows goes through the ntdll loader that std itself
 //! uses (`std.Io.Threaded`). Every other target is `std.DynLib`.
+//!
+//! Cites no LRM clause: loading a library is the host's business.
 
 const std = @import("std");
 const builtin = @import("builtin");

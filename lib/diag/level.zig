@@ -1,6 +1,7 @@
 //! Levels: a code -> how hard it fails. In: `--allow=`/`--warn=`/`--deny=`/
 //! `--forbid=` flags. Out: the `Level` `Builder.emit` consults for every
-//! diagnostic, and the `Severity` a kept one renders with.
+//! diagnostic, and the `Severity` a kept one renders with. Cites no LRM
+//! clause: the flags and their levels are VerA's own.
 
 const std = @import("std");
 const diag = @import("../diag.zig");
