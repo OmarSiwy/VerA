@@ -861,11 +861,7 @@ test "readmem validates high token characters beyond destination width" {
 /// "an error message is issued, and the load operation is terminated": E1157,
 /// the words before it stay loaded and the run goes on to print them (#65).
 fn expectMemoryLoad(data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, terminated: bool) !void {
-    return expectMemoryLoadTask("$readmemh", data, bounds, expected, warnings, terminated);
-}
-
-fn expectMemoryLoadTask(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, terminated: bool) !void {
-    return expectMemoryLoadDiagnostic(task, data, bounds, expected, warnings, if (terminated) "is outside the load range" else null);
+    return expectMemoryLoadDiagnostic("$readmemh", data, bounds, expected, warnings, if (terminated) "is outside the load range" else null);
 }
 
 fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, failure_phrase: ?[]const u8) !void {
@@ -966,8 +962,8 @@ test "readmem formfeeds delimit words and addresses without adding words" {
     try expectMemoryLoad("\x0c11\x0c22\x0c33\x0c44\x0c", "", "11 22 33 44\n", 0, false);
     try expectMemoryLoad("\x0c@2\x0c11\x0c22\x0c", ",2", "aa bb 11 22\n", 0, false);
     try expectMemoryLoad("/* not words: @0 55 */\x0c11\x0c22", ",2", "aa bb 11 22\n", 0, false);
-    try expectMemoryLoadTask("$readmemb", "\x0c00010001\x0c00100010\x0c", ",2", "aa bb 11 22\n", 0, false);
-    try expectMemoryLoadTask("$readmemb", "@3\x0c1\x0c@2\x0c10\x0c11", ",2", "aa bb 02 03\n", 0, false);
+    try expectMemoryLoadDiagnostic("$readmemb", "\x0c00010001\x0c00100010\x0c", ",2", "aa bb 11 22\n", 0, null);
+    try expectMemoryLoadDiagnostic("$readmemb", "@3\x0c1\x0c@2\x0c10\x0c11", ",2", "aa bb 02 03\n", 0, null);
 }
 
 test "§9.4.3 the radix conversions size themselves from the operand" {

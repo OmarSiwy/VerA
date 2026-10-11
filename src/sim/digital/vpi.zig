@@ -91,9 +91,7 @@ pub fn vpiAttributeValue(r: *Run, a: std.mem.Allocator, scope: u32, e: Ast.ExprI
 /// whose command token is `tok` in instance `scope`: `ticks` are its
 /// limits in A.7.5.1's written order, from the next event it judges.
 /// False when the run holds no such check.
-pub fn tchkLimits(r: *Run, scope: u32, tok: u32, ticks: []const u64) bool {
-    return tchk.putLimits(r, scope, tok, ticks);
-}
+pub const tchkLimits = tchk.putLimits;
 
 /// The instance scope and command token of timing check `check` (a
 /// `Run.tchk_hook` argument), which a host's object for it carries.
