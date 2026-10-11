@@ -20,6 +20,7 @@ pub const DynLib = if (builtin.target.os.tag == .windows) Windows else std.DynLi
 const Windows = struct {
     handle: windows.PVOID,
 
+    /// `open`'s failures; each is described on `open`.
     pub const Error = error{ BadPathName, FileNotFound };
 
     /// Loads the library at `path`. Trusts the file, as `std.DynLib.open`

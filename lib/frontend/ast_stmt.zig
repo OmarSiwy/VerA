@@ -128,6 +128,7 @@ pub const Stmt = union(enum) {
     /// `continue`. `value` is `.none` except for `return expr`.
     jump: struct { kind: JumpKind, value: ExprId = .none },
 
+    /// `return`, `break`, `continue`.
     pub const JumpKind = enum(u8) { ret, brk, cont };
 };
 

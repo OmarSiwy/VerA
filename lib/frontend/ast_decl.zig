@@ -43,6 +43,8 @@ pub const ValueRange = struct {
     /// parameter value ranges.
     strings: ?u32 = null,
 
+    /// `from` admits the range; `exclude` removes it (or `lo`) from what
+    /// the other ranges admit.
     pub const Kind = enum(u8) { from, exclude };
 };
 
@@ -894,6 +896,7 @@ pub const DisciplineDecl = struct {
     attrs: []const NatureAttr = &.{},
     main_tok: u32 = 0,
 
+    /// §3.6.2.2 the written domain; `.unspecified` when none was written.
     pub const Domain = enum(u8) { unspecified, continuous, discrete };
     pub const Override = struct {
         which: PotentialOrFlow,
@@ -924,6 +927,8 @@ pub const ParamsetOverride = struct {
     value: ExprId,
     main_tok: u32 = 0,
 
+    /// A.1.9 `.module_parameter_identifier = ...` or its
+    /// `.system_parameter_identifier` sibling (§9.18, `.$mfactor`).
     pub const Kind = enum(u8) { module_param, output_var, system_param };
 };
 

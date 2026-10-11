@@ -263,21 +263,28 @@ pub const ExprStore = struct {
         return self.nodes.get(@backingInt(id));
     }
 
+    /// Returns row `id`'s `ExprTag`, which says what its other columns hold.
     pub fn tag(self: *const ExprStore, id: ExprId) ExprTag {
         return self.nodes.items(.tag)[@backingInt(id)];
     }
+    /// Returns the token index row `id` is reported at.
     pub fn mainTok(self: *const ExprStore, id: ExprId) u32 {
         return self.nodes.items(.main_tok)[@backingInt(id)];
     }
+    /// Returns row `id`'s first operand, `.none` when its tag has none.
     pub fn lhs(self: *const ExprStore, id: ExprId) ExprId {
         return self.nodes.items(.lhs)[@backingInt(id)];
     }
+    /// Returns row `id`'s second operand, `.none` when its tag has none.
     pub fn rhs(self: *const ExprStore, id: ExprId) ExprId {
         return self.nodes.items(.rhs)[@backingInt(id)];
     }
+    /// Returns row `id`'s `extra` word: an opcode, a side-table index or a
+    /// `pool` offset, as its `ExprTag` arm says.
     pub fn extraOf(self: *const ExprStore, id: ExprId) u32 {
         return self.nodes.items(.extra)[@backingInt(id)];
     }
+    /// Returns row `id`'s interned name, `.none` when its tag carries none.
     pub fn strOf(self: *const ExprStore, id: ExprId) StrId {
         return self.nodes.items(.str)[@backingInt(id)];
     }

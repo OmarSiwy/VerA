@@ -724,6 +724,7 @@ pub const Parser = struct {
         self.seg.frames += 1;
     }
 
+    /// Closes the level `enter` opened.
     pub fn leave(self: *Parser) void {
         self.depth -= 1;
         self.seg.frames -= 1;
