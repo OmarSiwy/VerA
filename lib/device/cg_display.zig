@@ -1479,15 +1479,15 @@ test "§9.4.1 $monitor reports a step only when the record changed" {
     // `$strobe` prints unconditionally; `$monitor` goes through §9.4.1's
     // mechanism, which is the whole difference between the two tasks. The
     // needles are CALL-shaped: the kernel's own text is in both artifacts.
-    const s = try emitBody(a, "$strobe(\"v=%d\", 1);");
+    const s = try emitBody(a, "$strobe(\"v=%0d\", 1);");
     try std.testing.expect(has(s, "zd: { std.debug.print("));
-    const m = try emitBody(a, "$monitor(\"v=%d\", 1);");
+    const m = try emitBody(a, "$monitor(\"v=%0d\", 1);");
     try std.testing.expect(has(m, "S.con(zMonitorArm(0))")); // the invocation
     try std.testing.expect(has(m, "zd: { if (zMonitor(0, "));
     try std.testing.expect(has(m, ") |zt| std.debug.print(\"{s}\", .{zt});"));
     // §9.5.2 "$fmonitor ... works just like its counterpart": the record is
     // composed, then written only if it changed.
-    const f = try emitBody(a, "$fmonitor(1, \"v=%d\", 1);");
+    const f = try emitBody(a, "$fmonitor(1, \"v=%0d\", 1);");
     try std.testing.expect(has(f, "break :zf if (zMonitor(0, "));
     try std.testing.expect(has(f, ") |zm| zFPut("));
 

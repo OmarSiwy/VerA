@@ -903,11 +903,15 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
 }
 
 /// How many leading operands of task `c` are not message text: §9.5.2's
-/// descriptor, and §9.7.3's finish_number, which `cg_display.emitDisplayTask`
-/// drops when it is not a string and `finishLevel` reads as a constant.
+/// descriptor, §9.7.3's finish_number, which `cg_display.emitDisplayTask`
+/// drops when it is not a string, and §9.7.1's `$finish`/`$stop` level,
+/// which `cg_display.finishLevel` reads as a constant.
 fn messageStart(c: Mir.Callee, tys: []const Ty) usize {
     if (Mir.callee.family(c) == .file_out) if (Mir.callee.fdArg(c)) |fd| return @min(tys.len, @as(usize, fd) + 1);
     if (c == .@"$fatal" and tys.len > 0 and tys[0] != .string) return 1;
+    // §9.7.1/§9.7.2: `$finish`'s and `$stop`'s one operand is the diagnostic
+    // level `finishLevel` reads as a constant, never message text.
+    if (c == .@"$finish" or c == .@"$stop") return tys.len;
     return 0;
 }
 
@@ -961,7 +965,7 @@ fn decimalSize(self: *Lower, e: Ast.ExprId) DecimalSize {
             break :blk if (then.bits == els.bits and then.signed == els.signed) then else integer;
         },
         .ident => identSize(self, self.file.str(ex.strOf(e))),
-        .sys_call => if (std.mem.eql(u8, self.file.str(ex.strOf(e)), "$realtobits")) .{ .bits = 64, .signed = false } else integer,
+        .sys_call => if (Mir.Callee.fromName(self.file.str(ex.strOf(e))) == .@"$realtobits") .{ .bits = 64, .signed = false } else integer,
         else => integer, // else: any other integer-valued expression (a call, a select) is an `integer`
     };
 }
