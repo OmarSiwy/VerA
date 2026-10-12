@@ -15,8 +15,6 @@ const LimitCall = @import("limit.zig").LimitCall;
 const plan_noise = @import("noise.zig");
 const plan_topo = @import("topology.zig");
 
-const none_u32 = std.math.maxInt(u32);
-
 /// The planned core targets.
 pub const Jobs = struct {
     /// Every unit function to emit, resolved before any of them is written.
@@ -67,9 +65,6 @@ pub const Job = struct {
     comment: []const u8,
     /// §3.6.2.2 refusal seeded from the unit's DECLARATION (`Gen.pre_fatal`).
     pre_fatal: ?[]const u8 = null,
-    /// Index into `units` for an analog-operator job whose §4.5.11/§4.5.12
-    /// coefficient reader is emitted right after it; `none_u32` otherwise.
-    sec_of: u32 = none_u32,
 
     /// Why the target is in the core. `plan` queues the kinds in this order,
     /// which is the order of the core's fields: a model that gains a target
@@ -162,7 +157,6 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
                 .bound_step, .discontinuity => "§9.17 analog kernel control request",
                 .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
             },
-            .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
         });
     }
     // §4.5 Table 4-20's dynamic control arguments: `updateState` has one core

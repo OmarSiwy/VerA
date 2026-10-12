@@ -581,15 +581,14 @@ pub fn zeroOf(t: VTy) []const u8 {
 
 /// Where one slot's declaration ends up, and the evidence for it.
 ///
-/// `def_off`/`max_use` are output offsets and `scope` an index into
-/// `Probe.sc_end`. The emitted scopes nest, so "every use is lexically inside the
-/// block that defines this slot" is exactly `def_off < max_use <
-/// sc_end[scope]`, with no dominator query needed.
+/// `max_use` is an output offset and `scope` an index into `Probe.sc_end`.
+/// The emitted scopes nest, so once `pinned` rules out a read before the
+/// definition, "every use is lexically inside the block that defines this
+/// slot" is exactly `max_use < sc_end[scope]`, with no dominator query needed.
 /// `defs`/`uses` saturate at 255: every reader asks only 0, 1 or more.
 pub const Place = struct {
     defs: u8 = 0,
     uses: u8 = 0,
-    def_off: u32 = 0,
     max_use: u32 = 0,
     scope: u32 = 0,
     /// Something disqualifies this slot from `const`-at-definition: a
@@ -601,10 +600,10 @@ pub const Place = struct {
     at_def: bool = false,
 
     // One per slot of the body being probed (psp103's `setup`: 6854;
-    // hisimhv_va: 10097), walked whole by `probeBody`: 16 bytes, three
+    // hisimhv_va: 10097), walked whole by `probeBody`: 12 bytes, two
     // offsets and four one-byte facts.
     comptime {
-        std.debug.assert(@sizeOf(Place) == 16);
+        std.debug.assert(@sizeOf(Place) == 12);
     }
 };
 
@@ -631,10 +630,7 @@ pub fn scopeClose(self: *Gen, at: usize) void {
 pub fn probeDef(self: *Gen, slot: u32, movable: bool) void {
     if (!self.probe.active) return;
     const p = &self.probe.place.items[slot];
-    if (p.defs == 0) {
-        p.def_off = @intCast(self.out.items.len);
-        p.scope = self.probe.sc_open.last().?;
-    }
+    if (p.defs == 0) p.scope = self.probe.sc_open.last().?;
     p.defs +|= 1;
     if (p.defs > 1 or !movable) p.pinned = true;
 }
