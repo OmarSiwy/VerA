@@ -653,7 +653,7 @@ pub fn emitDerive(self: *Gen) Error!void {
         };
         // §6.3.4 gives the default; an explicit host write wins (else a card's
         // `VTH0` over `VTH0 = VTHO` would be erased). Only a localparam is
-        // overwritten unconditionally. `initGiven` raised the `__given`
+        // overwritten unconditionally. `plan/names.zig` raised the `__given`
         // companion for every non-local derived parameter.
         if (!p.is_local)
             try self.w("    if (!model.{s}__given) ", .{self.names.p_names[i]})
@@ -830,7 +830,7 @@ fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
         // ponytail: a default with no AST fold (`p.folded`, which saturates an
         // explicit integer at 32 bits above) clamps to the i64 carrier
         // (`lossyCast`: NaN -> 0) instead of panicking the compiler, as the
-        // fold (`Analysis.asI64`) and the runtime `fi_cast` do; `derive` then
+        // fold (`fold.Const.asInt`) and the runtime `fi_cast` do; `derive` then
         // keeps an explicit integer's low 32 bits. §4.2.1.1 fixes no overflow
         // rule. Upgrade path: a lowering-time diagnostic on the default's span.
         .int => try self.arena.print("{d}", .{if (c) |k| std.math.lossyCast(i64, @round(k.f)) else 0}),

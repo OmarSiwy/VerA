@@ -201,7 +201,7 @@ pub const Output = struct {
     text: []const u8,
     /// One entry per emitted top-level unit declaration, in emission order.
     /// `names[i]` is both the declaration name and the file stem, so the file
-    /// set changes exactly when `naming.zig`'s keys do. Arena-owned.
+    /// set changes exactly when `ir/names.zig`'s keys do. Arena-owned.
     names: []const []const u8 = &.{},
     /// Offset in `text` where each unit's declaration starts.
     unit_lo: []const u32 = &.{},

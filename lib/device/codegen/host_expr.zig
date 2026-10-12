@@ -170,7 +170,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
             // Table 3-3's relational row over two strings (equality, then
             // "lexicographical ordering"), as §3.4.6's `ebersmoll` example
             // writes in a parameter default. Lowering converted any mixed
-            // pair, so a string here is one of two. Mirrors `foldStrBinary`.
+            // pair, so a string here is one of two. Mirrors `fold.zig`'s `strBinary`.
             if (try strConst(self, av)) |sa| if (try strConst(self, bv)) |sb| {
                 const so: []const u8 = switch (row.op) {
                     .ieq => "== .eq",

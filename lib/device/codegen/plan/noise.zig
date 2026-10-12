@@ -67,7 +67,7 @@ pub const NoiseRow = struct {
     name: []const u8 = "",
     /// §4.6.4.6 the factor this branch applies to the generator, rv-resolved
     /// like `pwr`. `.f_zero` means the source never reached a contributed
-    /// value, which cannot happen through `planNoise` and is read as 1.
+    /// value, which cannot happen through `plan` and is read as 1.
     coeff: Mir.Value,
 };
 

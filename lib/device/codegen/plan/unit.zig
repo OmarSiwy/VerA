@@ -110,7 +110,7 @@ blk_phi: []bool = &.{},
 /// The condition is then never marked live, slotted or emitted.
 dead_branch: []bool = &.{},
 /// Local slot of a needed value, or `none_u32`. Unit-local, never a MIR
-/// index: naming.zig's ABSOLUTE RULE says why a MIR index in a name renumbers
+/// index: `ir/names.zig`'s header says why a MIR index in a name renumbers
 /// every downstream declaration.
 slot: []u32 = &.{},
 /// Number of slots `analyze` assigned.

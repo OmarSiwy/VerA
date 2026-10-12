@@ -47,7 +47,7 @@ pub const FilterPlan = struct {
     tau: ?[]const u8 = null,
     t0: ?[]const u8 = null,
     /// `const zr<k> = zRootSecs(...)` lines `__sec` runs before its return:
-    /// one per root vector whose parts the card sets (`cardRoots`).
+    /// one per root vector whose parts the card sets (`runtimeRoots`).
     lets: []const []const u8 = &.{},
     /// §4.5.14 the coefficients that move during the analysis, in the order `__sec`'s `k` parameter takes them; a
     /// coefficient's text reads `k[<j>]`. `updateState` latches them at the

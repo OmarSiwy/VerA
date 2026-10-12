@@ -77,7 +77,7 @@ pub const Core = struct {
 /// owned by `in.arena`.
 ///
 /// Job order (contributions in source order, then §4.5 operator inputs, then
-/// §9.4 display) makes `f<k>` insert-tolerant the way `naming.zig` makes
+/// §9.4 display) makes `f<k>` insert-tolerant the way `ir/names.zig` makes
 /// declaration names: adding a contribution at the end of a module appends
 /// fields and renumbers none. Fails only on allocation.
 pub fn plan(in: Input, jobs: []const Job) Error!Core {
@@ -144,7 +144,7 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
     self.name = try naming.unitNameAlloc(a, in.mir.name, .{
         .role = .common,
         // A single declaration, so the target is a fixed word rather than a
-        // key: naming.zig's insert-tolerance is about the NAME not moving,
+        // key: `ir/names.zig`'s insert-tolerance is about the NAME not moving,
         // and this one cannot.
         .target = "core",
     });

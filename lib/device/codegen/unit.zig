@@ -106,7 +106,7 @@ pub fn emitUnits(self: *Gen) Error!void {
     try self.w("// ---- the model, in one declaration ----\n\n", .{});
     // §4.5.11/§4.5.12 the coefficient reader is named from the operator's
     // unit (`<unit>__sec`), not a Unit of its own, so the ordering in
-    // naming.zig/proof.zig is untouched. It reads `Model` alone, so it is
+    // `ir/names.zig`/proof.zig is untouched. It reads `Model` alone, so it is
     // not part of the residual slice. It stays in device.zig's prologue,
     // ahead of the first recorded unit, and a unit file reads it through the
     // prelude's `dev.<unit>__sec` alias (`file.buildPrelude`): as a unit file of its

@@ -340,7 +340,7 @@ fn statusVal(self: *Gen, v: Mir.Value) Error![]const u8 {
 }
 
 /// §9.7.3 `status_sites`, `zStatusStore` (which `eval`, `q` and `evalQ` call
-/// on the core result: the first status reported sticks) and `zStatusDrop`
+/// on the core result: the first status reported sticks) and `status_drop`
 /// (`initState`, `setup`).
 fn emitStatusHelpers(self: *Gen) Error!void {
     if (!hasStatus(self)) return;

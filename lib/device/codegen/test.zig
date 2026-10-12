@@ -525,8 +525,8 @@ test "codegen: one stably-named declaration for the model, thin dispatcher" {
     try std.testing.expect(std.mem.find(u8, src, "pub const U = enum(u8) {") != null);
     try std.testing.expect(std.mem.find(u8, src, "pub const num_ports: usize = 2;") != null);
     try std.testing.expect(std.mem.find(u8, src, "r: f64 = 1000.0,") != null);
-    // The declaration name is naming.zig's structural key, not a MIR index,
-    // and there is one per model. The per-contribution keys (naming.zig,
+    // The declaration name is `ir/names.zig`'s structural key, not a MIR index,
+    // and there is one per model. The per-contribution keys (`ir/names.zig`,
     // proof.zig, the `Instance` state fields) name no declaration.
     try std.testing.expect(std.mem.find(u8, src, "fn res__common__core(comptime S: type,") != null);
     try std.testing.expect(std.mem.find(u8, src, "return zResidual(S, xs, @call(.always_inline, core, .{ S, xs, model, inst, sim }));") != null);
@@ -774,7 +774,7 @@ test "codegen: adding a contribution appends to the core, it does not renumber" 
     // The first contribution is still `f0` and `eval` still stamps it from
     // `m.f0`. That is what `plan_core.plan`'s job-order numbering buys: the field
     // index of an existing target is insert-tolerant in the same sense
-    // naming.zig makes a declaration name insert-tolerant, so `zig`'s
+    // `ir/names.zig` makes a declaration name insert-tolerant, so `zig`'s
     // `TrackedInst` for the dispatcher does not churn on an unrelated edit.
     try std.testing.expect(std.mem.find(u8, a, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.find(u8, b2, "const c = m.f0;") != null);
@@ -1481,7 +1481,7 @@ test "codegen: §5.6.7.1 two indirect contributions to one branch get one source
     // be a duplicate enum field, which the Zig parser cannot catch).
     try std.testing.expect(std.mem.find(u8, src, "flowZ28pZ2cnZ29, // branch flow") != null);
     try std.testing.expect(std.mem.find(u8, src, "flowZ28pZ2cnZ29Z231, // branch flow") != null);
-    // Two targets ⇒ two distinct core fields ⇒ two rows in `eval`. (naming.zig's
+    // Two targets ⇒ two distinct core fields ⇒ two rows in `eval`. (`ir/names.zig`'s
     // group-local ordinal keys the second unit's §4.5 state and proof verdict.)
     try std.testing.expect(std.mem.find(u8, src, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.find(u8, src, "const c = m.f1;") != null);
@@ -1549,7 +1549,7 @@ test "codegen: §4.5 operator state is keyed to the stable unit id" {
     try std.testing.expect(std.mem.find(u8, src, "tr__analog_op__transition__from: f64 = 0.0") != null);
     try std.testing.expect(std.mem.find(u8, src, "tr__analog_op__transition__t0: f64 = 0.0") != null);
     // The operator's input is a core field, not a declaration of its own; the
-    // state field carries `naming.zig`'s key.
+    // state field carries `ir/names.zig`'s key.
     try std.testing.expect(std.mem.find(u8, src, "zTransition(zL(S, ") != null);
     try std.testing.expect(std.mem.find(u8, src, "const m = tr__common__core__state(S, zVals(S, &x), model, inst, sim);") != null);
     try std.testing.expect(std.mem.find(u8, src, "pub fn updateState(") != null);
@@ -1974,7 +1974,7 @@ test "codegen: §3.2 the three sites that impose the 32-bit integer width agree"
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    // Site 1, `Lower.foldBinary`: a §4.2 constant expression, folded before the
+    // Site 1, `fold.binary`: a §4.2 constant expression, folded before the
     // Model field is written. 2^31 is one step past the top of §3.2's range.
     try std.testing.expect(std.mem.find(u8, src, "big: i64 = -2147483648") != null);
     // §4.2.11 `<<` at the same width: `1 << 31` is the sign bit, not 2^31.

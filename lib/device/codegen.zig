@@ -1,7 +1,7 @@
 //! Mir + Lowered + proof.Verdict -> device.zig: one Zig function per source
 //! unit, then the `eval`/`q` dispatchers, the §4.5.2 state machine and the
 //! decls `contract.validate` checks (LRM §5, §4.5, Clause 9, §8.3).
-//! Each unit has a stable name (naming.zig) and a uniform signature, so
+//! Each unit has a stable name (`ir/names.zig`) and a uniform signature, so
 //! `zig -fincremental` re-analyses only what changed. Identical MIR gives
 //! byte-identical output. Control flow is rebuilt by codegen/cfg.zig.
 
@@ -224,7 +224,7 @@ pub const Gen = struct {
     /// Then the storage is `S`; otherwise plain `f64`, and a store keeps only
     /// the value, since no load could see what it dropped. See `prepare`.
     arr_s: []bool = &.{},
-    /// The mask of each `Lowered.mem_arrays` row's storage (`family.arrMask`).
+    /// The mask of each `Lowered.mem_arrays` row's storage (`prepare`).
     arr_mask: []u64 = &.{},
     /// The setup roots and `setup`'s emission state (`codegen/setup.zig`).
     su: gen_setup.Setup = .{},
@@ -287,8 +287,8 @@ pub const Gen = struct {
     /// once and computes each value; the §9.4 display unit, the only other
     /// body, slices from one target and reads the rest.
     emitting_common: bool = false,
-    /// Set while the §9.4/§9.5 display unit is emitted; read only by
-    /// `emitSysCall`'s §9.5 dispatch. A §9.5 call opens files, moves read
+    /// Set while the §9.4/§9.5 display unit is emitted; read by
+    /// `call.zig`'s §9.5 dispatch. A §9.5 call opens files, moves read
     /// positions and appends bytes, while `eval` must stay a pure function of
     /// x for Newton to converge. So the file kernels run only in the display
     /// unit, which `plan_core.plan` keeps out of the shared core. §9.5.9: "if a

@@ -45,7 +45,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         return;
     }
     if (self.noise.rows.len == 0) return;
-    // `planNoise` gives a table row its `tabs` index and no other row one.
+    // `plan/noise.zig`'s `plan` gives a table row its `tabs` index and no other row one.
     for (self.noise.rows) |nr| switch (nr.kind) {
         .table, .table_log => assert(nr.table.? < self.noise.tabs.len),
         .thermal, .flicker => assert(nr.table == null),

@@ -231,7 +231,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         .comment = "§9.17.1 iteration rejection",
     });
     // §5.6.1.3 the retention flags of every runtime-selected branch row
-    // (`Retention.runtime`), read by `emitResidual` as core fields. A module
+    // (`Retention.runtime`), read by `emitEval`'s `zResidual` as core fields. A module
     // whose potential contributions are all unconditional queues nothing.
     for (self.lowered.contributions.items, 0..) |c, i| {
         if (c.kind != .direct or c.access != .potential) continue;
