@@ -82,9 +82,9 @@ fn callCap(g: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!u64 {
     switch (c) {
         .@"$sformat" => {
             var fmt: std.ArrayList(u8) = .empty;
-            var ops: cg_display.Ops = .{};
+            var ops: cg_display.Ops = .empty;
             try cg_display.buildArgs(g, args, &fmt, &ops);
-            return cg_display.siteCap(g, fmt.items, ops.items());
+            return cg_display.siteCap(g, fmt.items, ops.items);
         },
         .@"$sformat$rt" => return rtFormatCap(g, args),
         .@"$str$cat" => {

@@ -488,12 +488,6 @@ fn emitEval(self: *Gen) Error!void {
     , .{});
 }
 
-/// Whether the device is `batch_lead` (`file.batchLead`): its entry points
-/// then open with the lead loop.
-fn leads(self: *const Gen) bool {
-    return gen_file.batchLead(self);
-}
-
 /// Writes the lead loop an entry point opens with (`batch_lead`): a family
 /// running the protocol (`S.Inner`) evaluates the batch once per leader,
 /// merging each run's points that followed the leader's path, until every
@@ -501,7 +495,7 @@ fn leads(self: *const Gen) bool {
 /// first run is inlined and the re-runs (divergent batches) share one
 /// out-of-line copy, so a coherent batch costs one inlined body.
 fn writeLead(self: *Gen, call: []const u8, ret: []const u8) Error!void {
-    if (!leads(self)) return;
+    if (!gen_file.batchLead(self)) return;
     try self.w(
         \\    if (comptime zLeads(S)) {{
         \\        S.leadBegin();

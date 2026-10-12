@@ -175,7 +175,7 @@ pub fn buildArgs(
     fmt: *std.ArrayList(u8),
     ops: *Ops,
 ) Error!void {
-    const ops_before = ops.items().len;
+    const ops_before = ops.items.len;
     var i: usize = 0;
     while (i < args.len) {
         const i_before = i;
@@ -192,7 +192,7 @@ pub fn buildArgs(
     // `chunkText` splits the text at the operands' starts, so they ascend
     // and lie inside it.
     var at_prev: usize = 0;
-    for (ops.items()[ops_before..]) |op| {
+    for (ops.items[ops_before..]) |op| {
         assert(op.at >= at_prev);
         assert(op.at <= fmt.items.len);
         at_prev = op.at;
@@ -200,17 +200,7 @@ pub fn buildArgs(
 }
 
 /// One call's print operands, in format order.
-pub const Ops = struct {
-    list: std.ArrayList(PrintArg) = .empty,
-
-    fn append(self: *Ops, a: std.mem.Allocator, p: PrintArg) Error!void {
-        try self.list.append(a, p);
-    }
-
-    pub fn items(self: *const Ops) []const PrintArg {
-        return self.list.items;
-    }
-};
+pub const Ops = std.ArrayList(PrintArg);
 
 /// The most operands one `std.fmt` call takes (`std.fmt.ArgSetType`'s bits).
 /// A call with more is emitted as consecutive calls of at most this many.
@@ -327,7 +317,7 @@ fn renderPrintArgs(g: *Gen, ops: []const PrintArg, first: usize) Error!void {
 /// data). `site` keys `$monitor`'s scratch row. `$fatal` also halts.
 pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
-    var ops: Ops = .{};
+    var ops: Ops = .empty;
     // §9.7.3: the severity is the message's whole reason for existing, and a
     // reader cannot recover it from the text.
     if (severityWord(c)) |word| {
@@ -354,18 +344,18 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     // writes `+42` where §9.4.3 writes ` 42`; its scratch is a stack array
     // in this block.
     try g.b("zd: {{ ", .{});
-    try emitScratch(g, ops.items(), site);
+    try emitScratch(g, ops.items, site);
     if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
         // only when a watched argument VALUE differs from the step this site
         // last reported (`monitorValues`). An overrun is `emitStringFormat`'s
         // E1011.
         try g.b("if (zMonitor({d}, ", .{monitorKey(g, args)});
-        try monitorValues(g, ops.items());
+        try monitorValues(g, ops.items);
         try g.b(", ", .{});
-        try emitBufPrint(g, fmt.items, ops.items(), site);
+        try emitBufPrint(g, fmt.items, ops.items, site);
         try g.b(")) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
-    } else try emitDebugPrint(g, fmt.items, ops.items());
+    } else try emitDebugPrint(g, fmt.items, ops.items);
     // §9.7.3: `$fatal` "terminates the simulation with an errorcode". The
     // finish_number "may be used in an implementation-specific manner"; here
     // it is the exit status, floored at 1 so a `$fatal` never reads as success
@@ -438,7 +428,7 @@ pub fn planSay(g: *Gen) Error![]const SaySite {
 /// `$fdebug`, and collects the calls an `analog initial` block makes into
 /// `g.init_calls` (`callee.isFileCall`'s through `Lower.sequenceFileCall`'s
 /// `$itor` carrier). Such a unit takes a `comptime pass: contract.SayPass`
-/// and gates each call on it (`gen_call.passCond`).
+/// and gates each call on it (`gen_call.gateOpen`).
 pub fn planPasses(g: *Gen) Error!void {
     var init: std.ArrayList(Mir.Inst) = .empty;
     for (g.lowered.displays.items) |d| {
@@ -614,16 +604,16 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
 /// formatting, so field widths count the original bytes.
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
-    var ops: Ops = .{};
+    var ops: Ops = .empty;
     try buildArgs(g, args, &fmt, &ops);
     try g.b("zs: {{ ", .{});
-    try emitScratch(g, ops.items(), site);
+    try emitScratch(g, ops.items, site);
     // An overrun ends the run with E1011 (`zSOver`): §9.5.3 states no
     // truncation rule, and an empty or half string is a wrong answer. The
     // row is sized for every operand (`siteCap`), so only a run-time string
     // longer than the compiler could know can overrun it.
     try g.b("break :zs zStringStore(", .{});
-    try emitBufPrint(g, fmt.items, ops.items(), site);
+    try emitBufPrint(g, fmt.items, ops.items, site);
     try g.b("); }}", .{});
 }
 
@@ -695,7 +685,7 @@ pub fn emitFileCall(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize
 fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     switch (c) {
         // §9.5.2's five output tasks, and the two descriptor tasks that take no
-        // text (`Lower.isFileOutTask`).
+        // text (`callee.zig`'s `.file_out` family).
         .@"$fdisplay",
         .@"$fwrite",
         .@"$fstrobe",
@@ -809,7 +799,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     const all = if (mon) args[1..] else args;
     const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
-    var ops: Ops = .{};
+    var ops: Ops = .empty;
     try buildArgs(g, rest, &fmt, &ops);
     // The §9.4.1 task §9.5.2 names this one after decides the newline:
     // `$write` is the member that does not end the line, and so is `$fwrite`.
@@ -819,7 +809,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     // written, which is `emitStringFormat`'s sink with a descriptor instead of a
     // string variable. An overrun is E1011, as for §9.5.3.
     try g.b("zf: {{ ", .{});
-    try emitScratch(g, ops.items(), site);
+    try emitScratch(g, ops.items, site);
     // §9.5.2 makes `$fmonitor` "just like" `$monitor` with a descriptor in
     // front, so §9.4.1's change condition travels with it: the record is
     // composed either way, and `zMonitor` decides whether it is written.
@@ -828,10 +818,10 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
         try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", ", .{});
     }
-    try emitBufPrint(g, fmt.items, ops.items(), site);
+    try emitBufPrint(g, fmt.items, ops.items, site);
     if (mon) {
         try g.b("; break :zf if (zMonitor({d}, ", .{monitorKey(g, args)});
-        try monitorValues(g, ops.items());
+        try monitorValues(g, ops.items);
         try g.b(", zt)) |zm| zFPut(", .{});
         try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", zm) else 0; }}", .{});
@@ -1143,7 +1133,7 @@ pub fn appendConv(
         else => {},
     };
     const at = fmt.items.len;
-    const ops_before = ops.items().len;
+    const ops_before = ops.items.len;
     switch (conv) {
         // §9.4.3 Table 9-23's four real conversions "have the full formatting
         // capabilities available in the C language"; `%r` adds §2.6.2's
@@ -1226,7 +1216,7 @@ pub fn appendConv(
         },
     }
     // One `{…}` and one operand per conversion.
-    assert(ops.items().len == ops_before + 1);
+    assert(ops.items.len == ops_before + 1);
     assert(fmt.items.len > at);
 }
 

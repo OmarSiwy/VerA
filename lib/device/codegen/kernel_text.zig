@@ -6,8 +6,6 @@
 //! §9.5, §9.13, §9.21.
 
 const std = @import("std");
-const codegen = @import("../codegen.zig");
-const naming = @import("ir").names;
 const kernels = @import("kernels");
 
 // ===========================================================================

@@ -20,12 +20,11 @@ const family = @import("family.zig");
 const opcode_zig = codegen.opcode_zig;
 const Mir = @import("ir").Mir;
 const Analysis = @import("prove").Analysis;
-const Lower = @import("ir").Lowered;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 
-/// `.ipow`'s device text: `Lower.ipow32` as a callable expression. Locals
+/// `.ipow`'s device text: `kernels/fold.zig`'s `ipow32` as a callable expression. Locals
 /// carry a `zp_` prefix because Zig refuses a name that shadows any enclosing
 /// scope's.
 pub const ipow_fn = "(struct { fn zp_f(zp_b: i64, zp_n: i64) i64 { " ++
@@ -653,7 +652,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         .fi_cast => {
             // §4.2.1.1 rounds and leaves overflow undefined; `lossyCast`
             // (saturate, NaN to 0) avoids UB under ReleaseFast and matches
-            // `Analysis.asI64`'s fold.
+            // `fold.Const.asInt`'s fold.
             float_lanes.leadLanes(self, a); // a real→int collapse is a decision
             try self.b("zRoundI(S, ", .{});
             try renderVal(self, a, .real);
@@ -683,7 +682,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             try self.b("zInst(S, inst, \"{s}__{d}\")", .{ @as([]const u8, if (op == .path_prev) "pb" else "pq"), k });
         },
         // §3.2 integer arithmetic at 32-bit two's complement width
-        // (`Lower.wrap32`). `%` never widens; `/` overflows only for
+        // (`kernels/fold.zig`'s `wrap32`). `%` never widens; `/` overflows only for
         // -2^31 / -1, whose wrapped answer is -2^31.
         .iadd => try intBin32(self, a, "+%", b2),
         .isub => try intBin32(self, a, "-%", b2),
@@ -887,7 +886,7 @@ fn intBin(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
     try self.b("))", .{});
 }
 
-/// Writes `intBin` truncated to §3.2's 32-bit width (`Lower.wrap32`). `opx`
+/// Writes `intBin` truncated to §3.2's 32-bit width (`fold.wrap32`). `opx`
 /// must be a wrapping op (`+%`): an overflowing i64 `+` would panic before
 /// the truncation.
 pub fn intBin32(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
@@ -983,8 +982,8 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
     try self.b("))", .{});
 }
 
-/// Writes a §9.21 `$table_model` call in the shape `Lower.lowerTableModel`
-/// gives it:
+/// Writes a §9.21 `$table_model` call in the shape
+/// `analog/lower/table_model.zig`'s `lowerTableModel` gives it:
 ///
 ///     (ND, NP, NCOL, dep, "<interp/extrap>", snapshot_site, previous_call, in₀…, row₀…)
 ///
@@ -1038,8 +1037,8 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     if (site != 0) try self.b("; }}", .{});
 }
 
-/// Writes a §3.2/§5.7 runtime array index in the shape `Lower.lowerIndex`
-/// gives it, `(lo, i, e_lo … e_hi)`, as one `switch`: one dispatch and one
+/// Writes a §3.2/§5.7 runtime array index in the shape
+/// `analog/lower/expr.zig`'s `lowerIndex` gives it, `(lo, i, e_lo … e_hi)`, as one `switch`: one dispatch and one
 /// element evaluation per read (a `sel` chain would evaluate every element).
 /// An out-of-range read yields the element type's zero; an integer array
 /// cannot yield x. Pins lanes when the index depends on x.
