@@ -48,9 +48,6 @@ pub const Spec = struct {
     // scratch is a static row (`str_kernels.zSRow`), so no field makes a
     // huge frame (`PrintArg.onStack`).
     const max_stack = 4096;
-    fn w(self: Spec) usize {
-        return self.width;
-    }
     fn p(self: Spec, default: usize) usize {
         return self.prec orelse default;
     }
@@ -111,10 +108,10 @@ const PrintArg = struct {
         const n: ?usize = switch (self.how) {
             .ascii => @sizeOf(i64),
             .pad => 24, // i64's widest decimal (20 chars) plus slack
-            .cint => @max(24, self.spec.w() +| 2), // the full zero-filled field
+            .cint => @max(24, self.spec.width +| 2), // the full zero-filled field
             // The widest `%f` body is a sign, f64's 309 integer digits, the
             // point and the precision; the field can be wider still.
-            .creal => @max(self.spec.w(), self.spec.p(6) +| 320) +| 8,
+            .creal => @max(self.spec.width, self.spec.p(6) +| 320) +| 8,
             else => null,
         };
         if (n) |bytes| assert(bytes > 0);
@@ -151,7 +148,7 @@ const PrintArg = struct {
                 .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
             },
         };
-        return @max(body, self.spec.w());
+        return @max(body, self.spec.width);
     }
 };
 
@@ -1264,7 +1261,7 @@ fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             // @abs on an i64 returns u64, so minInt needs no special case.
             // Without zero-fill the outer `{s:>W}` does any padding.
             const sign: []const u8 = if (p.spec.plus) "+" else if (p.spec.space) " " else "";
-            const w = p.spec.w();
+            const w = p.spec.width;
             const zero_fill = p.spec.zero and !p.spec.left and p.spec.width > 0;
             // The zero-filled field leaves room for its sign.
             if (zero_fill) assert(w >= 1);
@@ -1294,7 +1291,7 @@ fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             try g.b(").val(), '{c}', {d}, {d}, {d})", .{
                 p.conv,
                 flags,
-                p.spec.w(),
+                p.spec.width,
                 if (p.spec.prec) |pr| @as(i64, @intCast(pr)) else -1,
             });
         },
