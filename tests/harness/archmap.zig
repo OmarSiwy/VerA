@@ -33,8 +33,8 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
 
-pub const begin = "<!-- BEGIN zig build archmap: generated, do not edit by hand -->";
-pub const end = "<!-- END zig build archmap -->";
+const begin = "<!-- BEGIN zig build archmap: generated, do not edit by hand -->";
+const end = "<!-- END zig build archmap -->";
 
 /// Writes `specification/UNITS.md`, then the map between the markers of the file named
 /// in `args` (default `AGENTS.md`). Exit 1 when that file has no markers.

@@ -1000,11 +1000,11 @@ pub const Run = struct {
         self.bag.add(self.stage(), code, .{ .start = start, .end = start }, fmt, args) catch return error.OutOfMemory;
         return error.DigitalFailed;
     }
-    /// `fail` at expression `e`'s main token, with a fixed message.
     /// A walk ran out of the stack `deep.runGuarded` reserved, at token `tok`.
     pub fn deepFail(self: *Run, tok: u32) Error {
         return self.fail(tok, deep.message, .{deep.mib()});
     }
+    /// `fail` at expression `e`'s main token, with a fixed message.
     pub fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
         return self.fail(self.file.exprs.mainTok(e), "{s}", .{msg});
     }

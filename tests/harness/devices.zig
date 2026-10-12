@@ -36,6 +36,8 @@ const Args = std.process.Args.Iterator;
 /// 1364-2005 §17.2.9's terminated load): it must fail as the reject lines say
 /// and print the transcript.
 pub const digital_dirs = [_][]const u8{ "digital", ieee1364_dir };
+/// The IEEE 1364-2005 transcript tree under `tests/fixtures`, which
+/// `zig build test-1364` runs alone.
 pub const ieee1364_dir = "ieee1364";
 
 /// The `devices` and `ieee1364` modes over the cases under `dirs`: the

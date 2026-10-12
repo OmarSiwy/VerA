@@ -24,6 +24,8 @@ pub const Source = struct {
     root: Io.Dir,
     texts: std.StringHashMapUnmanaged([]const u8) = .empty,
 
+    /// `path`'s bytes, read on the first ask and kept: arena-owned, valid
+    /// while `arena` is.
     pub fn text(s: *Source, path: []const u8) ![]const u8 {
         if (s.texts.get(path)) |t| return t;
         const t = try s.root.readFileAlloc(s.io, path, s.arena, .unlimited);

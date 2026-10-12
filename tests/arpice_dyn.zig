@@ -12,6 +12,8 @@ pub const vera_validate_contract = true;
 
 const contract = @import("contract");
 
+/// The `--dyn` hook (`lib/zigbuild/orchestrator.zig`): exports `bench_evalq`
+/// for `D`. `name` is unused: one device per `.so`, under a fixed symbol.
 pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
     _ = name;
     @export(&Bench(D).evalQ, .{ .name = "bench_evalq" });
