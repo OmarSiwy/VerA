@@ -4,6 +4,8 @@
 //! then one `#time` section per step of the variables that changed (§18.1.4).
 //! `Vcd` is shared by the interpreter and a native executable: the design
 //! through `Catalog`, the values through the engine's `src` (`Vcd.tick`).
+//! Also cited: §17.4.1 (`$finish` before the step's dump), §18.4.1 (the
+//! header's `$date` and `$version`).
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;

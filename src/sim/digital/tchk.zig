@@ -15,7 +15,8 @@
 //! it already reported, and a stamp of the window before the reference is
 //! the latest data event strictly before it.
 //!
-//! Clauses: IEEE 1364-2005 §15.1-§15.7, Tables 15-1 to 15-13; VAMS 12.31.4.
+//! Clauses: IEEE 1364-2005 §15.1-§15.7, Tables 15-1 to 15-13, §27.31
+//! (`putLimits`); VAMS 12.29, 12.31.4.
 
 const std = @import("std");
 const Front = @import("frontend");

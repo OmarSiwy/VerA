@@ -2,7 +2,8 @@
 //! they run in: time, then region. A payload indexes a caller-owned record;
 //! this module evaluates no HDL.
 //! Clauses: VAMS-2023 §8.4.4, §8.5.1, §8.5.2, §8.5.3.6, §8.5.3.7; IEEE
-//! 1364-2005 §10.3, §11.4.1, §11.4.2, §26.6.25.
+//! 1364-2005 §10.3, §11.4.1, §11.4.2, §26.6.25; VAMS §9.23 (the pending-driver
+//! queries `pendingPayloads` serves).
 const std = @import("std");
 
 /// Integer ticks at the design's finest time precision. Scaling/rounding belongs

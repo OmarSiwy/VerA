@@ -2,7 +2,8 @@
 //! expression (or a task call) -> its text, written to a caller's `Writer`.
 //! Parentheses only where precedence needs them, one space between operands
 //! and operators, each literal in its own base. A pure function of the AST;
-//! property.zig's `vpi_get_str` supplies the buffer.
+//! property.zig's `vpi_get_str` supplies the buffer. Precedence and
+//! associativity: IEEE 1364-2005 §5.1.2, Table 5-4.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
