@@ -1,6 +1,7 @@
 //! Exact decimal timescale factors and integer digital delay counts, and an
 //! analog time as the digital tick it falls in.
-//! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1 and 19.8; VAMS §5.10.3.1, §7.3.6.5.
+//! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1, 17.7.1, 17.7.2 and 19.8; VAMS §5.10.3.1,
+//! §7.3.6.5, §9.10.
 const std = @import("std");
 
 /// Why a timescale or a delay has no tick count. `InvalidQuantum`: not one

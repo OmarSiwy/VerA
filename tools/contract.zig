@@ -505,7 +505,7 @@ fn cExp(buf: *[512]u8, sci: []const u8) []const u8 {
 /// f64 transcendentals that also compile for NVPTX and AMDGCN, which have no
 /// libm. Used by the scalar paths of generated code (the §4.5.15 limiters), by
 /// `RefFamily`, and by the compiler's constant folds and the prover's bounds
-/// (`frontend/constfold.zig`, `ir/proof/prover.zig`): `exp`, `log` and `pow`
+/// (`frontend/constfold.zig`, `prove/proof/prover.zig`): `exp`, `log` and `pow`
 /// fold at compile time to the bits a device computes at run time, so changing
 /// their arithmetic changes folded constants. On the host the other functions
 /// are the Zig builtin or `std.math` call; on a GPU target each is a
