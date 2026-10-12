@@ -113,7 +113,7 @@ pub fn strip(optimize: std.lang.Optimize, debug_info: bool) bool {
 }
 
 /// A built shared library.
-pub const Artifact = struct {
+const Artifact = struct {
     /// `<work_dir>/lib<name>.<generation>.so`, a fresh inode for the host to
     /// dlopen. Owned by the build's `gpa`; freed by `Result.deinit`.
     so_path: []const u8,
@@ -347,7 +347,7 @@ pub const Part = @import("contract").DevicePart;
 const split_min_bytes: usize = 768 * 1024;
 
 /// Whether `compileRelease` builds `device` as `Part`s.
-pub fn splits(o: Options, device: Output) bool {
+fn splits(o: Options, device: Output) bool {
     return o.split orelse (o.backend == .llvm and device.text.len >= split_min_bytes);
 }
 

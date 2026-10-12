@@ -17,20 +17,14 @@ pub const Module = orchestrator.Module;
 pub const Options = orchestrator.Options;
 /// The generated device text and its per-unit ranges.
 pub const Output = orchestrator.Output;
-/// A built shared library.
-pub const Artifact = orchestrator.Artifact;
 /// A `.so` build outcome.
 pub const Result = orchestrator.Result;
 /// The pieces a split build compiles in parallel (`contract.DevicePart`).
 pub const Part = orchestrator.Part;
 /// A module name as a file-name stem.
 pub const fileStem = orchestrator.fileStem;
-/// Whether a native build passes `-fstrip`.
-pub const strip = orchestrator.strip;
 /// Writes the device tree a `.so` build compiles, touching only changed files.
 pub const writeTree = orchestrator.writeTree;
-/// Whether `compileRelease` builds a device as `Part`s.
-pub const splits = orchestrator.splits;
 /// Builds a device into `lib<name>.<generation>.so`.
 pub const compileRelease = orchestrator.compileRelease;
 /// Builds `sim`'s runtime as a position-independent object for `Options.engine`.
