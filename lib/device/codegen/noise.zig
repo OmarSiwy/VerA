@@ -183,7 +183,7 @@ pub fn emitNoiseCore(self: *Gen) Error!void {
 /// internally sort the pairs into ascending frequency" must hold for any card.
 /// `derive` stores its result in the row (`Model.noise_table_points__`,
 /// `contract.noiseTable`).
-pub fn emitNoiseTablePoints(self: *Gen) Error!void {
+fn emitNoiseTablePoints(self: *Gen) Error!void {
     if (!hasCardKnots(self)) return;
     const total = cardKnotCount(self);
     assert(total > 0);

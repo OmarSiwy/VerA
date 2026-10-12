@@ -185,12 +185,12 @@ pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: M
 ///   The branch potential of a flow probe is zero (0)." Figure 5-1 draws the
 ///   ammeter: the probe is a short, so its row is `V(hi) - V(lo) = 0` and its
 ///   current enters KCL at both ends.
-pub const FreeFlow = struct { u: u32, hi: u32, lo: u32, sourced: bool };
+const FreeFlow = struct { u: u32, hi: u32, lo: u32, sourced: bool };
 
 /// `free_flows`, in unknown-slot order (`flow_unknowns` is a hash map, and
 /// its iteration order is not the emitted order). Asserts that `branch_u`
 /// has one entry per contribution.
-pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
+fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
     assert(branch_u.len == self.lowered.contributions.items.len);
     var out: std.ArrayList(FreeFlow) = .empty;
     var it = self.lowered.flow_unknowns.iterator();
@@ -238,7 +238,7 @@ pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
 /// NESTED x-dependent steering surfaces as an inner phi in the incoming
 /// values, which recursion refuses. Loop-carried phis are refused
 /// outright.
-pub fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
+fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
     return constFree(self, v0, depth, true);
 }
 
@@ -305,7 +305,7 @@ fn constFree(self: Input, v0: Mir.Value, depth: u32, env: bool) bool {
 /// all of whose arms are? The accumulator of a §5.6.5 potential arm contributing
 /// `<+ 0.0` is exactly this shape: entry-seeded 0, `discardOpposite`'s 0
 /// on the flow arm, `0 + 0.0` on its own.
-pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
+fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
     if (depth > 16) return false;
     const v = self.an.rv(v0);
     if (v == .f_zero) return true;
@@ -350,7 +350,7 @@ fn unknownProbed(self: Input, u: u32) bool {
 /// the pair apart behind a selected 0 V short costs the host an unknown, a
 /// branch row, and catastrophic cancellation when its LU eliminates the short.
 /// Asserts that `branch_u` has one entry per contribution.
-pub fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
+fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
     assert(branch_u.len == self.lowered.contributions.items.len);
     var out: std.ArrayList(CollapsePair) = .empty;
     const np: u32 = @intCast(self.lowered.num_ports);

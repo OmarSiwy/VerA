@@ -28,7 +28,7 @@ pub const Jobs = struct {
 };
 
 /// What `plan` reads besides the lowered module.
-pub const From = struct {
+const From = struct {
     /// `plan/names.zig`: the canonical units, whose operators queue inputs.
     names: *const Names,
     /// `proof.Verdict.unit_modes`: the float mode of each CONTRIBUTION unit.

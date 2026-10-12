@@ -841,7 +841,7 @@ fn helperS(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
 }
 
 /// Writes a one-operand kernel call at the operand's mask.
-pub fn helper1(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
+fn helper1(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
     const m = family.mask(self, a);
     try kernelOpen(self, name, m);
     try kernelArg(self, a, m);
@@ -860,7 +860,7 @@ pub fn helper2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!
 
 /// Writes `zLu(S, m, name(zL(S, m), `: kernels take one scalar, which a
 /// family is at one mask. `m` is the result's. Close with `kernelClose`.
-pub fn kernelOpen(self: *Gen, name: []const u8, m: u64) Error!void {
+fn kernelOpen(self: *Gen, name: []const u8, m: u64) Error!void {
     try self.b("zLu(S, 0x{x}, {s}(zL(S, 0x{x}), ", .{ m, name, m });
 }
 
@@ -889,7 +889,7 @@ fn intBin(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
 /// Writes `intBin` truncated to §3.2's 32-bit width (`fold.wrap32`). `opx`
 /// must be a wrapping op (`+%`): an overflowing i64 `+` would panic before
 /// the truncation.
-pub fn intBin32(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+fn intBin32(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
     try self.b("@as(i64, @as(i32, @truncate(", .{});
     try intBin(self, a, opx, b2);
     try self.b(")))", .{});
@@ -1094,7 +1094,7 @@ fn intCall2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!voi
 /// Writes §4.2.11 `>>`: a logical shift over §3.2.1's 32-bit `integer`, so
 /// `-16 >> 2` is 1073741820. A zero count is the identity; `zShr` defines an
 /// over-wide or negative count as 0.
-pub fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
+fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
     try self.b("zShr(", .{});
     try renderVal(self, a, .int);
     try self.b(", ", .{});

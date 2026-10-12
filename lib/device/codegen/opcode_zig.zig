@@ -8,7 +8,7 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 
 /// How `render.renderOp` writes an opcode over `S`.
-pub const Spell = union(enum) {
+const Spell = union(enum) {
     /// Written by hand in `renderOp`: arithmetic with its scalar fast paths,
     /// comparisons, integer ops, casts, latches, and the control opcodes.
     custom,

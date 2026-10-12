@@ -354,7 +354,7 @@ fn usesQuad(self: *const Gen) bool {
 /// `enum(u8)` up to 256 unknowns and as wide as the count needs past them
 /// (`contract.isDenseEnum` takes any unsigned tag of 8 bits or more), so the
 /// count has no bound of its own (#29; §6.5.2.2 asks for at least 256 ports).
-pub fn emitTopology(self: *Gen) Error!void {
+fn emitTopology(self: *Gen) Error!void {
     const n_names: u32 = @intCast(self.names.u_names.len);
     try self.w("/// Solver unknowns: §6.5 ports first, then §3.6.3 internal nets,\n", .{});
     try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
@@ -481,7 +481,7 @@ fn emitDeclMeta(self: *Gen) Error!void {
 /// discipline (a §3.5 implicit net without `default_discipline`) falls back to
 /// annex D's `VOLTAGE_ABSTOL` 1e-6 / `CURRENT_ABSTOL` 1e-12.
 /// A shared potential node uses §7.2.4's minimum across its signal segments.
-pub fn abstolOf(self: *const Gen, i: u32) f64 {
+fn abstolOf(self: *const Gen, i: u32) f64 {
     const flow = plan_topo.isFlowUnknown(self.input(), i);
     var idx: u32 = i;
     if (i < self.lowered.nodes.len) switch (self.lowered.nodes.items(.kind)[i]) {
@@ -607,7 +607,7 @@ fn emitModel(self: *Gen) Error!void {
 /// ("shall not be directly modified"). Declaration order is dependency order
 /// (a forward reference is E0314), so one pass suffices. `Model{}` is already
 /// the spec default, so a host that overrides nothing need not call it.
-pub fn emitDerive(self: *Gen) Error!void {
+fn emitDerive(self: *Gen) Error!void {
     const at = self.out.items.len;
     try self.w(
         \\/// §6.3.4 parameter dependence + §3.4.5 localparam. Call ONCE after

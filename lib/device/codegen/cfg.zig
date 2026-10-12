@@ -392,7 +392,7 @@ pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
 /// straight into the slots.
 ///
 /// Asserts that `from` and `to` are blocks of the unit.
-pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
+fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     assert(from < self.an.term.len);
     assert(to < self.an.term.len);
     const phis = self.an.phi_pool[self.an.phi_off[to]..self.an.phi_off[to + 1]];
@@ -479,7 +479,7 @@ fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
 
 /// Returns whether this unit materializes the pooled phi `inst` into a
 /// local slot.
-pub fn slotted(self: *const Gen, inst: Mir.Inst) bool {
+fn slotted(self: *const Gen, inst: Mir.Inst) bool {
     const i = @backingInt(self.an.i_res[@backingInt(inst)]);
     return self.plan.needed[i] and self.plan.slot[i] != none_u32;
 }

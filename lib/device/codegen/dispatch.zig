@@ -366,7 +366,7 @@ fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
 /// host decides when text happens rather than getting it once per Newton
 /// iteration. Not emitted under `display == .drop`. The unit's `S` result is
 /// discarded.
-pub fn emitDisplay(self: *Gen) Error!void {
+fn emitDisplay(self: *Gen) Error!void {
     if (self.jobs.display_name.len == 0) return;
     if (self.display == .record) {
         try self.w(
@@ -518,7 +518,7 @@ const zero_both = ".{ .res = zRowsZero(S), .q = zSitesZero(S) };\n";
 /// has declared. Accumulates `uses.x`/`uses.model`/`uses.inst`, `jac.pat`, `jac.rows`
 /// and `lin`, and returns the row count so the caller can back-patch its
 /// signature. Opens a `core` call unless `core_hoisted` is set.
-pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
+fn emitStamps(self: *Gen, react: bool) Error!u32 {
     var stamps: u32 = 0;
     // Which half `patRow` accumulates into. `eval`/`q` and `evalQ` emit the
     // same rows, so the second pass ORs in bits the first already set.
@@ -837,7 +837,7 @@ fn emitFused(self: *Gen) Error!void {
 /// (`CollapsePair.card`), the flag-set arm's coefficients (±1) are constants
 /// per card and leave as `jac_const` entries guarded by the published `Model`
 /// field, so ib keeps no lane. Any other runtime row keeps every lane.
-pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, react: bool) Error!void {
+fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, react: bool) Error!void {
     const u = self.names.branch_u[i];
     const partner = plan_topo.switchFlowOf(self.input(), i);
     const split = collapsible(self, i);
@@ -1050,7 +1050,7 @@ fn rowEnd(self: *Gen) Error!void {
 /// Records that row `node` of the half being emitted (`jac.react`) gained a
 /// term whose derivative lives in `bits`, and that the row is written at all
 /// (`rows`). Ground has no row. Every `res[...]` writer calls this.
-pub fn patRow(self: *Gen, node: u32, bits: u64) void {
+fn patRow(self: *Gen, node: u32, bits: u64) void {
     if (node == Lower.ground) return;
     if (self.jac.pat[@intFromBool(self.jac.react)].len == 0) return;
     self.jac.pat[@intFromBool(self.jac.react)][node] |= bits;

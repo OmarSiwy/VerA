@@ -320,7 +320,7 @@ pub fn opInputIdx(self: *const Gen, i: u32) u32 {
 /// Returns the offset of the `fn` keyword, where `orchestrator.writeTree`
 /// splices `pub ` for the split form. `text` itself stays private because
 /// `contract.rejectStrayPubDecls` allows only contract-recognized public names.
-pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: proof.FloatMode, comment: []const u8) Error!usize {
+fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: proof.FloatMode, comment: []const u8) Error!usize {
     self.uses = .{};
     self.fatal = self.pre_fatal;
     self.plan.display_unit = self.emitting_display;
@@ -656,7 +656,7 @@ pub fn probeUse(self: *Gen, slot: u32) void {
 /// dominator query because the emitted nesting is not the CFG (dead branches,
 /// dropped labels and inlined arms). Safe to run twice: emission only appends
 /// to `out` and sets monotone flags, and `fatal` is set-once.
-pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
+fn probeBody(self: *Gen, target: Mir.Value) Error!void {
     self.probe.place.clearRetainingCapacity();
     try self.probe.place.appendNTimes(self.arena, .{}, self.plan.n_slots);
     self.probe.sc_end.clearRetainingCapacity();

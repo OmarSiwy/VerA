@@ -41,7 +41,7 @@ fn isAnalysisName(s: []const u8) bool {
 /// residual's frame: `f64Const`'s text when it folds, else the rendered S
 /// expression's `.val()`, which pins lanes. `ctrlStep` is the `updateState`
 /// frame's counterpart.
-pub fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     if (try gen_host.f64Const(self, args[i], 0, false)) |s| return s;
     // The collapse is intended: a control argument (or §4.6.3's stimulus
@@ -999,7 +999,7 @@ pub fn abort(self: *Gen, code: diag.Code, comptime fmt: []const u8, args: anytyp
 
 /// Writes the §4.6.1 test of `args`' analysis names against `sim.kind`,
 /// or `false` when none is a string literal.
-pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
+fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
     self.uses.sim = true;
     var first = true;
     for (args) |a| {
@@ -1209,7 +1209,7 @@ fn gateClose(self: *Gen) Error!void {
 /// Writes a §9.5 call outside the display unit (every §9.5 call in a
 /// `.drop` build). The result has `Mir.callee.ty`'s type; a descriptor is
 /// an integer (§9.5.1).
-pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
+fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     _ = args; // `UnitPlan.dispHere` did not mark them: there is nothing here to read them
     // In a printing artifact the display unit performed the call and latched
     // its integer result, so read it back.
@@ -1232,7 +1232,7 @@ pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
 
 /// Writes a §4.5 stateful analog operator call. Each operator is a named
 /// unit, so its `Instance` fields and `updateState`'s read share a stable key.
-pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKind) Error!void {
+fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKind) Error!void {
     self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
     const unit = gen_unit.unitOfInst(self, inst);
     if (unit == none_u32) return self.b("S.con(0.0)", .{});
@@ -1451,7 +1451,7 @@ fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u
 /// emitted ("the directive which immediately precedes the transition
 /// filter") as an f64 literal, or null. Requires `ctrl_tok` set to the
 /// operator call's token.
-pub fn defaultTransition(self: *Gen) Error!?[]const u8 {
+fn defaultTransition(self: *Gen) Error!?[]const u8 {
     const list = self.lowered.default_transitions;
     if (list.len == 0) return null;
     if (self.ctrl_tok == Mir.no_tok or self.ctrl_tok >= self.lowered.tok_starts.len) return null;

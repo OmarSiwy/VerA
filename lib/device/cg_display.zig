@@ -906,7 +906,7 @@ fn endsLine(c: Mir.Callee) bool {
 /// Returns how many of `operands` were consumed, so the §9.4.1 walk resumes
 /// after them. A conversion with no operand renders 0.0; §9.4.3 makes that a
 /// pairing violation, which `Lower.checkFormatPairing` diagnoses.
-pub fn translateFormat(
+fn translateFormat(
     g: *Gen,
     src: []const u8,
     operands: []const Mir.Value,
@@ -1096,7 +1096,7 @@ test fieldCols {
 
 /// Appends one conversion's `{…}` to `fmt` and its operand to `ops`.
 /// `conv_raw == 0` means the §9.4.3 default: the operand's natural form.
-pub fn appendConv(
+fn appendConv(
     g: *Gen,
     fmt: *std.ArrayList(u8),
     ops: *Ops,

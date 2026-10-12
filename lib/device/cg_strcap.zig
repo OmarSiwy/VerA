@@ -130,7 +130,7 @@ pub fn rtFormatCap(g: *Gen, args: []const Mir.Value) Error!u64 {
 /// solved together, each round reading the last round's; a model whose string
 /// grows by itself every step does not settle, and keeps the capacity the
 /// last round gave (E1011 when it outgrows it).
-pub fn heldCap(g: *Gen, i: usize) Error!u64 {
+fn heldCap(g: *Gen, i: usize) Error!u64 {
     if (g.held_caps == null) try planHeld(g);
     const caps = g.held_caps.?;
     assert(caps.len == g.lowered.held_vars.items.len);
