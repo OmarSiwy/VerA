@@ -4,6 +4,8 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `log10` of a subnormal argument is right: the 2^54 rescale used only the high word of the scaled value, 3.75 million ulp off at 3.74e-309 (#60).
+- A batched testbench (the fixture suite's) mutes the §4.3.2 domain report while its self-checks probe points no analysis asked for, as a single testbench already did; `158_pow_negative_base_runtime_exponent` runs again (#59).
 - A device's kernel banners name the files the kernels are in now (`lib/kernels/*.zig`, not `lib/backend/kernels/`); only those comment lines of the emitted text change.
 - internal: `lib/ir`, `lib/analog` and `lib/prove` headers list the clauses their code cites, and comments name `names.zig`, `lib/device/codegen` and functions that exist; the unread aliases `Lower.Contribution` and `Lower.TpBlock` are gone (`Lowered`'s remain). No output changes.
 - internal: the frontend, `base`, `diag`, `dynlib` and `elab` lose an unused import, a test wrapper and the never-built `ParamsetOverride.Kind.output_var`, and gain file-header and doc comments; no output changes.
