@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- A device's kernel banners name the files the kernels are in now (`lib/kernels/*.zig`, not `lib/backend/kernels/`); only those comment lines of the emitted text change.
 - internal: `lib/ir`, `lib/analog` and `lib/prove` headers list the clauses their code cites, and comments name `names.zig`, `lib/device/codegen` and functions that exist; the unread aliases `Lower.Contribution` and `Lower.TpBlock` are gone (`Lowered`'s remain). No output changes.
 - internal: the frontend, `base`, `diag`, `dynlib` and `elab` lose an unused import, a test wrapper and the never-built `ParamsetOverride.Kind.output_var`, and gain file-header and doc comments; no output changes.
 - internal: the runtime sweep (`src/`, `lib/digital/`, `tools/`, the harness) drops the `sim.fmt`, `rt.State.Spec` and `cli/report.readFailed` aliases nothing needed (an embedder that read `sim.fmt` reads `kernels.fmt`), and fixes comments that named moved files or removed bounds. No output changes.
