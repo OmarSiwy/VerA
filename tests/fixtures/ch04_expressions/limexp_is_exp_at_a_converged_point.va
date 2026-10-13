@@ -16,7 +16,7 @@
 // seven orders of magnitude. The derivative is §4.5.13's too: d/dV of
 // limexp(V) is exp(V), the same number, so the conductance is checked at the
 // same RTOL. `exp` beside it is the identity the clause states, compared bit
-// for bit (CHECKX: no digits of its own).
+// for bit (CHECKEQ, tolerance 0: no digits of its own).
 //
 //! lrm 4.5.13
 //! bias V(p) = 100, V(n) = 0
@@ -28,7 +28,7 @@ module ch04_limexp_converged(p, n);
     analog begin
         `CHECKR("limexp(100) is e^100 at a converged point", limexp(V(p, n)), 2.6881171418161356e43, 1e-15);
         `CHECKR("d limexp(V)/dV is e^100 there", ddx(limexp(V(p, n)), V(p)), 2.6881171418161356e43, 1e-15);
-        `CHECKX("limexp(V) is exp(V)", limexp(V(p, n)), exp(V(p, n)));
+        `CHECKEQ("limexp(V) is exp(V)", limexp(V(p, n)), exp(V(p, n)), 0.0);
         I(p, n) <+ V(p, n);
     end
 endmodule

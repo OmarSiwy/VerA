@@ -40,7 +40,7 @@
 //
 // Last, the fold: the same calls on constants fold at compile time, with the
 // same function (§9.14: `$asinh` and `asinh` are one function), so each is
-// CHECKX against its run-time twin, bit for bit.
+// CHECKEQ, tolerance 0, against its run-time twin: bit for bit.
 //
 //! lrm 4.3.1
 //! lrm 4.3.2
@@ -76,10 +76,10 @@ module c_math_values_at_run_time(p, n);
         `CHECKR("d atanh/dx at 0.5", ddx(atanh(V(p) + 0.5), V(p)), 1.3333333333333333, 5e-16);
         `CHECKR("d asin/dx at 0.5", ddx(asin(V(p) + 0.5), V(p)), 1.1547005383792515, 5e-16);
         `CHECKR("d log/dx at 2", ddx(log(V(p) + 2.0), V(p)), 0.2171472409516259, 5e-16);
-        `CHECKX("asinh(-1e8) folds to its run-time bits", asinh(z - 1e8), asinh(-1e8));
-        `CHECKX("acosh(1e300) folds to its run-time bits", acosh(z + 1e300), acosh(1e300));
-        `CHECKX("log(1e15) folds to its run-time bits", log(z + 1e15), log(1e15));
-        `CHECKX("atan2(-0, -1) folds to its run-time bits", atan2(nz, z - 1.0), atan2(-0.0, -1.0));
+        `CHECKEQ("asinh(-1e8) folds to its run-time bits", asinh(z - 1e8), asinh(-1e8), 0.0);
+        `CHECKEQ("acosh(1e300) folds to its run-time bits", acosh(z + 1e300), acosh(1e300), 0.0);
+        `CHECKEQ("log(1e15) folds to its run-time bits", log(z + 1e15), log(1e15), 0.0);
+        `CHECKEQ("atan2(-0, -1) folds to its run-time bits", atan2(nz, z - 1.0), atan2(-0.0, -1.0), 0.0);
         I(p, n) <+ V(p, n);
     end
 endmodule

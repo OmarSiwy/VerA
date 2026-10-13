@@ -19,7 +19,7 @@
 //              1e-15 admits a faithful exp (<= 1 ulp) and nothing near the old
 //              tangent's 1.1635307007226e36 (7 orders of magnitude off).
 //   limexp(x) == exp(x) at 100 and 700 (exp(700) = 1.0142320547350045e304):
-//              §4.5.13 states the identity with no digits, so CHECKX compares
+//              §4.5.13 states the identity with no digits, so CHECKEQ (tolerance 0) compares
 //              the two VerA expressions bit for bit.
 //
 //! lrm 4.5.13
@@ -33,8 +33,8 @@ module ex044_limexp(p, n);
     `CHECKR("limexp matches exp at 1", limexp(1.0), 2.718281828459045, 1e-15);
     `CHECKR("limexp matches exp at -5", limexp(-5.0), 0.006737946999085467, 1e-15);
     `CHECKR("limexp(100) is e^100, not a tangent above 80", limexp(100.0), 2.6881171418161356e43, 1e-15);
-    `CHECKX("limexp(100) is exp(100)", limexp(100.0), exp(100.0));
-    `CHECKX("limexp(700) is exp(700)", limexp(700.0), exp(700.0));
+    `CHECKEQ("limexp(100) is exp(100)", limexp(100.0), exp(100.0), 0.0);
+    `CHECKEQ("limexp(700) is exp(700)", limexp(700.0), exp(700.0), 0.0);
     `CHECKI("limexp is monotone", limexp(100.0) > limexp(80.0), 1);
     I(p, n) <+ 0.0;
   end
