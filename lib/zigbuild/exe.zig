@@ -278,12 +278,17 @@ pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOp
 
 /// Returns the root module of a `buildBatch` binary over `n` members,
 /// allocated in `arena`: its `main` runs `@import("tb<i>").main` for the `i`
-/// that `argv[0]` ends in after `batch_argv0`, and panics on any other.
+/// that `argv[0]` ends in after `batch_argv0`, and panics on any other. It
+/// also holds `vera_domain_muted`, the root decl a device's `zDomain` reads.
 fn batchRoot(arena: Allocator, n: usize) Allocator.Error![]const u8 {
     assert(n != 0); // `buildBatch`'s precondition: a switch with only `else`.
     var root: std.ArrayList(u8) = .empty;
     try root.print(arena,
         \\const std = @import("std");
+        \\/// The §4.3.2 domain-report mute each member's runner sets while its
+        \\/// self-checks run (`runner_text` `muteDomain`): a device's `zDomain`
+        \\/// reads it from the root, which here is this file.
+        \\pub var vera_domain_muted: bool = false;
         \\pub fn main(init: std.process.Init.Minimal) void {{
         \\    const argv = init.args.toSlice(std.heap.page_allocator) catch @panic("argv");
         \\    const at = std.mem.findLast(u8, argv[0], "{s}") orelse @panic("argv[0] names no batch member");
@@ -318,6 +323,8 @@ test batchRoot {
     // One arm per member and no more.
     try std.testing.expect(std.mem.find(u8, src, "        2 => @import(\"tb2\").main(init),\n") != null);
     try std.testing.expect(std.mem.find(u8, src, "3 =>") == null);
+    // A member's device reads the §4.3.2 mute from the root, which is this file.
+    try std.testing.expect(std.mem.find(u8, src, "pub var vera_domain_muted: bool = false;\n") != null);
     // The member index is read after the whole of `batch_argv0`.
     try std.testing.expect(std.mem.find(u8, src, "\"vera-batch-\"") != null);
     try std.testing.expect(std.mem.find(u8, src, "argv[0][at + 11 ..]") != null);

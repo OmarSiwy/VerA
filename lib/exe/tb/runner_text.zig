@@ -340,7 +340,13 @@ pub const runner_body =
     \\/// True while `point`'s self-checks evaluate the device around the
     \\/// point: the printing artifact's `zDomain` (§4.3.2) reads it from the
     \\/// root module and stays quiet, since no analysis asked for those inputs.
+    \\/// This runner is the root of a single testbench; a batch binary's root
+    \\/// declares its own (`zigbuild.exe` `batchRoot`), so `muteDomain` sets
+    \\/// the root's.
     \\pub var vera_domain_muted: bool = false;
+    \\fn muteDomain(on: bool) void {
+    \\    if (comptime @hasDecl(@import("root"), "vera_domain_muted")) @import("root").vera_domain_muted = on;
+    \\}
     \\/// The analysis this run is (§4.6.1 Table 4-21): the `//! analysis` kind,
     \\/// or the one the VPI host opened. `sim_state.kind` is the part of it a
     \\/// point evaluates as, which `atPoint` decides.
@@ -785,7 +791,7 @@ pub const runner_body =
     \\    // the printing artifact's `zDomain`); `x` itself is evaluated first,
     \\    // unmuted, so its own error still reports.
     \\    _ = D.eval(Val, x, model, inst, sim_state);
-    \\    vera_domain_muted = true;
+    \\    muteDomain(true);
     \\    laneCheck(x, model, inst);
     \\    fusedCheck(x, model, inst);
     \\    patternCheck(x, model, inst);
@@ -794,7 +800,7 @@ pub const runner_body =
     \\    constCheck(x, model, inst);
     \\    fdCheck(x, model, inst);
     \\    finiteCheck(n, model, inst);
-    \\    vera_domain_muted = false;
+    \\    muteDomain(false);
     \\
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.
