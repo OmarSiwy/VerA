@@ -15,3 +15,4 @@ pub const deriv_reads: u64 = 0x0000000000000007;
 pub const ddx_reads: u64 = 0x0000000000000000;
 pub const jac_const = [_]contract.JacConst(U){
 pub const lane_masks = [_]contract.LaneUse{
+pub const batch_ok = true;

@@ -59,6 +59,10 @@ varying fastest:
 {{#include ../examples/testbenches/sweep.out}}
 ```
 
+The W0650 at the end is about speed, not the sweep: `limexp` is `exp` (LRM
+§4.5.13), and nothing bounds its argument here, so the unit compiles in
+strict float mode ([the diode](../learn/diode.md#limexp) says more).
+
 ## Time
 
 `//! time` lists the `$abstime` values to step through (LRM §9.10), and makes
