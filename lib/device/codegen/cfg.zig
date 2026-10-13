@@ -70,7 +70,7 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
 
 fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!void {
     const i = @backingInt(self.an.i_res[@backingInt(inst)]);
-    if (!self.plan.needed[i]) return;
+    if (!self.plan.needed.isSet(i)) return;
     // §3.2.2 an `anew`/`store` is a statement on its storage, not a slot.
     if (self.an.arr_of[i] != none_u32) {
         if (!self.plan.cached(@fromBackingInt(@intCast(i)))) try gen_render.emitArrayStmt(self, inst, depth);
@@ -307,7 +307,7 @@ fn inlineSuccessor(self: *const Gen, bi: u32) ?u32 {
     if (t == .none) return null;
     const to: u32 = switch (self.mir.instData(t)) {
         .jump => |d| @backingInt(d.target),
-        .branch => |d| if (self.plan.dead_branch[bi]) @backingInt(d.then_block) else return null,
+        .branch => |d| if (self.plan.dead_branch.isSet(bi)) @backingInt(d.then_block) else return null,
         .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => unreachable,
     };
     if (self.an.is_loop[to] or self.an.is_merge[to]) return null;
@@ -343,7 +343,7 @@ fn emitTerm(self: *Gen, bi: u32, depth: u32, stack: *std.ArrayList(Resume), targ
         .branch => |d| {
             // `planDeadBranches`: both arms reconverge with nothing this
             // unit can observe in between, so emit the common action once.
-            if (self.plan.dead_branch[bi])
+            if (self.plan.dead_branch.isSet(bi))
                 return .{ .edge = .{ .from = bi, .to = @backingInt(d.then_block), .depth = depth } };
             try self.ind(depth);
             try self.b("if (", .{});
@@ -481,5 +481,5 @@ fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
 /// local slot.
 fn slotted(self: *const Gen, inst: Mir.Inst) bool {
     const i = @backingInt(self.an.i_res[@backingInt(inst)]);
-    return self.plan.needed[i] and self.plan.slot[i] != none_u32;
+    return self.plan.needed.isSet(i) and self.plan.slot[i] != none_u32;
 }

@@ -44,7 +44,7 @@ display_unit: bool = false,
 /// previous point's. So in the display unit such a value is never a cache
 /// read: `fd = $fopen(..)` under `@(initial_step)` then `$ftell(fd)` must see
 /// the descriptor the open just returned. Empty under `.drop`.
-file_dep: []bool = &.{},
+file_dep: std.DynamicBitSetUnmanaged = .{},
 /// Per memory-backed array: its storage carries derivative lanes
 /// (`Gen.arr_s`). The core returns an array's PLAIN values
 /// (`renderArrayOut`), so the display unit, where a §4.5.14 `ddx` may read
@@ -81,12 +81,12 @@ in_common: bool = false,
 
 /// Per loop header: does this unit run the loop itself, so its values must be
 /// recomputed rather than read from the core? Reset and refilled by `analyze`.
-loop_recompute: []bool = &.{},
+loop_recompute: std.DynamicBitSetUnmanaged = .{},
 // ---- per-unit scratch ----
-// Plain `[]bool` rather than bitsets: every access is a random probe and no
-// set operation is ever taken over them.
+// The per-value and per-block flags are bitsets: one bit per row, and a
+// clear is `unsetAll` over nv/64 words instead of nv bytes.
 /// Per value: in this unit's slice.
-needed: []bool = &.{},
+needed: std.DynamicBitSetUnmanaged = .{},
 /// The values `mark` reached for this unit, sorted ascending. Every per-unit
 /// sweep iterates this instead of `0..nv`, since a unit touches a small slice.
 live: std.ArrayList(Mir.Value) = .empty,
@@ -95,7 +95,7 @@ eager_use: []u32 = &.{},
 /// Per value: reads in lazy `select` arm positions (§4.2.12).
 arm_use: []u32 = &.{},
 /// Per value: rendered inside its user instead of getting a slot.
-inlined: []bool = &.{},
+inlined: std.DynamicBitSetUnmanaged = .{},
 /// Per value: the longest chain of inlined operands rendering it recurses
 /// through. Written by `boundInlineDepth` for the values it visits.
 inl_depth: []u16 = &.{},
@@ -103,12 +103,12 @@ inl_depth: []u16 = &.{},
 straight: bool = false,
 /// Blocks this unit defines something in, and blocks it needs a phi of.
 /// Per-block, per-unit; `planDeadBranches` is the only reader.
-blk_work: []bool = &.{},
-blk_phi: []bool = &.{},
+blk_work: std.DynamicBitSetUnmanaged = .{},
+blk_phi: std.DynamicBitSetUnmanaged = .{},
 /// A `branch` whose two arms are indistinguishable to this unit: it neither
 /// defines anything nor copies a phi on either side before they reconverge.
 /// The condition is then never marked live, slotted or emitted.
-dead_branch: []bool = &.{},
+dead_branch: std.DynamicBitSetUnmanaged = .{},
 /// Local slot of a needed value, or `none_u32`. Unit-local, never a MIR
 /// index: `ir/names.zig`'s header says why a MIR index in a name renumbers
 /// every downstream declaration.
@@ -132,17 +132,17 @@ pub fn init(
     display: Display,
 ) Error!UnitPlan {
     var self: UnitPlan = .{ .arena = arena, .mir = mir, .an = an, .display = display };
-    self.loop_recompute = try arena.alloc(bool, an.nb);
-    self.needed = try arena.alloc(bool, an.nv);
+    self.loop_recompute = try .initEmpty(arena, an.nb);
+    self.needed = try .initEmpty(arena, an.nv);
     self.eager_use = try arena.alloc(u32, an.nv);
     self.arm_use = try arena.alloc(u32, an.nv);
-    self.inlined = try arena.alloc(bool, an.nv);
+    self.inlined = try .initEmpty(arena, an.nv);
     self.inl_depth = try arena.alloc(u16, an.nv);
     self.slot = try arena.alloc(u32, an.nv);
     // Per-block tables, cleared by `planDeadBranches` before every read.
-    self.blk_work = try arena.alloc(bool, an.nb);
-    self.blk_phi = try arena.alloc(bool, an.nb);
-    self.dead_branch = try arena.alloc(bool, an.nb);
+    self.blk_work = try .initEmpty(arena, an.nb);
+    self.blk_phi = try .initEmpty(arena, an.nb);
+    self.dead_branch = try .initEmpty(arena, an.nb);
     if (display == .emit) try self.markFileDeps();
     return self;
 }
@@ -150,8 +150,7 @@ pub fn init(
 /// Fill `file_dep`. A fixpoint because a loop phi reads a value defined after
 /// it; marking only ever adds, so it converges.
 fn markFileDeps(self: *UnitPlan) Error!void {
-    self.file_dep = try self.arena.alloc(bool, self.an.nv);
-    @memset(self.file_dep, false);
+    self.file_dep = try .initEmpty(self.arena, self.an.nv);
     // Bound: every round but the last sets at least one of the `nv` flags,
     // so the loop runs at most `nv + 1` rounds.
     var rounds: usize = 0;
@@ -160,7 +159,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
         assert(rounds <= self.an.nv);
         grew = false;
         for (Mir.Value.first_dynamic..self.an.nv) |i| {
-            if (self.file_dep[i]) continue;
+            if (self.file_dep.isSet(i)) continue;
             const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
             if (def != .inst_result) continue;
             const inst = def.inst_result;
@@ -182,7 +181,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
                 .store => |d| self.fileDep(d.arr) or self.fileDep(d.index) or self.fileDep(d.value),
             };
             if (hit) {
-                self.file_dep[i] = true;
+                self.file_dep.set(i);
                 grew = true;
             }
         }
@@ -190,7 +189,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
 }
 
 inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
-    return self.file_dep[@backingInt(self.an.rv(v))];
+    return self.file_dep.isSet(@backingInt(self.an.rv(v)));
 }
 
 /// Is this Value a setup root here? Unlike `cached` it is true inside the
@@ -223,7 +222,7 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     // renders that literal directly instead of referencing an absent `c`.
     if (@backingInt(v) < Mir.Value.first_dynamic) return false;
     if (self.in_common or self.lo_idx[@backingInt(v)] == none_u32) return false;
-    if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@backingInt(v)]) return false;
+    if (self.display_unit and self.file_dep.bit_length != 0 and self.file_dep.isSet(@backingInt(v))) return false;
     if (self.display_unit and self.arr_lanes.len != 0) {
         const id = self.an.arr_of[@backingInt(v)];
         if (id != none_u32 and self.arr_lanes[id]) return false;
@@ -233,7 +232,7 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     const blk = self.an.def_block[@backingInt(v)];
     if (blk != none_u32) {
         const l = self.an.loop_of[blk];
-        if (l != none_u32 and self.loop_recompute[l]) return false;
+        if (l != none_u32 and self.loop_recompute.isSet(l)) return false;
     }
     return true;
 }
@@ -252,9 +251,9 @@ pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
     if (self.su_on) assert(self.su_idx.len == self.an.nv);
     if (self.setup_mode) assert(self.sinv.len == self.an.nv);
     if (self.setup_mode) assert(self.su_home.len == self.an.nv);
-    assert(self.loop_recompute.len == self.an.nb);
+    assert(self.loop_recompute.bit_length == self.an.nb);
     self.in_common = in_common;
-    @memset(self.loop_recompute, false);
+    self.loop_recompute.unsetAll();
     // Bound: every round but the last sets at least one of the `nb`
     // `loop_recompute` flags (`markRecomputedLoops`), so at most `nb + 1`.
     var rounds: usize = 0;
@@ -286,8 +285,8 @@ fn markRecomputedLoops(self: *UnitPlan) bool {
         const blk = self.an.def_block[v];
         if (blk == none_u32) continue;
         const l = self.an.loop_of[blk];
-        if (l == none_u32 or self.loop_recompute[l]) continue;
-        self.loop_recompute[l] = true;
+        if (l == none_u32 or self.loop_recompute.isSet(l)) continue;
+        self.loop_recompute.set(l);
         grew = true;
     }
     return grew;
@@ -297,10 +296,10 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     // A full clear: `analyze` runs a handful of times per compilation (setup,
     // the core, the §9.4 display unit), so there is no partial reset to keep
     // in sync with every new table.
-    @memset(self.needed, false);
+    self.needed.unsetAll();
     @memset(self.eager_use, 0);
     @memset(self.arm_use, 0);
-    @memset(self.inlined, false);
+    self.inlined.unsetAll();
     @memset(self.slot, none_u32);
     self.live.clearRetainingCapacity();
     self.n_slots = 0;
@@ -337,9 +336,9 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
                 const t = self.an.term[bi];
                 if (t == .none) continue;
                 if (self.mir.instOp(t) != .branch) continue;
-                if (self.dead_branch[bi]) continue;
+                if (self.dead_branch.isSet(bi)) continue;
                 const cond = self.an.rv(self.mir.instData(t).branch.cond);
-                if (self.needed[@backingInt(cond)] or !self.tested(cond)) continue;
+                if (self.needed.isSet(@backingInt(cond)) or !self.tested(cond)) continue;
                 try self.mark(&work, cond);
                 grew = true;
             }
@@ -388,7 +387,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
             .anew, .load, .store => continue,
             .unary, .binary, .ternary, .phi, .branch, .jump, .call => {},
         }
-        self.inlined[v] = true;
+        self.inlined.set(v);
         // ponytail: addUses already moves eager operands into lazy-arm counts.
         self.addUses(def.inst_result, true);
     }
@@ -401,7 +400,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     self.uses_cache = false;
     for (self.live.items) |lv| {
         const v = @backingInt(lv);
-        if (v < Mir.Value.first_dynamic or self.inlined[v]) continue;
+        if (v < Mir.Value.first_dynamic or self.inlined.isSet(v)) continue;
         // An Instance-field read needs no statement, slot or core call; it
         // is valid in every body including the core itself.
         if (self.isRoot(lv)) continue;
@@ -452,8 +451,8 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
 fn mark(self: *UnitPlan, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!void {
     const v = self.an.rv(v0);
     assert(@backingInt(v) < self.an.nv);
-    if (self.needed[@backingInt(v)]) return;
-    self.needed[@backingInt(v)] = true;
+    if (self.needed.isSet(@backingInt(v))) return;
+    self.needed.set(@backingInt(v));
     try self.live.append(self.arena, v);
     // A value read from the core's cache or from a setup root's Instance
     // field is a leaf here: its operands were computed there, and pulling
@@ -529,7 +528,7 @@ fn countUses(self: *UnitPlan, target: Mir.Value) void {
         // A dead branch emits no `if`, so its condition has no use here. It
         // must not be counted, or the value would be slotted and assigned
         // with nothing reading it, which Zig rejects.
-        if (self.dead_branch[bi]) continue;
+        if (self.dead_branch.isSet(bi)) continue;
         const cond = self.an.rv(self.mir.instData(t).branch.cond);
         if (!self.tested(cond)) continue;
         self.eager_use[@backingInt(cond)] += 1;
@@ -542,7 +541,7 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
     const bump = struct {
         fn f(g: *UnitPlan, v: Mir.Value, arm: bool, un: bool) void {
             const i = @backingInt(g.an.rv(v));
-            if (!g.needed[i]) return;
+            if (!g.needed.isSet(i)) return;
             if (un) {
                 if (arm) return; // already an arm use
                 if (g.eager_use[i] > 0) g.eager_use[i] -= 1;
@@ -603,7 +602,7 @@ fn boundInlineDepth(self: *UnitPlan) void {
     // inlines), so every inlined operand's depth is already written.
     for (self.live.items) |lv| {
         const v = @backingInt(lv);
-        if (v < Mir.Value.first_dynamic or !self.inlined[v]) continue;
+        if (v < Mir.Value.first_dynamic or !self.inlined.isSet(v)) continue;
         const ops: [3]Mir.Value = switch (self.mir.instData(self.mir.valueDef(lv).inst_result)) {
             .unary => |d| .{ d.operand, .undef, .undef },
             .binary => |d| .{ d.lhs, d.rhs, .undef },
@@ -617,10 +616,10 @@ fn boundInlineDepth(self: *UnitPlan) void {
             const o = @backingInt(self.an.rv(o0));
             // Saturating: an arm-inlined chain may run past a u16, and every
             // depth over `max_inline_depth` already decides the same way.
-            if (o >= Mir.Value.first_dynamic and self.inlined[o]) d = @max(d, self.inl_depth[o] +| 1);
+            if (o >= Mir.Value.first_dynamic and self.inlined.isSet(o)) d = @max(d, self.inl_depth[o] +| 1);
         }
         if (d > max_inline_depth and self.eager_use[v] != 0) {
-            self.inlined[v] = false;
+            self.inlined.unset(v);
             d = 0;
         }
         self.inl_depth[v] = d;
@@ -644,7 +643,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
         for (stmts[0 .. stmts.len - 1], 0..) |inst, si| {
             const v = @backingInt(self.an.rv(self.an.i_res[@backingInt(inst)]));
             if (v < Mir.Value.first_dynamic) continue;
-            if (!self.needed[v] or self.inlined[v]) continue;
+            if (!self.needed.isSet(v) or self.inlined.isSet(v)) continue;
             if (self.eager_use[v] != 1 or self.arm_use[v] != 0) continue;
             // A live-out is a FIELD of the returned cache (same reason as
             // the sweep above), and a cached value renders as `c.fN`
@@ -665,7 +664,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
             // arms sit between a comparison and the select that consumes it.
             for (stmts[si + 1 ..]) |next| {
                 if (self.eagerlyUses(next, @fromBackingInt(@intCast(v)))) {
-                    self.inlined[v] = true;
+                    self.inlined.set(v);
                     break;
                 }
                 const nop = self.mir.instOp(next);
@@ -738,11 +737,11 @@ fn isStraightLine(self: *const UnitPlan) bool {
 /// way. The unit then computes the same values and reaches the same place
 /// whichever arm runs, so the condition is unobservable and the `if` goes.
 fn planDeadBranches(self: *UnitPlan) void {
-    assert(self.blk_work.len == self.an.nb);
-    assert(self.blk_phi.len == self.an.nb);
-    assert(self.dead_branch.len == self.an.nb);
-    @memset(self.blk_work, false);
-    @memset(self.blk_phi, false);
+    assert(self.blk_work.bit_length == self.an.nb);
+    assert(self.blk_phi.bit_length == self.an.nb);
+    assert(self.dead_branch.bit_length == self.an.nb);
+    self.blk_work.unsetAll();
+    self.blk_phi.unsetAll();
     for (self.live.items) |lv| {
         const v = @backingInt(lv);
         if (v < Mir.Value.first_dynamic) continue;
@@ -757,12 +756,12 @@ fn planDeadBranches(self: *UnitPlan) void {
         if (self.isRoot(lv)) continue;
         const def = self.mir.valueDef(lv);
         if (def == .inst_result and self.an.i_op[@backingInt(def.inst_result)] == .phi)
-            self.blk_phi[db] = true;
+            self.blk_phi.set(db);
         // A cache read has no block of its own.
         if (self.cached(lv)) continue;
-        self.blk_work[db] = true;
+        self.blk_work.set(db);
     }
-    @memset(self.dead_branch, false);
+    self.dead_branch.unsetAll();
     // Innermost first (reverse RPO), so an arm whose only content is a branch
     // already found dead reads as the jump it will be emitted as (`edgeAct`).
     var k = self.an.rpo.len;
@@ -774,7 +773,7 @@ fn planDeadBranches(self: *UnitPlan) void {
         const d = self.mir.instData(t).branch;
         const a = self.edgeAct(bi, @backingInt(d.then_block)) orelse continue;
         const b2 = self.edgeAct(bi, @backingInt(d.else_block)) orelse continue;
-        if (std.meta.eql(a, b2)) self.dead_branch[bi] = true;
+        if (std.meta.eql(a, b2)) self.dead_branch.set(bi);
     }
 }
 
@@ -798,7 +797,7 @@ fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
     while (hops <= self.an.nb) : (hops += 1) {
         // A phi in `to` means `emitPhiCopies` copies a value on this edge, which
         // is the one thing the two arms cannot share.
-        if (self.blk_phi[to]) return null;
+        if (self.blk_phi.isSet(to)) return null;
         if (self.an.is_loop[to] and self.an.dominates(to, from)) return .{ .cont = to };
         if (self.an.is_merge[to] and std.mem.findScalar(u32, opened[0..n_open], to) == null) return .{ .brk = to };
         // Otherwise `to` is emitted INLINE here, so it has to be empty and
@@ -810,7 +809,7 @@ fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         // and `blk_phi` only guards a phi's own block. A loop-carried phi the
         // unit reads from the cache leaves it clear, so the two arms are not
         // interchangeable (the hazard `markRecomputedLoops` handles).
-        if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work[to]) return null;
+        if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work.isSet(to)) return null;
         const labels = self.an.mk_pool[self.an.mk_off[to]..self.an.mk_off[to + 1]];
         if (n_open + labels.len > opened.len) return null;
         @memcpy(opened[n_open..][0..labels.len], labels);
@@ -821,7 +820,7 @@ fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         // A dead branch emits as the edge to its `then` block (`emitTerm`).
         to = switch (self.mir.instOp(t)) {
             .jump => @backingInt(self.mir.instData(t).jump.target),
-            .branch => if (self.dead_branch[to]) @backingInt(self.mir.instData(t).branch.then_block) else return null,
+            .branch => if (self.dead_branch.isSet(to)) @backingInt(self.mir.instData(t).branch.then_block) else return null,
             else => return null, // else: a terminator is a jump or a branch; anything else ends the walk
         };
     }
@@ -848,7 +847,7 @@ test "a unit's slice stops at a value the core carries" {
     p.lo_idx = lo_idx;
     try p.analyze(t, false);
     try std.testing.expect(p.straight);
-    try std.testing.expect(p.needed[@backingInt(sq)] and p.needed[@backingInt(va)]);
+    try std.testing.expect(p.needed.isSet(@backingInt(sq)) and p.needed.isSet(@backingInt(va)));
     try std.testing.expect(!p.uses_cache);
 
     // Now the core returns `sq`: the unit reads it as a leaf, so `V(a)` is
@@ -857,7 +856,7 @@ test "a unit's slice stops at a value the core carries" {
     p.lo_vals = &.{sq};
     try p.analyze(t, false);
     try std.testing.expect(p.cached(sq) and p.uses_cache);
-    try std.testing.expect(p.needed[@backingInt(sq)] and !p.needed[@backingInt(va)]);
+    try std.testing.expect(p.needed.isSet(@backingInt(sq)) and !p.needed.isSet(@backingInt(va)));
 }
 
 /// A plan over `f` whose core carries nothing (`lo_idx` all none).
@@ -883,8 +882,8 @@ test "§4.2.12 a value read only in one select arm is inlined there; its conditi
     var p = try emptyCorePlan(&f, &an, .drop);
     try p.analyze(s, false);
     try std.testing.expect(p.straight);
-    try std.testing.expect(p.inlined[@backingInt(x)] and p.slot[@backingInt(x)] == none_u32);
-    try std.testing.expect(p.inlined[@backingInt(c)]);
+    try std.testing.expect(p.inlined.isSet(@backingInt(x)) and p.slot[@backingInt(x)] == none_u32);
+    try std.testing.expect(p.inlined.isSet(@backingInt(c)));
     // Only the target is a statement.
     try std.testing.expectEqual(@as(u32, 1), p.n_slots);
     try std.testing.expectEqual(@as(u32, 0), p.slot[@backingInt(s)]);
@@ -908,7 +907,7 @@ test "the core keeps every live-out as a field: none is inlined, each gets a slo
     p.lo_vals = &.{ x, y };
     try p.analyze(.undef, true);
     // Outside the core x would fuse into y; inside it is a returned field.
-    try std.testing.expect(!p.inlined[@backingInt(x)]);
+    try std.testing.expect(!p.inlined.isSet(@backingInt(x)));
     try std.testing.expect(p.slot[@backingInt(x)] != none_u32 and p.slot[@backingInt(y)] != none_u32);
     // The core computes its values; it reads no cache.
     try std.testing.expect(!p.uses_cache and !p.cached(x));
@@ -931,7 +930,7 @@ test "§9.4 a display task's operand is live only in the display unit of a print
         var p = try emptyCorePlan(&f, &an, cs.display);
         p.display_unit = cs.unit;
         try p.analyze(task, false);
-        try std.testing.expectEqual(cs.live, p.needed[@backingInt(x)]);
+        try std.testing.expectEqual(cs.live, p.needed.isSet(@backingInt(x)));
     }
 }
 
@@ -952,8 +951,8 @@ test "a setup root is a leaf: needed, but its operands are not, and it takes no 
     p.su_idx = su_idx;
     p.su_on = true;
     try p.analyze(t, false);
-    try std.testing.expect(p.isRoot(r) and p.needed[@backingInt(r)]);
-    try std.testing.expect(!p.needed[@backingInt(k)]);
+    try std.testing.expect(p.isRoot(r) and p.needed.isSet(@backingInt(r)));
+    try std.testing.expect(!p.needed.isSet(@backingInt(k)));
     try std.testing.expectEqual(none_u32, p.slot[@backingInt(r)]);
 }
 
@@ -981,8 +980,8 @@ test "§5.8 a branch whose arms this unit cannot tell apart is dead: no `if`, it
         var p = try emptyCorePlan(&f, &an, .drop);
         try p.analyze(t, false);
         try std.testing.expect(!p.straight);
-        try std.testing.expectEqual(!via_phi, p.dead_branch[0]);
-        try std.testing.expectEqual(via_phi, p.needed[@backingInt(c)]);
+        try std.testing.expectEqual(!via_phi, p.dead_branch.isSet(0));
+        try std.testing.expectEqual(via_phi, p.needed.isSet(@backingInt(c)));
     }
 }
 
@@ -1002,6 +1001,6 @@ test "a select-arm chain longer than a u16 plans without overflowing its inline 
     var p = try emptyCorePlan(&f, &an, .drop);
     try p.analyze(s, false);
     // Two statements: the condition every select reads, and the target.
-    try std.testing.expect(!p.inlined[@backingInt(s)] and !p.inlined[@backingInt(c)]);
+    try std.testing.expect(!p.inlined.isSet(@backingInt(s)) and !p.inlined.isSet(@backingInt(c)));
     try std.testing.expectEqual(@as(u32, 2), p.n_slots);
 }
