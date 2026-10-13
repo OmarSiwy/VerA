@@ -1,6 +1,7 @@
 archmap
 benchmark
 build-all
+check
 fmt-check
 fuzz
 golden
@@ -11,6 +12,8 @@ test
 test-1364
 test-all
 test-ams
+test-analog
+test-base
 test-beh-verilog
 test-canary
 test-cli
@@ -18,7 +21,9 @@ test-contract
 test-device
 test-devices
 test-diag
+test-digital
 test-dynlib
+test-elab
 test-exe
 test-frontend
 test-grid-events
@@ -26,14 +31,17 @@ test-ir
 test-kernels
 test-paramsets
 test-printf-reference
+test-prove
 test-rng-reference
 test-sim
 test-spice
 test-suite
 test-timers
 test-tools
+test-vampyre
 test-vera
 test-verilog
 test-vpi
 test-vpi-fixtures
+test-zigbuild
 uninstall

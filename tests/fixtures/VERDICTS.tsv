@@ -1811,6 +1811,7 @@ pass	ch07_mixed_signal/continuous_net_continuously_assigned_rejected.va
 pass	ch07_mixed_signal/contribution_under_a_digital_event_rejected.va
 pass	ch07_mixed_signal/cross_direction_in_digital_event_control_rejected.va
 pass	ch07_mixed_signal/cross_enable_and_dir_disable_the_event.va
+pass	ch07_mixed_signal/cross_time_tol_below_time_resolution.va
 pass	ch07_mixed_signal/custom_disciplines.va
 pass	ch07_mixed_signal/ddiscrete_net_continuously_assigned.va
 pass	ch07_mixed_signal/digital_function_from_analog_unsupported.va
@@ -1843,6 +1844,7 @@ pass	ch07_mixed_signal/hierarchy_unsupported.va
 pass	ch07_mixed_signal/incompatible_disciplines_rejected.va
 pass	ch07_mixed_signal/incompatible_port_discipline_rejected.va
 pass	ch07_mixed_signal/inf_contribution.va
+pass	ch07_mixed_signal/initial_untimed_process_runs.va
 pass	ch07_mixed_signal/last_tick_is_a_floor_on_a_long_run.va
 pass	ch07_mixed_signal/lrm_7_2_4.va
 pass	ch07_mixed_signal/lrm_7_3.va
