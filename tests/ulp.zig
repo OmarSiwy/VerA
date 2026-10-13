@@ -450,18 +450,15 @@ const bound = struct {
     const atan = 0.751; // 0.7507 at 2.680128387647313
     // #60's rows (asinh, acosh, atanh, log10, atan2, tan: `gm`'s musl ports
     // and sin/cos quotient; asin/acos: `std.math`, what a device calls),
-    // NOT yet measured by this file: each is the worst case of an exact f64
-    // model of the same arithmetic against mpmath on 2026-10-18 (40 000
-    // samples per function, scratch `math60/bounds.py`), plus a margin. The
-    // first run of this test replaces them with its own numbers.
-    const asinh = 2.0; // model: 1.4686 at -0.23096524440609834
-    const acosh = 2.5; // model: 1.9389 at 1.0069773115534078
-    const atanh = 2.0; // model: 1.4620 at -0.22925476584736693
-    const log10 = 1.0; // model: 0.6653 at 1.2973026535885752
-    const tan = 2.5; // model: 1.7578 at -7.067293421867058
-    const asin = 1.0; // model (glibc asin): 0.5070
-    const acos = 1.0;
-    const atan2 = 2.0; // model: 1.3321 at (0.06926285972366664, 0.27636768694060976)
+    // measured by this file on 2026-10-18 (ReleaseSafe, x86_64).
+    const asinh = 1.524; // 1.5239 at 0.51700870116405
+    const acosh = 2.016; // 2.0151 at 1.001887151218172
+    const atanh = 1.505; // 1.5049 at -0.12030145777284262
+    const log10 = 0.630; // 0.6297 at 1.374951715281116
+    const tan = 2.006; // 2.0055 at -145126.64517723466
+    const asin = 0.817; // 0.8162 at -0.5042767798999156
+    const acos = 0.864; // 0.8632 at -0.5232333655933563
+    const atan2 = 1.441; // 1.4405 at y = 0.06365036518777245
 };
 
 test "L3 ulp: gm.asinh, acosh, atanh, log10 and tan, and std's asin and acos (#60)" {
@@ -492,6 +489,12 @@ test "L3 ulp: gm.asinh, acosh, atanh, log10 and tan, and std's asin and acos (#6
     inline for (.{ asinh, atanh }) |f| try std.testing.expect(std.math.signbit(f(-0.0)));
     try std.testing.expectEqual(inf, gm.atanh(1.0));
     try std.testing.expectEqual(-inf, gm.atanh(-1.0));
+    // A subnormal argument is scaled by 2^54 first; both words of the scaled
+    // value must be used (the first run of this file found 3.75e6 ulp at
+    // 3.74e-309). References: CPython's math.log10.
+    try std.testing.expect(std.math.approxEqRel(f64, gm.log10(3.74288017396525e-309), -308.426794076337, 4e-16));
+    try std.testing.expect(std.math.approxEqRel(f64, gm.log10(0x1p-1074), -323.3062153431158, 4e-16));
+    try std.testing.expect(std.math.approxEqRel(f64, gm.log10(2.2250738585072009e-308), -307.6526555685888, 4e-16));
     try std.testing.expectEqual(-inf, gm.log10(0.0));
     try std.testing.expect(std.math.isNan(gm.log10(-1.0)));
     try std.testing.expect(std.math.isNan(gm.acosh(0.5)));

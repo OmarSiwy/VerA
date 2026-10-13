@@ -681,7 +681,9 @@ pub const gm = struct {
             // subnormal, scale x
             k -= 54;
             x *= 0x1.0p54;
-            hx = @intCast(@as(u64, @bitCast(x)) >> 32);
+            // Both words of the scaled value: the low word joins `hx` below.
+            ix = @bitCast(x);
+            hx = @intCast(ix >> 32);
         } else if (hx >= 0x7FF00000) {
             return x;
         } else if (hx == 0x3FF00000 and ix << 32 == 0) {
