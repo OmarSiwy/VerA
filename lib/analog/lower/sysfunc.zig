@@ -277,7 +277,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             for (host_simparams) |h| if (std.mem.eql(u8, h.name, s)) self.out.uses.insert(h.use);
         };
     }
-    const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
+    const sys_args = if (ex.extraOf(e) < ex.poolLen()) ex.args(e) else &[_]Ast.ExprId{};
     if (try checkArity(self, ex.mainTok(e), name, sys_args)) return poison;
     if (Mir.Callee.fromName(name) == .@"$clog2") return lowerClog2(self, ex.mainTok(e), sys_args[0]);
     if (Mir.Callee.fromName(name) == .@"$fopen" and try checkFopenType(self, sys_args)) return poison;

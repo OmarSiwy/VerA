@@ -122,15 +122,25 @@ pub const SeqBlock = stmt_file.SeqBlock;
 
 /// Root of one parsed file (LRM §1 source_text, annex A). Arena-owned; the
 /// decl slices are never freed by `deinit`.
+///
+/// Elaboration never writes a parse: it writes an `overlay`, a file that
+/// continues the parse (ARCHITECTURE.md I4). The overlay's interner,
+/// expressions and statements number on from the parse's, so every id keeps
+/// its number and reads the same through the overlay; its decl slices start
+/// as the parse's and elaboration may replace them.
 pub const SourceFile = struct {
+    /// The parse this file is an overlay of, which it never writes; null for
+    /// a parse. Set only by `overlay`.
+    base: ?*const SourceFile = null,
     /// §2.8 interned identifiers and §2.7 strings.
     strings: StringInterner = .empty,
     /// annex A expression grammar, SoA.
     exprs: ExprStore = .empty,
-    /// §5 statement pool; a StmtId indexes it. Read through `stmt`.
+    /// §5 statement pool: this file's own rows, after the base's. A StmtId
+    /// minus the base's count indexes it. Read through `stmt`.
     stmts: std.ArrayList(StmtRow) = .empty,
     /// The `SeqBlock` of every `.block` row, in statement order; a row's
-    /// `BlockId` indexes it.
+    /// `BlockId`, minus the base's count, indexes it.
     blocks: std.ArrayList(SeqBlock) = .empty,
     /// Token index per statement, parallel to `stmts`, kept apart so `Stmt`
     /// stays a pure union.
@@ -225,18 +235,69 @@ pub const SourceFile = struct {
 
     pub const empty: SourceFile = .{};
 
+    /// What the caller, not the parser, knows about the compilation: the
+    /// fields of the same names, which `overlay` sets.
+    pub const Compilation = struct {
+        builtin_modules: u32 = 0,
+        builtin_natures: u32 = 0,
+        annex_d_included: bool = false,
+        netlist_modules: u32 = 0,
+        netlist_unsupported: []const []const u8 = &.{},
+    };
+
+    /// Returns an overlay of `base` (see `SourceFile`), with the caller-set
+    /// fields from `c`. Its interner, expressions and statements continue
+    /// `base`'s; the decl slices, `attributes` and `lte_attrs` are borrowed
+    /// from `base` (never appended to). `base` must outlive the overlay and
+    /// must not change while it lives. Asserts `base` is a parse.
+    pub fn overlay(base: *const SourceFile, c: Compilation) SourceFile {
+        std.debug.assert(base.base == null);
+        return .{
+            .base = base,
+            .strings = .continuing(&base.strings),
+            .exprs = .continuing(&base.exprs),
+            .modules = base.modules,
+            .disciplines = base.disciplines,
+            .natures = base.natures,
+            .paramsets = base.paramsets,
+            .connectrules = base.connectrules,
+            .udps = base.udps,
+            .configs = base.configs,
+            .builtin_modules = c.builtin_modules,
+            .builtin_natures = c.builtin_natures,
+            .annex_d_included = c.annex_d_included,
+            .netlist_modules = c.netlist_modules,
+            .netlist_unsupported = c.netlist_unsupported,
+            .lte_attrs = base.lte_attrs,
+            .attributes = base.attributes,
+        };
+    }
+
+    /// The base's statement and block counts: where this file's own start.
+    fn baseStmts(self: *const SourceFile) u32 {
+        const b = self.base orelse return 0;
+        return @intCast(b.stmts.items.len);
+    }
+    fn baseBlocks(self: *const SourceFile) u32 {
+        const b = self.base orelse return 0;
+        return @intCast(b.blocks.items.len);
+    }
+
     /// Frees the append-only stores (strings, expressions, statements, blocks,
     /// the token column, `attributes` and `lte_attrs`) so an AST built on a
-    /// gpa is leak-free. The decl slices are not freed; they belong to the
-    /// arena or caller.
+    /// gpa is leak-free; an overlay frees only its own, never the base's or
+    /// the borrowed `attributes` and `lte_attrs`. The decl slices are not
+    /// freed; they belong to the arena or caller.
     pub fn deinit(self: *SourceFile, gpa: std.mem.Allocator) void {
         self.strings.deinit(gpa);
         self.exprs.deinit(gpa);
         self.stmts.deinit(gpa);
         self.blocks.deinit(gpa);
         self.stmt_toks.deinit(gpa);
-        self.attributes.deinit(gpa);
-        self.lte_attrs.deinit(gpa);
+        if (self.base == null) {
+            self.attributes.deinit(gpa);
+            self.lte_attrs.deinit(gpa);
+        }
         self.* = .empty;
     }
 
@@ -250,7 +311,9 @@ pub const SourceFile = struct {
     /// stage writes a decl, so `src` must outlive `self`. The caller-set
     /// counts (`builtin_modules` and the rest) are not copied.
     /// On OOM `self` holds a partial copy that `deinit(gpa)` frees.
+    /// Asserts `src` is a parse, not an overlay.
     pub fn seedFrom(self: *SourceFile, gpa: std.mem.Allocator, src: *const SourceFile) !void {
+        std.debug.assert(src.base == null and self.base == null);
         std.debug.assert(self.strings.strings.items.len == 0);
         std.debug.assert(self.exprs.nodes.len == 0);
         std.debug.assert(self.stmts.items.len == 0);
@@ -288,7 +351,7 @@ pub const SourceFile = struct {
     /// Invalidates `seqBlockMut` pointers and `seqBlocks` iterators.
     /// Asserts the pool holds fewer than `maxInt(u32)` statements.
     pub fn addStmt(self: *SourceFile, gpa: std.mem.Allocator, s: Stmt, main_tok: u32) !StmtId {
-        const id: u32 = @intCast(self.stmts.items.len);
+        const id: u32 = self.baseStmts() + @as(u32, @intCast(self.stmts.items.len));
         std.debug.assert(id != @backingInt(StmtId.none));
         try self.stmts.ensureUnusedCapacity(gpa, 1);
         try self.stmt_toks.ensureUnusedCapacity(gpa, 1);
@@ -296,7 +359,7 @@ pub const SourceFile = struct {
         self.stmts.appendAssumeCapacity(switch (s) {
             .block => |b| blk: {
                 self.blocks.appendAssumeCapacity(b);
-                break :blk .{ .block = @fromBackingInt(@intCast(self.blocks.items.len - 1)) };
+                break :blk .{ .block = @fromBackingInt(self.baseBlocks() + @as(u32, @intCast(self.blocks.items.len - 1))) };
             },
             inline else => |payload, tag| @unionInit(StmtRow, @tagName(tag), payload), // else: every other arm is stored as it is
         });
@@ -306,40 +369,50 @@ pub const SourceFile = struct {
 
     /// Returns statement `id` by value, since the pool may grow during parsing.
     pub fn stmt(self: *const SourceFile, id: StmtId) Stmt {
-        return switch (self.stmts.items[@backingInt(id)]) {
-            .block => |b| .{ .block = self.blocks.items[@backingInt(b)] },
+        const o = self.baseStmts();
+        if (@backingInt(id) < o) return self.base.?.stmt(id);
+        return switch (self.stmts.items[@backingInt(id) - o]) {
+            .block => |b| .{ .block = self.blocks.items[@backingInt(b) - self.baseBlocks()] },
             inline else => |payload, tag| @unionInit(Stmt, @tagName(tag), payload), // else: every other arm is stored as it is
         };
     }
 
     /// Returns the token statement `id` is reported at.
     pub fn stmtTok(self: *const SourceFile, id: StmtId) u32 {
-        return self.stmt_toks.items[@backingInt(id)];
+        const o = self.baseStmts();
+        if (@backingInt(id) < o) return self.base.?.stmtTok(id);
+        return self.stmt_toks.items[@backingInt(id) - o];
     }
 
     /// Returns the §5.3.2 block statement `id` for in-place editing (the
     /// parser names a generate block after the fact, §6.6.3). Asserts `id`
-    /// is a `.block`. Invalidated by the next `addStmt`.
+    /// is a `.block` and this file is a parse. Invalidated by the next
+    /// `addStmt`.
     pub fn seqBlockMut(self: *SourceFile, id: StmtId) *SeqBlock {
+        std.debug.assert(self.base == null);
         return &self.blocks.items[@backingInt(self.stmts.items[@backingInt(id)].block)];
     }
 
     /// Returns an iterator over every §5.3.2 block statement in the pool, in
-    /// statement order, for a pass that wants every block's declarations.
+    /// statement order (an overlay's base's first), for a pass that wants
+    /// every block's declarations.
     pub fn seqBlocks(self: *const SourceFile) SeqBlockIterator {
-        return .{ .blocks = self.blocks.items };
+        const first: []const SeqBlock = if (self.base) |b| b.blocks.items else &.{};
+        return .{ .first = first, .then = self.blocks.items };
     }
 
     /// See `seqBlocks`. Valid until the next `addStmt`.
     const SeqBlockIterator = struct {
-        blocks: []const SeqBlock,
+        /// The base's blocks, then this file's own.
+        first: []const SeqBlock,
+        then: []const SeqBlock,
         i: u32 = 0,
 
         /// Returns the next block, or null after the last.
         pub fn next(it: *SeqBlockIterator) ?*const SeqBlock {
-            if (it.i == it.blocks.len) return null;
+            if (it.i == it.first.len + it.then.len) return null;
             defer it.i += 1;
-            return &it.blocks[it.i];
+            return if (it.i < it.first.len) &it.first[it.i] else &it.then[it.i - it.first.len];
         }
     };
 
@@ -525,4 +598,53 @@ test "seedFrom copies the growing stores, borrows the decls, and the copy grows 
     try testing.expectEqual(@as(?StrId, null), src.strings.find("y"));
     try testing.expectEqual(@as(usize, 2), src.stmts.items.len);
     try testing.expectEqual(@as(usize, 1), src.lte_attrs.items.len);
+}
+
+/// The appends the overlay test makes: `n` = 0 the parse's half, 1 the
+/// overlay's.
+fn appendFileHalf(f: *SourceFile, gpa: std.mem.Allocator, n: u32) !StmtId {
+    _ = try f.intern(gpa, "x");
+    const e = try f.exprs.addInt(gpa, n, n);
+    _ = try f.addStmt(gpa, .{ .contribute = .{ .lhs = e, .rhs = e } }, 10 + n);
+    return f.addStmt(gpa, .{ .block = .{ .name = try f.intern(gpa, if (n == 0) "x" else "y") } }, 20 + n);
+}
+
+test "overlay: the parse's ids read through it, its own continue them, and the parse never changes" {
+    const gpa = testing.allocator;
+    var parse: SourceFile = .empty;
+    defer parse.deinit(gpa);
+    const b0 = try appendFileHalf(&parse, gpa, 0);
+    try parse.lte_attrs.append(gpa, .{ .stmt = b0, .value = .none, .main_tok = 0 });
+    const mods = [_]ModuleDecl{.{ .name = parse.strings.find("x").?, .ports = &.{} }};
+    parse.modules = &mods;
+    var f: SourceFile = .overlay(&parse, .{ .builtin_modules = 1 });
+    defer f.deinit(gpa);
+    const b1 = try appendFileHalf(&f, gpa, 1);
+    // The oracle: one file doing the same appends in the same order.
+    var one: SourceFile = .empty;
+    defer one.deinit(gpa);
+    try testing.expectEqual(b0, try appendFileHalf(&one, gpa, 0));
+    try testing.expectEqual(b1, try appendFileHalf(&one, gpa, 1));
+    for (0..4) |i| {
+        const id: StmtId = @fromBackingInt(@intCast(i));
+        try testing.expectEqual(std.meta.activeTag(one.stmt(id)), std.meta.activeTag(f.stmt(id)));
+        try testing.expectEqual(one.stmtTok(id), f.stmtTok(id));
+    }
+    try testing.expectEqual(one.stmt(b1).block.name, f.stmt(b1).block.name);
+    try testing.expectEqual(one.stmt(@fromBackingInt(2)).contribute.lhs, f.stmt(@fromBackingInt(2)).contribute.lhs);
+    try testing.expectEqual(one.exprs.len(), f.exprs.len());
+    try testing.expectEqual(one.strings.find("y").?, f.strings.find("y").?);
+    var blocks = f.seqBlocks();
+    try testing.expectEqual(f.stmt(b0).block.name, blocks.next().?.name);
+    try testing.expectEqual(f.stmt(b1).block.name, blocks.next().?.name);
+    try testing.expectEqual(null, blocks.next());
+    // Borrowed from the parse, and the caller's fields are the overlay's.
+    try testing.expect(f.modules.ptr == parse.modules.ptr);
+    try testing.expectEqual(b0, f.stmtLte(b0, .vera_lte).?.stmt);
+    try testing.expectEqual(@as(u32, 1), f.builtin_modules);
+    try testing.expectEqual(@as(u32, 0), parse.builtin_modules);
+    // The parse holds only its own half.
+    try testing.expectEqual(@as(usize, 2), parse.stmts.items.len);
+    try testing.expectEqual(@as(u32, 1), parse.exprs.len());
+    try testing.expectEqual(@as(?StrId, null), parse.strings.find("y"));
 }

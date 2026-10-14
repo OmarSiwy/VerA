@@ -151,7 +151,7 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             const name = if (ex.tag(e) == .event_initial_step) "initial_step" else "final_step";
             var args: std.ArrayList(Mir.Value) = .empty;
             defer args.deinit(self.arena);
-            if (ex.extraOf(e) < ex.pool.items.len) {
+            if (ex.extraOf(e) < ex.poolLen()) {
                 for (ex.nameParts(e)) |p|
                     try args.append(self.arena, try self.mir.addStrConst(self.arena, self.file.str(p)));
             }

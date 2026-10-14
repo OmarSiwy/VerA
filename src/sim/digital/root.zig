@@ -1511,10 +1511,10 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     }
     // Allocated before pass one: a bound or a parameter is typed and folded
     // while the slot space is still growing (`Run.constant`).
-    r.types = try arena.alloc(Type, file.exprs.nodes.len);
-    r.ty_state = try arena.alloc(TyState, file.exprs.nodes.len);
+    r.types = try arena.alloc(Type, file.exprs.len());
+    r.ty_state = try arena.alloc(TyState, file.exprs.len());
     @memset(r.ty_state, .untyped);
-    r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.nodes.len);
+    r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.len());
     @memset(r.sys_calls, null);
     r.growing = &e.values;
     try elab.declare(&r, &e, m, 0, &.{}, &.{}, 0);

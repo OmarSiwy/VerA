@@ -578,13 +578,12 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     // kernel (`markDiscreteExprs`). A two-state literal wider than an i64 is
     // judged where it is lowered: whole in a wide `reg`'s right-hand side
     // (`lower_wide`), E0130 as an analog integer (`lower_expr.lowerExpr`).
-    const tags = self.file.exprs.nodes.items(.tag);
-    const discrete = try self.arena.alloc(bool, tags.len);
+    const discrete = try self.arena.alloc(bool, self.file.exprs.len());
     @memset(discrete, false);
     lower_context.markDiscreteExprs(self.file, discrete);
-    for (tags, discrete, 0..) |tag, in_discrete, i| {
-        if (tag != .logic_literal or in_discrete) continue;
+    for (discrete, 0..) |in_discrete, i| {
         const e: Ast.ExprId = @fromBackingInt(@intCast(i));
+        if (self.file.exprs.tag(e) != .logic_literal or in_discrete) continue;
         const literal = self.file.exprs.logicValue(e);
         if (!literal.hasUnknown()) continue; // two-state: `lower_expr` or `lower_wide` lowers it
         const span = self.tokenSpan(self.file.exprs.mainTok(e));
@@ -670,7 +669,7 @@ fn declAttrs(self: *Lower) Oom![]const Lowered.DeclAttr {
 // `max_exprs` caps it at about 30 MB of address space all the same.
 fn reserveMir(self: *Lower) Oom!void {
     const max_exprs = 1 << 20;
-    const n: u64 = @min(self.file.exprs.nodes.len, max_exprs);
+    const n: u64 = @min(self.file.exprs.len(), max_exprs);
     try self.mir.reserve(self.arena, @intCast(n * 59 / 100), @intCast(n * 54 / 100), @intCast(n / 2));
 }
 

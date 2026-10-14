@@ -113,7 +113,7 @@ fn scanCallSitesExpr(
     const tag = ex.tag(e);
     if (limits) {
         if (tag == .sys_call and std.mem.eql(u8, self.file.str(ex.strOf(e)), "$limit")) {
-            const args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
+            const args = if (ex.extraOf(e) < ex.poolLen()) ex.args(e) else &[_]Ast.ExprId{};
             if (args.len >= 2) {
                 if (lower_limit.limitUserFunc(self, args[1]) != null) try lower_limit.addLimitSlot(self, args[0]);
             }

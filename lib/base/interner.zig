@@ -2,7 +2,9 @@
 //! out, assigned in insertion order so the same input gives the same ids.
 //! LRM §2.7 strings, §2.8 identifiers. The AST and the MIR each hold one
 //! (`SourceFile.strings`, `Mir.strings`); a `StrId` means something only
-//! against the table that issued it. Imports only std.
+//! against the table that issued it. A table may continue another (`base`,
+//! elaboration's overlay of the parse, ARCHITECTURE.md I4): its ids start
+//! after the base's, so an id keeps its number. Imports only std.
 
 const std = @import("std");
 
@@ -19,7 +21,12 @@ pub const StrId = enum(u32) { none = std.math.maxInt(u32), _ };
 /// Stored slices are borrowed (source substrings or parser arena copies) and
 /// never freed here; they must outlive the table.
 pub const StringInterner = struct {
-    /// The text of each id, indexed by `StrId`.
+    /// The table this one continues, which it never writes: the base's ids
+    /// are this table's first `base.len()`, and a text the base holds keeps
+    /// its id. Null for a table of its own. Set only by `continuing`.
+    base: ?*const StringInterner = null,
+    /// The text of each id this table added, indexed by `StrId` minus the
+    /// base's `len()`.
     strings: std.ArrayList([]const u8) = .empty,
     /// The set of ids, hashed by their text. The key is the 4-byte id, not
     /// the 16-byte slice `strings` already holds: 5 bytes a slot instead of
@@ -27,11 +34,13 @@ pub const StringInterner = struct {
     /// the MIR's).
     map: std.HashMapUnmanaged(StrId, void, IdContext, std.hash_map.default_max_load_percentage) = .empty,
 
-    /// Hashes an id by its text, for the map's own rehashing.
+    /// Hashes an id by its text, for the map's own rehashing. `off` is the
+    /// base's `len()`: the map holds only this table's own ids.
     const IdContext = struct {
         strings: []const []const u8,
+        off: u32 = 0,
         pub fn hash(c: IdContext, id: StrId) u64 {
-            return std.hash_map.hashString(c.strings[@backingInt(id)]);
+            return std.hash_map.hashString(c.strings[@backingInt(id) - c.off]);
         }
         pub fn eql(_: IdContext, a: StrId, b: StrId) bool {
             return a == b;
@@ -41,17 +50,38 @@ pub const StringInterner = struct {
     /// Looks a text up among the ids without interning it.
     const TextAdapter = struct {
         strings: []const []const u8,
+        off: u32 = 0,
         pub fn hash(_: TextAdapter, s: []const u8) u64 {
             return std.hash_map.hashString(s);
         }
         pub fn eql(a: TextAdapter, s: []const u8, id: StrId) bool {
-            return std.mem.eql(u8, s, a.strings[@backingInt(id)]);
+            return std.mem.eql(u8, s, a.strings[@backingInt(id) - a.off]);
         }
     };
 
     pub const empty: StringInterner = .{};
 
-    /// Frees both tables; the interned slices are borrowed and left alone.
+    /// Returns an empty table that continues `base`: `base`'s ids read
+    /// through it, and its own start at `base.len()`. `base` must outlive
+    /// it and must not grow while it lives. Asserts `base` continues none.
+    pub fn continuing(base: *const StringInterner) StringInterner {
+        std.debug.assert(base.base == null);
+        return .{ .base = base };
+    }
+
+    /// Returns how many ids the table holds, the base's included.
+    pub fn len(self: *const StringInterner) u32 {
+        return self.off() + @as(u32, @intCast(self.strings.items.len));
+    }
+
+    /// The base's id count: where this table's own ids start.
+    fn off(self: *const StringInterner) u32 {
+        const b = self.base orelse return 0;
+        return @intCast(b.strings.items.len);
+    }
+
+    /// Frees both tables, never the base's; the interned slices are borrowed
+    /// and left alone.
     pub fn deinit(self: *StringInterner, gpa: std.mem.Allocator) void {
         self.strings.deinit(gpa);
         self.map.deinit(gpa);
@@ -64,14 +94,16 @@ pub const StringInterner = struct {
     /// Asserts the table holds fewer than `maxInt(u32)` strings (that value
     /// is `StrId.none`).
     pub fn intern(self: *StringInterner, gpa: std.mem.Allocator, s: []const u8) !StrId {
+        if (self.base) |b| if (b.find(s)) |id| return id;
         // Room for the text first, so a failed append can never leave the
         // map holding an id with no string.
         try self.strings.ensureUnusedCapacity(gpa, 1);
         const items = self.strings.items;
-        const gop = try self.map.getOrPutContextAdapted(gpa, s, TextAdapter{ .strings = items }, .{ .strings = items });
+        const o = self.off();
+        const gop = try self.map.getOrPutContextAdapted(gpa, s, TextAdapter{ .strings = items, .off = o }, .{ .strings = items, .off = o });
         if (gop.found_existing) return gop.key_ptr.*;
-        std.debug.assert(items.len < std.math.maxInt(u32));
-        const id: StrId = @fromBackingInt(@intCast(items.len));
+        std.debug.assert(o + items.len < std.math.maxInt(u32));
+        const id: StrId = @fromBackingInt(@intCast(o + items.len));
         gop.key_ptr.* = id;
         self.strings.appendAssumeCapacity(s);
         return id;
@@ -80,17 +112,22 @@ pub const StringInterner = struct {
     /// Returns the string for `id`; asserts `id != .none`.
     pub fn get(self: *const StringInterner, id: StrId) []const u8 {
         std.debug.assert(id != .none);
-        return self.strings.items[@backingInt(id)];
+        const o = self.off();
+        if (@backingInt(id) < o) return self.base.?.get(id);
+        return self.strings.items[@backingInt(id) - o];
     }
 
     /// Returns the id for `s` without inserting it.
     pub fn find(self: *const StringInterner, s: []const u8) ?StrId {
-        return self.map.getKeyAdapted(s, TextAdapter{ .strings = self.strings.items });
+        if (self.base) |b| if (b.find(s)) |id| return id;
+        return self.map.getKeyAdapted(s, TextAdapter{ .strings = self.strings.items, .off = self.off() });
     }
 
     /// Returns a copy whose tables are `gpa`'s; the interned slices stay
     /// borrowed. Caller owns the copy and frees it with `deinit(gpa)`.
+    /// Asserts the table continues none.
     pub fn clone(self: *const StringInterner, gpa: std.mem.Allocator) !StringInterner {
+        std.debug.assert(self.base == null);
         var strings = try self.strings.clone(gpa);
         errdefer strings.deinit(gpa);
         return .{ .strings = strings, .map = try self.map.cloneContext(gpa, IdContext{ .strings = self.strings.items }) };
@@ -145,6 +182,34 @@ test "StringInterner: ids survive the map's rehashes, and a clone grows alone" {
     try testing.expectEqual(@as(?StrId, null), t.find("only-in-clone"));
     try testing.expectEqual(@as(usize, 300), t.strings.items.len);
     for (&names, 0..) |*n, i| try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(c.find(n).?));
+}
+
+test "StringInterner.continuing: the base's ids keep their numbers, new ones follow" {
+    const gpa = testing.allocator;
+    var base: StringInterner = .empty;
+    defer base.deinit(gpa);
+    const a = try base.intern(gpa, "a");
+    const b = try base.intern(gpa, "b");
+    var over: StringInterner = .continuing(&base);
+    defer over.deinit(gpa);
+    // A text the base holds is the base's id, and nothing is added.
+    try testing.expectEqual(b, try over.intern(gpa, "b"));
+    try testing.expectEqual(@as(u32, 2), over.len());
+    const c = try over.intern(gpa, "c");
+    try testing.expectEqual(c, try over.intern(gpa, "c"));
+    try testing.expectEqualStrings("a", over.get(a));
+    try testing.expectEqualStrings("c", over.get(c));
+    try testing.expectEqual(a, over.find("a").?);
+    try testing.expectEqual(c, over.find("c").?);
+    try testing.expect(over.eql(c, "c"));
+    // The base never grows.
+    try testing.expectEqual(@as(?StrId, null), base.find("c"));
+    try testing.expectEqual(@as(u32, 2), base.len());
+    // The ids one table gives the same texts in the same order (the oracle).
+    var one: StringInterner = .empty;
+    defer one.deinit(gpa);
+    for ([_][]const u8{ "a", "b", "b", "c" }) |t| _ = try one.intern(gpa, t);
+    try testing.expectEqual(one.find("c").?, c);
 }
 
 fn internSome(gpa: std.mem.Allocator) !void {

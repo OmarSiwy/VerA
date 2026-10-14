@@ -458,7 +458,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
 /// `collectInitialState` folds it into analog initial values, where an x has
 /// nowhere to live. Asserts that `marks` has one slot per expression id.
 pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
-    std.debug.assert(marks.len == file.exprs.nodes.len);
+    std.debug.assert(marks.len == file.exprs.len());
     const Mark = struct {
         file: *const Ast.SourceFile,
         marks: []bool,
@@ -1235,15 +1235,16 @@ test markDiscreteExprs {
     );
     defer h.deinit();
     const ex = &h.file.exprs;
-    const marks = try std.testing.allocator.alloc(bool, ex.nodes.len);
+    const marks = try std.testing.allocator.alloc(bool, ex.len());
     defer std.testing.allocator.free(marks);
     @memset(marks, false);
     markDiscreteExprs(&h.file, marks);
     var marked: usize = 0;
     var unmarked: usize = 0;
-    for (ex.nodes.items(.tag), marks, 0..) |tag, m, i| {
-        if (tag != .logic_literal) continue;
-        if (!ex.logicValue(@fromBackingInt(@intCast(i))).hasUnknown()) continue;
+    for (marks, 0..) |m, i| {
+        const e: Ast.ExprId = @fromBackingInt(@intCast(i));
+        if (ex.tag(e) != .logic_literal) continue;
+        if (!ex.logicValue(e).hasUnknown()) continue;
         if (m) marked += 1 else unmarked += 1;
     }
     try std.testing.expectEqual(2, marked);

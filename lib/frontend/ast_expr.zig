@@ -2,6 +2,9 @@
 //! expressions; annex A.8): one SoA row per expression, addressed by `ExprId`,
 //! with literal values and variable-arity operand lists in side tables. The
 //! parser appends rows; every later stage reads them through `ExprStore`.
+//! Elaboration appends to an overlay (`ExprStore.continuing`) whose ids,
+//! list offsets and side-table indices continue the parser's, so the
+//! parser's rows are never written and keep their numbers (ARCHITECTURE.md I4).
 
 const std = @import("std");
 const Integer = @import("kernels").Integer;
@@ -165,7 +168,17 @@ comptime {
 
 /// SoA expression store, one row per expression (LRM annex A). `ExprId`
 /// indexes every column.
+///
+/// A store may continue another (`base`, set by `continuing`): the base's
+/// rows, list offsets and side-table indices are its first ones and read
+/// through it, and its own columns hold only what it appended, numbered
+/// after the base's. Every number a row holds is in that one space, so a row
+/// copied from the base keeps working. The columns below are this store's
+/// own; read rows through the accessors, which route.
 pub const ExprStore = struct {
+    /// The store this one continues, which it never writes. Null for a
+    /// store of its own (every parse).
+    base: ?*const ExprStore = null,
     /// Columns: `.tag`, `.main_tok`, `.lhs`, `.rhs`, `.extra`, `.str`.
     nodes: std.MultiArrayList(Node) = .empty,
     /// Shared variable-arity payload pool. Each list is stored as
@@ -182,8 +195,50 @@ pub const ExprStore = struct {
 
     pub const empty: ExprStore = .{};
 
-    /// Frees every column and each `logic` literal's `planes`; `gpa` must be
-    /// the allocator the store was built with.
+    /// Returns an empty store that continues `base` (see `ExprStore`).
+    /// `base` must outlive it and must not grow while it lives. Asserts
+    /// `base` continues none.
+    pub fn continuing(base: *const ExprStore) ExprStore {
+        std.debug.assert(base.base == null);
+        return .{ .base = base };
+    }
+
+    const Column = enum { nodes, pool, reals, ints, logic };
+
+    /// How many entries of `column` the base holds: where this store's own
+    /// numbering of it starts.
+    fn baseLen(self: *const ExprStore, comptime column: Column) u32 {
+        const b = self.base orelse return 0;
+        return @intCast(switch (column) {
+            .nodes => b.nodes.len,
+            .pool => b.pool.items.len,
+            .reals => b.reals.items.len,
+            .ints => b.ints.items.len,
+            .logic => b.logic.items.len,
+        });
+    }
+
+    /// The store holding row `id`, and the row's index in its own columns.
+    fn row(self: *const ExprStore, id: ExprId) struct { *const ExprStore, usize } {
+        const i: usize = @backingInt(id);
+        const b = self.base orelse return .{ self, i };
+        return if (i < b.nodes.len) .{ b, i } else .{ self, i - b.nodes.len };
+    }
+
+    /// Returns how many rows the store holds, the base's included: one past
+    /// the largest `ExprId`.
+    pub fn len(self: *const ExprStore) u32 {
+        return self.baseLen(.nodes) + @as(u32, @intCast(self.nodes.len));
+    }
+
+    /// Returns how many `pool` words the store holds, the base's included:
+    /// one past the largest list offset.
+    pub fn poolLen(self: *const ExprStore) u32 {
+        return self.baseLen(.pool) + @as(u32, @intCast(self.pool.items.len));
+    }
+
+    /// Frees every column and each `logic` literal's `planes`, never the
+    /// base's; `gpa` must be the allocator the store was built with.
     pub fn deinit(self: *ExprStore, gpa: std.mem.Allocator) void {
         self.nodes.deinit(gpa);
         self.pool.deinit(gpa);
@@ -200,7 +255,7 @@ pub const ExprStore = struct {
     /// Asserts the store holds fewer than `maxInt(u32)` rows (that value is
     /// `ExprId.none`).
     pub fn add(self: *ExprStore, gpa: std.mem.Allocator, node: Node) !ExprId {
-        const id: u32 = @intCast(self.nodes.len);
+        const id: u32 = self.len();
         std.debug.assert(id != @backingInt(ExprId.none));
         try self.nodes.append(gpa, node);
         return @fromBackingInt(@intCast(id));
@@ -212,7 +267,7 @@ pub const ExprStore = struct {
         // Room for the value first, then the row: a failure at either step
         // leaves both tables as they were.
         try self.reals.ensureUnusedCapacity(gpa, 1);
-        const idx: u32 = @intCast(self.reals.items.len);
+        const idx: u32 = self.baseLen(.reals) + @as(u32, @intCast(self.reals.items.len));
         const id = try self.add(gpa, .{ .tag = .real_literal, .main_tok = main_tok, .extra = idx });
         self.reals.appendAssumeCapacity(value);
         return id;
@@ -230,7 +285,7 @@ pub const ExprStore = struct {
         // Room for the value first, then the row: a failure at either step
         // leaves both tables as they were.
         try self.ints.ensureUnusedCapacity(gpa, 1);
-        const idx: u32 = @intCast(self.ints.items.len);
+        const idx: u32 = self.baseLen(.ints) + @as(u32, @intCast(self.ints.items.len));
         const id = try self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
         self.ints.appendAssumeCapacity(literal);
         return id;
@@ -243,7 +298,7 @@ pub const ExprStore = struct {
         // Room for the value first, then the row: a failure at either step
         // leaves both tables as they were.
         try self.logic.ensureUnusedCapacity(gpa, 1);
-        const idx: u32 = @intCast(self.logic.items.len);
+        const idx: u32 = self.baseLen(.logic) + @as(u32, @intCast(self.logic.items.len));
         const id = try self.add(gpa, .{ .tag = .logic_literal, .main_tok = main_tok, .extra = idx });
         self.logic.appendAssumeCapacity(literal);
         return id;
@@ -253,40 +308,49 @@ pub const ExprStore = struct {
     /// by the store.
     pub fn logicValue(self: *const ExprStore, id: ExprId) Integer.Literal {
         std.debug.assert(self.tag(id) == .logic_literal);
-        return self.logic.items[self.extraOf(id)];
+        const k = self.extraOf(id);
+        const o = self.baseLen(.logic);
+        return if (k < o) self.base.?.logic.items[k] else self.logic.items[k - o];
     }
 
     /// Returns every column of row `id`. A walk that needs one field reads
     /// that column instead (`tag`, `lhs`, ...). `id` must not be `.none`;
     /// the column accessors below share that precondition.
     pub fn get(self: *const ExprStore, id: ExprId) Node {
-        return self.nodes.get(@backingInt(id));
+        const s, const i = self.row(id);
+        return s.nodes.get(i);
     }
 
     /// Returns row `id`'s `ExprTag`, which says what its other columns hold.
     pub fn tag(self: *const ExprStore, id: ExprId) ExprTag {
-        return self.nodes.items(.tag)[@backingInt(id)];
+        const s, const i = self.row(id);
+        return s.nodes.items(.tag)[i];
     }
     /// Returns the token index row `id` is reported at.
     pub fn mainTok(self: *const ExprStore, id: ExprId) u32 {
-        return self.nodes.items(.main_tok)[@backingInt(id)];
+        const s, const i = self.row(id);
+        return s.nodes.items(.main_tok)[i];
     }
     /// Returns row `id`'s first operand, `.none` when its tag has none.
     pub fn lhs(self: *const ExprStore, id: ExprId) ExprId {
-        return self.nodes.items(.lhs)[@backingInt(id)];
+        const s, const i = self.row(id);
+        return s.nodes.items(.lhs)[i];
     }
     /// Returns row `id`'s second operand, `.none` when its tag has none.
     pub fn rhs(self: *const ExprStore, id: ExprId) ExprId {
-        return self.nodes.items(.rhs)[@backingInt(id)];
+        const s, const i = self.row(id);
+        return s.nodes.items(.rhs)[i];
     }
     /// Returns row `id`'s `extra` word: an opcode, a side-table index or a
     /// `pool` offset, as its `ExprTag` arm says.
     pub fn extraOf(self: *const ExprStore, id: ExprId) u32 {
-        return self.nodes.items(.extra)[@backingInt(id)];
+        const s, const i = self.row(id);
+        return s.nodes.items(.extra)[i];
     }
     /// Returns row `id`'s interned name, `.none` when its tag carries none.
     pub fn strOf(self: *const ExprStore, id: ExprId) StrId {
-        return self.nodes.items(.str)[@backingInt(id)];
+        const s, const i = self.row(id);
+        return s.nodes.items(.str)[i];
     }
 
     /// Returns a `.unary` node's operator; asserts the tag.
@@ -312,18 +376,22 @@ pub const ExprStore = struct {
     /// Returns a `.int_literal` with its width and sign; asserts the tag.
     pub fn intLiteral(self: *const ExprStore, id: ExprId) IntLiteral {
         std.debug.assert(self.tag(id) == .int_literal);
-        return self.ints.items[self.extraOf(id)];
+        const k = self.extraOf(id);
+        const o = self.baseLen(.ints);
+        return if (k < o) self.base.?.ints.items[k] else self.ints.items[k - o];
     }
     /// Returns a §2.6.2 `.real_literal`'s value; asserts the tag.
     pub fn realValue(self: *const ExprStore, id: ExprId) f64 {
         std.debug.assert(self.tag(id) == .real_literal);
-        return self.reals.items[self.extraOf(id)];
+        const k = self.extraOf(id);
+        const o = self.baseLen(.reals);
+        return if (k < o) self.base.?.reals.items[k] else self.reals.items[k - o];
     }
 
     /// Stores a variable-arity list; returns the offset to put in a row's
     /// `extra`. Invalidates slices returned by `list`, `args` and `nameParts`.
     fn addList(self: *ExprStore, gpa: std.mem.Allocator, items: []const u32) !u32 {
-        const off: u32 = @intCast(self.pool.items.len);
+        const off: u32 = self.poolLen();
         try self.pool.ensureUnusedCapacity(gpa, items.len + 1);
         self.pool.appendAssumeCapacity(@intCast(items.len));
         self.pool.appendSliceAssumeCapacity(items);
@@ -342,8 +410,11 @@ pub const ExprStore = struct {
     /// `addExprList` or `addStrList` returned. The slice is invalidated by the
     /// next list append.
     pub fn list(self: *const ExprStore, off: u32) []const u32 {
-        const n = self.pool.items[off];
-        return self.pool.items[off + 1 ..][0..n];
+        const o = self.baseLen(.pool);
+        const pool = if (off < o) self.base.?.pool.items else self.pool.items;
+        const at = if (off < o) off else off - o;
+        const n = pool[at];
+        return pool[at + 1 ..][0..n];
     }
 
     /// Returns the arguments of any call-shaped tag (`call`, `builtin_call`,
@@ -499,6 +570,54 @@ test "literal side tables keep width, sign, radix and every f64 bit; an empty li
     const l2 = try s.addExprList(gpa, &.{ synth, nan });
     try std.testing.expectEqual(@as(usize, 1), s.list(l1).len);
     try std.testing.expectEqual(@as(usize, 2), s.list(l2).len);
+}
+
+/// The appends `continuing` is tested with: `n` = 0 writes the parser's
+/// half, 1 the overlay's, which copies a base row and a base list offset.
+fn appendHalf(s: *ExprStore, gpa: std.mem.Allocator, n: u32, prev: []const ExprId) ![4]ExprId {
+    const int = try s.addIntLiteral(gpa, n, .{ .value = 6 + n, .width = 8, .signed = true, .radix = 16 });
+    const real = try s.addReal(gpa, n, 0.5 + @as(f64, @floatFromInt(n)));
+    const planes = try gpa.alloc(u64, 2);
+    @memset(planes, n);
+    const logic = try s.addLogic(gpa, n, .{ .width = 64, .sized = true, .signed = false, .planes = planes });
+    const items: []const ExprId = if (n == 0) &.{ int, real } else &.{ prev[0], int, logic };
+    const call = try s.add(gpa, .{ .tag = .call, .main_tok = n, .extra = try s.addExprList(gpa, items) });
+    return .{ int, real, logic, call };
+}
+
+test "continuing: a store's ids, offsets and side indices continue the base's, which never grows" {
+    const gpa = std.testing.allocator;
+    var base: ExprStore = .empty;
+    defer base.deinit(gpa);
+    const b = try appendHalf(&base, gpa, 0, &.{});
+    var over: ExprStore = .continuing(&base);
+    defer over.deinit(gpa);
+    const o = try appendHalf(&over, gpa, 1, &b);
+    // A copy of a base row: its `extra` is a base list offset.
+    const copied = try over.add(gpa, base.get(b[3]));
+    // The oracle: one store doing the same appends in the same order.
+    var one: ExprStore = .empty;
+    defer one.deinit(gpa);
+    const ob = try appendHalf(&one, gpa, 0, &.{});
+    const oo = try appendHalf(&one, gpa, 1, &ob);
+    try std.testing.expectEqualSlices(ExprId, &ob, &b);
+    try std.testing.expectEqualSlices(ExprId, &oo, &o);
+    try std.testing.expectEqual(try one.add(gpa, one.get(ob[3])), copied);
+    try std.testing.expectEqual(one.len(), over.len());
+    try std.testing.expectEqual(one.poolLen(), over.poolLen());
+    for (0..one.len()) |i| {
+        const id: ExprId = @fromBackingInt(@intCast(i));
+        try std.testing.expectEqual(one.get(id), over.get(id));
+        var bo: [3]ExprId = undefined;
+        var bv: [3]ExprId = undefined;
+        try std.testing.expectEqualSlices(ExprId, one.children(id, &bo), over.children(id, &bv));
+        const t = one.tag(id);
+        if (t == .int_literal) try std.testing.expectEqual(one.intLiteral(id), over.intLiteral(id));
+        if (t == .real_literal) try std.testing.expectEqual(one.realValue(id), over.realValue(id));
+        if (t == .logic_literal) try std.testing.expectEqualSlices(u64, one.logicValue(id).planes, over.logicValue(id).planes);
+    }
+    try std.testing.expectEqual(@as(u32, 4), base.len());
+    try std.testing.expectEqual(@as(usize, 1), base.logic.items.len);
 }
 
 /// Allocates planes and hands them to `addLogic`; frees them itself only
