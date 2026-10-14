@@ -1,7 +1,7 @@
 //! Target-independent facts about a lowered module: Mir + Lowered → CFG,
-//! dominator tree, natural loops, flattened per-block instruction pools, and
-//! per-Value tables (type, alias snapshot, derivative dependencies, array
-//! owner, constant fold). Built once, then read-only. Nothing here knows the
+//! dominator and post-dominator trees, natural loops, flattened per-block
+//! instruction pools, and per-Value tables (type, alias snapshot, derivative
+//! dependencies, array owner, constant fold). Built once, then read-only. Nothing here knows the
 //! target is Zig, so `prove` never imports `device`; per-unit scheduling tables
 //! belong to the emitter.
 //!
@@ -92,6 +92,10 @@ i_res: []const Mir.Value = &.{},
 term: []Mir.Inst = &.{},
 /// Block a Value is defined in (`none_u32` for constants/params/probes).
 def_block: []u32 = &.{},
+/// Immediate post-dominator per block, `nb + 1` long: index `nb` is a virtual
+/// exit that every block with no successor, and every block that cannot
+/// reach one, flows to (`ipdom[nb] == nb`). Filled by `build` only.
+ipdom: []u32 = &.{},
 
 /// Value count, sentinels included.
 nv: u32 = 0,
@@ -190,6 +194,7 @@ pub fn build(
     lowered: *const Lowered,
 ) Error!Analysis {
     var self = try buildStructure(arena, mir, lowered);
+    try self.buildPostDominators();
     try self.buildValueTypes();
     try self.buildDeps();
     try self.buildFolds();
@@ -197,8 +202,8 @@ pub fn build(
 }
 
 /// Builds the structural half alone: alias snapshot, CFG, dominator tree,
-/// natural loops, per-block pools. `vty`, `deps`, `arr_of` and `folds` stay
-/// empty. For the prover, which runs before codegen's own `build` and needs
+/// natural loops, per-block pools. `ipdom`, `vty`, `deps`, `arr_of` and
+/// `folds` stay empty. For the prover, which runs before codegen's own `build` and needs
 /// no value types; building them twice per compile measured slower. It adds
 /// only `buildLiteralFolds` to identify provably untaken runtime-error paths.
 /// `mir` must have its entry block.
@@ -519,6 +524,127 @@ fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
     return x;
 }
 
+/// Fill `ipdom`. Cooper, Harvey and Kennedy's iteration over the reverse CFG,
+/// in its reverse postorder.
+fn buildPostDominators(self: *Analysis) Error!void {
+    const a = self.arena;
+    const nb = self.nb;
+    const exit = nb;
+    // Blocks with no successor end the body; a block that cannot reach one
+    // (a loop with no exit) is given a virtual edge so every block has an
+    // ipdom.
+    const reaches = try a.alloc(bool, nb + 1);
+    @memset(reaches, false);
+    // Each block is pushed at most once (its flag is set first).
+    var stack: std.ArrayList(u32) = try .initCapacity(a, nb);
+    for (0..nb) |b| if (self.succs[b].len == 0) {
+        reaches[b] = true;
+        stack.appendAssumeCapacity(@intCast(b));
+    };
+    while (stack.pop()) |b| for (self.preds[b]) |p| {
+        if (reaches[p]) continue;
+        reaches[p] = true;
+        stack.appendAssumeCapacity(p);
+    };
+    const to_exit = try a.alloc(bool, nb);
+    for (0..nb) |b| to_exit[b] = self.succs[b].len == 0 or !reaches[b];
+
+    // Postorder of the reverse CFG from `exit`: its successors there are the
+    // CFG predecessors.
+    const po = try a.alloc(u32, nb + 1);
+    const num = try a.alloc(u32, nb + 1);
+    @memset(num, none_u32);
+    const seen = try a.alloc(bool, nb + 1);
+    @memset(seen, false);
+    var n_po: u32 = 0;
+    const Frame = struct { b: u32, i: u32 };
+    // Each block and `exit` is pushed at most once (`seen`).
+    var dfs: std.ArrayList(Frame) = try .initCapacity(a, nb + 1);
+    dfs.appendAssumeCapacity(.{ .b = exit, .i = 0 });
+    seen[exit] = true;
+    while (dfs.items.len != 0) {
+        const top = &dfs.items[dfs.items.len - 1];
+        const next: ?u32 = blk: {
+            if (top.b == exit) {
+                while (top.i < nb) : (top.i += 1) {
+                    if (to_exit[top.i] and !seen[top.i]) break :blk top.i;
+                }
+                break :blk null;
+            }
+            const ps = self.preds[top.b];
+            while (top.i < ps.len) : (top.i += 1) {
+                if (!seen[ps[top.i]]) break :blk ps[top.i];
+            }
+            break :blk null;
+        };
+        if (next) |n| {
+            top.i += 1;
+            seen[n] = true;
+            dfs.appendAssumeCapacity(.{ .b = n, .i = 0 });
+        } else {
+            num[top.b] = n_po;
+            po[n_po] = top.b;
+            n_po += 1;
+            _ = dfs.pop();
+        }
+    }
+    // `exit` roots the walk, so it is numbered last; each block at most once.
+    std.debug.assert(n_po <= nb + 1);
+    std.debug.assert(po[n_po - 1] == exit);
+
+    const ipdom = try a.alloc(u32, nb + 1);
+    @memset(ipdom, none_u32);
+    ipdom[exit] = exit;
+    // Bound: the iteration is the dominator dataflow, monotone per block: a
+    // block's ipdom is set once from `none_u32`, then its dominator chain only
+    // shrinks, at most `nb + 1` times. Every round but the last changes one,
+    // so at most `(nb + 1) * (nb + 2) + 1` rounds.
+    const rounds_max = (@as(usize, nb) + 1) * (@as(usize, nb) + 2) + 1;
+    var rounds: usize = 0;
+    var changed = true;
+    while (changed) : (rounds += 1) {
+        std.debug.assert(rounds < rounds_max);
+        changed = false;
+        var k = n_po;
+        while (k > 0) {
+            k -= 1;
+            const b = po[k];
+            if (b == exit) continue;
+            var new: u32 = none_u32;
+            // Reverse-graph predecessors of b are its CFG successors (and the
+            // virtual exit).
+            const extra: []const u32 = if (to_exit[b]) &.{exit} else &.{};
+            for ([_][]const u32{ self.succs[b], extra }) |list| for (list) |s| {
+                if (ipdom[s] == none_u32) continue;
+                new = if (new == none_u32) s else pdomIntersect(ipdom, num, s, new);
+            };
+            if (new != none_u32 and ipdom[b] != new) {
+                ipdom[b] = new;
+                changed = true;
+            }
+        }
+    }
+    std.debug.assert(ipdom[exit] == exit);
+    self.ipdom = ipdom;
+}
+
+fn pdomIntersect(ipdom: []const u32, num: []const u32, b1: u32, b2: u32) u32 {
+    std.debug.assert(ipdom.len == num.len);
+    std.debug.assert(b1 < num.len);
+    std.debug.assert(b2 < num.len);
+    var f1 = b1;
+    var f2 = b2;
+    // Bound: every pass moves at least one finger to a higher postorder
+    // number, and each finger can rise at most `num.len` times.
+    var passes: usize = 0;
+    while (f1 != f2) : (passes += 1) {
+        std.debug.assert(passes < 2 * num.len);
+        while (num[f1] < num[f2]) f1 = ipdom[f1];
+        while (num[f2] < num[f1]) f2 = ipdom[f2];
+    }
+    return f1;
+}
+
 /// Returns whether block `a` dominates block `x`. O(1) via the Euler-tour
 /// interval. Unreachable blocks dominate only themselves. Asserts that both
 /// are below `nb`.
@@ -732,6 +858,23 @@ test "a chain of joins built outer-first types every phi from the integer at its
     defer arena.deinit();
     const an = try build(arena.allocator(), &mir, &lowered);
     for ([_]Mir.Value{ p1, p2, p3 }) |p| try std.testing.expectEqual(VTy.int, an.tyOf(p));
+}
+
+test "ipdom: a loop with no exit flows to the virtual exit" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const lowered: Lowered = .{};
+    const entry = try mir.addBlock(a);
+    const l = try mir.addBlock(a);
+    _ = try mir.emitJump(a, entry, l);
+    _ = try mir.emitJump(a, l, l);
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    // No block returns, so both are given an edge to the exit (2).
+    try std.testing.expectEqualSlices(u32, &.{ 2, 2, 2 }, an.ipdom);
 }
 
 test "a dstop clears the derivative bits and keeps the value varying" {

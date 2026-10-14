@@ -178,7 +178,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     }
     if (!any) return;
 
-    const cds = try plan_setup.controlDeps(in, try plan_setup.postDominators(in));
+    const cds = try plan_setup.controlDeps(in, in.an.ipdom);
     var m: Mark = .{ .in = in, .cds = .{ .off = cds.off, .cd = cds.cd }, .need = try a.alloc(bool, in.an.nv), .blk = try a.alloc(bool, in.an.nb) };
     @memset(m.need, false);
     @memset(m.blk, false);

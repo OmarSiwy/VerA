@@ -95,134 +95,14 @@ fn elseOf(in: Input, bi: u32) u32 {
     return @backingInt(in.mir.instData(in.an.term[bi]).branch.else_block);
 }
 
-/// Immediate post-dominators, with a virtual exit `nb` that every return
-/// block, and every block that cannot reach one, flows to. Cooper, Harvey
-/// and Kennedy's iteration over the reverse CFG, in its reverse postorder.
-pub fn postDominators(in: Input) Error![]u32 {
-    const a = in.arena;
-    const nb = in.an.nb;
-    const exit = nb;
-    // Blocks with no successor end the body; a block that cannot reach one
-    // (a loop with no exit) is given a virtual edge so every block has an
-    // ipdom.
-    const reaches = try a.alloc(bool, nb + 1);
-    @memset(reaches, false);
-    // Each block is pushed at most once (its flag is set first).
-    var stack: std.ArrayList(u32) = try .initCapacity(a, nb);
-    for (0..nb) |b| if (in.an.succs[b].len == 0) {
-        reaches[b] = true;
-        stack.appendAssumeCapacity(@intCast(b));
-    };
-    while (stack.pop()) |b| for (in.an.preds[b]) |p| {
-        if (reaches[p]) continue;
-        reaches[p] = true;
-        stack.appendAssumeCapacity(p);
-    };
-    const to_exit = try a.alloc(bool, nb);
-    for (0..nb) |b| to_exit[b] = in.an.succs[b].len == 0 or !reaches[b];
-
-    // Postorder of the reverse CFG from `exit`: its successors there are the
-    // CFG predecessors.
-    const po = try a.alloc(u32, nb + 1);
-    const num = try a.alloc(u32, nb + 1);
-    @memset(num, none_u32);
-    const seen = try a.alloc(bool, nb + 1);
-    @memset(seen, false);
-    var n_po: u32 = 0;
-    const Frame = struct { b: u32, i: u32 };
-    // Each block and `exit` is pushed at most once (`seen`).
-    var dfs: std.ArrayList(Frame) = try .initCapacity(a, nb + 1);
-    dfs.appendAssumeCapacity(.{ .b = exit, .i = 0 });
-    seen[exit] = true;
-    while (dfs.items.len != 0) {
-        const top = &dfs.items[dfs.items.len - 1];
-        const next: ?u32 = blk: {
-            if (top.b == exit) {
-                while (top.i < nb) : (top.i += 1) {
-                    if (to_exit[top.i] and !seen[top.i]) break :blk top.i;
-                }
-                break :blk null;
-            }
-            const ps = in.an.preds[top.b];
-            while (top.i < ps.len) : (top.i += 1) {
-                if (!seen[ps[top.i]]) break :blk ps[top.i];
-            }
-            break :blk null;
-        };
-        if (next) |n| {
-            top.i += 1;
-            seen[n] = true;
-            dfs.appendAssumeCapacity(.{ .b = n, .i = 0 });
-        } else {
-            num[top.b] = n_po;
-            po[n_po] = top.b;
-            n_po += 1;
-            _ = dfs.pop();
-        }
-    }
-    // `exit` roots the walk, so it is numbered last; each block at most once.
-    assert(n_po <= nb + 1);
-    assert(po[n_po - 1] == exit);
-
-    const ipdom = try a.alloc(u32, nb + 1);
-    @memset(ipdom, none_u32);
-    ipdom[exit] = exit;
-    // Bound: the iteration is the dominator dataflow, monotone per block: a
-    // block's ipdom is set once from `none_u32`, then its dominator chain only
-    // shrinks, at most `nb + 1` times. Every round but the last changes one,
-    // so at most `(nb + 1) * (nb + 2) + 1` rounds.
-    const rounds_max = (@as(usize, nb) + 1) * (@as(usize, nb) + 2) + 1;
-    var rounds: usize = 0;
-    var changed = true;
-    while (changed) : (rounds += 1) {
-        assert(rounds < rounds_max);
-        changed = false;
-        var k = n_po;
-        while (k > 0) {
-            k -= 1;
-            const b = po[k];
-            if (b == exit) continue;
-            var new: u32 = none_u32;
-            // Reverse-graph predecessors of b are its CFG successors (and the
-            // virtual exit).
-            const extra: []const u32 = if (to_exit[b]) &.{exit} else &.{};
-            for ([_][]const u32{ in.an.succs[b], extra }) |list| for (list) |s| {
-                if (ipdom[s] == none_u32) continue;
-                new = if (new == none_u32) s else intersect(ipdom, num, s, new);
-            };
-            if (new != none_u32 and ipdom[b] != new) {
-                ipdom[b] = new;
-                changed = true;
-            }
-        }
-    }
-    assert(ipdom[exit] == exit);
-    return ipdom;
-}
-
-fn intersect(ipdom: []const u32, num: []const u32, b1: u32, b2: u32) u32 {
-    assert(ipdom.len == num.len);
-    assert(b1 < num.len);
-    assert(b2 < num.len);
-    var f1 = b1;
-    var f2 = b2;
-    // Bound: every pass moves at least one finger to a higher postorder
-    // number, and each finger can rise at most `num.len` times.
-    var passes: usize = 0;
-    while (f1 != f2) : (passes += 1) {
-        assert(passes < 2 * num.len);
-        while (num[f1] < num[f2]) f1 = ipdom[f1];
-        while (num[f2] < num[f1]) f2 = ipdom[f2];
-    }
-    return f1;
-}
-
 /// Per-block control dependences, flat: `cd[off[b]..off[b + 1]]`, each
 /// block's entries in branch-block order, `then` edge before `else`. Both
-/// slices are owned by `in.arena`.
+/// slices are owned by `in.arena`. `ipdom` is `Analysis.ipdom`; asserts that
+/// it has the virtual exit (`Analysis.build` filled it).
 pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd: []Cd } {
     const a = in.arena;
     const nb = in.an.nb;
+    assert(ipdom.len == nb + 1);
     // Two walks of the post-dominator chains, counting then filling, rather
     // than a growable list per block: three exact arena allocations instead
     // of one list per block plus its doublings.
@@ -514,8 +394,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
     const a = in.arena;
     const nb = in.an.nb;
     const nv = in.an.nv;
-    const ipdom = try postDominators(in);
-    const cds = try controlDeps(in, ipdom);
+    const cds = try controlDeps(in, in.an.ipdom);
     var s: Scan = .{
         .in = in,
         .val = try a.alloc(bool, nv),
@@ -655,7 +534,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
         inside[x] = true;
         stack.appendAssumeCapacity(x);
     };
-    const cds = try controlDeps(in, try postDominators(in));
+    const cds = try controlDeps(in, in.an.ipdom);
     const vary = try a.alloc(bool, nv);
     @memset(vary, false);
     // Bound: `vary` only rises; every round but the last sets one of `nv`.
@@ -924,7 +803,7 @@ fn diamond(f: *Fixture) !struct { then_b: Mir.Block, else_b: Mir.Block, join: Mi
     return .{ .then_b = then_b, .else_b = else_b, .join = join, .c = c };
 }
 
-test "postDominators and controlDeps of a diamond: each arm hangs on one edge of the branch" {
+test "Analysis.ipdom and controlDeps of a diamond: each arm hangs on one edge of the branch" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
     try f.init(&.{"a"});
     defer f.deinit();
@@ -933,25 +812,10 @@ test "postDominators and controlDeps of a diamond: each arm hangs on one edge of
     const in: Input = .{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered };
 
     // Every block reaches join (3); join reaches the virtual exit (4).
-    const ipdom = try postDominators(in);
-    try std.testing.expectEqualSlices(u32, &.{ 3, 3, 3, 4, 4 }, ipdom);
-    const cds = try controlDeps(in, ipdom);
+    try std.testing.expectEqualSlices(u32, &.{ 3, 3, 3, 4, 4 }, an.ipdom);
+    const cds = try controlDeps(in, an.ipdom);
     try std.testing.expectEqualSlices(u32, &.{ 0, 0, 1, 2, 2 }, cds.off);
     try std.testing.expectEqualSlices(Cd, &.{ .{ .a = 0, .then = true }, .{ .a = 0, .then = false } }, cds.cd);
-}
-
-test "postDominators: a loop with no exit flows to the virtual exit" {
-    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init(&.{"a"});
-    defer f.deinit();
-    const a = f.alloc();
-    const l = try f.mir.addBlock(a);
-    _ = try f.mir.emitJump(a, .entry, l);
-    _ = try f.mir.emitJump(a, l, l);
-    const an = try f.analysis();
-    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
-    // No block returns, so both are given an edge to the exit (2).
-    try std.testing.expectEqualSlices(u32, &.{ 2, 2, 2 }, try postDominators(in));
 }
 
 test "solve invariance: the call allowlist, a branch on a probe, and what setup may hand eval" {
