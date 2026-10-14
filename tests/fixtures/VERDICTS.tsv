@@ -294,6 +294,7 @@ pass	annex_e_spice/limit_pnjlimds_bsim_pmos_von_at_old.va
 pass	annex_e_spice/limit_pnjlimds_bulk_rung.va
 pass	annex_e_spice/limit_pnjlimds_dangling_returns_probe.va
 pass	annex_e_spice/limit_seed_bsim3_pmos_initjct.va
+pass	annex_e_spice/limit_seed_conditional_on_card.va
 pass	annex_e_spice/limit_seed_explicit_beats_default.va
 pass	annex_e_spice/limit_seed_mos1_initjct.va
 pass	annex_e_spice/limit_vds.va
@@ -328,6 +329,7 @@ pass	annex_e_spice/primitive_vpulse.va
 pass	annex_e_spice/primitive_vpwl.va
 pass	annex_e_spice/primitive_vsine.va
 pass	annex_e_spice/reject_limit_seed_reads_solution.va
+pass	annex_e_spice/reject_limit_seed_reads_solution_through_conditional.va
 pass	annex_e_spice/reject_limit_vera_seed_attr_not_constant.va
 pass	annex_e_spice/reject_spice_binned_model.va
 pass	annex_e_spice/reject_spice_expression_value.va
@@ -1098,6 +1100,8 @@ pass	ch04_expressions/c_math_values_at_run_time.va
 pass	ch04_expressions/case_equality_real_operand_rejected.va
 pass	ch04_expressions/concatenation_empty_rejected.va
 pass	ch04_expressions/concatenation_real_operand_rejected.va
+pass	ch04_expressions/conditional_capacitance_not_constant.va
+pass	ch04_expressions/conditional_conductance_not_constant.va
 pass	ch04_expressions/constant_expression_reads_a_probe_rejected.va
 pass	ch04_expressions/dc_sweep_every_point_is_dc_and_static.va
 pass	ch04_expressions/ddt_abstol_dynamic_rejected.va
@@ -1298,6 +1302,7 @@ pass	ch05_analog_behavior/conditional_ddt_contribution_static.va
 pass	ch05_analog_behavior/conditional_ddt_parameter_variable.va
 pass	ch05_analog_behavior/conditional_event_control_invalid.va
 pass	ch05_analog_behavior/conditional_filter_invalid.va
+pass	ch05_analog_behavior/conditional_flag_conductance_not_constant.va
 pass	ch05_analog_behavior/conditional_indirect_invalid.va
 pass	ch05_analog_behavior/conditional_no_else.va
 pass	ch05_analog_behavior/conditional_potential_open.va
