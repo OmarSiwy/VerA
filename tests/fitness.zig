@@ -22,7 +22,8 @@ const import_graph = @import("import_graph.zig");
 const Role = enum { runtime, leaf, compiler, backend, tool };
 
 /// One allowed file and how many sites it holds, and the phase that deletes
-/// them (empty for an R7 ceiling, which has no deleting phase).
+/// them (empty for a ceiling with no deleting phase: R7's, and R3's
+/// overlay-writing elaboration rows).
 const Row = struct { path: []const u8, n: u32, phase: []const u8 = "" };
 
 const Count = struct { path: []const u8, n: u32 };
@@ -225,15 +226,16 @@ test "R2: no backend row's closure contains another backend row" {
 
 // Since Phase 12 every row below writes an overlay of the parse
 // (`Ast.SourceFile.overlay`), never the parse; the text cannot tell the two
-// apart, so the rows stay until R3 reads which file a write reaches.
+// apart. The rows are ceilings with no deleting phase (decided 2026-10-18):
+// a count may only fall, and a new elaboration write outside them fails.
 const r3_rows = [_]Row{
-    .{ .path = "lib/elab/elaborate.zig", .n = 1, .phase = "R3 retargeted to the parse" },
-    .{ .path = "lib/elab/elaborate/clone.zig", .n = 9, .phase = "R3 retargeted to the parse" },
-    .{ .path = "lib/elab/elaborate/insert.zig", .n = 1, .phase = "R3 retargeted to the parse" },
-    .{ .path = "lib/elab/elaborate/instance.zig", .n = 2, .phase = "R3 retargeted to the parse" },
-    .{ .path = "lib/elab/elaborate/names.zig", .n = 3, .phase = "R3 retargeted to the parse" },
-    .{ .path = "lib/elab/hier_param.zig", .n = 1, .phase = "R3 retargeted to the parse" },
-    .{ .path = "src/sim/digital/root.zig", .n = 1, .phase = "R3 retargeted to the parse" },
+    .{ .path = "lib/elab/elaborate.zig", .n = 1 },
+    .{ .path = "lib/elab/elaborate/clone.zig", .n = 9 },
+    .{ .path = "lib/elab/elaborate/insert.zig", .n = 1 },
+    .{ .path = "lib/elab/elaborate/instance.zig", .n = 2 },
+    .{ .path = "lib/elab/elaborate/names.zig", .n = 3 },
+    .{ .path = "lib/elab/hier_param.zig", .n = 1 },
+    .{ .path = "src/sim/digital/root.zig", .n = 1 },
 };
 
 const AstWrite = struct {
