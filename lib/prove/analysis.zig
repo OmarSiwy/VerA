@@ -96,6 +96,13 @@ def_block: []u32 = &.{},
 /// exit that every block with no successor, and every block that cannot
 /// reach one, flows to (`ipdom[nb] == nb`). Filled by `build` only.
 ipdom: []u32 = &.{},
+/// The branch conditions that pick which edge reaches block `b`, so which
+/// incoming value its phis take: `steer_pool[steer_off[b]..steer_off[b + 1]]`.
+/// A branch steers its immediate post-dominator, where its arms rejoin, and
+/// every branch inside a loop nest steers each header of that nest (how many
+/// times round). Only the `xdeps`/`pdeps` phi rule reads it. Filled by `build`.
+steer_pool: []Mir.Value = &.{},
+steer_off: []u32 = &.{},
 
 /// Value count, sentinels included.
 nv: u32 = 0,
@@ -118,9 +125,10 @@ alias: []Mir.Value = &.{},
 deps: []u64 = &.{},
 /// Some unknown index is ≥ 64; see `deps`.
 deps_folded: bool = false,
-/// `deps` with a `dstop` passing its operand's bits through: which unknowns
-/// the value can vary with (`xDep`). The same slice as `deps` when the module
-/// has no `dstop`.
+/// Which unknowns the value can vary with (`xDep`): `deps`, plus what passes
+/// a `dstop`, plus what steers a value without entering its derivative (a
+/// select's condition, an array index, the branches that pick a phi's
+/// incoming edge: `steer_pool`).
 xdeps: []u64 = &.{},
 /// `xdeps` plus the per-instance values a value can vary with: a §5.10 held
 /// variable, `$mfactor`, a `$prev`/charge path latch (`pointDep`). The same
@@ -897,6 +905,85 @@ test "a dstop clears the derivative bits and keeps the value varying" {
     try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@backingInt(prod)]);
 }
 
+test "a ?: steered by a probe varies with no derivative lane; one on a constant does not vary" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const lowered: Lowered = .{};
+    _ = try mir.addBlock(a);
+    const va = try mir.addBlockParam(a, 0);
+    const two = try mir.addFloatConst(a, 2.0);
+    const three = try mir.addFloatConst(a, 3.0);
+    // `V * (V > 0.4 ? 2.0 : 3.0)`: ∂/∂V is 2 or 3, picked by x.
+    const c = try mir.emit(a, .entry, .fgt, &.{ va, try mir.addFloatConst(a, 0.4) });
+    const sel = try mir.emit(a, .entry, .select, &.{ c, two, three });
+    const g = try mir.emit(a, .entry, .fmul, &.{ va, sel });
+    const fixed = try mir.emit(a, .entry, .select, &.{ .one, two, three });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    // The taken arm's derivative is a constant's: no lane. Its value is 2 or
+    // 3 as x moves: it varies.
+    try std.testing.expectEqual(@as(u64, 0), an.unknownDeps(sel));
+    try std.testing.expect(an.xDep(sel) and an.pointDep(sel));
+    try std.testing.expectEqual(@as(u64, 0b1), an.unknownDeps(g));
+    try std.testing.expect(an.dFree(fixed) and !an.xDep(fixed));
+}
+
+test "a join steered by a probe varies with no derivative lane; one steered by a constant does not vary" {
+    // b0: br (V > 0) b1 b2; b1, b2: jump b3; b3: p1 = phi(2, 3); br 1 b4 b5;
+    // b4, b5: jump b6; b6: p2 = phi(2, 3).
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const lowered: Lowered = .{};
+    var b: [7]Mir.Block = undefined;
+    for (&b) |*x| x.* = try mir.addBlock(a);
+    const va = try mir.addBlockParam(a, 0);
+    const two = try mir.addFloatConst(a, 2.0);
+    const three = try mir.addFloatConst(a, 3.0);
+    const c = try mir.emit(a, b[0], .fgt, &.{ va, .f_zero });
+    _ = try mir.emitBranch(a, b[0], c, b[1], b[2]);
+    _ = try mir.emitJump(a, b[1], b[3]);
+    _ = try mir.emitJump(a, b[2], b[3]);
+    const p1 = try mir.emitPhi(a, b[3], &.{ .{ .block = b[1], .value = two }, .{ .block = b[2], .value = three } });
+    _ = try mir.emitBranch(a, b[3], .one, b[4], b[5]);
+    _ = try mir.emitJump(a, b[4], b[6]);
+    _ = try mir.emitJump(a, b[5], b[6]);
+    const p2 = try mir.emitPhi(a, b[6], &.{ .{ .block = b[4], .value = two }, .{ .block = b[5], .value = three } });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    try std.testing.expect(an.dFree(p1) and an.xDep(p1));
+    try std.testing.expect(an.dFree(p2) and !an.xDep(p2));
+}
+
+test "a loop counter whose exit test reads a probe varies with no derivative lane" {
+    // b0: jump b1; b1: i = phi(0, i + 1); br (V > i) b2 b3; b2: jump b1.
+    // How many times round, so the `i` that leaves, moves with x.
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const lowered: Lowered = .{};
+    var b: [4]Mir.Block = undefined;
+    for (&b) |*x| x.* = try mir.addBlock(a);
+    const va = try mir.addBlockParam(a, 0);
+    _ = try mir.emitJump(a, b[0], b[1]);
+    const i = try mir.emitPhi(a, b[1], &.{});
+    const c = try mir.emit(a, b[1], .fgt, &.{ va, i });
+    _ = try mir.emitBranch(a, b[1], c, b[2], b[3]);
+    const next = try mir.emit(a, b[2], .iadd, &.{ i, .one });
+    _ = try mir.emitJump(a, b[2], b[1]);
+    try mir.setPhiPairs(a, mir.valueDef(i).inst_result, &.{ .{ .block = b[0], .value = .zero }, .{ .block = b[2], .value = next } });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    try std.testing.expect(an.dFree(i) and an.xDep(i));
+}
+
 test "acdyn: an absdelay's input deps reach the value, a direct path does not" {
     const a = std.testing.allocator;
     var mir: Mir = .{};
@@ -942,13 +1029,10 @@ fn buildDeps(self: *Analysis) Error!void {
         if (d == .block_param and d.block_param >= 64) self.deps_folded = true;
     }
     self.deps = try self.fixDeps(.deriv);
-    // Only a `dstop` tells the two tables apart.
-    self.xdeps = self.deps;
-    for (0..self.mir.insts.len) |i| {
-        if (self.mir.instOp(@fromBackingInt(@intCast(@as(u32, @intCast(i))))) != .dstop) continue;
-        self.xdeps = try self.fixDeps(.value);
-        break;
-    }
+    // Its own column always: a `?:`, an array index or a branch can steer a
+    // value without entering its derivative, and nearly every module has one.
+    try self.buildSteer();
+    self.xdeps = try self.fixDeps(.value);
     self.pdeps = self.xdeps;
     for (0..self.mir.insts.len) |i| {
         if (!readsInstance(self, @fromBackingInt(@intCast(@as(u32, @intCast(i)))))) continue;
@@ -965,7 +1049,68 @@ fn buildDeps(self: *Analysis) Error!void {
 }
 
 /// Which column `fixDeps` fills: `deps`, `xdeps`, `acdyn` or `pdeps`.
-const DepCol = enum { deriv, value, ac_dyn, point };
+const DepCol = enum {
+    deriv,
+    value,
+    ac_dyn,
+    point,
+
+    /// The columns that ask whether the value varies, so take what steers it
+    /// (`steer_pool`, a select's condition, an index) and not only what
+    /// enters its derivative.
+    fn steered(c: DepCol) bool {
+        return c == .value or c == .point;
+    }
+};
+
+/// Fill `steer_pool` (see there), counted then filled. Requires `ipdom` and
+/// the natural loops.
+fn buildSteer(self: *Analysis) Error!void {
+    const a = self.arena;
+    const nb = self.nb;
+    std.debug.assert(self.ipdom.len == nb + 1);
+    var n_heads: u32 = 0;
+    for (self.rpo) |h| n_heads += @intFromBool(self.is_loop[h]);
+    const heads = try a.alloc(u32, n_heads);
+    n_heads = 0;
+    for (self.rpo) |h| if (self.is_loop[h]) {
+        heads[n_heads] = h;
+        n_heads += 1;
+    };
+    self.steer_off = try a.alloc(u32, nb + 1);
+    @memset(self.steer_off, 0);
+    var at: []u32 = &.{};
+    for ([_]bool{ false, true }) |fill| {
+        if (fill) {
+            for (1..nb + 1) |b| self.steer_off[b] += self.steer_off[b - 1];
+            self.steer_pool = try a.alloc(Mir.Value, self.steer_off[nb]);
+            at = try a.dupe(u32, self.steer_off[0..nb]);
+        }
+        for (self.rpo) |bi| {
+            const t = self.term[bi];
+            if (t == .none or self.i_op[@backingInt(t)] != .branch) continue;
+            const cond = self.mir.instData(t).branch.cond;
+            const join = self.ipdom[bi];
+            // The virtual exit has no phis.
+            if (join < nb) {
+                if (fill) {
+                    self.steer_pool[at[join]] = cond;
+                    at[join] += 1;
+                } else self.steer_off[join + 1] += 1;
+            }
+            const nest = self.loop_of[bi];
+            if (nest == none_u32) continue;
+            for (heads) |h| {
+                if (self.loop_of[h] != nest) continue;
+                if (fill) {
+                    self.steer_pool[at[h]] = cond;
+                    at[h] += 1;
+                } else self.steer_off[h + 1] += 1;
+            }
+        }
+    }
+    for (0..nb) |b| std.debug.assert(at[b] == self.steer_off[b + 1]);
+}
 
 /// Whether `inst` reads a per-instance value (`pdeps`' seeds).
 fn readsInstance(self: *const Analysis, inst: Mir.Inst) bool {
@@ -996,7 +1141,8 @@ fn fixDeps(self: *const Analysis, which: DepCol) Error![]u64 {
 
 /// One step of the lattice: `val`'s bits given the current answer for its
 /// operands in `col`. Every rule is "union of the operands whose derivative
-/// the contract propagates". In `acdyn` a probe starts with no bits and a
+/// the contract propagates"; the `steered` columns add what decides which
+/// operand is taken. In `acdyn` a probe starts with no bits and a
 /// frequency-dependent operator takes its input's whole `deps`, since every
 /// derivative through it is scaled by its H(jω).
 fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCol) u64 {
@@ -1029,22 +1175,38 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCo
                     return if (which != .value and which != .point and u.op == .dstop) 0 else self.depsIn(col, u.operand);
                 },
                 .binary => |b| return self.depsIn(col, b.lhs) | self.depsIn(col, b.rhs),
-                // §4.2.12: the condition does not matter. It selects between
-                // arms rather than entering the value, so a conditional over
-                // two constants is constant however x steers it, and `S.sel`
-                // lets the taken arm's derivative ride through.
-                .ternary => |t| return self.depsIn(col, t.then_val) | self.depsIn(col, t.else_val),
+                // §4.2.12: the condition selects between arms rather than
+                // entering the derivative, so `S.sel` lets the taken arm's
+                // derivative ride through and `deps` ignores it. Which arm is
+                // taken still moves with the condition, so a conditional over
+                // two constants varies when its condition does (`steered`).
+                .ternary => |t| {
+                    const arms = self.depsIn(col, t.then_val) | self.depsIn(col, t.else_val);
+                    return if (which.steered()) arms | self.depsIn(col, t.cond) else arms;
+                },
                 // §3.2.2 an array version carries the union of what was stored
                 // into it; a fresh one (zero, or the held `Instance` copy) is
-                // constant. The index does not enter, for `select`'s reason:
-                // it picks an element, and the picked element's derivative is
-                // what rides through.
+                // constant. The index enters only the `steered` columns, for
+                // `select`'s reason: it picks an element, and the picked
+                // element's derivative is what rides through.
                 .anew => return 0,
-                .load => |l| return self.depsIn(col, l.arr),
-                .store => |st| return self.depsIn(col, st.arr) | self.depsIn(col, st.value),
+                .load => |l| {
+                    const arr = self.depsIn(col, l.arr);
+                    return if (which.steered()) arr | self.depsIn(col, l.index) else arr;
+                },
+                .store => |st| {
+                    const both = self.depsIn(col, st.arr) | self.depsIn(col, st.value);
+                    return if (which.steered()) both | self.depsIn(col, st.index) else both;
+                },
+                // A join is a select on the edge that reached it: the edge's
+                // branches (`steer_pool`) steer it as a condition does.
                 .phi => |d| {
                     var acc: u64 = 0;
                     for (0..d.count) |k| acc |= self.depsIn(col, self.mir.phiPair(inst, @intCast(k)).value);
+                    if (!which.steered()) return acc;
+                    const b = self.def_block[@backingInt(self.i_res[@backingInt(inst)])];
+                    if (b == none_u32) return acc;
+                    for (self.steer_pool[self.steer_off[b]..self.steer_off[b + 1]]) |c| acc |= self.depsIn(col, c);
                     return acc;
                 },
             }
@@ -1062,8 +1224,10 @@ pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
     return self.depsOf(v) == 0;
 }
 
-/// Returns whether `v`'s value varies with some §4.4 probe. `!dFree` except
-/// past a `dstop`, whose value varies while its derivative is zero.
+/// Returns whether `v`'s value varies with some §4.4 probe. `!dFree` implies
+/// it; it also holds past a `dstop`, whose value varies while its derivative
+/// is zero, and for a select, join or array read steered by a varying
+/// condition or index over arms that do not vary (`xdeps`).
 pub fn xDep(self: *const Analysis, v: Mir.Value) bool {
     return self.depsIn(self.xdeps, v) != 0;
 }

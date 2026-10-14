@@ -228,8 +228,9 @@ fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
 /// Is `v` a constant of the whole simulation, a function of Model and
 /// Instance-at-build and nothing else? Stricter than `Analysis.dFree`,
 /// which admits x-steered selects between constants (its ternary/phi
-/// rule ignores the condition); a collapse decision taken once at build
-/// must not. Calls are allowlisted for the same reason: `$abstime`, rng
+/// rule ignores the condition), and than `Analysis.xDep`, which asks only
+/// whether x moves the value; a collapse decision taken once at build
+/// must not move at all. Calls are allowlisted for that reason: `$abstime`, rng
 /// draws, `$held_*` seeds and `analysis()` all change between
 /// evaluations, so a new operator is unsound here until shown otherwise.
 ///
