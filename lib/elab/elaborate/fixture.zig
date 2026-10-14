@@ -13,9 +13,12 @@ const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
 
 /// One compilation for a test: the arena every parse and elaboration row
-/// lives in, the parsed file and its diagnostics. Free with `deinit`.
+/// lives in, the file elaboration writes and its diagnostics. Free with
+/// `deinit`.
 pub const Fixture = struct {
     arena: std.heap.ArenaAllocator,
+    /// The overlay of the parse (`Ast.SourceFile.overlay`), as the spine
+    /// makes it; the parse itself lives in `arena`.
     file: Ast.SourceFile = .empty,
     bag: diag.Bag = undefined,
     src: []const u8 = "",
@@ -49,7 +52,9 @@ pub fn parse(out: *Fixture, text: []const u8) !void {
     var toks = try Lexer.Lexer.tokenize(arena, text);
     out.starts = toks.items(.start);
     var p = Parser.Parser.init(arena, text, toks.items(.tag), out.starts, &out.bag);
-    out.file = try p.parseSourceFile();
+    const parsed = try arena.create(Ast.SourceFile);
+    parsed.* = try p.parseSourceFile();
+    out.file = parsed.overlay(.{});
 }
 
 /// Annex E: the prelude is a prefix of `modules` only if the preprocessor ran,
@@ -62,8 +67,9 @@ pub fn parseWithPrelude(out: *Fixture, text: []const u8) !void {
     var toks = try Lexer.Lexer.tokenize(arena, out.src);
     out.starts = toks.items(.start);
     var p = Parser.Parser.init(arena, out.src, toks.items(.tag), out.starts, &out.bag);
-    out.file = try p.parseSourceFile();
-    out.file.builtin_modules = Preprocessor.spice_module_count;
+    const parsed = try arena.create(Ast.SourceFile);
+    parsed.* = try p.parseSourceFile();
+    out.file = parsed.overlay(.{ .builtin_modules = Preprocessor.spice_module_count });
 }
 
 /// Returns a `Flatten` over `f`'s file before any walk: no table seeded, no

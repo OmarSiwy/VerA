@@ -559,7 +559,7 @@ pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     var blocks = self.file.seqBlocks();
     while (blocks.next()) |b| for (b.vars) |v| try vars.put(self.arena, v.name, {});
     const ex = &self.file.exprs;
-    for (0..ex.nodes.len) |i| {
+    for (0..ex.len()) |i| {
         const e: Ast.ExprId = @fromBackingInt(@intCast(i));
         if (ex.tag(e) != .index or !runtimeSub(self, &vars, module.genvars, ex.rhs(e))) continue;
         var base = ex.lhs(e);

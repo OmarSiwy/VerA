@@ -223,19 +223,17 @@ test "R2: no backend row's closure contains another backend row" {
 // allowed) through a receiver spelled `...file`.
 // ---------------------------------------------------------------------------
 
+// Since Phase 12 every row below writes an overlay of the parse
+// (`Ast.SourceFile.overlay`), never the parse; the text cannot tell the two
+// apart, so the rows stay until R3 reads which file a write reaches.
 const r3_rows = [_]Row{
-    .{ .path = "lib/elab/elaborate.zig", .n = 1, .phase = "Phase 12" },
-    .{ .path = "lib/elab/elaborate/clone.zig", .n = 9, .phase = "Phase 12" },
-    .{ .path = "lib/elab/elaborate/fixture.zig", .n = 1, .phase = "Phase 12" },
-    .{ .path = "lib/elab/elaborate/insert.zig", .n = 1, .phase = "Phase 12" },
-    .{ .path = "lib/elab/elaborate/instance.zig", .n = 2, .phase = "Phase 12" },
-    .{ .path = "lib/elab/elaborate/names.zig", .n = 3, .phase = "Phase 12" },
-    .{ .path = "lib/elab/hier_param.zig", .n = 1, .phase = "Phase 12" },
-    // The lowering test harness's `builtin_modules`.
-    .{ .path = "lib/analog/lower.zig", .n = 1, .phase = "Phase 12" },
-    // The spine sets the five fields the parser leaves to its caller.
-    .{ .path = "lib/root.zig", .n = 5, .phase = "Phase 12" },
-    .{ .path = "src/sim/digital/root.zig", .n = 1, .phase = "Phase 12" },
+    .{ .path = "lib/elab/elaborate.zig", .n = 1, .phase = "R3 retargeted to the parse" },
+    .{ .path = "lib/elab/elaborate/clone.zig", .n = 9, .phase = "R3 retargeted to the parse" },
+    .{ .path = "lib/elab/elaborate/insert.zig", .n = 1, .phase = "R3 retargeted to the parse" },
+    .{ .path = "lib/elab/elaborate/instance.zig", .n = 2, .phase = "R3 retargeted to the parse" },
+    .{ .path = "lib/elab/elaborate/names.zig", .n = 3, .phase = "R3 retargeted to the parse" },
+    .{ .path = "lib/elab/hier_param.zig", .n = 1, .phase = "R3 retargeted to the parse" },
+    .{ .path = "src/sim/digital/root.zig", .n = 1, .phase = "R3 retargeted to the parse" },
 };
 
 const AstWrite = struct {

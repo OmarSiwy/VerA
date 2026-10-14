@@ -376,13 +376,13 @@ fn compileInArena(
     const seed = try Preprocessor.preludeAst(opts.std_defs);
     var p = try Parser.Parser.initSeeded(arena, text, tags, starts, bag, seed);
     p.setLanguage(opts.language);
-    const file = try arena.create(Ast.SourceFile);
+    const parse = try arena.create(Ast.SourceFile);
     // The Table E.1 primitives (annex E) are the first declarations in `text`,
     // and the annex E.2 netlist modules follow them before the user's source,
     // so together they lead `file.modules`. This is the one place that knows
     // whether the prelude was prepended; see `Ast.SourceFile.builtin_modules`.
     const builtins: u32 = if (opts.std_defs) Preprocessor.spice_module_count + netlist_modules else 0;
-    file.* = p.parseSourceFile() catch |err| switch (err) {
+    parse.* = p.parseSourceFile() catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ParseError => {
             // The parser recovers at top level, so a diagnosed parse still
@@ -398,11 +398,18 @@ fn compileInArena(
             return error.CompileFailed;
         },
     };
-    file.builtin_modules = builtins;
-    file.builtin_natures = if (seed) |sd| @intCast(sd.file.natures.len) else 0;
-    file.annex_d_included = pp.annex_d_included;
-    file.netlist_modules = netlist_modules;
-    file.netlist_unsupported = pp.netlist_unsupported;
+    // Every later stage reads, and elaboration writes, an overlay of the
+    // parse: the parse itself is never written (ARCHITECTURE.md I4), and its
+    // ids keep their numbers through the overlay.
+    const parsed: *const Ast.SourceFile = parse;
+    const file = try arena.create(Ast.SourceFile);
+    file.* = parsed.overlay(.{
+        .builtin_modules = builtins,
+        .builtin_natures = if (seed) |sd| @intCast(sd.file.natures.len) else 0,
+        .annex_d_included = pp.annex_d_included,
+        .netlist_modules = netlist_modules,
+        .netlist_unsupported = pp.netlist_unsupported,
+    });
     // Every stage from here walks the AST by recursion, so it runs on a stack
     // reserved for the nesting the parser measured (`deep_stack`).
     return deep_stack.run(p.deepest, lowerAndProve, .{ gpa, arena_state, file, text, starts, pp.directives, p.deepest, target, opts, bag }) catch |err| switch (err) {

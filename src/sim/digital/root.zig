@@ -1404,12 +1404,16 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     parser.setLanguage(opts.language);
     // A failed parse still leaves every recovered module in `parser.file`, and
     // the `wreal` refusal is itself a parse error, so the rules read that.
-    // Arena-owned, not a local: the returned `Run` points at it.
-    const file = try arena.create(Ast.SourceFile);
-    file.* = parser.parseSourceFile() catch |e| switch (e) {
+    // Arena-owned, not a local: the returned `Run` points at it. Elaboration
+    // writes an overlay of the parse, never the parse (ARCHITECTURE.md I4).
+    const parse = try arena.create(Ast.SourceFile);
+    parse.* = parser.parseSourceFile() catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ParseError => parser.file,
     };
+    const parsed: *const Ast.SourceFile = parse;
+    const file = try arena.create(Ast.SourceFile);
+    file.* = parsed.overlay(.{});
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
     var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .real_card = if (opts.mixed) |mx| mx.real_params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null, .source = source, .opts = opts, .scratch = .init(arena), .resolve_scratch = .init(arena) };

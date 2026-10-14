@@ -42,10 +42,12 @@ const Harness = struct {
         const text = (try Preprocessor.process(arena, src, .{ .bag = &out.bag })).text;
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
-        out.file = try p.parseSourceFile();
+        const parse = try arena.create(Ast.SourceFile);
+        parse.* = try p.parseSourceFile();
         // The annex E prelude came with `Preprocessor.process` (std_defs is on by
         // default), so its modules are the leading entries of `file.modules`.
-        out.file.builtin_modules = Preprocessor.spice_module_count;
+        // Elaboration writes the overlay, never the parse.
+        out.file = parse.overlay(.{ .builtin_modules = Preprocessor.spice_module_count });
         out.lowered = (try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{})).lowered;
     }
 

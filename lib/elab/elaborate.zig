@@ -277,8 +277,11 @@ pub const SystemCheck = struct { kind: hier_param.Kind, value: Ast.ExprId, name:
 
 /// Everything elaboration needs from the compilation. `file` is MUTABLE because
 /// flattening appends: new interned names (§6.7 paths), cloned expression rows
-/// and cloned statements all land in the stores the parser filled. Nothing is
-/// ever rewritten in place, so every id the parser handed out stays valid.
+/// and cloned statements. It is an overlay of the parse
+/// (`Ast.SourceFile.overlay`), so they land in the overlay's own rows, numbered
+/// after the parser's, and the parse is never written (ARCHITECTURE.md I4).
+/// Nothing is ever rewritten in place, so every id the parser handed out
+/// stays valid.
 pub const Ctx = struct {
     arena: std.mem.Allocator,
     file: *Ast.SourceFile,

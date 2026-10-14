@@ -176,7 +176,9 @@ mir: *Mir,
 out: Lowered,
 /// Mutable only because `Elaborate.elaborate` appends to its stores (§6.7 flat
 /// names, cloned rows) as the first step of `lowerFile`, before anything
-/// caches an index into them. Lowering itself only reads.
+/// caches an index into them. An overlay of the parse
+/// (`Ast.SourceFile.overlay`), so those appends never reach the parse.
+/// Lowering itself only reads.
 file: *Ast.SourceFile,
 /// The module being lowered (§6.2), elaboration's flattened top. Set by
 /// `lowerModule`; `lower` hands it out beside `out` (`Output.module`).
@@ -1177,9 +1179,11 @@ pub const Harness = struct {
         const text = (try Preprocessor.process(arena, src, .{ .bag = &h.bag })).text;
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &h.bag);
-        h.file = try p.parseSourceFile();
-        // The annex E prelude's modules lead `file.modules`.
-        h.file.builtin_modules = Preprocessor.spice_module_count;
+        const parse = try arena.create(Ast.SourceFile);
+        parse.* = try p.parseSourceFile();
+        // The annex E prelude's modules lead `file.modules`. Elaboration
+        // writes the overlay, never the parse.
+        h.file = parse.overlay(.{ .builtin_modules = Preprocessor.spice_module_count });
         h.low = Lower.init(arena, &h.mir, &h.file, text, toks.items(.start), &h.bag);
     }
 
