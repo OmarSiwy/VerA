@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- internal: elaboration no longer writes the parser's AST. It writes an overlay (`Ast.SourceFile.overlay`) whose names, expressions and statements number on from the parse's, so every id and diagnostic is unchanged (ARCHITECTURE.md Phase 12). An embedder that sets `builtin_modules` and the other caller-set fields on a parsed file can pass them to `overlay` instead. No output changes.
 - internal: codegen's per-value and per-block plan flags (`plan/unit.zig`: `needed`, `inlined`, `file_dep`, `loop_recompute`, `blk_work`, `blk_phi`, `dead_branch`) are bitsets, one bit per row instead of one byte. No output changes; compile time and peak memory unchanged on mos1, bsim4va, psp103 and hisimhv.
 - `log10` of a subnormal argument is right: the 2^54 rescale used only the high word of the scaled value, 3.75 million ulp off at 3.74e-309 (#60).
 - A batched testbench (the fixture suite's) mutes the §4.3.2 domain report while its self-checks probe points no analysis asked for, as a single testbench already did; `158_pow_negative_base_runtime_exponent` runs again (#59).
