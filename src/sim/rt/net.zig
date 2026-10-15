@@ -317,7 +317,8 @@ pub fn gate(s: *State, i: u32, comptime kind: Ast.GateKind, ins: []const Bit) Er
     return driveBit(s, i, s.nets.drivers[i].source.gate, o.bit, o.or_z);
 }
 
-/// §8 UDP driver `i` over its input bits (`resolution.udpValue`).
+/// §8 UDP driver `i` over its input bits (`resolution.udpValue`). Asserts
+/// the UDP has at most 64 inputs.
 pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     const t = &s.nets;
     const k = t.drivers[i].source.udp;
@@ -530,7 +531,7 @@ fn resolveJoined(s: *State, start: u32) Error!void {
             const res = t.res[t.nat[y.net]..][0 .. 2 * words(n.width)];
             // A net first reached here keeps what it shows on the bits no
             // switch joins (`exec`'s `resolved`, which it published).
-            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) {
+            if (std.mem.findScalar(u32, touched.items, y.net) == null) {
                 try touched.append(a, y.net);
                 const nw = words(n.width);
                 @memcpy(res[0..nw], s.v[n.off..][0..nw]);

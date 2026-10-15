@@ -16,8 +16,8 @@ pub const Radix = enum(u8) {
     decimal = 10,
     hex = 16,
 
-    /// Bits consumed per printed digit; meaningless for `.decimal`, which reads
-    /// the whole operand at once.
+    /// Bits consumed per printed digit. Asserts `self` is not `.decimal`,
+    /// which reads the whole operand at once.
     pub fn perDigit(self: Radix) u32 {
         return switch (self) {
             .binary => 1,
@@ -41,7 +41,8 @@ pub const TimeFormat = struct {
 /// A `%d` of an operand wider than 64 bits (see `decimalText`).
 pub const Error = error{TooWide} || std.Io.Writer.Error;
 
-/// Byte `n` of `v` counting from the least significant, unknown bits read as 0.
+/// Byte `n` of `v` counting from the least significant, unknown bits read as
+/// 0 and bits at or past `v.width` absent (0).
 pub fn byteAt(v: Int.Literal, n: u32) u8 {
     var c: u8 = 0;
     for (0..8) |k| {
@@ -75,7 +76,9 @@ pub fn text(out: *std.Io.Writer, v: Int.Literal, char: bool, width: ?u32) std.Io
 ///     value · 10^(unit_exp − units_number)
 ///
 /// and nothing here needs the precision: scaling a unit count by a ratio of
-/// decades is exact in the only direction that matters.
+/// decades is exact in the only direction that matters. An operand with an
+/// x or z bit prints as 0, as does a signed one wider than 64 bits; an
+/// unsigned one wider than 64 bits is read by its low 64.
 pub fn time(out: *std.Io.Writer, v: Int.Literal, f: TimeFormat, unit_exp: i32) std.Io.Writer.Error!void {
     const raw: f64 = if (v.hasUnknown())
         0
@@ -91,6 +94,7 @@ pub fn time(out: *std.Io.Writer, v: Int.Literal, f: TimeFormat, unit_exp: i32) s
 }
 
 /// 10^e seconds in §19.8's spelling: 1, 10 or 100 of s, ms, us, ns, ps, fs.
+/// Asserts `e` is in [-15, 2], the range of §19.8's 18 operands.
 pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
     const k = @divFloor(e, 3);
     const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
@@ -99,7 +103,8 @@ pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
 }
 
 /// One operand, in one radix, sized by IEEE 1364-2005 §17.1.1.3 unless the
-/// format gave an explicit width.
+/// format gave an explicit width. `error.TooWide` for a decimal operand
+/// wider than 64 bits with no x or z bit (`decimalText`).
 ///
 /// The three power-of-two radices are a GROUP walk and decimal is not, and
 /// that is the whole split: a hex digit is four bits of this operand and
@@ -136,7 +141,8 @@ pub fn value(out: *std.Io.Writer, v: Int.Literal, radix: Radix, width: ?u32) Err
 /// and the default decimal field is sized to the largest value the operand
 /// can hold". For a signed operand the largest printed value is the
 /// negative one, because of its sign: a 32-bit `integer` is 11 columns
-/// ("-2147483648"), not 10.
+/// ("-2147483648"), not 10. Exact at every width, so an x in a 128-bit `%d`
+/// is right-justified in 39 columns.
 pub fn autoWidth(v: Int.Literal, radix: Radix) u32 {
     if (radix != .decimal) {
         const per = radix.perDigit();
@@ -188,8 +194,9 @@ pub fn groupDigit(v: Int.Literal, radix: Radix, d: u32) u8 {
     else "0123456789abcdef"[val];
 }
 
-/// Decimal, where one unknown bit poisons the whole number (§17.1.1.4).
-/// Returns error.TooWide for a known operand wider than 64 bits.
+/// Decimal, where one unknown bit poisons the whole number (§17.1.1.4), as
+/// a slice of `buf`. Returns error.TooWide for a known operand wider than 64
+/// bits. Asserts `buf` holds 20 bytes, the longest i64 or u64.
 pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
     // ponytail: 64 bits, refused rather than truncated; a bignum divide if
     // a wider `%d` is ever printed.

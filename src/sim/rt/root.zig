@@ -660,7 +660,10 @@ pub const State = struct {
         return self.initIn(std.heap.smp_allocator, init_.io, d, time_units);
     }
 
-    /// `init` with its storage from `gpa`, printing through `io`.
+    /// `init` with its storage from `gpa`, printing through `io`. Every
+    /// table is allocated from `gpa` and none is freed: a `State` has no
+    /// `deinit`, so give it an arena, or let the process exit reclaim it.
+    /// The time-0 processes (`d.order`) are queued, not run.
     pub fn initIn(self: *State, gpa: std.mem.Allocator, io: std.Io, d: *const Design, time_units: i32) Error!void {
         self.* = .{
             .gpa = gpa,
@@ -986,16 +989,24 @@ pub const State = struct {
 
     /// §7.9 the net-resolution entry points (`net.zig`).
     pub const drive = net.drive;
+    /// `net.switchCtrl`: §7.6 a pass switch's control changed.
     pub const switchCtrl = net.switchCtrl;
+    /// `net.gate`: §7.8.5 a gate's output bit.
     pub const gate = net.gate;
+    /// `net.udp`: §8 a UDP's output bit.
     pub const udp = net.udp;
+    /// `net.mos`: §7.6 a MOS switch's output.
     pub const mos = net.mos;
+    /// `net.bridge`: §6.5.7.1 a port window's bits.
     pub const bridge = net.bridge;
+    /// `net.pull`: §19.9 an `unconnected_drive` level.
     pub const pull = net.pull;
+    /// `net.resolve`: §7.9 a net folded from its drivers and published.
     pub const resolve = net.resolve;
 
-    /// §18.3 `$dumpports` selection and control (`evcd.zig`).
+    /// `evcd.select`: §18.3 a `$dumpports` call selects its file.
     pub const portsSelect = evcd.select;
+    /// `evcd.control`: §18.3 `$dumpportsoff`/`on`/`all`/`limit`/`flush`.
     pub const portsControl = evcd.control;
 
     /// `put` of the bits `m` of an `n`-word value at runtime width.
@@ -1194,6 +1205,8 @@ pub const State = struct {
     /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
     /// automatic one (§10.2.3) sets its frame, `fill.len` words from `lo`,
     /// aside and makes it x (`fill`, the x of each word); `leave` puts it back.
+    /// `error.Failed` past 1024 nested activations; `error.Rerun` for an
+    /// automatic frame in the 2-state phase.
     pub fn enter(self: *State, sub: u32, lo: u32, fill: []const u64) Error!void {
         if (self.depth == 1024) return self.fail("task and function calls nested deeper than 1024 are not implemented", .{});
         self.depth += 1;
@@ -1208,7 +1221,8 @@ pub const State = struct {
 
     /// The activation `enter` began has returned. Restore the caller before
     /// its actuals receive captured outputs; a `disable` of `sub` ends with
-    /// its outermost activation.
+    /// its outermost activation. Asserts it pairs with an `enter` of `sub`
+    /// whose `fill.len` was `n`.
     pub fn leave(self: *State, sub: u32, lo: u32, n: u32) void {
         self.depth -= 1;
         self.active[sub] -= 1;
@@ -1943,7 +1957,9 @@ pub const State = struct {
     pub const Spec = struct { conv: u8, width: ?u32, precision: i64 };
 
     /// The characters of the `w`-bit format `a` (`system.text`) in `buf`,
-    /// `w / 8` bytes rounded up; none when it holds an x or z.
+    /// `w / 8` bytes rounded up, most significant first and its leading zero
+    /// bytes dropped; none when it holds an x or z. The text is a slice of
+    /// `buf`.
     pub fn formatOf(buf: []u8, a: anytype, w: u32) Format {
         var planes = logic.planesOf(a);
         const v = literal(&planes, w, false);
