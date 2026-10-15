@@ -1,7 +1,11 @@
 //! §9.17.3 `$limit`: the limiting-function call and its state slot.
 //!
-//! In: `$limit(access, fn, ...)` calls. Out: the inlined call and one `LimitSlot` per
-//! access function, shared by every site that names it.
+//! In: `$limit(access, fn, ...)` calls. Out: the inlined call and one
+//! `LimitSlot` per access function, shared by every site that names it.
+//!
+//! Spine: `scanCallSites` (func.zig) mints every slot with `addLimitSlot`
+//! before the body lowers; `lowerLimitUser` then lowers each user-function
+//! site. `AliasResult` is §9.20's, kept here for `hier_name.zig`.
 //!
 //! LRM clauses this file's code cites: §2.8, §4.5.15, §4.7, §9.17.3, §9.20.
 
@@ -18,8 +22,8 @@ const TypedValue = Lower.TypedValue;
 /// Returns the §4.7 function a `$limit` second argument names, or null when it names
 /// none (Syntax 9-12's other two forms put a string there, or nothing).
 /// A variable or parameter with the same name wins over the function (LRM §2.8).
-// ponytail: lookup only; add an error set if resolution ever does fallible work.
 pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
+    // ponytail: lookup only; add an error set if resolution ever does fallible work.
     const ex = &self.file.exprs;
     if (a == .none or ex.tag(a) != .ident) return null;
     const name = self.file.str(ex.strOf(a));
@@ -39,7 +43,9 @@ pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
 /// The result carries the access function's derivative, not the limiter's: the host
 /// stamps `I(vlim) + g(vlim)*(v - vlim)`, so the Jacobian entry never vanishes in the
 /// clamped region. `$limit$uf` (codegen `zLimitUf`) shifts `vlim.val()` onto the probe.
+/// Asserts that `args` holds at least the access function and the function name.
 pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args: []const Ast.ExprId) Oom!TypedValue {
+    std.debug.assert(args.len >= 2);
     // §9.17.3 the first argument is an ACCESS FUNCTION, never a net.
     const vnew = try self.toReal(try lower_sysfunc.lowerSysArg(self, args[0], false));
     const slot = try limitSlotOf(self, args[0]) orelse {
@@ -64,6 +70,12 @@ pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args
 /// created every slot before the body was lowered. Null when `a` is not an access function.
 fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
     const t = try limitSlotKey(self, a) orelse return null;
+    return findSlot(self, t);
+}
+
+/// The `limit_slots` row keyed on branch `t`, or null. One slot per access
+/// function: the spelling (`neg`) is part of the key, as `addLimitSlot` mints it.
+fn findSlot(self: *const Lower, t: lower_contrib.Target) ?usize {
     for (self.out.limit_slots.items, 0..) |s, i| {
         if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
             return i;
@@ -84,10 +96,7 @@ fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?lower_contrib.Target {
 /// when `a` is not an access function.
 pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     const t = try limitSlotKey(self, a) orelse return;
-    for (self.out.limit_slots.items) |s| {
-        if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
-            return;
-    }
+    if (findSlot(self, t) != null) return;
     const k: i64 = @intCast(self.out.limit_slots.items.len);
     // A `call`, so `analysis.foldConst` cannot fold the previous iterate into a constant.
     const seed = try self.call("$limit$old", &.{try self.mir.addIntConst(self.arena, k)});

@@ -13,10 +13,11 @@
 //! runs it once per accepted point and never per Newton iteration (§9.5.9).
 //!
 //! LRM clauses this file's code cites: §2.7, §3.2, §3.3, §3.4.1, §3.6.1.4, §4.2.1.1,
-//! §4.4.1, §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.8.1, §5.9.3, §5.10, §5.12, §9.2,
-//! §9.4, §9.4.1, §9.4.3, §9.4.5, §9.4.6, §9.5, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1, §9.5.4.2,
-//! §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17, §9.17.1, §9.17.2,
-//! §12.22.2, §12.30, §12.32.2.
+//! §4.4.1, §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.8.1, §5.9.3, §5.10, §5.12, §7.3.1,
+//! §9.2, §9.4, §9.4.1, §9.4.3, §9.4.5, §9.4.6, §9.5, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1,
+//! §9.5.4.2, §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17, §9.17.1,
+//! §9.17.2, §12.22.2, §12.30, §12.32.2.
+//! IEEE 1364-2005 clauses cited: §17.1.1.2, §17.1.1.3, §17.10.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -618,12 +619,12 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 
     var need: usize = 0;
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+    while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
         i = p + 1;
         if (i >= fmt.len) break;
         // §9.4.3 `%[flags][width][.precision]conv`; the conversion letter is
         // what decides, so everything before it is skipped unread.
-        while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+        while (i < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i]) != null or
             (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
         {}
         if (i >= fmt.len) break;
@@ -724,10 +725,10 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
         };
         var next = at + 1;
         var i: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+        while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
             i = p + 1;
             if (i >= fmt.len) break;
-            while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+            while (i < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i]) != null or
                 (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
             {}
             if (i >= fmt.len) break;
@@ -948,7 +949,9 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
 /// the write is a `select` on the result over the variable's incoming value.
 /// The value is `$sscanf` of the matched plusarg against the whole user_string
 /// (the device's `zPlusarg` says why that is the clause's conversion).
+/// Asserts that `args` is the user string and the variable, both written.
 pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value {
+    assert(args.len == 2 and args[0] != .none and args[1] != .none);
     const user = (try lower_expr.lowerExpr(self, args[0])).v;
     const found = try self.call("$value$plusargs", &.{user});
     const slot = try lower_stmt.resolveLvalue(self, args[1]) orelse return found;
@@ -976,7 +979,7 @@ pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value 
 /// nothing; refusing it is the useful implementation-dependent result.
 fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+    while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
         i = p + 1;
         if (i >= fmt.len) break;
         if (fmt[i] == '%') { // a literal percent, matched not converted
@@ -993,7 +996,7 @@ fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
         // factors defined in 2.6.2" and "m Returns the current hierarchical
         // path as a string. Does not read data from the input file or str
         // argument".
-        if (std.mem.indexOfScalar(u8, "dohxbcfegsrm", conv) != null) continue;
+        if (std.mem.findScalar(u8, "dohxbcfegsrm", conv) != null) continue;
         var b = self.errWith(tok, .E0813);
         b.msg("$sscanf does not support the conversion `%{c}`", .{conv});
         b.note("§9.5.4.2's codes are %d %o %h %x %b %c %f %e %g %s %r %m", .{});
@@ -1140,7 +1143,7 @@ pub fn finishKernelCtl(self: *Lower) Oom!void {
     }
 }
 
-/// §9.4 Chains every unconditional display call into one value, so codegen has
+/// Chains every unconditional §9.4 display call into one value, so codegen has
 /// a single live root to slice a unit from. `fadd` is the cheapest carrier: the
 /// sum is discarded, and rendering it walks the operands in MIR order, which is
 /// source order.
@@ -1151,10 +1154,11 @@ pub fn finishKernelCtl(self: *Lower) Oom!void {
 /// reach the root through `display_cond_place` instead — one read of a place
 /// the arms wrote, an ordinary phi. §9.4.6 is satisfied by where the call
 /// sits: it stays in the arm's block and codegen emits the arm as an `if`.
-// ponytail: print order is MIR order, so a module that prints both kinds shows
-// the guarded lines first, whatever the source order. Upgrade path: give
-// `Display` a source-order index and have codegen emit by it.
+/// Runs once, after `finishKernelCtl`; writes `Lowered.display_root`.
 pub fn finishDisplays(self: *Lower) Oom!void {
+    // ponytail: print order is MIR order, so a module that prints both kinds shows
+    // the guarded lines first, whatever the source order. Upgrade path: give
+    // `Display` a source-order index and have codegen emit by it.
     try lowerDeferredDisplays(self);
     var root: Mir.Value = .f_zero;
     var first = true;

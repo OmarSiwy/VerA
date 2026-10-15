@@ -1,9 +1,12 @@
 //! §9.21 `$table_model`.
 //!
-//! In: `$table_model` calls and their data files. Out: the table data and control plan
-//! the table kernel reads.
+//! In: `$table_model` calls and their data files (and §4.6.4.3's `noise_table`
+//! file, which shares the format). Out: one self-describing `$table_model`
+//! call whose operands are the table data and its control plan, and the
+//! `Lowered.table_samples` row of each array-source snapshot site.
 //!
-//! LRM clauses this file's code cites: §3.4.8, §4.5.11, §4.6.4, §4.6.4.3, §9.20, §9.21, §9.21.1, §9.21.2, §9.21.5.
+//! LRM clauses this file's code cites: §3.4.8, §4.6.4.3, §9.21, §9.21.1, §9.21.2,
+//! §9.21.5.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -184,7 +187,7 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const dep = nd;
 
     const site = if (cols.items.len == 0) 0 else blk: {
-        if (std.mem.indexOfScalar(Ast.ExprId, self.table_model_state.table_sources.items, e)) |existing| break :blk existing + 1;
+        if (std.mem.findScalar(Ast.ExprId, self.table_model_state.table_sources.items, e)) |existing| break :blk existing + 1;
         try self.table_model_state.table_sources.append(self.arena, e);
         try self.out.table_samples.append(self.arena, @intCast(rows.len));
         break :blk self.out.table_samples.items.len;
@@ -246,6 +249,7 @@ fn tooLarge(self: *Lower, e: Ast.ExprId, path: []const u8) Oom!?TableFile {
 /// vector form produces. Returns null after reporting E0519 when the file cannot be
 /// read or its lines do not hold exactly one frequency/power pair. Ordering and sign
 /// rules are checked in codegen's `planNoiseTable`, as for the vector form.
+/// The returned pairs are `self.arena`'s.
 pub fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]const f64 {
     const f = (try readTableFile(self, e, name, "noise_table", .E0519, null)) orelse return null;
     if (f.cols != 2) {
@@ -304,7 +308,7 @@ fn readTableFile(
     var cols: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
-        const line = if (std.mem.indexOfScalar(u8, raw, '#')) |h| raw[0..h] else raw;
+        const line = if (std.mem.findScalar(u8, raw, '#')) |h| raw[0..h] else raw;
         var n: usize = 0;
         var it = std.mem.tokenizeAny(u8, line, " \t\r");
         while (it.next()) |tok| {
@@ -350,7 +354,7 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
     // extrapolation".
     @memset(ext, 'L');
     for (0..nd) |dim| ext[3 * dim] = '1';
-    const semi = std.mem.indexOfScalar(u8, ctl, ';');
+    const semi = std.mem.findScalar(u8, ctl, ';');
     const head = if (semi) |s| ctl[0..s] else ctl;
 
     // `dependent_selector ::= integer`, "a column number ... This number runs 1
@@ -388,7 +392,7 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
         col += 1;
         defer d += 1;
         var j: usize = 0;
-        if (s.len != 0 and std.mem.indexOfScalar(u8, "D123", s[0]) != null) {
+        if (s.len != 0 and std.mem.findScalar(u8, "D123", s[0]) != null) {
             ext[3 * d] = s[0];
             j = 1;
         }
@@ -397,7 +401,7 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
             try self.err(self.file.exprs.mainTok(e), .E0815, "`{s}`: a control sub-string carries at most 2 extrapolation characters", .{s});
             return null;
         }
-        for (xs) |c| if (std.mem.indexOfScalar(u8, "CLE", c) == null) {
+        for (xs) |c| if (std.mem.findScalar(u8, "CLE", c) == null) {
             try self.err(self.file.exprs.mainTok(e), .E0815, "`{c}` is not a Table 9-30 interpolation character or a Table 9-31 extrapolation character", .{c});
             return null;
         };
