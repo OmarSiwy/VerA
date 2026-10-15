@@ -181,7 +181,8 @@ pub const StringInterner = struct {
         const items = self.strings.items;
         const gop = try self.map.getOrPutContextAdapted(gpa, s, TextAdapter{ .strings = items }, .{ .strings = items });
         if (gop.found_existing) return gop.key_ptr.*;
-        const id: StrId = @fromBackingInt(@intCast(@as(u32, @intCast(items.len))));
+        std.debug.assert(items.len < std.math.maxInt(u32));
+        const id: StrId = @fromBackingInt(@intCast(items.len));
         gop.key_ptr.* = id;
         self.strings.appendAssumeCapacity(s);
         return id;
@@ -332,6 +333,7 @@ pub const SourceFile = struct {
         self.blocks.deinit(gpa);
         self.stmt_toks.deinit(gpa);
         self.attributes.deinit(gpa);
+        self.lte_attrs.deinit(gpa);
         self.* = .empty;
     }
 
@@ -366,11 +368,16 @@ pub const SourceFile = struct {
         // Attribute specs are immutable borrowed declaration data; owner
         // rows are copied because a resumed parser appends/reclassifies them.
         self.attributes = try src.attributes.clone(gpa);
+        // Vendor-attribute rows name statements and expressions by id, which
+        // the copied columns keep valid.
+        self.lte_attrs = try src.lte_attrs.clone(gpa);
         self.modules = src.modules;
         self.disciplines = src.disciplines;
         self.natures = src.natures;
         self.paramsets = src.paramsets;
         self.connectrules = src.connectrules;
+        self.udps = src.udps;
+        self.configs = src.configs;
     }
 
     /// Appends a statement and its token; both columns stay in lockstep, and a

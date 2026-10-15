@@ -243,9 +243,13 @@ pub const ExprStore = struct {
     /// Appends a `.real_literal` row whose value lives in `reals`. On OOM
     /// neither table grows.
     pub fn addReal(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, value: f64) !ExprId {
+        // Room for the value first, then the row: a failure at either step
+        // leaves both tables as they were.
+        try self.reals.ensureUnusedCapacity(gpa, 1);
         const idx: u32 = @intCast(self.reals.items.len);
-        try self.reals.append(gpa, value);
-        return self.add(gpa, .{ .tag = .real_literal, .main_tok = main_tok, .extra = idx });
+        const id = try self.add(gpa, .{ .tag = .real_literal, .main_tok = main_tok, .extra = idx });
+        self.reals.appendAssumeCapacity(value);
+        return id;
     }
 
     /// Appends a synthetic unsized, signed `.int_literal` (the implementation
@@ -257,18 +261,26 @@ pub const ExprStore = struct {
     /// Appends an `.int_literal` row whose value lives in `ints`, keeping its
     /// width, sign and radix. On OOM neither table grows.
     pub fn addIntLiteral(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: IntLiteral) !ExprId {
+        // Room for the value first, then the row: a failure at either step
+        // leaves both tables as they were.
+        try self.ints.ensureUnusedCapacity(gpa, 1);
         const idx: u32 = @intCast(self.ints.items.len);
-        try self.ints.append(gpa, literal);
-        return self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
+        const id = try self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
+        self.ints.appendAssumeCapacity(literal);
+        return id;
     }
 
     /// Appends a `.logic_literal` row. On success the store owns
     /// `literal.planes`, which must be allocated with `gpa`; `deinit` frees
     /// it. On OOM nothing is stored and the planes stay the caller's.
     pub fn addLogic(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: Integer.Literal) !ExprId {
+        // Room for the value first, then the row: a failure at either step
+        // leaves both tables as they were.
+        try self.logic.ensureUnusedCapacity(gpa, 1);
         const idx: u32 = @intCast(self.logic.items.len);
-        try self.logic.append(gpa, literal);
-        return self.add(gpa, .{ .tag = .logic_literal, .main_tok = main_tok, .extra = idx });
+        const id = try self.add(gpa, .{ .tag = .logic_literal, .main_tok = main_tok, .extra = idx });
+        self.logic.appendAssumeCapacity(literal);
+        return id;
     }
 
     /// Returns a `.logic_literal`'s value; asserts the tag. `planes` stays owned

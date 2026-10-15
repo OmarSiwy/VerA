@@ -331,7 +331,8 @@ pub const Lexer = struct {
 
     /// The byte `n` past the cursor, or 0 past the end.
     fn peek(self: *const Lexer, n: u32) u8 {
-        const i = self.pos + n;
+        // usize: `pos + n` may pass maxInt(u32) on a source of that length.
+        const i = @as(usize, self.pos) + n;
         return if (i < self.src.len) self.src[i] else 0; // NUL never appears in source
     }
 
