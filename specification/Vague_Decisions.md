@@ -154,6 +154,7 @@ summary and has a **Status** line naming what landed.
 | VD-110 | VAMS 9.15 Table 9-28 | `$simparam$str` strings reach a device through `Model` u32 indices into `contract.host_strings`; index 0 falls back to the `Instance` slices (GPU always does) | DONE (2026-10-08) |
 | VD-111 | VAMS 8.4.3.2, 8.4.4, 8.5.1, 7.3.6.3; IEEE 1364-2005 17.1.3 | A digital `$monitor`'s analog probe is an operand: a report is due when a probe's value changed (VD-032's `!=`), checked at every digital time step and at every analog solution at a tick no digital event reached; time moving inside an argument is no change | DONE (2026-10-08) |
 | VD-112 | VAMS 4.5.7 | A full `absdelay` ring keeps its window by thinning its older half, never by refusing (E1012 retired) or shortening the delay; W1051 once per site | DONE (2026-10-15) |
+| VD-113 | IEEE 1364-2005 7.11, 7.6, 3.7 | A pass-switch group's net-type strengths (a supply through an uncontrolled `tran`) are settled when elaboration ends, as the nets' initial values, with no time-0 event; interpreter and native alike | DONE (2026-10-15) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1260,6 +1261,16 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **VerA today**: `lib/backend/kernels/hist_kernels.zig` `zHistThin` (called by `updateState` before each push; the dropped samples stay past the live ones until a push overwrites them, so `zHistRevert` undoes a thinning push exactly), `Instance.<site>__w` the window; `lib/backend/codegen/instance.zig` sizes the ring. E1012 is retired. Semver: minor (a run that ended with E1012 now completes).
 - **Measure impact**: A (`ch04_expressions/absdelay_history_past_capacity.va` replaces the refusal). C: 4.5.7 gains positive evidence past the old capacity.
 - **Status**: DONE 2026-10-15 (#29): `absdelay_history_past_capacity.va`; `lib/backend/kernels/test.zig` "§4.5.7 a full ring thins its older half and keeps its window: against the full history" and the plain-ring bit-identity test.
+
+### VD-113: When a pass-switch group with no driver event is first resolved
+- **Source**: GitHub issue #29 (Phase 3 gap list); `ieee1364/07_gate_switch_level/b_7_11_tran_from_supply_undriven.v`, an XFAIL that printed `HiZ z`.
+- **Rule**: IEEE 1364-2005 §7.11: "The tran, tranif0, and tranif1 switches shall not affect signal strength across the bidirectional terminals, except that a supply strength shall be reduced to a strong strength." §7.13.3: supply nets "shall have supply driving strengths". §7.6/§8.5.3.5: switch processing considers every device of the switch-connected net.
+- **Why vague**: the clauses fix what a switch-connected net shows, not when a group nothing drives first shows it. A supply net through an uncontrolled `tran` onto an undriven wire has no driver and no control to change, so no event ever asks for a resolution; whether its value arrives as a time-0 update event (visible to an `@(c)` armed at time 0) or is the net's initial value is not said.
+- **Options**: (a) a time-0 update event per group (the interpreter's `.tran_switch` queue; the native emitter refuses any non-process event queued at elaboration); (b) settle the groups when elaboration ends, as initial values, with every driver still z, so only net-type strengths (supply, tri0/tri1, trireg charge) cross; drivers then resolve at time 0 as before.
+- **Decision**: `DECIDED:` (b). It needs no event the native path cannot carry, and a supply net's own value is already an initial value (§3.7), not an event.
+- **VerA today**: `src/sim/digital/root.zig` `elaborateDeep` resolves every net with a switch terminal after `watch` is cleared and before anything is armed; `src/sim/rt/root.zig` `State.initIn` resolves the same nets before the time-0 processes, so `Nets.sig0` (`%v`) holds the group's signal. Semver: minor (what a design prints).
+- **Measure impact**: A (one XFAIL passes). B: inherited 7.11 and 17.1.1.5 gain a passing positive fixture.
+- **Status**: DONE 2026-10-15 (#29): `b_7_11_tran_from_supply_undriven.v` (`St1 1`), both engines.
 
 ## 6. Implementation-defined choices
 

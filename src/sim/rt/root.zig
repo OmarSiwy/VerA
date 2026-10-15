@@ -747,6 +747,9 @@ pub const State = struct {
         @memset(self.parts, .{});
         @memset(self.dumped, false);
         @memset(self.port_live, .{});
+        // §7.11: the switch groups `Run.elaborate` settled, again, so each
+        // has its signal (`Nets.sig0`, `%v`) before any process runs.
+        for (self.nets.on_net, 0..) |l, k| if (l.len != 0) try net.resolve(self, @intCast(k));
         for (d.order) |pc| try self.runPlain(pc, null);
     }
 
