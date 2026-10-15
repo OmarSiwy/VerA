@@ -131,10 +131,6 @@ pub fn main(init: std.process.Init) !u8 {
         try err.print("error: {s} builds a .v design's executable; it takes --emit-exe and a .v file\n", .{f});
         return 2;
     };
-    if (digital_source and cli.emit_osdi) {
-        try err.print("error: {s}: --emit-osdi takes a Verilog-A model (.va)\n", .{in_path});
-        return 2;
-    }
     if (digital_source and cli.emit_verilog) {
         try err.print("error: {s}: --emit-verilog takes a Verilog-A model (.va)\n", .{in_path});
         return 2;

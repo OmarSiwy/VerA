@@ -545,11 +545,15 @@ pub fn build(b: *std.Build) void {
     }
     // `--emit-osdi` names what OSDI 0.4 has no slot for before it builds
     // (VD-102): a step-rejection request is refused, a correlated noise pair
-    // is a warning and the library builds, so tools/osdi_dyn.zig compiles here.
-    // The refused source runs under `--emit-exe` in the fixture suite.
+    // is a warning and the library builds, so tools/osdi_dyn.zig compiles here,
+    // over a `.va` device and over a `.v` one (whose W1155 is its own, not
+    // OSDI's). The refused source runs under `--emit-exe` in the fixture suite;
+    // ngspice runs a `.v` library beside a `.va` one in
+    // tests/fixtures/external/osdi/mixed.sp.
     for ([_]struct { file: []const u8, exit: u8, says: []const u8 }{
         .{ .file = "tests/fixtures/ch05_analog_behavior/vera_reject_step_retry.va", .exit = 1, .says = "error[E1099]" },
         .{ .file = "tests/fixtures/ch04_expressions/a06_noise_anticorrelated_coefficient.va", .exit = 0, .says = "warning[W1098]" },
+        .{ .file = "tests/fixtures/ch07_mixed_signal/v_seconds.v", .exit = 0, .says = "warning[W1155]" },
     }) |r| {
         const run = b.addRunArtifact(exe);
         run.addArgs(&.{ "--emit-osdi", "-I" });

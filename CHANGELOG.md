@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `--emit-osdi` builds a `.v` design's contract device too (it was a usage error), so ngspice loads a Verilog module beside a Verilog-A one; every OSDI library now bounds ngspice's step to the device's next breakpoint and reports a static solve's "iterate again" as unconverged (#29).
 - Diagnostics: a label in another file prints under its own `:::` header, a fix's `~` ruler counts display columns (tabs, multi-byte characters), and a span at a CRLF newline or past the end of a file clamps to its line instead of panicking; an unregistered file no longer gives a registered one wrong line numbers (#29).
 - Preprocessor: an `` `include `` inside a macro body or argument numbers its own lines (`__LINE__`, `__FILE__`, diagnostics); a multi-line macro argument no longer emits its newlines twice; `` `define M($x) `` and an empty trailing macro argument are E0110, and `` `line `` sharing its line with other text is E0128 (IEEE 1364-2005 §19.7) (#29).
 - Parser: a specify block, specparam or port declaration inside a generate region is E0229 (a port was E0206; specify paths were silently dropped); a malformed UDP edge or current-state field is E0233; analog statement nesting past the limit is E0241; an out-of-range literal width or terminal width is refused instead of crashing (#29).
