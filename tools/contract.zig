@@ -3230,7 +3230,10 @@ pub const LaneUse = struct { mask: u64, uses: u32 };
 /// without it.
 pub fn laneMasks(comptime D: type) []const LaneUse {
     if (@hasDecl(D, "lane_masks")) return &D.lane_masks;
-    return &.{.{ .mask = derivReads(D) & unknownsMask(D), .uses = 0 }};
+    // `comptime`: called at run time, the literal would be a stack temporary
+    // and the slice would dangle.
+    const dense = comptime [_]LaneUse{.{ .mask = derivReads(D) & unknownsMask(D), .uses = 0 }};
+    return &dense;
 }
 
 /// Every unknown of `D` as a mask.

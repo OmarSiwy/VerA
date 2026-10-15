@@ -93,10 +93,32 @@ pub fn build(b: *std.Build) void {
         b.step(b.fmt("test-{s}", .{m.name}), b.fmt("Run the {s} module tests only", .{m.name}))
             .dependOn(r);
     }
-    // The CLI has no tests, so `test` depends on the executable compiling, in
-    // both languages since only main.zig reads the option. A test artifact over
-    // main.zig would analyse nothing.
+    // `test` depends on the executable compiling, in both languages since only
+    // main.zig reads the option.
     test_step.dependOn(&exe.step);
+    // The CLI's own tests: main.zig's, which pull in src/cli/'s.
+    const cli_run = testRun(b, "cli", exe.root_module, runner);
+    test_step.dependOn(cli_run);
+    b.step("test-cli", "Run the CLI's tests (src/main.zig, src/cli/) only").dependOn(cli_run);
+    // tools/: the OSDI host over mock devices, and the test runner itself
+    // (on the stock runner, since zrunner cannot be its own runner's root).
+    const osdi_run = testRun(b, "osdi_dyn", b.createModule(.{
+        .root_source_file = b.path("tools/osdi_dyn.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = byName(mods, "contract") }},
+    }), runner);
+    test_step.dependOn(osdi_run);
+    const zrunner_test = b.addTest(.{ .name = "zrunner", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/zrunner.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    all_step.dependOn(&zrunner_test.step);
+    const zrunner_run = b.addRunArtifact(zrunner_test);
+    test_step.dependOn(&zrunner_run.step);
+    b.step("test-tools", "Run tools/osdi_dyn.zig's and tools/zrunner.zig's tests only").dependOn(osdi_run);
+    b.top_level_steps.get("test-tools").?.step.dependOn(&zrunner_run.step);
     const other_exe = cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams);
     test_step.dependOn(&other_exe.step);
     all_step.dependOn(&other_exe.step);
