@@ -47,6 +47,7 @@ const token = @import("frontend").token;
 const Lexer = @import("frontend").Lexer;
 const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;
+const deep_stack = @import("frontend").deep_stack;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Ssa = @import("ir").Ssa;
@@ -194,6 +195,9 @@ pub const CompileResult = struct {
     device_has_compile_error: bool = false,
     /// Settings that change what codegen generates.
     codegen_opts: codegen.Options = .{},
+    /// The source's nesting depth (`Parser.deepest`): codegen's walks run on
+    /// a `deep_stack` reserved for it.
+    nesting: u32 = 0,
 
     /// Frees the arena and the two gpa-owned buffers; invalidates every slice
     /// borrowed from the result.
@@ -217,7 +221,9 @@ pub const CompileResult = struct {
     /// value is borrowed from the result and lives until `deinit`.
     pub fn generateOutput(self: *CompileResult) codegen.Error!codegen.Output {
         if (self.device.text.len == 0) {
-            self.device = try codegen.generate(
+            // A stack the system will not reserve is memory it will not give;
+            // the compile already reserved one this deep, so this is rare.
+            self.device = deep_stack.run(self.nesting, codegen.generate, .{
                 self.gpa,
                 self.arena.allocator(),
                 self.mir,
@@ -225,7 +231,10 @@ pub const CompileResult = struct {
                 self.verdict,
                 &self.device_has_compile_error,
                 self.codegen_opts,
-            );
+            }) catch |err| switch (err) {
+                error.DeepStackUnavailable => return error.OutOfMemory,
+                else => |e| return e,
+            };
         }
         return self.device;
     }
@@ -363,6 +372,32 @@ fn compileInArena(
     file.annex_d_included = pp.annex_d_included;
     file.netlist_modules = netlist_modules;
     file.netlist_unsupported = pp.netlist_unsupported;
+    // Every stage from here walks the AST by recursion, so it runs on a stack
+    // reserved for the nesting the parser measured (`deep_stack`).
+    return deep_stack.run(p.deepest, lowerAndProve, .{ gpa, arena_state, file, text, starts, pp.directives, p.deepest, target, opts, bag }) catch |err| switch (err) {
+        error.DeepStackUnavailable => {
+            try bag.add(.lower, .E0241, .{}, "{d} levels deep", .{p.deepest});
+            return error.CompileFailed;
+        },
+        else => |e| return e,
+    };
+}
+
+/// The stages after the parse, through the proof, on the `deep_stack` thread
+/// `compileInArena` starts; `nesting` is the parser's `deepest`.
+fn lowerAndProve(
+    gpa: Allocator,
+    arena_state: *BigArena,
+    file: *Ast.SourceFile,
+    text: []const u8,
+    starts: []const u32,
+    directives: Preprocessor.Directives,
+    nesting: u32,
+    target: Target,
+    opts: Options,
+    bag: *diag.Bag,
+) Error!CompileResult {
+    const arena = arena_state.allocator();
     try Elaborate.spiceCase(arena, file);
     // §3.7/§6.5.3 wreal structure rules. The digital runner calls the same
     // check, so both routes refuse the same wirings.
@@ -373,7 +408,7 @@ fn compileInArena(
     mir.* = .{};
     const lowered = try arena.create(Lowered);
     lowered.* = Lower.lower(arena, mir, file, text, starts, bag, .{
-        .directives = pp.directives,
+        .directives = directives,
         .include_dirs = opts.include_dirs, // §9.21.1 a $table_model data file
         .param_overrides = opts.param_overrides, // §3.4 `--param`
         .displays_dropped = opts.display == .drop, // §3.2 retention, see `Exposed`
@@ -424,6 +459,7 @@ fn compileInArena(
         .lowered = lowered,
         .verdict = verdict,
         .target = target,
+        .nesting = nesting,
         // `opts.diags`, not this bag: codegen runs after compileSourceOpts
         // detached the messages, so the caller's bag is the only one alive
         // when E0515 is raised.
@@ -658,6 +694,71 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
     var b = try compileSource(gpa, test_resistor, .build);
     defer b.deinit();
     try std.testing.expectEqualStrings(try a.generateDevice(), try b.generateDevice());
+}
+
+/// A module whose analog block holds `pre`, then `n` copies of `open`, `mid`,
+/// `n` copies of `close`, and `post`.
+fn deepSource(gpa: Allocator, n: usize, c: DeepCase) ![]u8 {
+    var src: std.ArrayList(u8) = .empty;
+    errdefer src.deinit(gpa);
+    try src.appendSlice(gpa, "module deep(p, n); inout p, n; electrical p, n; real r; integer k; analog begin ");
+    try src.appendSlice(gpa, c.pre);
+    for (0..n) |_| try src.appendSlice(gpa, c.open);
+    try src.appendSlice(gpa, c.mid);
+    for (0..n) |_| try src.appendSlice(gpa, c.close);
+    try src.appendSlice(gpa, c.post);
+    try src.appendSlice(gpa, " I(p, n) <+ r * V(p, n); end endmodule");
+    return src.toOwnedSlice(gpa);
+}
+
+const DeepCase = struct { pre: []const u8 = "", open: []const u8, mid: []const u8, close: []const u8 = "", post: []const u8 = "", lint: usize = 100_000, device: usize = 100_000 };
+
+test "nesting has no bound: 100,000 levels lint and generate a device" {
+    // Every stage after the parse recurses per AST level and runs on a
+    // `deep_stack` sized from `Parser.deepest`; 100,000 levels is far past
+    // the 8 MiB stack the pipeline had (it overflowed near 3,000). For if
+    // and ?: chains `lint` is the depth linted and `device` the depth taken
+    // through codegen: the prover's per-branch facts make a lint quadratic
+    // in their depth (7.6 s for 10,000 else-ifs in Debug), and codegen
+    // indents each nested `if`, so its text is quadratic too, until
+    // limits/elab lands; they run at 10,000 and 2,000, past the old 1,024
+    // cap. The parser takes all three at 100,000 (`parser/test.zig`).
+    const gpa = std.testing.allocator;
+    for ([_]DeepCase{
+        .{ .pre = "r = 1.0", .open = "", .mid = "", .close = " + 1.0", .post = ";" },
+        .{ .pre = "r = ", .open = "(", .mid = "1.0", .close = ")", .post = ";" },
+        .{ .pre = "r = ", .open = "-", .mid = "1.0", .post = ";" },
+        .{ .pre = "k = ", .open = "{", .mid = "1'b1", .close = "}", .post = "; r = k;" },
+        .{ .open = "begin ", .mid = "r = 1.0;", .close = " end" },
+        .{ .pre = "r = ", .open = "V(p) > 1 ? 1 : ", .mid = "0", .post = ";", .lint = 10_000, .device = 2_000 },
+        .{ .open = "if (V(p) > 1) r = 1; else ", .mid = "r = 0;", .lint = 10_000, .device = 2_000 },
+        .{ .pre = "r = 0; ", .open = "if (V(p) > 1) ", .mid = "r = 1;", .lint = 10_000, .device = 2_000 },
+    }) |c| {
+        for ([_]usize{ c.lint, c.device }, [_]Target{ .lint, .build }) |n, target| {
+            const src = try deepSource(gpa, n, c);
+            defer gpa.free(src);
+            var res = try compileSource(gpa, src, target);
+            defer res.deinit();
+            if (target == .build) {
+                _ = try res.generateDevice();
+                try std.testing.expect(!res.device_has_compile_error);
+            }
+        }
+    }
+}
+
+test "a later stage whose stack cannot be reserved is E0241, naming the depth" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const src = try deepSource(gpa, 10, .{ .open = "begin ", .mid = "r = 1.0;", .close = " end" });
+    defer gpa.free(src);
+    deep_stack.refuse_for_test = true;
+    defer deep_stack.refuse_for_test = false;
+    var bag: diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    try std.testing.expectError(error.CompileFailed, compileSourceOpts(gpa, src, .lint, .{ .diags = &bag }));
+    try std.testing.expectEqual(diag.Code.E0241, bag.at(0).code);
+    try std.testing.expect(std.mem.indexOf(u8, bag.at(0).message, "levels deep") != null);
 }
 
 test "generateDevice runs codegen once and hands back the cached text" {

@@ -461,8 +461,7 @@ pub const ValueError = error{
     /// literal; a value too large for f64 is not this error but inf (§2.6.2
     /// leaves it to IEEE 754).
     Overflow,
-    /// Literal longer than the fixed decode buffer (see `parseReal`).
-    LiteralTooLong,
+    OutOfMemory,
 };
 
 /// A decoded §2.6.1 integer constant. `width` is the declared size in bits, or
@@ -481,10 +480,11 @@ comptime {
     std.debug.assert(@sizeOf(IntLiteral) == 16);
 }
 
-/// Decodes a `.real_literal`'s text (LRM §2.6.2). Strips `_` and rewrites a
-/// Table 2-1 scale factor into an exponent, so IEEE-754 rounding happens once.
-/// Fails with `LiteralTooLong` past the 512-byte decode buffer.
-pub fn parseReal(text: []const u8) ValueError!f64 {
+/// Decodes a `.real_literal`'s text (LRM §2.6.2), of any length. Strips `_`
+/// and rewrites a Table 2-1 scale factor into an exponent, so IEEE-754
+/// rounding happens once. A literal past 512 bytes is decoded in a `gpa`
+/// buffer freed before return.
+pub fn parseReal(gpa: std.mem.Allocator, text: []const u8) ValueError!f64 {
     // A scale factor is always the final character and never coexists with an
     // exponent, so one look at the last byte decides.
     var body = text;
@@ -496,15 +496,16 @@ pub fn parseReal(text: []const u8) ValueError!f64 {
         }
     }
 
-    var buf: [512]u8 = undefined;
+    var small: [512]u8 = undefined;
+    const need = body.len + suffix.len;
+    const buf = if (need <= small.len) small[0..need] else try gpa.alloc(u8, need);
+    defer if (need > small.len) gpa.free(buf);
     var n: usize = 0;
     for (body) |c| {
         if (c == '_') continue; // §2.6.2: underscores are ignored
-        if (n == buf.len) return error.LiteralTooLong;
         buf[n] = c;
         n += 1;
     }
-    if (n + suffix.len > buf.len) return error.LiteralTooLong;
     @memcpy(buf[n..][0..suffix.len], suffix);
     n += suffix.len;
 
@@ -736,21 +737,21 @@ test "tokenEnd recomputes exact spans (no len is stored)" {
 }
 
 test "scale factors: M is 1e6, m is 1e-3 (§2.6.2 Table 2-1)" {
-    try testing.expectEqual(@as(f64, 1e6), try parseReal("1M"));
-    try testing.expectEqual(@as(f64, 1e-3), try parseReal("1m"));
-    try testing.expectEqual(@as(f64, 1e3), try parseReal("1K"));
-    try testing.expectEqual(@as(f64, 1e3), try parseReal("1k"));
-    try testing.expectEqual(@as(f64, 1e12), try parseReal("1T"));
-    try testing.expectEqual(@as(f64, 1e9), try parseReal("1G"));
-    try testing.expectEqual(@as(f64, 1e-6), try parseReal("1u"));
-    try testing.expectEqual(@as(f64, 1e-9), try parseReal("1n"));
-    try testing.expectEqual(@as(f64, 1e-12), try parseReal("1p"));
-    try testing.expectEqual(@as(f64, 1e-15), try parseReal("1f"));
-    try testing.expectEqual(@as(f64, 1e-18), try parseReal("1a"));
-    try testing.expectEqual(@as(f64, 1300.0), try parseReal("1.3k"));
-    try testing.expectEqual(@as(f64, 1.2e12), try parseReal("1.2E12"));
-    try testing.expectEqual(@as(f64, 1234.567), try parseReal("1_234.5_67"));
-    try testing.expectEqual(@as(f64, 236.123763e-12), try parseReal("236.123_763_e-12"));
+    try testing.expectEqual(@as(f64, 1e6), try parseReal(testing.allocator, "1M"));
+    try testing.expectEqual(@as(f64, 1e-3), try parseReal(testing.allocator, "1m"));
+    try testing.expectEqual(@as(f64, 1e3), try parseReal(testing.allocator, "1K"));
+    try testing.expectEqual(@as(f64, 1e3), try parseReal(testing.allocator, "1k"));
+    try testing.expectEqual(@as(f64, 1e12), try parseReal(testing.allocator, "1T"));
+    try testing.expectEqual(@as(f64, 1e9), try parseReal(testing.allocator, "1G"));
+    try testing.expectEqual(@as(f64, 1e-6), try parseReal(testing.allocator, "1u"));
+    try testing.expectEqual(@as(f64, 1e-9), try parseReal(testing.allocator, "1n"));
+    try testing.expectEqual(@as(f64, 1e-12), try parseReal(testing.allocator, "1p"));
+    try testing.expectEqual(@as(f64, 1e-15), try parseReal(testing.allocator, "1f"));
+    try testing.expectEqual(@as(f64, 1e-18), try parseReal(testing.allocator, "1a"));
+    try testing.expectEqual(@as(f64, 1300.0), try parseReal(testing.allocator, "1.3k"));
+    try testing.expectEqual(@as(f64, 1.2e12), try parseReal(testing.allocator, "1.2E12"));
+    try testing.expectEqual(@as(f64, 1234.567), try parseReal(testing.allocator, "1_234.5_67"));
+    try testing.expectEqual(@as(f64, 236.123763e-12), try parseReal(testing.allocator, "236.123_763_e-12"));
 }
 
 test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.2 * 1e-9" {
@@ -759,13 +760,13 @@ test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.
     // the joined text instead, so the value is the double nearest the literal;
     // §2.6.2 does not forbid that, and exact cases (1.3k) are unchanged. The
     // difference is 1 ulp for some literals and reaches emitted device text.
-    try testing.expectEqual(@as(f64, 2.2e-9), try parseReal("2.2n"));
+    try testing.expectEqual(@as(f64, 2.2e-9), try parseReal(testing.allocator, "2.2n"));
     // Both operands must be runtime `f64`s: Zig folds a comptime_float product
     // at arbitrary precision, which is exactly the double rounding under test.
     const mantissa: f64 = 2.2;
     const scale: f64 = 1e-9;
-    try testing.expect((try parseReal("2.2n")) != mantissa * scale);
-    try testing.expectEqual(@as(f64, 1.3e3), try parseReal("1.3k"));
+    try testing.expect((try parseReal(testing.allocator, "2.2n")) != mantissa * scale);
+    try testing.expectEqual(@as(f64, 1.3e3), try parseReal(testing.allocator, "1.3k"));
 }
 
 test "§2.6.1 white space splits the base format from the digits, and nothing else" {
@@ -1040,18 +1041,25 @@ test "badEscape corners: from past the end, an escaped backslash, a short octal 
     try testing.expectEqual(BadEscape{ .start = 1, .end = 5, .above_377 = true }, badEscape("\"\\400\"", 0).?);
 }
 
-test "parseReal: the 512-byte buffer, underscores free, overflow is inf" {
+test "parseReal: any length, underscores free, overflow is inf" {
+    // 512 bytes decode on the stack; 513 and far past it in a heap buffer
+    // (the old 512-byte cap, E0134).
     var buf: [600]u8 = @splat('1');
     buf[1] = '.';
-    // 512 bytes fit; 513 do not.
-    try testing.expect(std.math.isFinite(try parseReal(buf[0..512])));
-    try testing.expectError(error.LiteralTooLong, parseReal(buf[0..513]));
-    // The rewritten scale factor counts: 511 + "e-3" is 514 bytes.
+    try testing.expect(std.math.isFinite(try parseReal(testing.allocator, buf[0..512])));
+    try testing.expect(std.math.isFinite(try parseReal(testing.allocator, buf[0..513])));
+    // The rewritten scale factor is part of the text: 511 + "e-3".
     buf[511] = 'm';
-    try testing.expectError(error.LiteralTooLong, parseReal(buf[0..512]));
-    buf[509] = 'm';
-    try testing.expect(std.math.isFinite(try parseReal(buf[0..510])));
-    // `_` is dropped before the buffer is filled.
+    try testing.expectApproxEqRel(try parseReal(testing.allocator, buf[0..511]) * 1e-3, try parseReal(testing.allocator, buf[0..512]), 1e-15);
+    // "0.", 100,000 zeros, "1e100001": 10^-100001 * 10^100001 = 1.0
+    // exactly, which only a decoder that reads every digit gets.
+    const long = try testing.allocator.alloc(u8, 100_010);
+    defer testing.allocator.free(long);
+    @memcpy(long[0..2], "0.");
+    @memset(long[2..100_002], '0');
+    @memcpy(long[100_002..], "1e100001");
+    try testing.expectEqual(@as(f64, 1.0), try parseReal(testing.allocator, long));
+    // `_` is dropped before decoding.
     var spaced: [1022]u8 = undefined;
     spaced[0] = '1';
     spaced[1] = '.';
@@ -1059,10 +1067,10 @@ test "parseReal: the 512-byte buffer, underscores free, overflow is inf" {
         spaced[2 + 2 * i] = '1';
         spaced[3 + 2 * i] = '_';
     }
-    try testing.expect(std.math.isFinite(try parseReal(&spaced)));
+    try testing.expect(std.math.isFinite(try parseReal(testing.allocator, &spaced)));
     // §2.6.2 leaves overflow to IEEE 754: inf, not an error.
-    try testing.expect(std.math.isPositiveInf(try parseReal("1e400")));
-    try testing.expectEqual(@as(f64, 0), try parseReal("1e-400"));
+    try testing.expect(std.math.isPositiveInf(try parseReal(testing.allocator, "1e400")));
+    try testing.expectEqual(@as(f64, 0), try parseReal(testing.allocator, "1e-400"));
 }
 
 test "tokenSpan of an empty token column is the end of the text; stringRunaway past it is .none" {

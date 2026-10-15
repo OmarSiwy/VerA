@@ -138,8 +138,9 @@ pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 /// where the trip count is known, not here where it is not. Digital execution
 /// declares each iteration's own nets from `Ast.GenItems` in its block scope.
 pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId {
-    try self.enter();
-    defer self.depth -= 1;
+    if (self.segmentDue()) return self.segment(parseGenerateBlock, .{ self, b });
+    self.enter();
+    defer self.leave();
     const tok = self.pos;
     const loop_body = self.gen_loop_body;
     self.gen_loop_body = false;

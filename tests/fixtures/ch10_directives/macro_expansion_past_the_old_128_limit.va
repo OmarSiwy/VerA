@@ -1,12 +1,15 @@
-// AN ENGINE CEILING, PINNED FROM THE ENFORCING SIDE. §10.2 lets a macro's
-// text use other macros and bounds nothing about how deep that goes. VerA
-// expands at most 128 nested macros (specification/Vague_Decisions.md) and refuses the
-// 129th with E0119, naming the limit. M130 below expands M129, and so on to
-// M0: 131 levels. A macro that uses itself is a different error, E0118.
+// §10.2 lets a macro's text use other macros and bounds nothing about how
+// deep that goes. VerA refused past 128 nested expansions (E0119) until
+// 2026-10; it now expands any finite chain, its depth bounded by memory.
+// M130 below expands M129, and so on to M0: 131 levels. A macro that uses
+// itself, which never ends, is still refused (E0118).
 //
-// Legal neighbour: any fixture using a macro from check.vh.
+// HAND DERIVATION. Every M<k> for k >= 1 is M<k-1>, so `M130 is M0's text,
+// 1.0.
 //
-//! reject-only E0119
+//! lrm 10.4
+//! checks 1
+`include "check.vh"
 `define M0 1.0
 `define M1 `M0
 `define M2 `M1
@@ -138,7 +141,12 @@
 `define M128 `M127
 `define M129 `M128
 `define M130 `M129
-module macro_expansion_past_128_rejected(p);
+module macro_expansion_past_the_old_128_limit(p);
   inout p; electrical p;
-  analog I(p) <+ `M130 * V(p);
+  real r;
+  analog begin
+    r = `M130;
+    `CHECKX("131 nested expansions", r, 1.0);
+    I(p) <+ r * V(p);
+  end
 endmodule

@@ -45,8 +45,9 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
 /// A task enable falls through to the expression statement. `casex`/`casez`
 /// parse everywhere: §7.3.2 makes them analog statements in Verilog-AMS.
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
-    try self.enter();
-    defer self.depth -= 1;
+    if (self.segmentDue()) return self.segment(parseStmt, .{self});
+    self.enter();
+    defer self.leave();
     const mark = self.attrs.items.len;
     try self.skipAttributes();
     self.statementAttributes(self.pos);

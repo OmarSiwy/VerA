@@ -122,7 +122,7 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     // `ifdef in a prelude file, so neither may be skipped here.
     _ = try bag.addFile("<source>", "");
     for (predefined_macros) |name| {
-        try pp.macros.put(arena, name, .{ .body = "1", .predefined = true });
+        try pp.putMacro(name, .{ .body = "1", .predefined = true });
     }
 
     pp.runStdDefs() catch |err| switch (err) {

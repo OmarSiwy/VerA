@@ -40,7 +40,6 @@ ieee1364/03_lexical_conventions/b_3_3_nested_block_comment_rejected.v	reject	ref
 ieee1364/03_lexical_conventions/b_3_4_operator_positions.v	transcript	accepts	0	yes	
 ieee1364/03_lexical_conventions/b_3_4_postfix_unary_rejected.v	reject	refuses	-	yes	tests/fixtures/ieee1364/03_lexical_conventions/b_3_4_postfix_unary_rejected.v:14: syntax error
 ieee1364/03_lexical_conventions/b_3_5_1_literal_size_65536.v	transcript	accepts	0	yes	
-ieee1364/03_lexical_conventions/b_3_5_1_literal_size_over_2_24_rejected.v	reject	limit	-	-	iverilog stopped by its resource bounds
 ieee1364/03_lexical_conventions/b_3_5_2_no_fraction_digit_rejected.v	reject	refuses	-	yes	tests/fixtures/ieee1364/03_lexical_conventions/b_3_5_2_no_fraction_digit_rejected.v:15: syntax error
 ieee1364/03_lexical_conventions/b_3_5_2_no_integer_digit_rejected.v	reject	refuses	-	yes	tests/fixtures/ieee1364/03_lexical_conventions/b_3_5_2_no_integer_digit_rejected.v:15: syntax error
 ieee1364/03_lexical_conventions/b_3_5_2_real_constants.v	transcript	accepts	0	yes	
@@ -301,7 +300,6 @@ ieee1364/08_udp/b_8_1_2_combinational_reg_rejected.v	reject	limit	-	-	iverilog s
 ieee1364/08_udp/b_8_1_2_input_minimums.v	transcript	accepts	0	yes	
 ieee1364/08_udp/b_8_1_2_sequential_64_inputs.v	transcript	accepts	0	no	stdout differs
 ieee1364/08_udp/b_8_1_2_sequential_without_reg_rejected.v	reject	limit	-	-	iverilog stopped by its resource bounds
-ieee1364/08_udp/b_8_1_2_udp_more_than_64_inputs_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/08_udp/b_8_1_3_initial_to_input_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/08_udp/b_8_1_3_initial_values.v	transcript	accepts	0	yes	
 ieee1364/08_udp/b_8_1_3_multibit_initial_rejected.v	reject	accepts	0	no	accepts and exits 0

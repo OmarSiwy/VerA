@@ -367,7 +367,7 @@ fn libraries(
     const more = try arena.alloc(digital.Unit, paths.len - 1);
     for (paths[1..], libs[1..], more) |p, l, *u| u.* = .{
         .name = p,
-        .text = Io.Dir.cwd().readFileAlloc(io, p, arena, .limited(root.max_source_bytes)) catch |e| {
+        .text = vera.Preprocessor.readText(io, .cwd(), p, arena) catch |e| {
             try root.readFailed(err, p, e);
             return false;
         },

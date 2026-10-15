@@ -47,9 +47,9 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
     // §2.6.2 decoding (`_` removal, the Table 2-1 scale factor) has one home,
     // `lexer.parseReal`. It applies the scale to the text and rounds once;
     // `mantissa * scale` would round twice and can be off by 1 ulp.
-    const v = lexer.parseReal(text) catch |e| return switch (e) {
-        error.LiteralTooLong => self.failAt(tok, .E0134, "", .{}),
-        else => self.failAt(tok, .E0133, "`{s}`", .{text}),
+    const v = lexer.parseReal(self.arena, text) catch |e| return switch (e) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Overflow => self.failAt(tok, .E0133, "`{s}`", .{text}),
     };
     return self.file.exprs.addReal(self.arena, tok, v);
 }

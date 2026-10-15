@@ -99,9 +99,10 @@ pub fn parseAssignPattern(self: *Parser, tok: u32) Error!Ast.ExprId {
 /// Digital mode keeps every group and count unflattened.
 fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
     // An analog `{{{...` recurses here through `braceGroup` without passing
-    // `parseUnary`, so each brace counts against E0241 itself.
-    try self.enter();
-    defer self.depth -= 1;
+    // `parseUnary`, so each brace is a level of its own.
+    if (self.segmentDue()) return self.segment(braceOperands, .{ self, items });
+    self.enter();
+    defer self.leave();
     _ = try self.expect(.lbrace);
     if (self.eat(.rbrace)) return null;
 
