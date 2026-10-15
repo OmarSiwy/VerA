@@ -4,6 +4,9 @@
 //! reaches with `emit_expr`'s expressions, once per `rt.Phase` (`Code(two)`).
 //! A construct that is not native refuses by name; the executable then embeds
 //! the source and runs the interpreter (`rt.interpret`, `Program.fallback`).
+//! Clauses: IEEE 1364-2005 §3.2, §4.8.2, §6.1/§6.1.3, §7.6, §7.9, §9.2.2,
+//! §9.3, §9.7.6, §9.7.7, §9.8.2, §10.2.2/§10.2.3, §10.3, §15, §17.1 to §17.6,
+//! §18; VAMS §9.22 driver access (refused).
 const std = @import("std");
 const no_cold = @import("net.zig").no_cold;
 const Front = @import("frontend");
@@ -28,12 +31,19 @@ test {
 
 /// What `vera --emit-exe design.v` was given: enough to run the source again.
 pub const Embed = struct {
+    /// The design's source text, before preprocessing.
     source: []const u8,
+    /// The name diagnostics and `$finish` reports give the source.
     file_name: []const u8,
+    /// `-I` directories, searched by `` `include ``.
     include_dirs: []const []const u8,
+    /// `--std=`'s keyword set.
     language: Front.token.KeywordSet,
+    /// §13.2.3 the library the source maps into.
     lib: []const u8 = "work",
+    /// More sources, each with its own library (§13.2).
     more: []const root.Unit = &.{},
+    /// §13.7.1 `-L`'s library search order; empty is the default order.
     search: []const []const u8 = &.{},
 };
 
@@ -63,6 +73,8 @@ pub const Error = error{ Unsupported, OutOfMemory };
 /// The root module of `r`'s executable. `r` is read and its time-0 queue
 /// drained, never run. Under `.two` a design where an x or z carries
 /// meaning is refused; under `.auto` it is 4-state throughout (`Program.four`).
+/// A refused design's root embeds `embed` and runs the interpreter. Every
+/// returned slice is in `arena`.
 pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = logic == .two, .auto = logic == .auto };
     if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null, .four = e.four } else |err| switch (err) {
@@ -304,7 +316,7 @@ pub const Emitter = struct {
             return self.print("a{d}, {d} + (a{d} - {d}) * {d}, ", .{lb} ++ off);
         }
         const count = self.r.arrays.get(base).?.count;
-        const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
+        const watched = std.mem.findScalar(bool, self.watched[base..][0..count], true) != null;
         if (how == .blocking and !watched) return self.print("try M.set(s, {d} + (a{d} - {d}) * {d}, ", off);
         var wakes: plan.Reach = .{};
         for (self.reach[base..][0..count]) |x| wakes = @bitCast(@as(u8, @bitCast(wakes)) | @as(u8, @bitCast(x)));
@@ -854,7 +866,7 @@ fn emitShows(self: *Emitter) Error!void {
 
 /// The `show` index of the `$strobe`/`$monitor` at `pc`.
 fn site(self: *Emitter, pc: u32) Error!u32 {
-    const k = std.mem.indexOfScalar(u32, self.shows.items, pc) orelse blk: {
+    const k = std.mem.findScalar(u32, self.shows.items, pc) orelse blk: {
         try self.shows.append(self.arena, pc);
         break :blk self.shows.items.len - 1;
     };
@@ -922,7 +934,7 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
             // continues past it.
             .call_timed => |c| {
                 if (self.device) return self.refuse("a §10.2.3 timed task that reaches itself");
-                if (std.mem.indexOfScalar(u32, self.timed.items, c.sub) == null) try self.timed.append(self.arena, c.sub);
+                if (std.mem.findScalar(u32, self.timed.items, c.sub) == null) try self.timed.append(self.arena, c.sub);
                 try work.append(self.arena, next);
             },
             .task_return => {},
@@ -964,13 +976,13 @@ fn process(self: *Emitter, pcs: []const u32) Error!void {
     // Zig refuses an unused label and an unused parameter, so each is
     // declared only when the body uses it.
     const text = self.out.written()[head..];
-    if (std.mem.indexOf(u8, text, "continue :sw") != null) try insert(self, sw + 4, "sw: ");
+    if (std.mem.find(u8, text, "continue :sw") != null) try insert(self, sw + 4, "sw: ");
     if (!usesS(self.out.written()[head..])) try insert(self, sw, "    _ = s;\n");
 }
 
 /// Does a function's text use its parameter `s`?
 fn usesS(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, "s.") != null or std.mem.indexOf(u8, text, "(s,") != null;
+    return std.mem.find(u8, text, "s.") != null or std.mem.find(u8, text, "(s,") != null;
 }
 
 fn insert(self: *Emitter, at: usize, text: []const u8) Error!void {
