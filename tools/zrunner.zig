@@ -472,3 +472,38 @@ const FileReporter = struct {
         try t.setColor(.reset);
     }
 };
+
+// zrunner is the runner, not a module under test, so no artifact collects
+// these; `zig test tools/zrunner.zig` runs them on the stock runner.
+
+test "Test.wrap: the namespace before `.test.`/`.decltest.`, the name after" {
+    const f = struct {
+        fn f() anyerror!void {}
+    }.f;
+    const cases = [_][3][]const u8{
+        .{ "ir.lower.test.adds two", "ir.lower", "adds two" },
+        .{ "ir.lower.decltest.parse", "ir.lower", "parse" },
+        .{ "bare", "", "bare" },
+        // A file named test.zig is a namespace ending in `.test`.
+        .{ "backend.codegen.test.test.emits", "backend.codegen.test", "emits" },
+        .{ "backend.codegen.test.decltest.emit", "backend.codegen.test", "emit" },
+    };
+    for (cases) |c| {
+        const t = Test.wrap(.{ .name = c[0], .func = &f });
+        try std.testing.expectEqualStrings(c[1], t.namespace);
+        try std.testing.expectEqualStrings(c[2], t.name);
+    }
+}
+
+test "TestResult: the test it is for, and a skip never leaks" {
+    const f = struct {
+        fn f() anyerror!void {}
+    }.f;
+    const t = Test.wrap(.{ .name = "m.test.x", .func = &f });
+    const skipped: TestResult = .{ .skipped = t };
+    try std.testing.expect(!skipped.isMemoryLeak());
+    try std.testing.expectEqualStrings("x", skipped.@"test"().name);
+    const xfailed: TestResult = .{ .xfailed = .{ .@"test" = t, .is_mem_leak = true } };
+    // An xfail excuses the failure, never the leak.
+    try std.testing.expect(xfailed.isMemoryLeak());
+}
