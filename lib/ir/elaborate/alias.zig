@@ -122,3 +122,71 @@ const Scan = struct {
         }
     }
 };
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test original {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const g = try file.intern(a, "g");
+    const ag = try file.intern(a, "ag");
+    const a1 = try file.intern(a, "a1");
+    const a2 = try file.intern(a, "a2");
+    const c1 = try file.intern(a, "c1");
+    const c2 = try file.intern(a, "c2");
+    const am = try file.intern(a, "am");
+    const mf = try file.intern(a, "$mfactor");
+    const ad = try file.intern(a, "ad");
+    const nowhere = try file.intern(a, "nowhere");
+    const params = [_]Ast.ParamDecl{.{ .name = g, .ty = .real, .default = .none }};
+    const aliases = [_]Ast.AliasParam{
+        .{ .alias = ag, .target = g },
+        .{ .alias = a1, .target = a2 },
+        .{ .alias = a2, .target = g },
+        .{ .alias = c1, .target = c2 },
+        .{ .alias = c2, .target = c1 },
+        .{ .alias = am, .target = mf },
+        .{ .alias = ad, .target = nowhere },
+    };
+    // §3.4.7: one alias, then a chain of two, both end at the parameter.
+    try std.testing.expectEqual(@as(?Ast.StrId, g), original(&file, &params, &aliases, aliases[0]));
+    try std.testing.expectEqual(@as(?Ast.StrId, g), original(&file, &params, &aliases, aliases[1]));
+    // A cycle and a dangling target have no original; the walk still ends.
+    try std.testing.expectEqual(@as(?Ast.StrId, null), original(&file, &params, &aliases, aliases[3]));
+    try std.testing.expectEqual(@as(?Ast.StrId, null), original(&file, &params, &aliases, aliases[6]));
+    // §9.18 a system parameter is an original in its own right.
+    try std.testing.expectEqual(@as(?Ast.StrId, mf), original(&file, &params, &aliases, aliases[5]));
+    // An alias spelled like a parameter is shadowed by it, so it aliases nothing.
+    const shadowed = [_]Ast.ParamDecl{ params[0], .{ .name = ag, .ty = .real, .default = .none } };
+    try std.testing.expectEqual(@as(?Ast.StrId, null), original(&file, &shadowed, &aliases, aliases[0]));
+}
+
+test checkSource {
+    // §3.4.7: a value expression that reads an aliasparam is E0373.
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad,
+        \\module top(p); inout p; electrical p;
+        \\  parameter real g = 1.0; aliasparam ag = g; parameter real h = ag * 2.0;
+        \\endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0373));
+
+    // The legal neighbour reads the original.
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good,
+        \\module top(p); inout p; electrical p;
+        \\  parameter real g = 1.0; aliasparam ag = g; parameter real h = g * 2.0;
+        \\endmodule
+    );
+    _ = try elaborate.elaborate(good.ctx());
+    try std.testing.expect(!fixture.hasCode(&good.bag, .E0373));
+}

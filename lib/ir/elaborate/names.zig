@@ -736,3 +736,90 @@ const ParamEnv = struct {
         return null;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test PathKey {
+    // Oracle: the hash a stored `path ++ local` key got, `StringContext`'s.
+    // Every split of strings around Wyhash's 48-byte block boundary must
+    // land in that bucket, the empty halves included.
+    var buf: [97]u8 = undefined;
+    for (&buf, 0..) |*c, i| c.* = @intCast('a' + i % 26);
+    for ([_]usize{ 0, 1, 47, 48, 49, 96, 97 }) |len| {
+        const whole = buf[0..len];
+        const want = std.hash_map.hashString(whole);
+        for (0..len + 1) |cut| {
+            const k: PathKey = .{ .path = whole[0..cut], .local = whole[cut..] };
+            try std.testing.expectEqual(want, PathKey.Context.hash(.{}, k));
+            try std.testing.expect(PathKey.Context.eql(.{}, k, whole));
+        }
+    }
+    // `eql` is exactly the joined bytes, not a prefix or a same-length cousin.
+    const key: PathKey = .{ .path = "u.", .local = "g" };
+    try std.testing.expect(PathKey.Context.eql(.{}, key, "u.g"));
+    try std.testing.expect(!PathKey.Context.eql(.{}, key, "u.gg"));
+    try std.testing.expect(!PathKey.Context.eql(.{}, key, "u."));
+    try std.testing.expect(!PathKey.Context.eql(.{}, key, "v.g"));
+    try std.testing.expect(!PathKey.Context.eql(.{}, key, "u.h"));
+}
+
+/// A `.hier_ident` row over `parts`, interned into `file`.
+fn hierIdent(file: *Ast.SourceFile, a: std.mem.Allocator, parts: []const []const u8) !Ast.ExprId {
+    const ids = try a.alloc(Ast.StrId, parts.len);
+    for (parts, ids) |p, *i| i.* = try file.intern(a, p);
+    return file.exprs.add(a, .{ .tag = .hier_ident, .extra = try file.exprs.addStrList(a, ids) });
+}
+
+test flatReference {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const top = try file.intern(a, "top");
+    const m: Ast.ModuleDecl = .{ .name = top, .ports = &.{} };
+    const Case = struct { parts: []const []const u8, want: []const u8 };
+    const cases = [_]Case{
+        // §6.2.1 `$root.` and IEEE 1364 §12.6's upward `top.` both drop:
+        // the flat namespace is rooted at the device.
+        .{ .parts = &.{ "$root", "top", "u", "x" }, .want = "u.x" },
+        .{ .parts = &.{ "top", "u", "x" }, .want = "u.x" },
+        .{ .parts = &.{ "$root", "u", "x" }, .want = "u.x" },
+        .{ .parts = &.{ "u", "x" }, .want = "u.x" },
+        .{ .parts = &.{"x"}, .want = "x" },
+        // A lone part is a name, never a prefix to drop.
+        .{ .parts = &.{"$root"}, .want = "$root" },
+        .{ .parts = &.{ "$root", "top" }, .want = "top" },
+    };
+    for (cases) |c| try std.testing.expectEqualStrings(c.want, try flatReference(&file, a, &m, try hierIdent(&file, a, c.parts)));
+    // With no module in hand the top's name is an ordinary first part.
+    try std.testing.expectEqualStrings("top.u.x", try flatReference(&file, a, null, try hierIdent(&file, a, &.{ "top", "u", "x" })));
+    // §6.2.1 "priority to the local scope": an instance named like the top keeps its part.
+    const shadow: Ast.ModuleDecl = .{ .name = top, .ports = &.{}, .instances = &.{.{ .module = top, .name = top }} };
+    try std.testing.expectEqualStrings("top.x", try flatReference(&file, a, &shadow, try hierIdent(&file, a, &.{ "top", "x" })));
+}
+
+test findModule {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parseWithPrelude(&f,
+        \\module dup(p); inout p; electrical p; parameter real first = 1.0; endmodule
+        \\module dup(p); inout p; electrical p; parameter real second = 1.0; endmodule
+        \\paramset dps dup; parameter real x = 1.0; .second = x; endparamset
+    );
+    var fl = try fixture.flatten(&f);
+    const user = f.file.userModules();
+    // IEEE 1364-2005 §13.2.1.1: the last definition of a name is the module.
+    try std.testing.expectEqual(&user[1], findModule(&fl, fixture.id(&f.file, "dup").?).?);
+    // §6.4: a paramset name is selected by its instance, never by this lookup.
+    try std.testing.expectEqual(@as(?*const Ast.ModuleDecl, null), findModule(&fl, fixture.id(&f.file, "dps").?));
+    // Annex E: a Table E.1 row is found when no user module has the name,
+    // and is a primitive; a user module never is.
+    const resistor = findModule(&fl, fixture.id(&f.file, "resistor").?).?;
+    try std.testing.expect(isPrimitive(&fl, resistor));
+    try std.testing.expect(!isPrimitive(&fl, &user[1]));
+    try std.testing.expectEqual(@as(?*const Ast.ModuleDecl, null), findModule(&fl, try f.file.intern(f.arena.allocator(), "nowhere")));
+}
