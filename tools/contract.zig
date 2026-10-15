@@ -14,6 +14,12 @@
 //! tables (noise, AC, VPI, files, limiting and Jacobian masks); §5.6.1.2 charge
 //! sites; scalar families (the lead protocol, `RefFamily`, `Rows`/`Sites`);
 //! `validate`/`validateHost`; tests.
+//!
+//! Clauses: LRM §2.9.2 (`DeclMeta`), §3.4 (shape parameters), §3.6 (unknown
+//! metadata), §4.5 (operators, `ac_dyn_slots`), §4.6.3/§4.6.4 (AC stimuli,
+//! noise and its tables), §5.4-§5.6 (rows, charge sites, collapse), §5.10
+//! (held state), §6.3.6 (`$mfactor`), §9.4/§9.5/§9.7.3 (display records,
+//! files, status), §9.15 (`$simparam`), §9.17 (limiting), §12.32 (`Systf`).
 
 const std = @import("std");
 
@@ -82,6 +88,8 @@ pub const StatusSite = struct {
 
 /// The `vera_status__` value site index `site` (0-based) of severity `sev`
 /// latches: the severity in the top byte (1 fatal, 2 error), `site + 1` below.
+/// Asserts that `site + 1` fits the low 24 bits, so the code cannot spill
+/// into the severity byte.
 pub fn statusCode(sev: @FieldType(StatusSite, "severity"), site: usize) u32 {
     return (@as(u32, if (sev == .fatal) 1 else 2) << 24) | @as(u32, @intCast(site + 1));
 }
@@ -191,6 +199,8 @@ pub const SayPass = enum {
 /// Writes the records `D.say` put in `s`, each as its site's format renders
 /// it, `name` standing for `%m`; then, if any record did not fit, a line
 /// saying how many. Empties `s` for the next accepted point.
+/// Precondition: every record was put by `D.say`, so its site indexes
+/// `D.say_sites` and carries that site's `nargs` values.
 pub fn formatSay(comptime D: type, s: *Say, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
     var i: usize = 0;
     while (i < s.len) {
@@ -207,8 +217,12 @@ pub fn formatSay(comptime D: type, s: *Say, name: []const u8, w: *std.Io.Writer)
 /// real conversions) over `args`, each conversion taking the next value, 0
 /// past the end. Integer conversions round the value (§4.2.1.1); `%h`, `%x`,
 /// `%o` and `%b` print its 64-bit two's complement, `%c` its low byte, `%r`
-/// is §2.6.2 engineering notation, `%t` is `%g`, `%s` writes `?`, and
-/// `%m`/`%l` write `name`. Precision past 64 is cut to 64.
+/// is §2.6.2 engineering notation (a mantissa in [1, 1000) and one scale
+/// letter, the mantissa's shortest digits, or a precision's fractional
+/// digits, as the device's display kernels print it), `%t` is `%g`, `%s`
+/// writes `?`, and `%m`/`%l` write `name`. Precision past 64 is cut to 64.
+/// A `%` that ends `fmt` is written as is; one cut off after its flags,
+/// width or precision writes nothing.
 fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
     var next: usize = 0;
     var i: usize = 0;
@@ -259,12 +273,12 @@ fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writ
                 const n: i64 = if (std.math.isNan(v)) 0 else @intFromFloat(@round(std.math.clamp(v, -0x1p63, 0x1p63 - 1024)));
                 const u: u64 = @bitCast(n);
                 const digits = switch (conv) {
-                    'd', 'D', 'i' => std.fmt.bufPrint(&buf, "{d}", .{@abs(n)}),
-                    'h', 'x' => std.fmt.bufPrint(&buf, "{x}", .{u}),
-                    'H', 'X' => std.fmt.bufPrint(&buf, "{X}", .{u}),
-                    'o', 'O' => std.fmt.bufPrint(&buf, "{o}", .{u}),
-                    'b', 'B' => std.fmt.bufPrint(&buf, "{b}", .{u}),
-                    else => std.fmt.bufPrint(&buf, "{c}", .{@as(u8, @truncate(u))}),
+                    'd', 'D', 'i' => std.mem.print(&buf, "{d}", .{@abs(n)}),
+                    'h', 'x' => std.mem.print(&buf, "{x}", .{u}),
+                    'H', 'X' => std.mem.print(&buf, "{X}", .{u}),
+                    'o', 'O' => std.mem.print(&buf, "{o}", .{u}),
+                    'b', 'B' => std.mem.print(&buf, "{b}", .{u}),
+                    else => std.mem.print(&buf, "{c}", .{@as(u8, @truncate(u))}),
                 } catch unreachable;
                 const signed = conv == 'd' or conv == 'D' or conv == 'i';
                 try cPad(w, if (signed) cSign(n < 0, f) else "", digits, f, true);
@@ -328,8 +342,8 @@ fn cPad(w: *std.Io.Writer, sign: []const u8, body: []const u8, f: CSpec, number:
 }
 
 /// `v` (finite, not negative) as C's `%e`, `%f` or `%g` at precision `p`, or
-/// §9.4.3's `%r`: `%g`'s digits over a §2.6.2 scale factor (`T G M K k m u
-/// n p f a`; `k` for 1e3, Table 2-1's spelling).
+/// §9.4.3's `%r`: a mantissa in [1, 1000) over a §2.6.2 scale factor (`T G M
+/// K k m u n p f a`; `k` for 1e3, Table 2-1's spelling).
 fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
     const float = std.fmt.float;
     switch (conv) {
@@ -351,15 +365,15 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
             // print; %f with P - 1 - X decimals when P > X >= -4, else %e.
             const sig = @max(p, 1);
             const sci = float.render(buf[256..], v, .{ .mode = .scientific, .precision = sig - 1 }) catch return "?";
-            const x = std.fmt.parseInt(i32, sci[std.mem.indexOfScalar(u8, sci, 'e').? + 1 ..], 10) catch 0;
+            const x = std.fmt.parseInt(i32, sci[std.mem.findScalar(u8, sci, 'e').? + 1 ..], 10) catch 0;
             var out = if (x < -4 or x >= @as(i32, @intCast(sig)))
                 cExp(buf, sci)
             else
                 float.render(buf, v, .{ .mode = .decimal, .precision = @intCast(@as(i32, @intCast(sig)) - 1 - x) }) catch return "?";
             if (alt) return out;
             // Trailing zeros of the fraction go, then a bare point.
-            const e_at = std.mem.indexOfScalar(u8, out, 'e') orelse out.len;
-            if (std.mem.indexOfScalar(u8, out[0..e_at], '.') == null) return out;
+            const e_at = std.mem.findScalar(u8, out, 'e') orelse out.len;
+            if (std.mem.findScalar(u8, out[0..e_at], '.') == null) return out;
             var end = e_at;
             while (out[end - 1] == '0') end -= 1;
             if (out[end - 1] == '.') end -= 1;
@@ -374,7 +388,7 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
 /// Zig's `1.5e-7` as C's `1.5e-07`: a signed exponent of at least two
 /// digits, copied to the front of `buf`.
 fn cExp(buf: *[512]u8, sci: []const u8) []const u8 {
-    const e = std.mem.indexOfScalar(u8, sci, 'e').?;
+    const e = std.mem.findScalar(u8, sci, 'e').?;
     var exp = sci[e + 1 ..];
     const neg = exp.len != 0 and exp[0] == '-';
     if (neg) exp = exp[1..];
@@ -438,6 +452,7 @@ pub const gm = struct {
         const r = 1 - 2.0 / (armExp(2 * ax) + 1);
         return if (x < 0) -r else r;
     }
+    /// sinh(x); on a GPU a Taylor series below 0.5, else (e^|x| - e^-|x|)/2.
     pub inline fn sinh(x: f64) f64 {
         if (comptime !dev) return std.math.sinh(x);
         const ax = @abs(x);
@@ -451,6 +466,7 @@ pub const gm = struct {
         const r = 0.5 * e - 0.5 / e;
         return if (x < 0) -r else r;
     }
+    /// cosh(x); on a GPU (e^|x| + e^-|x|)/2.
     pub inline fn cosh(x: f64) f64 {
         if (comptime !dev) return std.math.cosh(x);
         const e = armExp(@abs(x));
@@ -461,6 +477,7 @@ pub const gm = struct {
     pub inline fn sin(x: f64) f64 {
         return if (comptime dev) softSin(x) else @sin(x);
     }
+    /// cos(x), with `sin`'s accuracy on each target.
     pub inline fn cos(x: f64) f64 {
         return if (comptime dev) softCos(x) else @cos(x);
     }
@@ -2082,6 +2099,8 @@ pub const SystfHost = struct {
     /// `out`, or, when it is null, argument j unchanged: the value an
     /// argument calltf did not put keeps (`args[j - 1]`, partial 1 on itself
     /// and 0 elsewhere). Writes every slot of `partials`.
+    /// Asserts that `j` is 1-based and in range (1 <= j <= `args.len`) and
+    /// that `partials.len == args.len`.
     pub fn output(h: *const SystfHost, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
         if (h.out) |f| return f(h.ctx, k, j, args, partials);
         @memset(partials, 0);
@@ -2797,8 +2816,8 @@ pub fn RefFamily(comptime L: type, comptime lane: []const u8, comptime opts: Ref
     return if (opts.dense) RefDense(L, lane, opts.collapse_applied) else RefSparse(L, lane, opts.collapse_applied);
 }
 
-const fma_lanes = switch (@import("builtin").cpu.arch) {
-    .x86_64 => std.Target.x86.featureSetHas(@import("builtin").cpu.features, .fma),
+const fma_lanes = switch (@import("builtin").target.cpu.arch) {
+    .x86_64 => std.Target.x86.featureSetHas(@import("builtin").target.cpu.features, .fma),
     .aarch64, .nvptx64, .amdgcn => true,
     else => false,
 };

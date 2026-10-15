@@ -1,7 +1,7 @@
 //! `vera`'s argv -> one `Cli` value: what the user typed, flag by flag, in
 //! order. `--help` and `--explain` answer here; a malformed flag is refused
 //! here with exit status 2. Conflicts between well-formed flags are refused
-//! after the whole line is read, by `main`, whatever their order.
+//! after the whole line is read, by `resolve`, whatever their order.
 //!
 //! The flags, their spelling and every message below are user-visible and
 //! frozen. Clauses: LRM 3.4 (`--param`), Annex E.2 (`--spice`), IEEE 1364-2005
@@ -208,7 +208,12 @@ pub const Cli = struct {
 /// `--help` (usage on `out`) or `--explain CODE` (the explanation on `out`),
 /// 2 after a malformed flag (the reason on `err`). Stops at the first such
 /// flag, so the rest of the line is never read.
-pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator, out: *Io.Writer, err: *Io.Writer) !?u8 {
+/// `args` points at any iterator whose `next()` returns each argument as a
+/// `?[]const u8` (or a sentinel slice): `std.process.Args.Iterator`, or a
+/// test's fixed list. `cli` borrows every argument it keeps, so the
+/// iterator's storage must outlive `cli`. Invalidates nothing; the lists grow
+/// in `gpa`, which `Cli.deinit` takes.
+pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, err: *Io.Writer) !?u8 {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try out.writeAll(usage_text);
@@ -279,7 +284,7 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
             cli.contract_path = args.next() orelse return try missing(err, "--contract", "a path");
         } else if (std.mem.eql(u8, arg, "--param")) {
             const kv = args.next() orelse return try missing(err, "--param", "NAME=VALUE");
-            const eq = std.mem.indexOfScalar(u8, kv, '=') orelse return try missing(err, "--param", "NAME=VALUE");
+            const eq = std.mem.findScalar(u8, kv, '=') orelse return try missing(err, "--param", "NAME=VALUE");
             const value = std.fmt.parseFloat(f64, kv[eq + 1 ..]) catch {
                 try err.print("error: --param {s}: `{s}` is not a number\n", .{ kv, kv[eq + 1 ..] });
                 return 2;
@@ -388,6 +393,58 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
                 return 2;
             }
         } else try cli.paths.append(gpa, arg);
+    }
+    return null;
+}
+
+/// Refuses the well-formed flags that conflict, whatever order they came in,
+/// and settles what they derive: `--display=record` beside a testbench makes
+/// it print the device's records, and `--emit-osdi` makes `-o` name the
+/// `.osdi` rather than a device. Returns null to go on, or exit status 2
+/// with the reason on `err`, or the usage when the line names no input.
+/// Runs once, after `parse` returned null.
+pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
+    if (cli.exe_flag) |f| if (cli.display_drop_flag) {
+        try err.print(
+            "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
+                "output, and `--display=drop` discards every print\n",
+            .{f},
+        );
+        return 2;
+    };
+    // §9.4 a testbench over the device a host gets: it prints the records
+    // the device's `say` makes, whichever flag came first.
+    if (cli.exe_flag != null and cli.display_record_flag) cli.display = .record;
+    if (cli.validate_contract and cli.exe_flag == null) {
+        try err.writeAll("error: `--validate-contract` turns the checks on in an --emit-exe or --run " ++
+            "testbench; --check always runs them\n");
+        return 2;
+    }
+    if (cli.lint_flag) if (cli.codegen_flag) |f| {
+        try err.print(
+            "error: `--lint` and `{s}` conflict: --lint stops after the frontend " ++
+                "and `{s}` needs codegen\n",
+            .{ f, f },
+        );
+        return 2;
+    };
+
+    if (cli.emit_verilog) if (cli.check or cli.emit_so or cli.exe_flag != null) {
+        try err.writeAll("error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n");
+        return 2;
+    };
+
+    if (cli.emit_osdi) {
+        if (cli.dyn_path != null or cli.emit_zig_typed or cli.exe_flag != null) {
+            try err.writeAll("error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
+            return 2;
+        }
+        cli.emit_zig = false; // `-o` names the .osdi
+    }
+
+    if (cli.paths.items.len == 0) {
+        try err.writeAll(usage_text);
+        return 2;
     }
     return null;
 }

@@ -7,10 +7,14 @@
 //! 2 on a usage error, including conflicting flags (never last-one-wins).
 //!
 //! `main` is the spine: read the command line (`cli/args.zig`), refuse the
-//! flags that conflict, read the source, then hand it to the `.v` path
+//! flags that conflict (`args.resolve`), read the source, then hand it to the `.v` path
 //! (`cli/digital.zig`) or to `compileAnalog` below. Flags, streams, exit
 //! codes and messages are user-visible and frozen: `--emit-exe` prints the
 //! artifact's path on stdout and every diagnostic on stderr.
+//!
+//! Clauses: LRM Annex E.1.1 (`--spice`), §3.4 (`--param` and a testbench's
+//! shape cards), §9.4 (`--display`), §4.6.4.6 and VD-102 (what `--emit-osdi`
+//! refuses or warns before it builds).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -54,48 +58,7 @@ pub fn main(init: std.process.Init) !u8 {
     if ((cli.exe_flag != null or cli.emit_so) and backend == .self_hosted and opt != .debug)
         try err.print("warning: --zig-backend=native does not optimise; the {t} artifact is unoptimised\n", .{opt});
     // Conflicting flags are refused by name, whatever order they came in.
-    if (cli.exe_flag) |f| if (cli.display_drop_flag) {
-        try err.print(
-            "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
-                "output, and `--display=drop` discards every print\n",
-            .{f},
-        );
-        return 2;
-    };
-    // §9.4 a testbench over the device a host gets: it prints the records
-    // the device's `say` makes, whichever flag came first.
-    if (cli.exe_flag != null and cli.display_record_flag) cli.display = .record;
-    if (cli.validate_contract and cli.exe_flag == null) {
-        try err.writeAll("error: `--validate-contract` turns the checks on in an --emit-exe or --run " ++
-            "testbench; --check always runs them\n");
-        return 2;
-    }
-    if (cli.lint_flag) if (cli.codegen_flag) |f| {
-        try err.print(
-            "error: `--lint` and `{s}` conflict: --lint stops after the frontend " ++
-                "and `{s}` needs codegen\n",
-            .{ f, f },
-        );
-        return 2;
-    };
-
-    if (cli.emit_verilog) if (cli.check or cli.emit_so or cli.exe_flag != null) {
-        try err.writeAll("error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n");
-        return 2;
-    };
-
-    if (cli.emit_osdi) {
-        if (cli.dyn_path != null or cli.emit_zig_typed or cli.exe_flag != null) {
-            try err.writeAll("error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
-            return 2;
-        }
-        cli.emit_zig = false; // `-o` names the .osdi
-    }
-
-    if (cli.paths.items.len == 0) {
-        try err.writeAll(args.usage_text);
-        return 2;
-    }
+    if (try args.resolve(&cli, err)) |code| return code;
     const in_path = cli.paths.items[0];
 
     // Digital Verilog uses the shared frontend below. Other language families
@@ -438,7 +401,7 @@ fn compileAnalog(
         defer r.deinit(gpa);
         switch (r) {
             .ok => |a| if (cli.emit_osdi) {
-                const dest = cli.out_path orelse try std.fmt.allocPrint(tb_arena.allocator(), "{s}.osdi", .{result.mir.name});
+                const dest = cli.out_path orelse try tb_arena.allocator().print("{s}.osdi", .{result.mir.name});
                 Io.Dir.cwd().copyFile(a.so_path, Io.Dir.cwd(), dest, io, .{}) catch |e| {
                     try err.print("error: cannot write `{s}`: {t}\n", .{ dest, e });
                     return 1;
@@ -557,6 +520,8 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
 /// The largest source file or `--spice` netlist read (E1013).
 const max_source_bytes = 64 * 1024 * 1024;
 
+/// Reports that `path` could not be read: E1013 for a file past
+/// `max_source_bytes`, else the error's name.
 fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
     if (e == error.StreamTooLong)
         try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, max_source_bytes })
