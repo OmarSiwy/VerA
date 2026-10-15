@@ -42,17 +42,30 @@
 //!                ground; every other `collapse` alias is left unapplied
 //!                (the uncollapsed system is exact, a 0 V branch's flow kept
 //!                as an unknown)
+//!   static request  `updateState`'s `request_reject_at` in a static solve
+//!                ("iterate again", `contract.UpdateResult`) is
+//!                EVAL_RET_FLAG_LIM: ngspice counts the iterate unconverged
+//!   breakpoints  `pendingBreakpoint` bounds the step after each point
+//!                (`bound_step_offset`, with the device's own `$bound_step`):
+//!                see `boundStep`
+//!
+//! A `.v` design's contract device (`rt.Device`, `vera --emit-osdi design.v`)
+//! takes the same mapping: its pins are the terminals, its bridge card
+//! (vdd, vth, rout, ...) the parameters.
 //!
 //! Not mapped, each because OSDI 0.4 has no slot for it (specification/Vague_Decisions.md
 //! VD-102): opvars; correlated noise (`NoiseGen.source` shared by rows,
 //! `PsdTerm.corr_with`): each row is an independent source, and `vera`
-//! warns W1098; a step rejection a device asks for (`request_reject_at`),
-//! which `vera` refuses (E1099) before building this; the device's display
-//! records (`say`); and acceptance itself: OSDI has no accept
+//! warns W1098; a transient step rejection a device asks for
+//! (`request_reject_at`), which `vera` refuses (E1099) before building this;
+//! the late-event query (`stateCtl(.query)`), so a crossing is never moved
+//! back to a step that ends near it; a Verilog-A device's display records
+//! (`say`); and acceptance itself: OSDI has no accept
 //! callback, so `updateState` and `stateCtl(.commit)` run at every iterate
 //! of a static solve and, in a transient, at the last point evaluated before
 //! the simulator moves time forward (a rejected step retries at an earlier
-//! time, so it is never committed). `$bound_step` is `bound_step_offset`.
+//! time, so it is never committed). A `.v` device prints what a committed
+//! step ran, to stderr, at those commits.
 //!
 //! Host-only: never imported by the device text, so the device stays
 //! GPU-compilable.
@@ -475,6 +488,11 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             state: State,
             t_prev: f64,
             t_last: f64,
+            /// The time `accept` last committed.
+            t_acc: f64,
+            /// The step bound ngspice's OSDItrunc reads (`bound_step_offset`)
+            /// when the device schedules breakpoints: see `boundStep`.
+            bound: f64,
         };
 
         comptime {
@@ -568,6 +586,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             self.sim = .{};
             self.t_prev = 0;
             self.t_last = 0;
+            self.t_acc = 0;
+            self.bound = std.math.inf(f64);
         }
 
         /// The analysis OSDI's flags describe (ngspice osdiload.c sets them).
@@ -609,7 +629,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             }
             // The last point before the simulator moves time forward is the
             // one it accepted (a rejected step retries at an earlier time).
-            if (State != void and self.have_x and self.sim.kind == .tran and info.abstime > self.sim.t and info.flags & calc_react_residual != 0) accept(self);
+            if (State != void and self.have_x and self.sim.kind == .tran and info.abstime > self.sim.t and info.flags & calc_react_residual != 0) _ = accept(self);
             const sim = simState(self, info);
             if (@hasDecl(D, "advanceIteration") and self.have_x) D.advanceIteration(Val, &self.row, &self.inst, self.x, sim);
 
@@ -688,7 +708,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             self.sim = sim;
 
             // A static solve has no steps to reject: every iterate is accepted.
-            if (State != void and (sim.kind == .dc or sim.kind == .ic)) accept(self);
+            // A request there means "iterate again" (`contract.UpdateResult`):
+            // the device's state moved, so this iterate is not converged.
+            if (State != void and (sim.kind == .dc or sim.kind == .ic) and accept(self) != .ok) ret |= eval_ret_flag_lim;
+            if (has_bp) boundStep(self, sim);
             if (@hasDecl(D, "checkConvergence") and !D.checkConvergence(Val, &self.row, &self.inst, x, sim)) ret |= eval_ret_flag_lim;
             if (@hasField(D.Instance, "vera_status__") and self.inst.vera_status__ != 0) {
                 var buf: [512]u8 = undefined;
@@ -700,10 +723,31 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             return ret;
         }
 
-        /// `updateState` and `stateCtl(.commit)` at the last evaluated point.
-        fn accept(self: *Instance) void {
-            _ = D.updateState(Val, &self.row, &self.inst, self.x, &self.state, self.sim);
+        /// `updateState` and `stateCtl(.commit)` at the last evaluated point;
+        /// what `updateState` returned.
+        fn accept(self: *Instance) contract.UpdateResult {
+            const r = D.updateState(Val, &self.row, &self.inst, self.x, &self.state, self.sim);
             if (@hasDecl(D, "stateCtl")) _ = D.stateCtl(&self.row, &self.inst, &self.state, .commit);
+            self.t_acc = self.sim.t;
+            return r;
+        }
+
+        const has_bp = State != void and @hasDecl(D, "pendingBreakpoint");
+
+        /// OSDI has no breakpoint slot, so `pendingBreakpoint` becomes the
+        /// step bound ngspice's OSDItrunc applies to the step after this
+        /// point: the distance to the device's next breakpoint after the
+        /// accepted time. One due at or before this point runs only when the
+        /// point is accepted (`accept`), so what it schedules next is not
+        /// known yet: the next step is held to this one's length. The device's
+        /// own `$bound_step` bounds it too.
+        fn boundStep(self: *Instance, sim: contract.SimState) void {
+            const inf = std.math.inf(f64);
+            self.bound = if (@hasField(D.Instance, "bound_step")) self.inst.bound_step else inf;
+            if (sim.kind != .tran) return;
+            const bp = D.pendingBreakpoint(&self.inst, self.t_acc) orelse return;
+            const b = if (bp > sim.t) bp - sim.t else sim.t - self.t_acc;
+            if (b > 0) self.bound = @min(self.bound, b);
         }
 
         fn inst(ip: *anyopaque) *Instance {
@@ -928,7 +972,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             .jacobian_ptr_resist_offset = @offsetOf(Instance, "jac_ptr"),
             .num_states = 0,
             .state_idx_off = @offsetOf(Instance, "state_idx"),
-            .bound_step_offset = if (State != void and @hasField(D.Instance, "bound_step")) @offsetOf(Instance, "inst") + @offsetOf(D.Instance, "bound_step") else no_off,
+            .bound_step_offset = if (has_bp) @offsetOf(Instance, "bound") else if (State != void and @hasField(D.Instance, "bound_step")) @offsetOf(Instance, "inst") + @offsetOf(D.Instance, "bound_step") else no_off,
             .instance_size = @sizeOf(Instance),
             .model_size = @sizeOf(Model),
             .access = &access,
@@ -1013,6 +1057,43 @@ const Gn = struct {
     }
     pub fn noisePsd(comptime _: type, _: [2]f64, m: *const Model, _: *const Instance, _: contract.SimState) [1]contract.PsdTerm {
         return .{.{ .white = 4 * 1.380649e-23 * m.temperature__ / m.r }};
+    }
+};
+
+/// A conductance with digital-style state: an event every 5 s from 5 s
+/// (`pendingBreakpoint`), and a static solve whose first accepted iterate
+/// moves its state (`request_reject_at`, "iterate again").
+const Ev = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct { next: f64 = 5, settled: bool = false };
+    pub const State = struct {};
+    pub const state_class: contract.StateClass = .history;
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const i = p[0].sub(p[1]);
+        return contract.rows(@This(), S, .{ i, i.neg() });
+    }
+    pub fn initState(_: *const Model, _: *Instance) State {
+        return .{};
+    }
+    pub fn updateState(comptime _: type, _: *const Model, inst: *Instance, _: [2]f64, _: *State, sim: contract.SimState) contract.UpdateResult {
+        if (sim.kind != .tran) {
+            if (inst.settled) return .ok;
+            inst.settled = true;
+            return .{ .request_reject_at = sim.t };
+        }
+        while (inst.next <= sim.t) inst.next += 5;
+        return .ok;
+    }
+    pub fn stateCtl(_: *const Model, _: *Instance, _: *State, _: contract.StateCtlOp) bool {
+        return false;
+    }
+    pub fn pendingBreakpoint(inst: *const Instance, t: f64) ?f64 {
+        return if (inst.next > t) inst.next else null;
     }
 };
 
@@ -1144,6 +1225,41 @@ test "noise: one source per generator row, its PSD coeff²·white at the last ev
     var dens: [1]f64 = undefined;
     d.load_noise(&inst, &model, 1e3, &dens);
     try testing.expectEqual(4 * 1.380649e-23 * @as(f64, 300.15) / 1e3, dens[0]);
+}
+
+test "a static request is one more iterate (LIM); breakpoints bound the step after each point" {
+    const H = Osdi(Ev, "ev");
+    const d = &H.descriptors[0];
+    try testing.expectEqual(@as(u32, @offsetOf(H.Instance, "bound")), d.bound_step_offset);
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    // DC: the first accepted iterate moved the state, so it is not converged.
+    try testing.expectEqual(eval_ret_flag_lim, evalAt(d, &inst, &model, &.{ 1, 0 }));
+    try testing.expectEqual(@as(u32, 0), evalAt(d, &inst, &model, &.{ 1, 0 }));
+    try testing.expectEqual(std.math.inf(f64), inst.bound);
+
+    const tran = struct {
+        fn at(dd: *const Descriptor, ip: *anyopaque, mp: *anyopaque, t: f64) void {
+            const x = [2]f64{ 1, 0 };
+            const si: SimInfo = .{ .paras = no_paras, .abstime = t, .prev_solve = &x, .prev_state = null, .next_state = null, .flags = analysis_tran | calc_react_residual };
+            _ = dd.eval(null, ip, mp, &si);
+        }
+    };
+    // At 1 s the next event is 5 s: the step after is at most 4 s.
+    tran.at(d, &inst, &model, 1);
+    try testing.expectEqual(@as(f64, 4), inst.bound);
+    // At 5 s the event is due and runs only once 5 s is accepted: the step
+    // after is held to this one's, 4 s.
+    tran.at(d, &inst, &model, 5);
+    try testing.expectEqual(@as(f64, 4), inst.bound);
+    // At 7 s, 5 s was accepted and scheduled 10 s: the bound is 10 - 7.
+    tran.at(d, &inst, &model, 7);
+    try testing.expectEqual(@as(f64, 10), inst.inst.next);
+    try testing.expectEqual(@as(f64, 3), inst.bound);
 }
 
 test "the module and noise names are the source's, not undone escapes" {

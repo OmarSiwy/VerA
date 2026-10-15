@@ -85,7 +85,8 @@ builds a host step by step.
   model struct has no field for a request to reject a time step, correlated
   noise, a step-accepted callback or printed output, so VerA refuses the first
   (E1099) and warns on the second (W1098) rather than drop them silently.
-  VerA's own device contract carries all four.
+  VerA's own device contract carries all four. A `.v` design builds to OSDI
+  too, so ngspice can load a Verilog module beside a Verilog-A model.
 - **Languages:** Verilog-AMS and IEEE 1364-2005 Verilog. SystemVerilog (E1104)
   and VHDL are out of scope.
 - **Open bugs** are `//! xfail` fixtures, each naming its clause; CI's verdict
