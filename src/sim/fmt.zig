@@ -390,11 +390,13 @@ test "%d: one unknown bit poisons the number, and the field fits the largest val
 /// The decimal digits of 2^n, by doubling a digit string: an oracle that
 /// shares no arithmetic with `autoWidth`.
 fn digitsOfPow2(n: u32) u32 {
-    var d: [128]u8 = @splat(0);
+    // ponytail: u32 digits, not u8. The Debug x86_64 backend fails to encode
+    // the u8 version (`emit MIR failed: CannotEncode`, Zig 0.17.0).
+    var d: [128]u32 = @splat(0);
     d[0] = 1;
     var len: u32 = 1;
     for (0..n) |_| {
-        var carry: u8 = 0;
+        var carry: u32 = 0;
         for (d[0..len]) |*digit| {
             const doubled = digit.* * 2 + carry;
             digit.* = doubled % 10;
