@@ -349,28 +349,15 @@ fn usesQuad(self: *const Gen) bool {
 
 /// Emits `U`, the solver unknowns (§1.3.1 nodes, §6.5 ports first, so the
 /// host's terminal order is the module header order), and the per-unknown
-/// tables. `x[i]` in every emitted body indexes this enum.
-/// Fails with `error.TooManyUnknowns` (E1003) above 256 unknowns.
+/// tables. `x[i]` in every emitted body indexes this enum. `U` is an
+/// `enum(u8)` up to 256 unknowns and as wide as the count needs past them
+/// (`contract.isDenseEnum` takes any unsigned tag of 8 bits or more), so the
+/// count has no bound of its own (#29; §6.5.2.2 asks for at least 256 ports).
 pub fn emitTopology(self: *Gen) Error!void {
-    // A 257th member would fail in the host's build at a line of generated
-    // Zig, naming no .va. Refuse here, where the model is still in hand.
-    //
-    // ponytail: |U| <= 256 is a permanent ceiling. `enum(u16)` is the upgrade
-    // path and an ABI break: `isDenseEnum` (tools/contract.zig) requires the
-    // `u8` tag, so both move together and every host recompiles.
-    if (self.names.u_names.len > 256) {
-        if (self.diags) |bag| try bag.add(
-            .codegen,
-            .E1003,
-            .{},
-            "this module needs {d} solver unknowns; the emitted `U` is an enum(u8) and holds 256",
-            .{self.names.u_names.len},
-        );
-        return error.TooManyUnknowns;
-    }
+    const n_names: u32 = @intCast(self.names.u_names.len);
     try self.w("/// Solver unknowns: §6.5 ports first, then §3.6.3 internal nets,\n", .{});
     try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
-    try self.w("pub const U = enum(u8) {{\n", .{});
+    try self.w("pub const U = enum(u{d}) {{\n", .{@max(8, std.math.log2_int_ceil(u32, @max(n_names, 1)))});
     for (self.names.u_names, 0..) |n, i| {
         const kindc: []const u8 = if (i < self.lowered.num_ports)
             "port"
@@ -383,7 +370,7 @@ pub fn emitTopology(self: *Gen) Error!void {
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
     // No unknowns: Zig 0.17 refuses an empty exhaustive `enum(u8)`, and
-    // `enum(noreturn)` would break the contract's `enum(u8)` tag.
+    // `enum(noreturn)` would break the contract's unsigned tag.
     if (self.names.u_names.len == 0) try self.w("    _,\n", .{});
     try self.w(
         \\}};
@@ -495,7 +482,7 @@ fn emitDeclMeta(self: *Gen) Error!void {
 /// A shared potential node uses §7.2.4's minimum across its signal segments.
 pub fn abstolOf(self: *const Gen, i: u32) f64 {
     const flow = plan_topo.isFlowUnknown(self.input(), i);
-    var idx: u16 = @intCast(i);
+    var idx: u32 = i;
     if (i < self.lowered.nodes.len) switch (self.lowered.nodes.items(.kind)[i]) {
         .net => {},
         .branch_flow, .port_flow => |n| idx = n,

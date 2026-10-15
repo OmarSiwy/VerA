@@ -125,8 +125,7 @@ pub const Job = struct {
 /// Returns every core target in queue order (`Job.Kind`); slices are owned by
 /// `self.arena`. `dyn.isDynamic(v)` answers whether a §4.5 control argument
 /// renders only off the core, so a test can pass a stub. Fails on
-/// allocation, on a display name over `naming.max_name_len`, or with `dyn`'s
-/// error.
+/// allocation or with `dyn`'s error.
 pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     var out: Jobs = .{};
     var jobs: std.ArrayList(Job) = .empty;
@@ -390,12 +389,10 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     // path, and proof.zig rates contributions only.
     const root = self.an.rv(self.lowered.display_root);
     if ((from.emit_display or from.record_display) and root != .f_zero) {
-        var buf: [naming.max_name_len]u8 = undefined;
-        const n = naming.unitName(&buf, self.mir.name, .{
+        out.display_name = try naming.unitNameAlloc(self.arena, self.mir.name, .{
             .role = .display,
             .target = "tasks",
-        }) catch return error.NameTooLong;
-        out.display_name = try self.arena.dupe(u8, n);
+        });
         try jobs.append(self.arena, .{
             .kind = .display,
             .name = out.display_name,

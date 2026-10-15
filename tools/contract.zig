@@ -2383,7 +2383,7 @@ pub fn limitWrites(comptime D: type) u64 {
 /// stamps `jacConst` for those columns. Their matrix slots stay in
 /// `jac_pattern`/`q_pattern` and `jac_rows`/`q_rows`.
 ///
-/// `validate` enforces: (a) a declared mask needs |U| <= 64; (b) on a device
+/// `validate` enforces: (a) a declared mask is `MaskOf(|U|)`; (b) on a device
 /// with `limit`, `limitWrites ⊆ derivReads`, because the host's limiting
 /// correction is lane-indexed; (c) `jac_const` is sorted by (row, col), has no
 /// duplicate, no all-zero entry and no column inside the mask, and a guard's
@@ -2870,7 +2870,8 @@ pub fn checkFamily(comptime S: type) void {
     };
 }
 
-/// The `RefFamily` `lane[u]` entry for an unknown the family does not carry.
+/// The `RefFamily` `lane[u]` entry for an unknown the family does not carry,
+/// in a `u8` table. A wider table spells it as its element type's maximum.
 pub const no_lane: u8 = std.math.maxInt(u8);
 
 /// Layout options for `RefFamily`.
@@ -2887,12 +2888,41 @@ pub const RefOptions = struct {
 /// (`f64`, or `f32` under `jac_f32`) beside an `f64` value. `lane[u]` is the
 /// lane unknown `u` occupies in the dense layout, or `no_lane`; a sparse
 /// `Of(m)` refuses at compile time a mask naming an unknown `lane` does not
-/// carry. Its masks are `MaskOf(lane.len)`. A sparse family reads `lane`
-/// only as which unknowns it carries, so it serves any number of them; a
-/// dense one has at most 255 lanes (`no_lane` is the 256th). Transcendentals
-/// go through `gm`, so the family compiles for NVPTX and AMDGCN too.
-pub fn RefFamily(comptime L: type, comptime lane: []const u8, comptime opts: RefOptions) type {
-    return if (opts.dense) RefDense(L, lane, opts.collapse_applied) else RefSparse(L, lane, opts.collapse_applied);
+/// carry. Its masks are `MaskOf(lane.len)`. `lane` is a table (a slice or
+/// a pointer to an array or tuple) of any unsigned element type: `u8` with
+/// `no_lane` up to 255 lanes, a wider element past them, where the
+/// element's maximum is "not carried". A sparse family reads `lane` only as
+/// which unknowns it carries. Transcendentals go through `gm`, so the family
+/// compiles for NVPTX and AMDGCN too.
+pub fn RefFamily(comptime L: type, comptime lane: anytype, comptime opts: RefOptions) type {
+    const t = comptime laneTable(lane);
+    return if (opts.dense) RefDense(L, t, opts.collapse_applied) else RefSparse(L, t, opts.collapse_applied);
+}
+
+/// `RefFamily`'s internal "not carried": `lane` normalized by `laneTable`.
+const lane_none: u32 = std.math.maxInt(u32);
+
+/// `lane` as `u32` entries, each element type's maximum (`no_lane` in a `u8`
+/// table) mapped to `lane_none`. A `comptime_int` entry is always a lane.
+fn laneTable(comptime lane: anytype) []const u32 {
+    comptime {
+        // `&std.simd.iota(u8, n)`: a pointer to a vector has no `.len`.
+        const P = @typeInfo(@TypeOf(lane));
+        if (P == .pointer and @typeInfo(P.pointer.child) == .vector) {
+            const v = @typeInfo(P.pointer.child).vector;
+            const a: [v.len]v.child = lane.*;
+            return laneTable(&a);
+        }
+        @setEvalBranchQuota(10 * lane.len + 1000);
+        var out: [lane.len]u32 = undefined;
+        for (&out, 0..) |*o, u| {
+            const l = lane[u];
+            const E = @TypeOf(l);
+            o.* = if (E != comptime_int and l == std.math.maxInt(E)) lane_none else l;
+        }
+        const final = out;
+        return &final;
+    }
 }
 
 const fma_lanes = switch (@import("builtin").target.cpu.arch) {
@@ -2917,10 +2947,11 @@ fn sqrtSlope(s: f64) f64 {
     return if (s > 0.0) 0.5 / s else 0.0;
 }
 
-fn laneWidth(comptime lane: []const u8) usize {
+fn laneWidth(comptime lane: []const u32) usize {
+    @setEvalBranchQuota(10 * lane.len + 1000);
     var n: usize = 0;
     for (lane) |l| {
-        if (l != no_lane) n = @max(n, @as(usize, l) + 1);
+        if (l != lane_none) n = @max(n, @as(usize, l) + 1);
     }
     return n;
 }
@@ -2928,7 +2959,7 @@ fn laneWidth(comptime lane: []const u8) usize {
 /// `RefFamily`'s dense layout: every `Of(m)` is this one type, the value and
 /// `laneWidth(lane)` lanes of `L`, so a mask only documents intent. The
 /// methods are `family_primitives`, computing the numerics table.
-fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
+fn RefDense(comptime L: type, comptime lane: []const u32, comptime collapsed: bool) type {
     return struct {
         v: f64,
         /// An array, not a vector, so a host's scatter loop may index it at
@@ -2957,7 +2988,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
         }
         pub fn probe(comptime u: usize, v: f64) T {
             var d: [N]L = @splat(0.0);
-            if (lane[u] != no_lane) d[lane[u]] = 1.0;
+            if (lane[u] != lane_none) d[lane[u]] = 1.0;
             return .{ .v = v, .d = d };
         }
         pub fn to(a: T, comptime _: MaskOf(lane.len)) T {
@@ -2967,7 +2998,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
             return a.v;
         }
         pub fn ddxAt(a: T, comptime u: usize) f64 {
-            if (lane[u] == no_lane) return 0.0;
+            if (lane[u] == lane_none) return 0.0;
             return a.d[lane[u]];
         }
         pub fn add(a: T, b: T) T {
@@ -3052,7 +3083,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
 /// in unknown order, and a binary operation returns `Of(m | m')` with each
 /// operand's lanes spread into the joined layout (`spread`). The methods are
 /// `family_primitives`, computing the numerics table.
-fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
+fn RefSparse(comptime L: type, comptime lane: []const u32, comptime collapsed: bool) type {
     const M = MaskOf(lane.len);
     return struct {
         pub const collapse_applied = collapsed;
@@ -3073,7 +3104,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
         const carried: M = blk: {
             @setEvalBranchQuota(10 * lane.len + 1000);
             var c: M = 0;
-            for (lane, 0..) |l, u| if (l != no_lane) {
+            for (lane, 0..) |l, u| if (l != lane_none) {
                 c |= @as(M, 1) << @intCast(u);
             };
             break :blk c;
@@ -5470,10 +5501,13 @@ test "pow and sqrt lane coefficients at the edges the numerics table pins" {
     try testing.expectEqual(@as(f64, 0.125), sqrtSlope(4)); // 0.5/4
     try testing.expectEqual(@as(f64, 0), sqrtSlope(0));
     try testing.expectEqual(@as(f64, 0), sqrtSlope(std.math.nan(f64)));
-    try testing.expectEqual(@as(usize, 0), comptime laneWidth(&.{}));
-    try testing.expectEqual(@as(usize, 0), comptime laneWidth(&.{ no_lane, no_lane }));
-    try testing.expectEqual(@as(usize, 4), comptime laneWidth(&.{ 3, no_lane }));
-    try testing.expectEqual(@as(usize, 1), comptime laneWidth(&.{ 0, 0 }));
+    try testing.expectEqual(@as(usize, 0), comptime laneWidth(laneTable(&[_]u8{})));
+    try testing.expectEqual(@as(usize, 0), comptime laneWidth(laneTable(&[_]u8{ no_lane, no_lane })));
+    try testing.expectEqual(@as(usize, 4), comptime laneWidth(laneTable(&[_]u8{ 3, no_lane })));
+    try testing.expectEqual(@as(usize, 1), comptime laneWidth(laneTable(&.{ 0, 0 })));
+    // Past 255 lanes a wider table: 255 is a lane, its maximum is not (#29).
+    try testing.expectEqual(@as(usize, 256), comptime laneWidth(laneTable(&[_]u16{ 255, std.math.maxInt(u16) })));
+    try testing.expectEqual(@as(usize, 300), comptime laneWidth(laneTable(&std.simd.iota(u16, 300))));
 }
 
 /// A device shape with `n` unknowns and nothing else, for the mask helpers.

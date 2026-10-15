@@ -107,7 +107,7 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         try lower_hier_name.refuseRuntime(self, self.file.exprs.mainTok(args[1]), t.hi, t.lo);
-        const u: u16 = switch (t.access) {
+        const u: u32 = switch (t.access) {
             .potential => t.hi,
             // Peek, never mint: "If the expression does not depend explicitly on
             // the unknown, then ddx() returns zero (0)." A branch current enters an

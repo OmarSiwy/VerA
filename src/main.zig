@@ -320,6 +320,7 @@ fn compileAnalog(
         var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
         dm.op_states = try vera.tb.opStates(tb_arena.allocator(), result.lowered);
+        dm.mem_bytes = vera.tb.memBytes(result.lowered);
         dm.validate_contract = cli.validate_contract;
         try vera.tb.warnGridEvents(&bag, result.lowered, result.mir);
         // Runner diagnostics obey --deny/--forbid before an artifact is

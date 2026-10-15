@@ -161,7 +161,7 @@ fn emitVpiValues(self: *Gen, name: []const u8, items: anytype) Error!void {
     try self.w("    }};\n}}\n\n", .{});
 }
 
-fn nodeCol(n: u16) i64 {
+fn nodeCol(n: u32) i64 {
     return if (n == Lower.ground) -1 else n;
 }
 
@@ -1007,7 +1007,7 @@ fn coreRef(self: *Gen, v: Mir.Value) Error!void {
 /// `bits` in the row pattern. `col` names the unknown when `val` is exactly `x[col]` (a ±1 term
 /// whose coefficient `Gen.jac.lin` records), and is null for a core value, whose
 /// lanes `renderValueRef` already marked. Ground has no row and writes nothing.
-pub fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8, bits: u64, col: ?u32) Error!void {
+pub fn stamp(self: *Gen, depth: u32, node: u32, opx: []const u8, val: []const u8, bits: u64, col: ?u32) Error!void {
     if (node == Lower.ground) return; // §1.3.1.1 ground has no equation
     patRow(self, node, bits);
     if (col) |k| linTerm(self, node, k, if (std.mem.eql(u8, opx, "add")) 1 else -1);
@@ -1033,7 +1033,7 @@ fn rowEnd(self: *Gen) Error!void {
 /// Records that row `node` of the half being emitted (`jac.react`) gained a
 /// term whose derivative lives in `bits`, and that the row is written at all
 /// (`rows`). Ground has no row. Every `res[...]` writer calls this.
-pub fn patRow(self: *Gen, node: u16, bits: u64) void {
+pub fn patRow(self: *Gen, node: u32, bits: u64) void {
     if (node == Lower.ground) return;
     if (self.jac.pat[@intFromBool(self.jac.react)].len == 0) return;
     self.jac.pat[@intFromBool(self.jac.react)][node] |= bits;
@@ -1069,7 +1069,7 @@ fn linClear(self: *Gen, row: u32) void {
 
 /// Records that row `row` is assigned `V(hi) − V(lo) − <core value>`: §5.6's branch
 /// relation, and §5.4.2.1's zero-potential flow probe.
-fn linBranch(self: *Gen, row: u32, hi: u16, lo: u16) void {
+fn linBranch(self: *Gen, row: u32, hi: u32, lo: u32) void {
     linClear(self, row);
     linTerm(self, row, hi, 1);
     linTerm(self, row, lo, -1);
@@ -1147,7 +1147,7 @@ pub fn uBit(u: u32) u64 {
 }
 
 /// Same, for a node that may be ground (no unknown, no column).
-fn nodeBit(node: u16) u64 {
+fn nodeBit(node: u32) u64 {
     return if (node == Lower.ground) 0 else uBit(node);
 }
 
@@ -1183,7 +1183,7 @@ fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool)
     return acc;
 }
 
-fn nodeVoltage(self: *Gen, node: u16) Error!void {
+fn nodeVoltage(self: *Gen, node: u32) Error!void {
     if (node == Lower.ground) return self.b("S.con(0.0)", .{});
     try self.b("x[@intFromEnum(U.{s})]", .{self.names.u_names[node]});
 }

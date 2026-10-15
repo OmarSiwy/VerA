@@ -148,7 +148,7 @@ const Emitter = struct {
         @memset(potential, null);
         for (lw.contributions.items, 0..) |c, ci| {
             if (c.kind != .direct) return self.refuse("§5.6.7 indirect branch assignments are not supported", .{});
-            for ([_]u16{ c.hi, c.lo }) |r| {
+            for ([_]u32{ c.hi, c.lo }) |r| {
                 if (r == Lowered.ground) continue;
                 if (kinds[r] != .net) return self.refuse("`{s}` is not a net (an I() probe, or ddt/idt outside a contribution)", .{names[r]});
             }
@@ -165,7 +165,7 @@ const Emitter = struct {
                 if (!lo_rail) return self.refuse("`V({s}, {s}) <+`: a potential contribution must be referred to a supply or ground", .{ names[c.hi], names[c.lo] });
                 potential[c.hi] = @intCast(ci);
                 driven[c.hi] = true;
-            } else for ([_]u16{ c.hi, c.lo }) |r| {
+            } else for ([_]u32{ c.hi, c.lo }) |r| {
                 if (r != Lowered.ground and !self.isSupply(pins, r)) driven[r] = true;
             }
         }
@@ -173,7 +173,7 @@ const Emitter = struct {
         self.driven = driven;
 
         // The variables: undriven signal ports (inputs), then driven nets (states).
-        var vars: std.ArrayList(u16) = .empty;
+        var vars: std.ArrayList(u32) = .empty;
         for (0..lw.num_ports) |r| if (!driven[r] and !self.isSupply(pins, @intCast(r))) try vars.append(self.arena, @intCast(r));
         const n_inputs = vars.items.len;
         for (0..n_nodes) |r| if (driven[r]) try vars.append(self.arena, @intCast(r));
@@ -359,7 +359,7 @@ const Emitter = struct {
         return out.items;
     }
 
-    fn isSupply(self: *const Emitter, pins: []const Pin, r: u16) bool {
+    fn isSupply(self: *const Emitter, pins: []const Pin, r: u32) bool {
         return r < self.lw.num_ports and (pins[r] == .power or pins[r] == .ground);
     }
 
@@ -370,14 +370,14 @@ const Emitter = struct {
     /// The Verilog net that carries row `r`'s bit: a digital or an undriven
     /// port itself, else an internal `vera_n_*` (a driven analog port stays
     /// undriven outside).
-    fn net(self: *const Emitter, pins: []const Pin, r: u16) Name {
+    fn net(self: *const Emitter, pins: []const Pin, r: u32) Name {
         const n = self.lw.nodes.items(.name)[r];
         if (r < self.lw.num_ports and (pins[r] == .digital or !self.driven[r])) return ident(n);
         return .{ .prefix = "vera_n_", .text = n };
     }
 
     /// Emits row `r`'s target table and its delayed assignment.
-    fn node(self: *Emitter, w: *std.ArrayList(u8), vars: []const u16, target: []const Bit, support: []const usize, r: u16, rise: f64, fall: f64) Error!void {
+    fn node(self: *Emitter, w: *std.ArrayList(u8), vars: []const u32, target: []const Bit, support: []const usize, r: u32, rise: f64, fall: f64) Error!void {
         const A = self.arena;
         const lw = self.lw;
         const name = lw.nodes.items(.name)[r];
@@ -619,7 +619,7 @@ const logic: Options = .{ .digital = &.{ "a", "y" }, .source = "buf.va" };
 
 /// Appends the unconditional direct contribution `I(hi, lo) <+ resist +
 /// ddt(react)`.
-fn addFlow(f: *Fixture, hi: u16, lo: u16, resist: Mir.Value, react: Mir.Value) !void {
+fn addFlow(f: *Fixture, hi: u32, lo: u32, resist: Mir.Value, react: Mir.Value) !void {
     try f.lowered.contributions.append(f.alloc(), .{ .access = .flow, .hi = hi, .lo = lo, .resist_val = resist, .react_val = react, .wrote_val = .f_one });
 }
 

@@ -17,7 +17,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const codegen = @import("codegen.zig");
-const naming = @import("naming.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Cache = std.Build.Cache;
@@ -210,7 +209,6 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     var udir = try dir.openDir(io, unit_dir, .{ .iterate = true });
     defer udir.close(io);
 
-    var path_buf: [naming.max_name_len + 8]u8 = undefined;
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(gpa);
 
@@ -223,7 +221,8 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
         try body.appendSlice(gpa, device.text[lo..fn_at]);
         if (!std.mem.startsWith(u8, device.text[fn_at..], "pub ")) try body.appendSlice(gpa, "pub ");
         try body.appendSlice(gpa, device.text[fn_at..hi]);
-        const p = try std.mem.print(&path_buf, "{s}.zig", .{name});
+        const p = try std.fmt.allocPrint(gpa, "{s}.zig", .{name});
+        defer gpa.free(p);
         if (try writeIfChanged(io, gpa, udir, p, body.items)) writes += 1;
     }
 
