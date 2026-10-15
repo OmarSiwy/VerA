@@ -787,3 +787,51 @@ pub fn isConnectModuleOnlySysFunc(name: []const u8) bool {
 /// §9.15 Table 9-28: the string parameter names `$simparam$str` "shall"
 /// support, and the only ones VerA knows.
 const simparam_str_names = [_][]const u8{ "analysis_name", "analysis_type", "cwd", "module", "instance", "path" };
+
+test isDigitalOnlySysFunc {
+    try std.testing.expect(isDigitalOnlySysFunc("$time")); // Table 9-7
+    try std.testing.expect(isDigitalOnlySysFunc("$async$and$array")); // Table 9-5, one token (§2.8.3)
+    try std.testing.expect(isDigitalOnlySysFunc("$displayb")); // Table 9-1
+    try std.testing.expect(!isDigitalOnlySysFunc("$abstime")); // Yes in both columns
+    try std.testing.expect(!isDigitalOnlySysFunc("$realtobits")); // §9.11 extends it to analog
+    try std.testing.expect(!isDigitalOnlySysFunc("$strobe"));
+}
+
+test isAnalogOnlySysFunc {
+    try std.testing.expect(isAnalogOnlySysFunc("$bound_step"));
+    try std.testing.expect(isAnalogOnlySysFunc("$fatal"));
+    try std.testing.expect(!isAnalogOnlySysFunc("$display"));
+}
+
+test isConnectModuleOnlySysFunc {
+    try std.testing.expect(isConnectModuleOnlySysFunc("$driver_count"));
+    try std.testing.expect(isConnectModuleOnlySysFunc("$receiver_count"));
+    try std.testing.expect(isConnectModuleOnlySysFunc("$driver_type"));
+    try std.testing.expect(!isConnectModuleOnlySysFunc("$port_connected"));
+}
+
+test simparamValueIn {
+    // No `timescale: §9.15's two source rows are unknown.
+    const d: Preprocessor.Directives = .{};
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "timeUnit"));
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "timePrecision"));
+    try std.testing.expectEqual(@as(?f64, 1e-12), simparamValueIn(&d, "gmin"));
+    try std.testing.expectEqual(@as(?f64, 27.0), simparamValueIn(&d, "tnom"));
+    try std.testing.expectEqual(@as(?f64, 1.0), simparamValueIn(&d, "shrink"));
+    // Table 9-27 applies "if they support the parameter"; VerA does not.
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "gdev"));
+}
+
+test simparamHostField {
+    try std.testing.expectEqualStrings("nom_temp__", simparamHostField("tnom").?);
+    try std.testing.expectEqualStrings("source_scale__", simparamHostField("sourceScaleFactor").?);
+    try std.testing.expect(simparamHostField("timeUnit") == null);
+    // Every row's field ends `__`, the suffix `naming.sanitize` never emits.
+    for (host_simparams) |h| try std.testing.expect(std.mem.endsWith(u8, h.field, "__"));
+}
+
+test simparamIsRuntime {
+    try std.testing.expect(simparamIsRuntime("iteration"));
+    try std.testing.expect(simparamIsRuntime("dt"));
+    try std.testing.expect(!simparamIsRuntime("gmin"));
+}

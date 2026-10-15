@@ -748,3 +748,29 @@ fn timerReadChanged(self: *Lower, read: TimerRead) Oom!bool {
     const after = try self.builder.readVariable(read.slot.place, self.cur);
     return self.mir.resolveAlias(after) != self.mir.resolveAlias(read.value);
 }
+
+test requiredSlots {
+    // §5.10.3: the monitored quantity, and absdelta's delta besides.
+    try std.testing.expectEqual(@as(usize, 1), requiredSlots("cross").len);
+    try std.testing.expectEqualStrings("expr", requiredSlots("above")[0]);
+    try std.testing.expectEqualStrings("start_time", requiredSlots("timer")[0]);
+    try std.testing.expectEqual(@as(usize, 2), requiredSlots("absdelta").len);
+    try std.testing.expectEqualStrings("delta", requiredSlots("absdelta")[1]);
+    try std.testing.expectEqual(@as(usize, 0), requiredSlots("initial_step").len);
+}
+
+test enableSlot {
+    // cross(expr, dir, time_tol, expr_tol, enable); above and timer one earlier.
+    try std.testing.expectEqual(@as(?usize, 4), enableSlot("cross"));
+    try std.testing.expectEqual(@as(?usize, 3), enableSlot("above"));
+    try std.testing.expectEqual(@as(?usize, 3), enableSlot("timer"));
+    try std.testing.expectEqual(@as(?usize, null), enableSlot("absdelta"));
+}
+
+test timerSystemPure {
+    try std.testing.expect(timerSystemPure(.fromName("$sqrt")));
+    try std.testing.expect(timerSystemPure(.fromName("$abstime")));
+    // A descriptor call opens a file: replaying it would open a second one.
+    try std.testing.expect(!timerSystemPure(.fromName("$fopen")));
+    try std.testing.expect(!timerSystemPure(.fromName("$strobe")));
+}
