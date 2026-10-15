@@ -56,7 +56,9 @@ pub fn runNoise(comptime D: type, title: []const u8, model: *D.Model, inst: *D.I
     var ckt: Circuit(D) = .init(model, inst);
     var ws: converger.Workspace(contract.nU(D)) = .{};
     var x: [contract.nU(D)]f64 = undefined;
-    _ = op.solve(&ckt, &ws, &x, .dc) catch |e| fail(title, "operating point: {t}", .{e});
+    // §4.6.1 Table 4-22's NOISE OP column: "static" holds and "dc" does not,
+    // so the operating point is `.static`, not a `.dc` analysis of its own.
+    _ = op.solve(&ckt, &ws, &x, .static) catch |e| fail(title, "operating point: {t}", .{e});
     var dens: [freqs.len]f64 = undefined;
     noise.sweep(&ckt, &x, @backingInt(out), freqs, &dens) catch |e| fail(title, "noise: {t}", .{e});
     for (freqs, dens) |f, d| std.debug.print("noise f={e} onoise={e}\n", .{ f, @sqrt(d) });
