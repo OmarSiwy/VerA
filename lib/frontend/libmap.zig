@@ -43,6 +43,8 @@ pub const Map = struct {
 
     /// §13.2.1.1 the library `file` (absolute) maps into: the one whose
     /// specification matches it most specifically, else `work` (§13.2.1).
+    /// A tie names the first two libraries, in declaration order, whose best
+    /// specifications share the most specific class. O(specifications).
     pub fn libraryOf(map: Map, file: []const u8) Placement {
         var best: ?Class = null;
         var lib: []const u8 = "work";
@@ -87,7 +89,9 @@ pub const Error = error{ MapFailed, OutOfMemory };
 /// Reads the map files at `paths`, in order (§13.2.1: "If multiple map files
 /// are specified, then they shall be read in the order in which they are
 /// specified"). A refusal is E0244 in `bag`, whose files it registers, and
-/// `error.MapFailed`.
+/// `error.MapFailed`: an unreadable file, a statement other than `library`
+/// or `include` (§13.2.2), a malformed one (Syntax 13-2), or an `include`
+/// nested past 32 files. Every slice of the `Map` lives in `arena`.
 pub fn load(arena: std.mem.Allocator, io: Io, bag: *diag.Bag, paths: []const []const u8) Error!Map {
     var l: Loader = .{ .arena = arena, .io = io, .bag = bag };
     for (paths) |p| try l.read(p, null, 0);
@@ -193,15 +197,15 @@ const Tokens = struct {
             if (std.ascii.isWhitespace(s[t.pos])) {
                 t.pos += 1;
             } else if (std.mem.startsWith(u8, s[t.pos..], "//")) {
-                t.pos = std.mem.indexOfScalarPos(u8, s, t.pos, '\n') orelse s.len;
+                t.pos = std.mem.findScalarPos(u8, s, t.pos, '\n') orelse s.len;
             } else if (std.mem.startsWith(u8, s[t.pos..], "/*")) {
-                t.pos = if (std.mem.indexOfPos(u8, s, t.pos + 2, "*/")) |e| e + 2 else s.len;
+                t.pos = if (std.mem.findPos(u8, s, t.pos + 2, "*/")) |e| e + 2 else s.len;
             } else break;
         }
         if (t.pos == s.len) return null;
         const start = t.pos;
         if (s[t.pos] == '"') {
-            t.pos = if (std.mem.indexOfScalarPos(u8, s, t.pos + 1, '"')) |e| e + 1 else s.len;
+            t.pos = if (std.mem.findScalarPos(u8, s, t.pos + 1, '"')) |e| e + 1 else s.len;
         } else if (isPunct(s[t.pos .. t.pos + 1])) {
             t.pos += 1;
         } else while (t.pos < s.len and !std.ascii.isWhitespace(s[t.pos]) and s[t.pos] != ',' and s[t.pos] != ';') t.pos += 1;
@@ -223,14 +227,17 @@ fn unquote(w: []const u8) []const u8 {
     return if (w.len >= 2 and w[0] == '"' and w[w.len - 1] == '"') w[1 .. w.len - 1] else w;
 }
 
-/// §13.2.1 "Paths that do not begin with / are relative to the directory in
-/// which the current lib.map file is located"; "Paths that end in / shall
-/// include all files in the specified directory. Identical to /*."
+/// Returns `raw`, a `file_path_spec`, resolved against `dir` (absolute,
+/// `/`-separated) and classed for §13.2.1.1. §13.2.1 "Paths that do not
+/// begin with / are relative to the directory in which the current lib.map
+/// file is located"; "Paths that end in / shall include all files in the
+/// specified directory. Identical to /*." The pattern is allocated in
+/// `arena`.
 pub fn resolveSpec(arena: std.mem.Allocator, dir: []const u8, raw: []const u8) error{OutOfMemory}!Spec {
     const base = std.fs.path.basenamePosix(raw);
     const class: Class = if (std.mem.endsWith(u8, raw, "/"))
         .directory
-    else if (std.mem.indexOfAny(u8, base, "*?") != null or std.mem.eql(u8, base, "..."))
+    else if (std.mem.findAny(u8, base, "*?") != null or std.mem.eql(u8, base, "..."))
         .wildcard
     else
         .file;
@@ -247,10 +254,11 @@ fn slashed(arena: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]cons
     return out;
 }
 
-/// Does `file` match `pattern`, both absolute? §13.2.1's wildcards: `?` one
-/// character, `*` any run within one name, `...` any number of directories.
-/// `pattern` is `/`-separated (`resolveSpec`); `file` is a host path, split
-/// on the host's separators.
+/// Reports whether `file` matches `pattern`, both absolute. §13.2.1's
+/// wildcards: `?` one character, `*` any run within one name, `...` any
+/// number of directories. `pattern` is `/`-separated (`resolveSpec`); `file`
+/// is a host path, split on the host's separators. Each name is matched in
+/// time linear in the product of its pattern and name lengths.
 pub fn matches(pattern: []const u8, file: []const u8) bool {
     var f = file;
     while (f.len != 0 and std.fs.path.isSep(f[0])) f = f[1..];
@@ -264,7 +272,7 @@ fn nextSep(f: []const u8) ?usize {
 
 fn segments(p: []const u8, f: []const u8) bool {
     if (p.len == 0) return f.len == 0;
-    const p_end = std.mem.indexOfScalar(u8, p, '/') orelse p.len;
+    const p_end = std.mem.findScalar(u8, p, '/') orelse p.len;
     const p_rest = if (p_end == p.len) "" else p[p_end + 1 ..];
     if (std.mem.eql(u8, p[0..p_end], "...")) {
         var rest = f;

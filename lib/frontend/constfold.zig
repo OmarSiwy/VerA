@@ -254,9 +254,12 @@ pub fn unary(op: Ast.UnaryOp, a: Const) ?Const {
 }
 
 /// Folds a binary operator over two folded operands, or returns null when the
-/// result has no constant value (zero divisor, string mix, out-of-range
-/// shift). `lhs_signed` is the left operand's signedness, read only by `>>>`
-/// (IEEE 1364-2005 §5.1.12); null makes `>>>` decline.
+/// result has no constant value here: an integer zero divisor or a zero
+/// modulus, a string beside a number or under an operator Table 3-3 does not
+/// define, a shift count outside 0..63, a real under `<<<`, `>>>`, `===` or
+/// `!==`, and `0 ** negative`. `lhs_signed` is the left operand's
+/// signedness, read only by `>>>` (IEEE 1364-2005 §5.1.12); null makes `>>>`
+/// decline.
 pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
     // Strings first: `asReal` is 0 for every string, so a numeric compare
     // would make `"slow" == "fast"` true.
@@ -431,7 +434,8 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
 
 /// Folds `e` over `file`'s expression store, or returns null when it is not
 /// constant. Covers literals, the A.2.5 infinities, the unary and binary
-/// operators, a lazy `?:`, and §4.3's math functions.
+/// operators, a lazy `?:`, and §4.3's math functions. `&&` and `||` fold both
+/// operands here (`foldSized` short-circuits), so `0 && 1/0` declines.
 ///
 /// `env` answers what the structure cannot, as three methods:
 ///   leaf(e) ?Const     any tag this walk does not fold itself (an identifier)
@@ -637,6 +641,7 @@ pub const IntContext = struct {
     signed: bool,
 
     /// Returns `value` cut to `width` bits and re-extended by `signed`.
+    /// `width` is at least 1: every context comes from an operand width.
     pub fn normalize(c: IntContext, value: i64) i64 {
         if (c.width >= 64) return value;
         const mask = (@as(u64, 1) << @intCast(c.width)) - 1;
@@ -666,9 +671,11 @@ pub const IntPlan = struct {
     }
 };
 
+/// Returns how `e` is sized inside `parent` (null: `e` is self-determined).
 /// IEEE Table 5-22 and §5.5.2: logical operands, a shift/power's RHS, and a
 /// conditional's condition are self-determined. Comparisons share a context
-/// between their operands, independent of their one-bit result.
+/// between their operands, independent of their one-bit result. Null when
+/// `env` cannot give a width or signedness the plan needs.
 pub fn intPlan(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, parent: ?IntContext) ?IntPlan {
     const ex = &file.exprs;
     const own: IntContext = .{ .width = clog2Width(file, e, env) orelse return null, .signed = clog2Signed(file, e, env) orelse return null };
@@ -754,9 +761,10 @@ pub const LiteralEnv = struct {
 /// IEEE 1364-2005 §5.1.11: "The unary reduction operators shall perform a
 /// bitwise operation on a single operand to produce a single-bit result", so
 /// the answer depends on the operand's width, which a `Const` does not carry.
-/// A literal has one (its size, or §3.2's 32 bits unsized); any other operand
-/// declines. §4.2.10 bars these operators from the analog block, not from a
-/// parameter declaration.
+/// A literal has one: its size, or unsized the width `operandWidth` gives it
+/// (§3.2's 32 bits, or 64 when 32 do not hold its value); any other operand,
+/// and a size past 64, declines. §4.2.10 bars these operators from the analog
+/// block, not from a parameter declaration.
 fn reduction(ex: *const Ast.ExprStore, op: Ast.UnaryOp, operand: Ast.ExprId, a: Const) ?Const {
     if (a != .int) return null;
     if (ex.tag(operand) != .int_literal) return null;

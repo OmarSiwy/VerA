@@ -148,6 +148,8 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
     // Emitted names, so a repeated card does not declare the same module twice.
     // The first card wins; E.1.2 leaves the choice to "the authors of the
     // simulator".
+    // ponytail: `seen` and `models` are linear scans, O(cards * models); a
+    // StringHashMap keyed by name if a netlist ever holds thousands of models.
     var seen: std.ArrayList([]const u8) = .empty;
     var unsupported: std.ArrayList([]const u8) = .empty;
 
@@ -346,7 +348,7 @@ fn unquote(t: []const u8) []const u8 {
 /// `level = 72`, and every reader below splits a parameter on its `=` within
 /// one token.
 fn tightEquals(arena: Allocator, card: []const u8) Allocator.Error![]const u8 {
-    if (std.mem.indexOfScalar(u8, card, '=') == null) return arena.dupe(u8, card);
+    if (std.mem.findScalar(u8, card, '=') == null) return arena.dupe(u8, card);
     var out: std.ArrayList(u8) = try .initCapacity(arena, card.len);
     for (card, 0..) |c, i| {
         const blank = c == ' ' or c == '\t';
@@ -370,7 +372,7 @@ const Tokens = struct {
     const seps = " \t(),";
 
     fn next(t: *Tokens) ?[]const u8 {
-        while (t.i < t.text.len and std.mem.indexOfScalar(u8, seps, t.text[t.i]) != null) t.i += 1;
+        while (t.i < t.text.len and std.mem.findScalar(u8, seps, t.text[t.i]) != null) t.i += 1;
         if (t.i == t.text.len) return null;
         const start = t.i;
         var depth: usize = 0;
@@ -385,7 +387,7 @@ const Tokens = struct {
                 depth += 1;
             } else if (c == '}') {
                 depth -|= 1;
-            } else if (depth == 0 and std.mem.indexOfScalar(u8, seps, c) != null) break;
+            } else if (depth == 0 and std.mem.findScalar(u8, seps, c) != null) break;
         }
         return t.text[start..t.i];
     }
@@ -400,7 +402,7 @@ fn tokens(text: []const u8) Tokens {
 fn strip(raw: []const u8) []const u8 {
     var line = std.mem.trim(u8, raw, " \t\r");
     if (line.len != 0 and line[0] == '*') return "";
-    if (std.mem.indexOfAny(u8, line, ";$")) |at| line = std.mem.trim(u8, line[0..at], " \t");
+    if (std.mem.findAny(u8, line, ";$")) |at| line = std.mem.trim(u8, line[0..at], " \t");
     return line;
 }
 
@@ -458,7 +460,7 @@ fn emitCard(
             // E.1.2: "a particular SPICE netlist can reference a primitive
             // which is unsupported". Kept, so its use is named as that.
             try seen.append(arena, name);
-            try unsupported.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ name, type_ }));
+            try unsupported.append(arena, try arena.print("{s} {s}", .{ name, type_ }));
             return false;
         };
         // E.2.2.1: the interface is the primitive's. The body instantiates the
@@ -491,7 +493,7 @@ fn emitCard(
                 in_params = true;
                 continue;
             }
-            const eq = std.mem.indexOfScalar(u8, t, '=') orelse {
+            const eq = std.mem.findScalar(u8, t, '=') orelse {
                 if (in_params or !isSpiceName(t)) {
                     try refusals.add(card, "`{s}` on `.subckt {s}`: neither a node before the parameters nor a `k=v` parameter", .{ t, name });
                     return false;
@@ -531,7 +533,7 @@ fn emitCard(
         const zero_port = for (ports.items) |pt| {
             if (std.mem.eql(u8, pt, "\\0 ")) break true;
         } else false;
-        if (!zero_port and std.mem.indexOf(u8, inner.items, "\\0 ") != null)
+        if (!zero_port and std.mem.find(u8, inner.items, "\\0 ") != null)
             try out.appendSlice(arena, "   electrical \\0 ;\n   ground \\0 ;\n");
         try out.appendSlice(arena, inner.items);
         try out.appendSlice(arena, "endmodule\n\n");
@@ -593,7 +595,8 @@ const controlled = [_]struct { letter: u8, lhs: []const u8, rhs: []const u8, by_
 /// A card this cannot read is a `Refusal`: a letter with no `device_cards`,
 /// `controlled` or `model_cards` row and not `X` (`S`, `T`, `K`), a value
 /// that is a model name (`R1 A B RMOD`) or an expression `expression` does
-/// not read, a missing or extra field, a nested `.SUBCKT` or any other dot
+/// not read, a missing or extra field, a controlled source in its `POLY`,
+/// `VALUE`, `TABLE` or `LAPLACE` form, a nested `.SUBCKT` or any other dot
 /// card (`.PARAM` included).
 ///
 /// A node the port list does not name needs no declaration: it is an implicit
@@ -720,6 +723,11 @@ fn emitBody(
 ///     Q c b e [s] model [area] [k=v ...]
 ///     J d g s model [area] [k=v ...]
 ///     D a c model [area] [k=v ...]
+///
+/// Q's substrate is read as SPICE3 reads it: the fourth field is the model
+/// when a `.MODEL` card names it; otherwise the fifth is, when a `.MODEL`
+/// card names it or it is not a number (`2N2222` is both a model name and
+/// SPICE's 2n with unit noise, so the card decides).
 const model_cards = [_]struct { letter: u8, nodes: u8, prim: []const u8 }{
     .{ .letter = 'm', .nodes = 4, .prim = "mosfet" },
     .{ .letter = 'q', .nodes = 3, .prim = "bjt" },
@@ -788,7 +796,7 @@ fn emitModelCard(
     var plain: std.ArrayList([]const u8) = .empty;
     var over: std.ArrayList(Override) = .empty;
     while (it.next()) |t| {
-        const eq = std.mem.indexOfScalar(u8, t, '=') orelse {
+        const eq = std.mem.findScalar(u8, t, '=') orelse {
             if (over.items.len != 0)
                 return refusals.add(card, "`{s}`: the field `{s}` after its parameters is not read", .{ inst, t });
             try plain.append(arena, t);
@@ -832,11 +840,11 @@ fn emitModelCard(
         }
         module = m.type_;
         // A bin (`name.N`, picked or named) keeps its bounds to itself.
-        const binned = std.mem.indexOfScalar(u8, m.name, '.') != null;
+        const binned = std.mem.findScalar(u8, m.name, '.') != null;
         var mit = tokens(m.card.text);
         for (0..3) |_| _ = mit.next(); // `.model name type`
         while (mit.next()) |t| {
-            const eq = std.mem.indexOfScalar(u8, t, '=') orelse
+            const eq = std.mem.findScalar(u8, t, '=') orelse
                 return refusals.add(card, "`{s}`: the field `{s}` of `.model {s}` is not read", .{ inst, t, m.name });
             if (binned and binBound(t[0..eq]) != null) continue;
             try setOverride(arena, &params, t[0..eq], try paramValue(arena, t, eq, inst, card, refusals, &.{}) orelse return);
@@ -888,7 +896,7 @@ fn pickBin(card: Card, inst: []const u8, model: []const u8, models: []const Mode
         var mit = tokens(m.card.text);
         for (0..3) |_| _ = mit.next(); // `.model name type`
         while (mit.next()) |t| {
-            const eq = std.mem.indexOfScalar(u8, t, '=') orelse continue;
+            const eq = std.mem.findScalar(u8, t, '=') orelse continue;
             const k = binBound(t[0..eq]) orelse continue;
             b[@backingInt(k)] = spiceNumber(t[eq + 1 ..]) orelse {
                 try refusals.add(card, "`{s}`: the bound `{s}` of the bin `.model {s}` is not a number", .{ inst, t, m.name });
@@ -919,7 +927,7 @@ fn emitSubcktCard(
     var over: std.ArrayList(Override) = .empty;
     while (it.next()) |t| {
         if (std.mem.eql(u8, t, "params:")) continue;
-        const eq = std.mem.indexOfScalar(u8, t, '=') orelse {
+        const eq = std.mem.findScalar(u8, t, '=') orelse {
             if (over.items.len != 0)
                 return refusals.add(card, "`{s}`: the field `{s}` after its parameters is not read", .{ inst, t });
             try plain.append(arena, t);
@@ -1053,7 +1061,9 @@ const Expr = union(enum) {
 /// `+` and `-`; parentheses; and the `expr_fns` calls. Power binds tighter
 /// than a unary minus on its left (`-2**2` is -4), and every operation is
 /// parenthesized, so the grammar's precedence is the text's. Anything else
-/// (`.param` names, `^`, comparisons, `?:`, other functions) is refused.
+/// (`.param` names, `^`, comparisons, `?:`, other functions) is refused, and
+/// so is nesting (parentheses, calls, unary signs) deeper than
+/// `ExprParser.max_depth`, which bounds the recursion on any input.
 fn expression(arena: Allocator, src: []const u8, scope: []const []const u8) Allocator.Error!Expr {
     var p: ExprParser = .{ .arena = arena, .src = src, .scope = scope };
     const text = try p.sum() orelse return .{ .refused = p.why.? };
@@ -1070,6 +1080,12 @@ const ExprParser = struct {
     scope: []const []const u8,
     i: usize = 0,
     why: ?[]const u8 = null,
+    /// `unary` frames open; every recursive rule passes through `unary`.
+    depth: u32 = 0,
+
+    /// The deepest nesting `expression` reads. A card is a line of text a
+    /// person writes; this bounds the recursion's stack on any input.
+    const max_depth = 256;
 
     fn refuse(p: *ExprParser, comptime fmt: []const u8, args: anytype) Allocator.Error!?[]const u8 {
         if (p.why == null) p.why = try p.arena.print(fmt, args);
@@ -1228,7 +1244,7 @@ fn modelParams(
     var keys: std.ArrayList([]const u8) = .empty;
     var vals: std.ArrayList([]const u8) = .empty;
     while (it.next()) |t| {
-        const at = std.mem.indexOfScalar(u8, t, '=') orelse continue;
+        const at = std.mem.findScalar(u8, t, '=') orelse continue;
         if (at == 0 or at + 1 == t.len) continue;
         try keys.append(arena, t[0..at]);
         try vals.append(arena, t[at + 1 ..]);
@@ -1240,12 +1256,12 @@ fn modelParams(
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t");
         if (!std.mem.startsWith(u8, line, "parameter ")) continue;
-        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const eq = std.mem.findScalar(u8, line, '=') orelse continue;
         const head = std.mem.trimEnd(u8, line[0..eq], " \t");
         // The declared name is the last token before the `=`, minus any §3.4.4
         // array range: `parameter real wave[0:nwave-1] = ...` declares `wave`.
-        var name = head[(std.mem.lastIndexOfAny(u8, head, " \t") orelse 0) + 1 ..];
-        if (std.mem.indexOfScalar(u8, name, '[')) |b| name = name[0..b];
+        var name = head[(std.mem.findLastAny(u8, head, " \t") orelse 0) + 1 ..];
+        if (std.mem.findScalar(u8, name, '[')) |b| name = name[0..b];
         if (name.len == 0) continue;
 
         if (args.items.len != 0) try args.appendSlice(arena, ", ");
@@ -1267,7 +1283,7 @@ fn modelParams(
             // Everything from the `from` range on is kept: §3.4.2's range is part
             // of the declaration, not of the default it replaces.
             const rest = line[eq + 1 ..];
-            const tail = if (std.mem.indexOf(u8, rest, " from ")) |f| rest[f..] else ";";
+            const tail = if (std.mem.find(u8, rest, " from ")) |f| rest[f..] else ";";
             try decls.print(arena, "   {s} = {f}{s}\n", .{ head, v, tail });
         } else {
             try decls.print(arena, "   {s}\n", .{line});
@@ -1283,9 +1299,9 @@ fn primitiveBody(prim: []const u8) []const u8 {
     const prelude = @import("preprocessor.zig").spice_primitives;
     var buf: [64]u8 = undefined;
     const header = std.mem.print(&buf, "\nmodule {s}(", .{prim}) catch return "";
-    const at = std.mem.indexOf(u8, prelude, header) orelse return "";
+    const at = std.mem.find(u8, prelude, header) orelse return "";
     const rest = prelude[at + header.len ..];
-    const end = std.mem.indexOf(u8, rest, "\nendmodule") orelse return "";
+    const end = std.mem.find(u8, rest, "\nendmodule") orelse return "";
     return rest[0..end];
 }
 
@@ -1295,7 +1311,10 @@ fn primitiveBody(prim: []const u8) []const u8 {
 ///
 /// The scale letter is followed by unit letters that carry no value (`PF`, `UH`,
 /// `NS`, `MA`), so anything after the matched suffix is ignored rather than
-/// rejected. Returns null when the token does not start with a number at all.
+/// rejected. Returns null when the token does not start with a number at all,
+/// when its exponent does not fit an i32, or when a scaled number's joined
+/// text passes 128 bytes; a value past f64's range is an infinity. Never
+/// panics.
 fn spiceNumber(t: []const u8) ?f64 {
     var i: usize = 0;
     if (i < t.len and (t[i] == '+' or t[i] == '-')) i += 1;
@@ -1324,7 +1343,7 @@ fn spiceNumber(t: []const u8) ?f64 {
     // Rounds once, as `Lexer.scaleExp`'s callers do: `50n` is
     // parseFloat("50e-9"), while 50 * 1e-9 is a different double.
     var buf: [128]u8 = undefined;
-    const joined = std.fmt.bufPrint(&buf, "{s}e{d}", .{ t[0..mant_end], own + scale.exp }) catch return null;
+    const joined = std.mem.print(&buf, "{s}e{d}", .{ t[0..mant_end], own + scale.exp }) catch return null;
     return std.fmt.parseFloat(f64, joined) catch null;
 }
 
@@ -1398,7 +1417,7 @@ test "model_types names a real Table E.1 module with the ports it lists" {
             .{ r.prim, r.ports },
         );
         defer std.testing.allocator.free(header);
-        try std.testing.expect(std.mem.indexOf(u8, prelude, header) != null);
+        try std.testing.expect(std.mem.find(u8, prelude, header) != null);
     }
 }
 
@@ -1424,18 +1443,18 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
     // declares `area` and nothing else, so `BF`, `IS`, `CJE` have no parameter
     // to land on and are dropped in silence (E.4.2: "support of SPICE model
     // cards is implementation specific").
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "module vertnpn(c, b, e, s);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real area = 1.0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "bjt #(.area(area)) prim(c, b, e, s);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "bf") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "module vertnpn(c, b, e, s);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "parameter real area = 1.0;") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "bjt #(.area(area)) prim(c, b, e, s);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "bf") == null);
     // E.2.2.2: ports from the card, lowered, parentheses dropped, and the two
     // device cards between it and `.ENDS` as E.2.2.3 translates them. `vcc` is
     // an internal node and appears only in the body.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "module ecposc(out, gnd);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "vsine #(.dc(5)) va(vcc, gnd);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(10000)) r1(b1, gnd);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "module ecposc(out, gnd);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "vsine #(.dc(5)) va(vcc, gnd);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "resistor #(.r(10000)) r1(b1, gnd);") != null);
     // The `.TRAN` after `.ENDS` is outside the body and is still not a module.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "100n") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "100n") == null);
 }
 
 test "a .SUBCKT's device cards are its body, and an unreadable one is refused" {
@@ -1453,18 +1472,18 @@ test "a .SUBCKT's device cards are its body, and an unreadable one is refused" {
         \\R9 X Y 1K
     , "");
     try std.testing.expectEqual(@as(u32, 1), s.modules);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(1000)) r1(in, out);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(3000)) r2(out, gnd);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "resistor #(.r(1000)) r1(in, out);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "resistor #(.r(3000)) r2(out, gnd);") != null);
     // A letter VerA has no row for (`S`, a switch) and no number on a
     // model-referenced R: neither becomes an instance, and each is a refusal
     // located at its line.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "s1") == null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "r3") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "s1") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "r3") == null);
     try std.testing.expectEqual(@as(usize, 2), s.refused.len);
     try std.testing.expectEqual(@as(u32, 51), s.refused[0].at);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "`rmod` is not a number") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[1].why, "`rmod` is not a number") != null);
     // `R9` is after `.ENDS`: top-level netlist, not part of any definition.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "r9") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "r9") == null);
 
     // A repeated `.SUBCKT` is dropped with its body: the cards inside must not
     // fall out into the next module, or into a module of their own.
@@ -1477,7 +1496,7 @@ test "a .SUBCKT's device cards are its body, and an unreadable one is refused" {
         \\.ENDS
     , "");
     try std.testing.expectEqual(@as(u32, 1), dup.modules);
-    try std.testing.expect(std.mem.indexOf(u8, dup.text, "9000") == null);
+    try std.testing.expect(std.mem.find(u8, dup.text, "9000") == null);
 }
 
 test "a .MODEL card's value reaches the Table E.1 parameter of the same name" {
@@ -1493,15 +1512,15 @@ test "a .MODEL card's value reaches the Table E.1 parameter of the same name" {
     // §2.6.2 Table 2-1 by way of E.2.2.3's `resistor #(.r(10k))`: `10K` is 10000.
     // §3.4.2's `from` range survives the substitution: it belongs to the
     // declaration, not to the default it replaces.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real r = 10000 from (0:inf);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real tc1 = 0.001;") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "parameter real r = 10000 from (0:inf);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "parameter real tc1 = 0.001;") != null);
     // A parameter the card does not name keeps the primitive's own default.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real tc2 = 0.0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(r), .tc1(tc1), .tc2(tc2)) prim(p, n);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "parameter real tc2 = 0.0;") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "resistor #(.r(r), .tc1(tc1), .tc2(tc2)) prim(p, n);") != null);
     // Not a resistor special case, and `ic` is an initial condition rather than
     // a coefficient.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real c = 0.000000000001 from (0:inf);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real ic = 2.5;") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "parameter real c = 0.000000000001 from (0:inf);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "parameter real ic = 2.5;") != null);
 }
 
 test "SPICE's scaled notation, including the three suffixes §2.6.2 does not share" {
@@ -1544,12 +1563,12 @@ test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // The terminator is the point: `\input,` would scan the comma into the
     // name (§2.8.1 ends at white space, and `,` is printable ASCII).
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "module amp(\\input , \\output );") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical \\input , \\output ;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\wire (c, b, e, s);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "module amp(\\input , \\output );") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "electrical \\input , \\output ;") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "module \\wire (c, b, e, s);") != null);
     // A name that is not a keyword is not escaped.
     const plain = try synthesize(arena, ".SUBCKT PAD IN OUT\n.ENDS\n", "");
-    try std.testing.expect(std.mem.indexOf(u8, plain.text, "module pad(in, out);") != null);
+    try std.testing.expect(std.mem.find(u8, plain.text, "module pad(in, out);") != null);
 }
 
 test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" {
@@ -1565,18 +1584,18 @@ test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" 
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // E.2 treats the model as a module definition even though `2N2222` fails
     // §2.7's identifier shape.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\2n2222 (c, b, e, s);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "module \\2n2222 (c, b, e, s);") != null);
     // The numeric node is the SPICE default and is a port, not the end of the
     // list: three ports, in card order, or §6.5.4's ordered binding is wrong.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "module flt(a, \\1 , b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical a, \\1 , b;") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "module flt(a, \\1 , b);") != null);
+    try std.testing.expect(std.mem.find(u8, s.text, "electrical a, \\1 , b;") != null);
     // A parameter assignment ends the port list: it is a module parameter
     // (HSPICE's PARAMS:, VD-012), not a port.
     const p = try synthesize(arena, ".SUBCKT X N1 N2 PARAMS: W=2\n.ENDS\n", "");
     try std.testing.expectEqual(@as(u32, 1), p.modules);
     try std.testing.expectEqual(@as(usize, 0), p.refused.len);
-    try std.testing.expect(std.mem.indexOf(u8, p.text, "module x(n1, n2);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, p.text, "   parameter real w = 2;") != null);
+    try std.testing.expect(std.mem.find(u8, p.text, "module x(n1, n2);") != null);
+    try std.testing.expect(std.mem.find(u8, p.text, "   parameter real w = 2;") != null);
 }
 
 test "an unrecognised model type, a repeat and an empty netlist all contribute nothing" {
@@ -1596,7 +1615,7 @@ test "an unrecognised model type, a repeat and an empty netlist all contribute n
     // A portless .SUBCKT is A.1.2's `module identifier ;`, not `electrical ;`.
     const bare = try synthesize(arena, ".SUBCKT PAD\n.ENDS\n", "");
     try std.testing.expectEqual(@as(u32, 1), bare.modules);
-    try std.testing.expect(std.mem.indexOf(u8, bare.text, "electrical") == null);
+    try std.testing.expect(std.mem.find(u8, bare.text, "electrical") == null);
 }
 
 test "E.3.1 the four controlled sources inside a .SUBCKT, and the V card an F or H reads" {
@@ -1621,12 +1640,12 @@ test "E.3.1 the four controlled sources inside a .SUBCKT, and the V card an F or
         "I(c, \\0 ) <+ 3 * V(a, x);",
         "I(d, \\0 ) <+ 4 * I(vs);",
         "V(b, c) <+ 5 * I(vs);",
-    }) |want| try std.testing.expect(std.mem.indexOf(u8, s.text, want) != null);
+    }) |want| try std.testing.expect(std.mem.find(u8, s.text, want) != null);
     // A controlling V card the subcircuit does not declare is refused, and a
     // controlling V card is a branch of this module, not a `vsine` child.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "6 *") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "6 *") == null);
     try std.testing.expectEqual(@as(usize, 1), s.refused.len);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "vsine") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "vsine") == null);
 }
 
 test "E.1.2 nested .SUBCKT, {expr} values and trailing fields in a body are refused, top-level cards are not" {
@@ -1644,9 +1663,9 @@ test "E.1.2 nested .SUBCKT, {expr} values and trailing fields in a body are refu
         \\.TRAN 1N 1U
     , "");
     try std.testing.expectEqual(@as(usize, 3), s.refused.len);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "nested") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "{rval}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[2].why, "tc=0.01") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[0].why, "nested") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[1].why, "{rval}") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[2].why, "tc=0.01") != null);
 }
 
 test "E.2 an M/Q/J/D card instantiates its model's module, card parameters under the instance's" {
@@ -1681,7 +1700,7 @@ test "E.2 an M/Q/J/D card instantiates its model's module, card parameters under
         // No `.MODEL`: the name is a module or paramset of the design.
         "   myjfet j1(d, g, s);",
     }) |want| {
-        if (std.mem.indexOf(u8, s.text, want) == null) {
+        if (std.mem.find(u8, s.text, want) == null) {
             std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, s.text });
             return error.TestUnexpectedResult;
         }
@@ -1705,11 +1724,11 @@ test "E.2 a card whose model is a Table E.1 semiconductor is E0953; a binned mod
     , "");
     try std.testing.expectEqual(@as(usize, 4), s.refused.len);
     try std.testing.expect(s.refused[0].code == .E0953);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "Table E.1's `mosfet`") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[0].why, "Table E.1's `mosfet`") != null);
     try std.testing.expect(s.refused[1].code == .E0928);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "binned") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[2].why, "{len}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[3].why, "`off`") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[1].why, "binned") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[2].why, "{len}") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[3].why, "`off`") != null);
 }
 
 test "PARAMS: on a .SUBCKT, {expr} values over them, and X cards instantiating a subcircuit" {
@@ -1743,7 +1762,7 @@ test "PARAMS: on a .SUBCKT, {expr} values over them, and X cards instantiating a
         // SPICE's node 0 is the global ground, not a local net.
         "   electrical \\0 ;\n   ground \\0 ;\n",
     }) |want| {
-        if (std.mem.indexOf(u8, s.text, want) == null) {
+        if (std.mem.find(u8, s.text, want) == null) {
             std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, s.text });
             return error.TestUnexpectedResult;
         }
@@ -1751,7 +1770,7 @@ test "PARAMS: on a .SUBCKT, {expr} values over them, and X cards instantiating a
     // A name that is not a parameter before it is refused at the card.
     const bad = try synthesize(arena, ".SUBCKT R A B PARAMS: X={Y}\n.ENDS\n", "");
     try std.testing.expectEqual(@as(usize, 1), bad.refused.len);
-    try std.testing.expect(std.mem.indexOf(u8, bad.refused[0].why, "reads `y`") != null);
+    try std.testing.expect(std.mem.find(u8, bad.refused[0].why, "reads `y`") != null);
 }
 
 test "SPICE expressions: real arithmetic, power over a unary minus, and what is refused" {
@@ -1793,20 +1812,20 @@ test "E.4.2 a card naming a binned model instantiates the bin that holds its L a
         "   myfet #(.kp(0.003), .w(2), .l(0.5)) m1(d, g, s, b);",
         "   myfet #(.kp(0.001), .w(2), .l(0.25)) m2(d, g, s, b);",
     }) |want| {
-        if (std.mem.indexOf(u8, s.text, want) == null) {
+        if (std.mem.find(u8, s.text, want) == null) {
             std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, s.text });
             return error.TestUnexpectedResult;
         }
     }
     try std.testing.expectEqual(@as(usize, 2), s.refused.len);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "no bin of the binned model `nch`") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "gives no w") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[0].why, "no bin of the binned model `nch`") != null);
+    try std.testing.expect(std.mem.find(u8, s.refused[1].why, "gives no w") != null);
 }
 
 test "a card value at or past 2^31 that is integral is spelled real" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("10000", try std.fmt.bufPrint(&buf, "{f}", .{num(1e4)}));
-    try std.testing.expectEqualStrings("2147483647", try std.fmt.bufPrint(&buf, "{f}", .{num(2147483647)}));
-    try std.testing.expectEqualStrings("2.147483648e9", try std.fmt.bufPrint(&buf, "{f}", .{num(2147483648)}));
-    try std.testing.expectEqualStrings("0.5", try std.fmt.bufPrint(&buf, "{f}", .{num(0.5)}));
+    try std.testing.expectEqualStrings("10000", try std.mem.print(&buf, "{f}", .{num(1e4)}));
+    try std.testing.expectEqualStrings("2147483647", try std.mem.print(&buf, "{f}", .{num(2147483647)}));
+    try std.testing.expectEqualStrings("2.147483648e9", try std.mem.print(&buf, "{f}", .{num(2147483648)}));
+    try std.testing.expectEqualStrings("0.5", try std.mem.print(&buf, "{f}", .{num(0.5)}));
 }
