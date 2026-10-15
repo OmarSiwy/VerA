@@ -24,7 +24,7 @@ const PathKey = elab_names.PathKey;
 /// Returns whether a declared net name is an out-of-context one. A period can
 /// only come from a hierarchical path (see `sep`).
 pub fn isOoc(name: []const u8) bool {
-    return std.mem.indexOfScalar(u8, name, sep) != null;
+    return std.mem.findScalar(u8, name, sep) != null;
 }
 
 /// Adds `nets` to the flattened module through `addNet`, skipping
@@ -375,7 +375,7 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
             continue;
         }
         // ponytail: linear membership for short lists; use a set if this scan dominates.
-        if (std.mem.indexOfScalar(Ast.StrId, cands.items, d) == null)
+        if (std.mem.findScalar(Ast.StrId, cands.items, d) == null)
             cands.appendAssumeCapacity(d);
     }
     if (cands.items.len <= 1) return if (cands.items.len == 1) cands.items[0] else null;
@@ -428,11 +428,11 @@ fn matchResolution(self: *Flatten, cands: []const Ast.StrId, report: bool) Error
         for (self.ctx.file.connectrules) |*cr| {
             rule: for (cr.resolutions) |*r| {
                 for (cands) |c| {
-                    if (std.mem.indexOfScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
+                    if (std.mem.findScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
                 }
                 var exact = true;
                 for (r.disciplines) |d| {
-                    if (std.mem.indexOfScalar(Ast.StrId, cands, d) == null) exact = false;
+                    if (std.mem.findScalar(Ast.StrId, cands, d) == null) exact = false;
                 }
                 if (exact != want_exact) continue;
                 if (first != null) {
@@ -468,8 +468,10 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
             // §7.8 "When two disciplines are specified in a connect
             // statement, one shall be discrete and the other continuous."
             if (ins.overrides) |o| {
-                const da = discipline.domainOf(discipline.declOf(self.ctx.file, o.a) orelse continue);
-                const db = discipline.domainOf(discipline.declOf(self.ctx.file, o.b) orelse continue);
+                // A name no discipline declares has no domain, so it is
+                // neither of the two: refused here, not skipped.
+                const da = if (discipline.declOf(self.ctx.file, o.a)) |d| discipline.domainOf(d) else null;
+                const db = if (discipline.declOf(self.ctx.file, o.b)) |d| discipline.domainOf(d) else null;
                 if (da == null or db == null or da == db) {
                     try self.err(ins.main_tok, .E0923, "`{s}` and `{s}`: one shall be discrete and the other continuous", .{
                         self.ctx.file.str(o.a), self.ctx.file.str(o.b),
@@ -523,4 +525,130 @@ pub fn checkNetDisciplines(self: *Flatten) Error!void {
         if (v.discipline == .none or discipline.declOf(file, v.discipline) != null) continue;
         try self.err(v.main_tok, .E0371, "`{s}` in the declaration of the reg `{s}`", .{ file.str(v.discipline), file.str(v.name) });
     };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test isOoc {
+    try std.testing.expect(isOoc("m.l.p"));
+    try std.testing.expect(!isOoc("p"));
+    try std.testing.expect(!isOoc(""));
+}
+
+test levelOf {
+    // An arrival's level is the arrival whose instance path is its longest
+    // PROPER prefix. Every path ends in `sep`, so `u1.` is not below `u.`.
+    const paths = [_][]const u8{ "u.", "u.v.", "w.", "u.v.x.", "u1.", "u." };
+    try std.testing.expectEqual(@as(?usize, null), levelOf(&paths, 0));
+    try std.testing.expectEqual(@as(?usize, 0), levelOf(&paths, 1));
+    try std.testing.expectEqual(@as(?usize, null), levelOf(&paths, 2));
+    try std.testing.expectEqual(@as(?usize, 1), levelOf(&paths, 3));
+    try std.testing.expectEqual(@as(?usize, null), levelOf(&paths, 4));
+    // A repeated path is the same level, never its own parent.
+    try std.testing.expectEqual(@as(?usize, null), levelOf(&paths, 5));
+}
+
+test levelCandidates {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\discipline fa; domain continuous; enddiscipline
+        \\discipline fb; domain continuous; enddiscipline
+        \\discipline fc; domain continuous; enddiscipline
+        \\discipline fd; domain continuous; enddiscipline
+        \\module top; endmodule
+        \\connectrules r; connect fa, fb resolveto fc; connect fa, fd resolveto exclude; endconnectrules
+    );
+    var fl = try fixture.flatten(&f);
+    const fa = fixture.id(&f.file, "fa").?;
+    const fb = fixture.id(&f.file, "fb").?;
+    const fc = fixture.id(&f.file, "fc").?;
+    const fd = fixture.id(&f.file, "fd").?;
+    try std.testing.expectEqual(Ast.StrId.none, try levelCandidates(&fl, &.{}));
+    try std.testing.expectEqual(fa, try levelCandidates(&fl, &.{fa}));
+    // §7.7.2 a statement whose list matches the set, in any order, names the
+    // answer, which "need not be one of the disciplines specified" (§7.7.2.1).
+    try std.testing.expectEqual(fc, try levelCandidates(&fl, &.{ fb, fa }));
+    // `resolveto exclude` resolves nothing.
+    try std.testing.expectEqual(Ast.StrId.none, try levelCandidates(&fl, &.{ fd, fa }));
+    // No statement matches: the first candidate, quietly (the diagnostics are
+    // `levelAnswer`'s, on the flattened net).
+    try std.testing.expectEqual(fb, try levelCandidates(&fl, &.{ fb, fd }));
+    try std.testing.expectEqual(@as(usize, 0), f.bag.count());
+}
+
+test checkNetDisciplines {
+    // A.2.1.3: `kid c1;` is a net of discipline `kid`, a module instance
+    // missing its `()`: E0371, even though nothing instantiates `kid`.
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad,
+        \\discipline ca; domain continuous; enddiscipline
+        \\module top(p); inout p; ca p; kid c1; endmodule
+        \\module kid(a); inout a; ca a; endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0371));
+
+    // The legal neighbour declares the net with a discipline.
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good,
+        \\discipline ca; domain continuous; enddiscipline
+        \\module top(p); inout p; ca p; ca w; endmodule
+    );
+    _ = try elaborate.elaborate(good.ctx());
+}
+
+test applyOocInits {
+    // §3.6.3.2: "initializers on hierarchical net declarations win. If there
+    // are multiple hierarchical declarations, then the declaration on the
+    // highest level wins." `u.w` has a local nodeset 1.25 and the top's
+    // hierarchical 2.75: 2.75. Node `n` has the top's own 1.25, the top's
+    // `m.p = 2.75` (level 0) and mid's `v.q = 1.25` (level `m.`), all one
+    // node after the joins: the top's hierarchical 2.75.
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\discipline electrical; domain continuous; enddiscipline
+        \\module cub(g); inout g; electrical g; electrical w = 1.25; endmodule
+        \\module leaf(q, g); inout q, g; electrical q, g; endmodule
+        \\module mid(p, g); inout p, g; electrical p, g; leaf v(p, g); electrical v.q = 1.25; endmodule
+        \\module top(g); inout g; electrical g; electrical n = 1.25;
+        \\  cub u(g); mid m(n, g);
+        \\  electrical u.w = 2.75; electrical m.p = 2.75;
+        \\endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    const x = &f.file.exprs;
+    try std.testing.expectEqual(@as(f64, 2.75), x.realValue(fixture.netNamed(&f.file, d.top, "u.w").?.init));
+    try std.testing.expectEqual(@as(f64, 2.75), x.realValue(fixture.netNamed(&f.file, d.top, "n").?.init));
+}
+
+test "§7.8 a connect statement's override naming no discipline is E0923" {
+    // "When two disciplines are specified in a connect statement, one shall
+    // be discrete and the other continuous." A name no declaration
+    // introduces is neither, so the statement bridges nothing; it is
+    // refused, not skipped. The neighbour overrides with declared ones.
+    const src =
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\connectmodule bridge(a, d); input a; output d; ca a; dd d; endmodule
+        \\module top(p); inout p; ca p; endmodule
+        \\connectrules r; connect bridge {s}, dd; endconnectrules
+    ;
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad, try bad.arena.allocator().print(src, .{"nowhere"}));
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0923));
+
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good, try good.arena.allocator().print(src, .{"ca"}));
+    _ = try elaborate.elaborate(good.ctx());
 }

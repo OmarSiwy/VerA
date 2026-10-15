@@ -97,7 +97,7 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     var cands: std.ArrayList(Ast.StrId) = .empty;
     for (below.items) |s| {
         if (s.domain != domain or s.disc == .none) continue;
-        if (std.mem.indexOfScalar(Ast.StrId, cands.items, s.disc) == null)
+        if (std.mem.findScalar(Ast.StrId, cands.items, s.disc) == null)
             try cands.append(self.ctx.arena, s.disc);
     }
     return .{ .disc = try elab_resolve.levelCandidates(self, cands.items), .domain = domain, .behavioral = behavioral };
@@ -124,6 +124,7 @@ fn digitalUse(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, net: A
         file: *const Ast.SourceFile,
         net: Ast.StrId,
         hit: *bool,
+        /// Sets `hit` when `e` or an operand below it is the identifier `net`.
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
             if (e == .none) return;
             const ex = &w.file.exprs;
@@ -131,6 +132,7 @@ fn digitalUse(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, net: A
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| try w.expr(c, .read);
         }
+        /// Visits every expression and child statement of `s`.
         pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
             if (s != .none) try w.file.stmtEdges(s, w);
         }
@@ -180,4 +182,88 @@ pub fn down(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net
         .discrete => if (s.domain == .discrete) s else .{ .disc = parent.disc, .domain = .discrete },
         .unspecified => s,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+/// One module per F.2 case, each with the segment `s` under test at path "".
+const cases_src =
+    \\discipline ca; domain continuous; enddiscipline
+    \\discipline dd; domain discrete; enddiscipline
+    \\module m_mixed(s); inout s; la x(s); ld y(s); endmodule
+    \\module m_dig(s); inout s; ld y(s); endmodule
+    \\module m_beh(s); inout s; reg r; initial r = s; la x(s); endmodule
+    \\module m_unk(s); inout s; nd z(s); endmodule
+    \\module m_decl(s); inout s; ca s; ld y(s); endmodule
+    \\module la(p); inout p; ca p; endmodule
+    \\module ld(p); inout p; dd p; endmodule
+    \\module nd(p); inout p; endmodule
+;
+
+/// `up` for `module`'s `s`. Every module of `cases_src` sits at path "",
+/// the key `up` memoizes under, so the memo is cleared first, as
+/// `insert.plan` clears it per level.
+fn upOf(fl: *Flatten, f: *fixture.Fixture, module: []const u8) Error!Seg {
+    fl.seg_up.clearRetainingCapacity();
+    return up(fl, fixture.moduleNamed(&f.file, module).?, "", fixture.id(&f.file, "s").?, 0);
+}
+
+/// `down` for `module`'s `s` under an upper connection `parent`.
+fn downOf(fl: *Flatten, f: *fixture.Fixture, module: []const u8, parent: Seg) Error!Seg {
+    fl.seg_up.clearRetainingCapacity();
+    return down(fl, fixture.moduleNamed(&f.file, module).?, "", fixture.id(&f.file, "s").?, parent);
+}
+
+test up {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, cases_src);
+    var fl = try fixture.flatten(&f);
+    const ca = fixture.id(&f.file, "ca").?;
+    const dd = fixture.id(&f.file, "dd").?;
+    // F.2.1 step 4.a, "continuous (analog) has precedence over discrete";
+    // 4.b's one continuous candidate is the answer.
+    try std.testing.expectEqual(Seg{ .disc = ca, .domain = .continuous }, try upOf(&fl, &f, "m_mixed"));
+    // Every child digital: digital, with the child's discipline.
+    try std.testing.expectEqual(Seg{ .disc = dd, .domain = .discrete }, try upOf(&fl, &f, "m_dig"));
+    // 4.a and §3.6.2.4: behavioral use makes the segment digital whatever is
+    // below it, and with no digital child there is no discipline to take.
+    try std.testing.expectEqual(Seg{ .domain = .discrete, .behavioral = true }, try upOf(&fl, &f, "m_beh"));
+    // F.2.2 step 4's "unknown": nothing below declares a domain.
+    try std.testing.expectEqual(Seg{}, try upOf(&fl, &f, "m_unk"));
+    // Steps 2 and 3: a declaration decides, and says so.
+    try std.testing.expectEqual(Seg{ .disc = ca, .domain = .continuous, .declared = true }, try upOf(&fl, &f, "m_decl"));
+}
+
+test down {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, cases_src);
+    var fl = try fixture.flatten(&f);
+    const ca = fixture.id(&f.file, "ca").?;
+    const dd = fixture.id(&f.file, "dd").?;
+    const cont: Seg = .{ .disc = ca, .domain = .continuous };
+    const dig: Seg = .{ .disc = dd, .domain = .discrete };
+    // Basic mode (F.2.1) has no top-down pass: `down` is `up`.
+    try std.testing.expectEqual(dig, try downOf(&fl, &f, "m_dig", cont));
+
+    fl.ctx.discipline_resolution = .detail;
+    // F.2.2 5.a/5.b: a segment step 4 made digital under an analog parent is
+    // analog, with the parent's discipline (§7.4.4.2 Figure 7-4).
+    try std.testing.expectEqual(cont, try downOf(&fl, &f, "m_dig", cont));
+    // Under a digital parent it keeps step 4's answer (Figure 7-5 Case 2).
+    try std.testing.expectEqual(dig, try downOf(&fl, &f, "m_dig", dig));
+    // An unknown segment takes a known parent's domain and discipline.
+    try std.testing.expectEqual(dig, try downOf(&fl, &f, "m_unk", dig));
+    try std.testing.expectEqual(cont, try downOf(&fl, &f, "m_unk", cont));
+    // Declared, behavioral and continuous segments are left alone, and so is
+    // everything under an unknown parent.
+    try std.testing.expectEqual(Seg{ .disc = ca, .domain = .continuous, .declared = true }, try downOf(&fl, &f, "m_decl", dig));
+    try std.testing.expectEqual(Seg{ .domain = .discrete, .behavioral = true }, try downOf(&fl, &f, "m_beh", cont));
+    try std.testing.expectEqual(cont, try downOf(&fl, &f, "m_mixed", dig));
+    try std.testing.expectEqual(dig, try downOf(&fl, &f, "m_dig", .{}));
 }
