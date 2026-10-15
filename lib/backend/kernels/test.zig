@@ -888,7 +888,7 @@ test "§9.5.4.2 zScan: white space, literals, %%, %m, and what a scan leaves unr
     try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("a", "a%d"));
 }
 
-test "xfail(literal text at the end of input reads as a matching failure): §9.5.4.2 EOF before the first matching failure" {
+test "§9.5.4.2 zScan: EOF when the input ends before the first matching failure" {
     // "This number can be EOF if the input ends before the first matching
     // failure or conversion." A matching failure needs a conflicting
     // character; an input that has ended offers none, so a control string
@@ -954,7 +954,7 @@ test "§9.4.3 zCReal %r: §2.6.2 Table 2-1 engineering notation" {
     }
 }
 
-test "xfail(the precision formula drops digits when dp < 0): §2.6.2 %r below the table prints every shortest digit" {
+test "§2.6.2 zCReal %r: below the table every shortest digit prints" {
     // Below 1e-18 Table 2-1 has no symbol, so the mantissa absorbs the
     // exponent: 1.5e-20 is 0.015a and 1e-21 is 0.001a. With no precision the
     // kernel means to print every shortest round-trip digit, as it does above.
@@ -963,7 +963,7 @@ test "xfail(the precision formula drops digits when dp < 0): §2.6.2 %r below th
     try std.testing.expectEqualStrings("0.001a", str_k.zCReal(&b, 1e-21, 'r', 0, 0, -1));
 }
 
-test "xfail(rounding is not renormalised): §2.6.2 %r with a precision keeps the mantissa in [1, 1000)" {
+test "§2.6.2 zCReal %r: a precision keeps the rounded mantissa in [1, 1000)" {
     // 999.96 to one fractional digit is 1000.0, which engineering notation
     // writes 1.0K; 999999 to two is 1.00M, not 1000.00K.
     var b: [64]u8 = undefined;
@@ -1048,6 +1048,28 @@ test "§9.5.3 zSBuf: one 4096-byte row per call site" {
     try std.testing.expectEqual(@as(usize, 4096), str_k.zSBuf(9001).len);
 }
 
+// The next two tests, and the $fseek overflow test below, trapped (an
+// overflow) or never returned (a pad loop) before their fix. No `xfail(...)`
+// marker can contain a trap or a hang, so they landed with the fix.
+
+test "§9.5.4.2 zScan: the most negative integer, and a width no usize holds" {
+    // The accumulation wraps, so "-9223372036854775808" arrives as minInt, and
+    // its negation must wrap as well rather than trap.
+    try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), str_k.zScanI("-9223372036854775808", "%d", 0));
+    // A width saturates, and past the input it is the whole input.
+    try std.testing.expectEqual(@as(i64, 12), str_k.zScanI("12", "%99999999999999999999999d", 0));
+    try std.testing.expectEqualStrings("ab", str_k.zScanS("ab", "%99999999999999999999999c", 0));
+    try std.testing.expectEqualStrings("ab", str_k.zScanS("ab cd", "%18446744073709551615s", 0));
+}
+
+test "§9.4.3 zCReal: a field wider than the row returns what fits, '-' or not" {
+    // The writer drops an overrun ("1.000000" keeps four bytes), and the left
+    // pad must not wait for a width the row cannot reach.
+    var b: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("1.00", str_k.zCReal(&b, 1.0, 'f', 1, 10, -1));
+    try std.testing.expectEqualStrings("1.00", str_k.zCReal(&b, 1.0, 'f', 0, 10, -1));
+}
+
 // -------------------------------------------------------------------- file
 
 /// The path `file_kernels` opens for `name` inside `tmp`: the kernels resolve
@@ -1118,6 +1140,22 @@ test "§9.5.5 $fseek: absolute, relative, from the end, and refused before the s
     try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 0, 0));
     try std.testing.expectEqual(@as(i64, 0), file_k.zFEof(r));
     try std.testing.expectEqual(@as(i64, 'h'), file_k.zFGetc(r));
+    _ = file_k.zFClose(r);
+}
+
+test "§9.5.5 $fseek: an offset whose sum overflows is refused, not trapped" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "o.txt", .data = "hello" });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "o.txt"), "r", false);
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 2, 0));
+    // 2 + maxInt and 5 + maxInt name no position: code -1, EINVAL, and the
+    // position stays.
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFSeek(r, std.math.maxInt(i64), 1));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFSeek(r, std.math.maxInt(i64), 2));
+    try std.testing.expectEqual(@as(i64, 2), file_k.zFTell(r));
+    try std.testing.expectEqual(@as(i64, 22), file_k.zFError(r));
     _ = file_k.zFClose(r);
 }
 

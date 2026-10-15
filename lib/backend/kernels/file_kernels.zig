@@ -174,8 +174,8 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
     const io = zfIo();
     // §9.5.1 Table 9-24: "b" only distinguishes hosts that translate line
     // endings; nothing here translates. Omitted type defaults to writing.
-    const mode: u8 = if (zfstd.mem.indexOfAny(u8, ty, "rwa")) |at| ty[at] else 'w';
-    const plus = zfstd.mem.indexOfScalar(u8, ty, '+') != null;
+    const mode: u8 = if (zfstd.mem.findAny(u8, ty, "rwa")) |at| ty[at] else 'w';
+    const plus = zfstd.mem.findScalar(u8, ty, '+') != null;
     const cwd: zfstd.Io.Dir = .cwd();
     const f: zfstd.Io.File = switch (mode) {
         // Table 9-24 "r"/"r+": open an EXISTING file. §9.5.1's failure case is
@@ -488,7 +488,9 @@ pub fn zFSeek(d: i64, off: i64, op: i64) i64 {
         }),
         else => 0,
     };
-    const np = base + off;
+    // An offset whose sum leaves i64 names no position either: EINVAL, like
+    // one before the start, rather than a trap on the overflow.
+    const np = zfstd.math.add(i64, base, off) catch -1;
     if (np < 0) {
         s.err = 22; // EINVAL
         zf_last_err = 22;
