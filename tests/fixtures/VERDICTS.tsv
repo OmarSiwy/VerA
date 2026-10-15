@@ -693,6 +693,7 @@ pass	ch03_data_types/96_range_closed_on_inf_warns.va
 pass	ch03_data_types/97_range_without_closed_inf_is_silent.va
 pass	ch03_data_types/a08_nodeset_01_nodeset_is_the_dc_initial_guess.va
 pass	ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va
+pass	ch03_data_types/alias_card_write_sets_original_given.va
 pass	ch03_data_types/aliasparam_child_read_rejected.va
 pass	ch03_data_types/aliasparam_condition_rejected.va
 pass	ch03_data_types/aliasparam_dead_read_rejected.va

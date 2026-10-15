@@ -2603,6 +2603,42 @@ test "codegen: §6.6 a parameter in a generate scheme fixes structure, so it is 
     try std.testing.expect(std.mem.find(u8, text, "    if (@as(i32, @truncate(model.sel)) != 1) return \"sel\";\n") != null);
 }
 
+test "codegen: §3.4.7 a card write through an alias sets the original and its __given (#76)" {
+    // §3.4.7: after `.trise(5)` "the value of the parameter dtemp, as used in
+    // the module equations ..., is 5", so the original was overridden: §9.19
+    // `$param_given(dtemp)` is 1, and §6.3.4's default (`dtemp = a`) must not
+    // erase it. `c` has no `__given` (its default folds, nothing asks), so
+    // its alias copies the value alone.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module al(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real a = 1.0;
+        \\  parameter real dtemp = a;
+        \\  parameter real c = 2.0;
+        \\  aliasparam trise = dtemp;
+        \\  aliasparam cc = c;
+        \\  analog I(p, n) <+ V(p, n) * (dtemp + c + $param_given(dtemp));
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const alias_then_default =
+        \\    if (model.trise__given) {
+        \\        model.dtemp = model.trise;
+        \\        model.dtemp__given = true;
+        \\    }
+        \\
+    ;
+    const at = std.mem.find(u8, src, alias_then_default) orelse return error.TestUnexpectedResult;
+    // The alias is folded first, so the guarded default sees the raised flag.
+    const guard = std.mem.find(u8, src, "if (!model.dtemp__given) model.dtemp = model.a;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(at < guard);
+    try std.testing.expect(std.mem.find(u8, src, "    if (model.cc__given) model.c = model.cc;\n") != null);
+    try std.testing.expect(std.mem.find(u8, src, "c__given = true") == null);
+}
+
 test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
     // `tnom` must not fold to the constant 27: a SPICE deck setting `.options
     // tnom` would be ignored, and a compact model derives its whole parameter

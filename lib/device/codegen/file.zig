@@ -620,11 +620,17 @@ fn emitDerive(self: *Gen) Error!void {
     const at_s = self.out.items.len - "S: type, model: *Model) void {\n".len;
     const body = self.out.items.len;
     // §3.4.7 first: an override written through the alias must be the
-    // original's value before a §6.3.4 dependent parameter reads it.
+    // original's value before a §6.3.4 dependent parameter reads it. The
+    // write sets the original too (#76): "the value of the parameter dtemp
+    // ... is 5" after `.trise(5)`, so its own `__given` (§9.19 `$param_given`,
+    // and the §6.3.4 guard below that keeps a default from erasing it) is raised.
     for (self.lowered.aliases.items, 0..) |al, i| {
-        try self.w("    if (model.{s}__given) model.{s} = model.{s};\n", .{
-            self.names.a_names[i], self.names.p_names[al.param], self.names.a_names[i],
-        });
+        const a = self.names.a_names[i];
+        const p = self.names.p_names[al.param];
+        if (self.names.p_given[al.param])
+            try self.w("    if (model.{0s}__given) {{\n        model.{1s} = model.{0s};\n        model.{1s}__given = true;\n    }}\n", .{ a, p })
+        else
+            try self.w("    if (model.{0s}__given) model.{1s} = model.{0s};\n", .{ a, p });
     }
     // §3.4.1 an explicit `integer` parameter is a 32-bit value, but the host
     // writes the ABI's i64 carrier (4294967297 for 1). Reduce it here, once
