@@ -1433,8 +1433,6 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
 /// with `dims`, and its element count; 1, and no row, for no dimensions.
 fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
     if (dims.len == 0) return 1;
-    // `address` and `netSlot` gather one index per dimension on the stack.
-    if (dims.len > 16) return r.fail(tok, "arrays of more than 16 dimensions are not implemented", .{});
     var count: u32 = 1;
     const spans = try r.arena.alloc(Span, dims.len);
     var left: i64 = 0;
@@ -1460,15 +1458,16 @@ fn netSlot(r: *Run, e: Ast.ExprId, tok: u32) Error!u32 {
     const arr = (try r.indexedArray(e)) orelse return r.scalarSlot(e);
     const ex = &r.file.exprs;
     const c = r.chainBase(e);
-    var indices: [16]i64 = undefined;
+    var offset: evaluate.Offset = .{};
+    var inside = true;
     var x = e;
     var k = c.depth;
     while (k != 0) : (x = ex.lhs(x)) {
         k -= 1;
-        indices[k] = try r.declaredBound(ex.rhs(x), tok);
+        inside = offset.add(arr, k, try r.declaredBound(ex.rhs(x), tok)) and inside;
     }
-    const offset = evaluate.elementOffset(arr, indices[0..c.depth]) orelse return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
-    return try r.slot(c.base) + offset;
+    if (!inside) return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
+    return try r.slot(c.base) + offset.at;
 }
 
 fn usesReal(t: *const Ast.Subroutine) bool {
