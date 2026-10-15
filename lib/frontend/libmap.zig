@@ -6,6 +6,8 @@
 
 const std = @import("std");
 const diag = @import("diag");
+const Preprocessor = @import("preprocessor.zig");
+const deep_stack = @import("deep_stack.zig");
 const Io = std.Io;
 
 /// §13.2.1.1's resolution order, most specific first: a specification that
@@ -91,10 +93,12 @@ pub const Error = error{ MapFailed, OutOfMemory };
 /// specified"). A refusal is E0244 in `bag`, whose files it registers, and
 /// `error.MapFailed`: an unreadable file, a statement other than `library`
 /// or `include` (§13.2.2), a malformed one (Syntax 13-2), or an `include`
-/// nested past 32 files. Every slice of the `Map` lives in `arena`.
+/// cycle (a map file that includes itself, directly or through others,
+/// which would never end; any finite nesting is read). Every slice of the
+/// `Map` lives in `arena`.
 pub fn load(arena: std.mem.Allocator, io: Io, bag: *diag.Bag, paths: []const []const u8) Error!Map {
     var l: Loader = .{ .arena = arena, .io = io, .bag = bag };
-    for (paths) |p| try l.read(p, null, 0);
+    for (paths) |p| try l.read(p, null);
     const out = try arena.alloc(Library, l.libs.items.len);
     for (l.libs.items, out) |b, *o| o.* = .{ .name = b.name, .specs = b.specs.items };
     return .{ .libraries = out, .incdirs = l.incdirs.items };
@@ -106,14 +110,26 @@ const Loader = struct {
     bag: *diag.Bag,
     libs: std.ArrayList(struct { name: []const u8, specs: std.ArrayList(Spec) = .empty }) = .empty,
     incdirs: std.ArrayList([]const u8) = .empty,
+    /// The map files open now, outermost first, by real path: an `include`
+    /// of one of them is a cycle.
+    open: std.ArrayList([]const u8) = .empty,
 
     /// `at` is the `include` that names `path`, for the diagnostic when the
     /// file cannot be read.
-    fn read(l: *Loader, path: []const u8, at: ?Site, depth: u8) Error!void {
-        const text = Io.Dir.cwd().readFileAlloc(l.io, path, l.arena, .limited(1 << 24)) catch |e|
+    fn read(l: *Loader, path: []const u8, at: ?Site) Error!void {
+        const text = Preprocessor.readText(l.io, .cwd(), path, l.arena) catch |e|
             return l.fail(at, "cannot read library map `{s}`: {t}", .{ path, e });
         const real = Io.Dir.cwd().realPathFileAlloc(l.io, path, l.arena) catch |e|
             return l.fail(at, "cannot resolve library map `{s}`: {t}", .{ path, e });
+        for (l.open.items, 0..) |o, k| {
+            if (!std.mem.eql(u8, o, real)) continue;
+            var chain: std.ArrayList(u8) = .empty;
+            for (l.open.items[k..]) |c| try chain.print(l.arena, "{s} -> ", .{c});
+            try chain.appendSlice(l.arena, real);
+            return l.fail(at, "library map `include` cycle: {s}", .{chain.items});
+        }
+        try l.open.append(l.arena, real);
+        defer _ = l.open.pop();
         const dir = try slashed(l.arena, std.fs.path.dirname(real) orelse "/");
         const file = try l.bag.addFile(path, text);
         var t: Tokens = .{ .text = text };
@@ -127,8 +143,14 @@ const Loader = struct {
                 const spec = t.next() orelse return l.fail(here, "`include` names no file_path_spec", .{});
                 if (isPunct(spec.text)) return l.fail(.{ .file = file, .tok = spec }, "`include` names no file_path_spec", .{});
                 try l.expectSemicolon(&t, file, spec);
-                if (depth == 32) return l.fail(here, "library map `include` nested deeper than 32", .{});
-                try l.read(try std.fs.path.resolveAllocPosix(l.arena, &.{ dir, unquote(spec.text) }), .{ .file = file, .tok = spec }, depth + 1);
+                const next = try std.fs.path.resolveAllocPosix(l.arena, &.{ dir, unquote(spec.text) });
+                const site: Site = .{ .file = file, .tok = spec };
+                // Every 1024 nested files continue on a fresh stack segment,
+                // so nesting is bounded by memory, not the caller's stack.
+                if (l.open.items.len % 1024 != 0) try l.read(next, site) else deep_stack.run(1024, read, .{ l, next, site }) catch |e| switch (e) {
+                    error.DeepStackUnavailable => return l.fail(here, "no stack left for {d} nested map files", .{l.open.items.len}),
+                    else => |other| return other,
+                };
             } else if (std.mem.eql(u8, kw.text, "library")) {
                 const name = t.next() orelse return l.fail(here, "`library` names no library", .{});
                 if (!isIdentifier(name.text)) return l.fail(.{ .file = file, .tok = name }, "`{s}` is not a library_identifier", .{name.text});
@@ -559,6 +581,24 @@ test "§13.2.2 load reads library and include statements, and a library declared
     try testing.expect(std.mem.endsWith(u8, map.incdirs[1], "/inc 2"));
 }
 
+test "§13.2.2 include nesting has no depth bound: a chain of 40 map files, past the old 32" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const n = 40;
+    for (0..n) |k| {
+        const data = if (k + 1 == n) try a.print("library deep{d} x.v;\n", .{k}) else try a.print("include m{d}.map;\n", .{k + 1});
+        try tmp.dir.writeFile(io, .{ .sub_path = try a.print("m{d}.map", .{k}), .data = data });
+    }
+    var bag: diag.Bag = .init(a);
+    const map = try load(a, io, &bag, &.{try tmp.dir.realPathFileAlloc(io, "m0.map", a)});
+    try testing.expectEqual(@as(usize, 0), bag.count());
+    try testing.expectEqualStrings("deep39", map.libraries[0].name);
+}
+
 /// Loads `text` as `bad.map` in `tmp`, requires one E0244 refusal, and
 /// returns its message (allocated in `a`).
 fn testLoadRefusal(a: std.mem.Allocator, tmp: *std.testing.TmpDir, name: []const u8, text: []const u8) ![]const u8 {
@@ -597,8 +637,8 @@ test "§13.2.2 Syntax 13-2: every malformed statement is E0244 naming what it fo
         .{ "include x.map", "an `include` statement ends with `;`" },
         .{ "include x.map y;", "found `y`: an `include` statement ends with `;`" },
         .{ "include missing.map;", "cannot read library map" },
-        // A map that includes itself stops at the nesting bound.
-        .{ "include bad.map;", "nested deeper than 32" },
+        // A map that includes itself would never end: a named cycle.
+        .{ "include bad.map;", "library map `include` cycle:" },
     }) |c| {
         const msg = try testLoadRefusal(a, &tmp, "bad.map", c[0]);
         if (std.mem.find(u8, msg, c[1]) == null) {

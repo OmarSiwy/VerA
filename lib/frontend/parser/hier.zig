@@ -106,7 +106,7 @@ pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
     self.pos += 1;
     const idx = try parse_expr.parseExpr(self);
     _ = try self.expect(.rbracket);
-    const k = constIndex(self, idx) orelse return self.failAt(tok, .E0231, "", .{});
+    const k = try self.walk(tok, constIndex, .{ self, idx }) orelse return self.failAt(tok, .E0231, "", .{});
     return self.file.intern(self.arena, try self.arena.print("{s}[{d}]", .{ self.file.str(name), k }));
 }
 
@@ -114,7 +114,7 @@ pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
 /// integer typing: the same kernel elaboration applies to the instance-array
 /// range. Parameters are elaboration's, so a read of one does not fold, and
 /// neither does a real-valued index.
-fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
+fn constIndex(self: *const Parser, e: Ast.ExprId) ?i64 {
     const c = constfold.fold(&self.file, e, constfold.literal_env) orelse return null;
     return if (c == .int) c.int else null;
 }

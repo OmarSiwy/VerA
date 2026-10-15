@@ -684,10 +684,10 @@ fn mask(width: u32) u64 {
 }
 
 /// The widest a number literal may be (E1019), by its size or, unsized, by
-/// the width its digits need. 1364-2005 §4.3.1 asks a tool for vectors of
-/// 65536 bits; this is 256 times that, and the planes a literal allocates
-/// stay at 4 MiB.
-pub const max_width: u32 = 1 << 24;
+/// the width its digits need: the largest a `Literal.width` (u32, as every
+/// stage carries a width) can hold. Not a policy bound: a literal of this
+/// width allocates 1 GiB of planes, so memory runs out first.
+pub const max_width: u32 = std.math.maxInt(u32);
 
 /// §2.6.1 the radix `text`'s base format names: 2, 8, 10 or 16, and 10 for
 /// a literal without one. `text` is one `parse` accepted.
@@ -800,24 +800,45 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
     if (radix == 10 and any_unknown) {
         @memset(literal.unknowns(), std.math.maxInt(u64));
         if (std.ascii.toLower(digits[0]) == 'x') @memset(literal.values(), std.math.maxInt(u64));
-    } else {
+    } else if (radix == 10) {
+        // ponytail: multiply-accumulate is O(digits * words); a decimal
+        // literal of millions of digits is slow. Divide and conquer if one
+        // ever matters.
         for (digits) |c| {
             if (c == '_') continue;
-            const unknown = c == 'x' or c == 'X' or c == 'z' or c == 'Z' or c == '?';
-            var carry: u128 = if (unknown) (if (std.ascii.toLower(c) == 'x') (@as(u64, 1) << shift) - 1 else 0) else (std.fmt.charToDigit(c, radix) catch unreachable);
+            var carry: u128 = std.fmt.charToDigit(c, radix) catch unreachable;
             for (literal.values()) |*word| {
                 carry += @as(u128, word.*) * radix;
                 word.* = @truncate(carry);
                 carry >>= 64;
             }
-            if (radix != 10) {
-                var unknown_carry: u64 = if (unknown) (@as(u64, 1) << shift) - 1 else 0;
-                for (literal.unknowns()) |*word| {
-                    const next = word.* >> @intCast(64 - @as(u7, shift));
-                    word.* = (word.* << shift) | unknown_carry;
-                    unknown_carry = next;
-                }
+        }
+    } else {
+        // A power-of-two radix places each digit's `shift` bits directly,
+        // from the least significant digit up: linear in the digits, where
+        // shifting the whole value per digit was O(digits * words). Digits
+        // above `width` are the left truncation a sized literal gets.
+        var bit: u64 = 0;
+        var i = digits.len;
+        while (i > 0 and bit < width) {
+            i -= 1;
+            const c = digits[i];
+            if (c == '_') continue;
+            const unknown = c == 'x' or c == 'X' or c == 'z' or c == 'Z' or c == '?';
+            const group: u64 = (@as(u64, 1) << shift) - 1;
+            const val: u64 = if (unknown) (if (std.ascii.toLower(c) == 'x') group else 0) else (std.fmt.charToDigit(c, radix) catch unreachable);
+            const unk: u64 = if (unknown) group else 0;
+            const w: usize = @intCast(bit / 64);
+            const off: u6 = @intCast(bit % 64);
+            literal.values()[w] |= val << off;
+            literal.unknowns()[w] |= unk << off;
+            // A group straddling a word boundary spills its high bits.
+            if (@as(u64, off) + shift > 64 and w + 1 < words) {
+                const back: u6 = @intCast(64 - @as(u7, off));
+                literal.values()[w + 1] |= val >> back;
+                literal.unknowns()[w + 1] |= unk >> back;
             }
+            bit += shift;
         }
         if (radix != 10 and any_unknown) {
             const used = @as(u64, count) * shift;
@@ -917,7 +938,7 @@ test "wide literals cross limbs without silently reducing their declared size" {
     try std.testing.expectError(error.DigitOutOfRange, parse(arena, "08'hff"));
     try std.testing.expectError(error.DigitOutOfRange, parse(arena, "0_8'hff"));
     try std.testing.expectError(error.Overflow, parse(arena, "4294967296'h1"));
-    try std.testing.expectError(error.Overflow, parse(arena, "16777217'h1"));
+    try std.testing.expectEqual(@as(u32, 16777217), (try parse(arena, "16777217'h1")).width);
 }
 
 // Scalar truth tables are the oracle for packed words, in 0/1/X/Z order.
@@ -1962,24 +1983,58 @@ test "parse agrees with std.fmt on random sized hex and unsized decimal numbers"
     }
 }
 
-test "E1019 bounds an unsized literal by the width its digits need" {
+test "E1019 is only the u32 width: literals past the old 2^24-bit cap parse, in linear time" {
     const gpa = std.testing.allocator;
-    // `'h1` and 4194304 zeros need 4194304 * 4 + 1 bits, one past `max_width`.
+    // `'h1` and 4194304 zeros need 4194304 * 4 + 1 bits, one past the old
+    // 2^24 cap: bit 2^24 set, every other bit clear.
     const known = try gpa.alloc(u8, 3 + 4194304);
     defer gpa.free(known);
     @memcpy(known[0..3], "'h1");
     @memset(known[3..], '0');
-    try std.testing.expectError(error.Overflow, parse(gpa, known));
-    // X digits fill `count * 4` bits: 4194305 of them is past the limit.
+    const k = try parse(gpa, known);
+    defer gpa.free(k.planes);
+    try std.testing.expectEqual(@as(u32, (1 << 24) + 1), k.width);
+    try std.testing.expectEqual(@as(u64, 1), k.values()[(1 << 24) / 64]);
+    for (k.values()[0 .. (1 << 24) / 64]) |w| try std.testing.expectEqual(@as(u64, 0), w);
+    // X digits fill `count * 4` bits: 4194305 of them, all x.
     const unknown = try gpa.alloc(u8, 2 + 4194305);
     defer gpa.free(unknown);
     @memcpy(unknown[0..2], "'h");
     @memset(unknown[2..], 'x');
-    try std.testing.expectError(error.Overflow, parse(gpa, unknown));
+    const u = try parse(gpa, unknown);
+    defer gpa.free(u.planes);
+    try std.testing.expectEqual(@as(u32, 4194305 * 4), u.width);
+    const uw = u.unknowns();
+    for (uw[0 .. uw.len - 1]) |w| try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), w);
+    try std.testing.expectEqual(@as(u64, 0xf), uw[uw.len - 1]);
+    // A sized literal past the old cap, and the u32 bound itself.
+    const sized = try parse(gpa, "16777217'h1_0");
+    defer gpa.free(sized.planes);
+    try std.testing.expectEqual(@as(u32, 16777217), sized.width);
+    try std.testing.expectEqual(@as(u64, 0x10), sized.values()[0]);
+    try std.testing.expectError(error.Overflow, parse(gpa, "4294967296'h0"));
     // Leading zeros need no bits.
     const zeros = try parse(gpa, "'h000000000000000000001");
     defer gpa.free(zeros.planes);
     try std.testing.expectEqual(@as(u32, 64), zeros.width);
+}
+
+test "power-of-two radices place digits across word boundaries and truncate from the left" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Octal groups straddle bit 63/64: 23 digits of 7 is 69 ones.
+    const o = try parse(arena, "69'o77777777777777777777777");
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), o.values()[0]);
+    try std.testing.expectEqual(@as(u64, 0x1f), o.values()[1]);
+    // Sized narrower than the digits: the high digits are dropped.
+    const t = try parse(arena, "4'hAB");
+    try std.testing.expectEqual(@as(u64, 0xB), t.values()[0]);
+    // A z digit in octal straddling the boundary: unknown, value 0.
+    const z = try parse(arena, "66'oz000000000000000000000");
+    try std.testing.expectEqual(@as(u64, 1) << 63, z.unknowns()[0]);
+    try std.testing.expectEqual(@as(u64, 0b11), z.unknowns()[1]);
+    try std.testing.expectEqual(@as(u64, 0), z.values()[1]);
 }
 
 test "parse: a leading x or z fills the size, digits and sizes take `_`, and malformed text names its rule" {

@@ -20,6 +20,7 @@ const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const diag = @import("diag");
 const Parser = parser.Parser;
+const deep_stack = @import("../deep_stack.zig");
 
 /// A parsed file and the bag holding its diagnostics.
 pub const TestResult = struct {
@@ -1474,21 +1475,62 @@ test "Parser.expect: E0207 leaves the cursor, and only a terminator earns an ins
     try std.testing.expectEqual(@as(u32, 0), bag.at(1).n_notes);
 }
 
-test "Parser.enter: E0241 at max_depth, with the depth unchanged" {
+/// Parses `prefix ++ open*n ++ middle ++ close*n ++ suffix` and returns the
+/// parser's `deepest`, failing the test on any diagnostic.
+fn parseNested(arena: std.mem.Allocator, prefix: []const u8, open: []const u8, middle: []const u8, close: []const u8, suffix: []const u8, n: usize) !u32 {
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena, prefix);
+    for (0..n) |_| try src.appendSlice(arena, open);
+    try src.appendSlice(arena, middle);
+    for (0..n) |_| try src.appendSlice(arena, close);
+    try src.appendSlice(arena, suffix);
+    const list = try lexer.Lexer.tokenize(arena, src.items);
+    const bag = try newBag(arena, src.items);
+    var p = Parser.init(arena, src.items, list.items(.tag), list.items(.start), bag);
+    _ = try p.parseSourceFile();
+    try std.testing.expectEqual(@as(usize, 0), bag.count());
+    try std.testing.expectEqual(@as(u32, 0), p.depth);
+    try std.testing.expectEqual(@as(u32, 0), p.frames);
+    return p.deepest;
+}
+
+test "nesting has no parser bound: each construct at the old 1024 cap and far past it" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    const m = "module m(p); inout p; electrical p; real r; integer k; analog begin ";
+    const e = " end endmodule";
+    // 1025 was one past E0241's old cap; 100,000 crosses many stack segments
+    // (`segment_levels`), so the run also checks `frames` unwinds across them.
+    for ([_]usize{ 1025, 100_000 }) |n| {
+        const deep: u32 = @intCast(n);
+        try std.testing.expect(try parseNested(arena, m ++ "r = ", "(", "1.0", ")", ";" ++ e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m ++ "r = ", "-", "1.0", "", ";" ++ e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m ++ "r = ", "V(p) > 1 ? 1 : ", "0", "", ";" ++ e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m ++ "r = 1.0", " + 1.0", "", "", ";" ++ e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m, "begin ", "r = 1;", " end", e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m, "if (V(p) > 1) r = 1; else ", "r = 0;", "", e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m ++ "k = ", "{", "1'b1", "}", ";" ++ e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, "module m; generate ", "if (1) begin ", "", "end ", "endgenerate endmodule", n) >= deep);
+    }
+}
 
-    const src = "x";
-    const list = try lexer.Lexer.tokenize(arena, src);
-    const bag = try newBag(arena, src);
-    var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
-    p.depth = parser.max_depth - 1;
-    try p.enter();
-    try std.testing.expectEqual(@as(u16, parser.max_depth), p.depth);
-    try std.testing.expectError(error.ParseError, p.enter());
-    try std.testing.expectEqual(@as(u16, parser.max_depth), p.depth);
-    try std.testing.expectEqual(diag.Code.E0241, bag.at(0).code);
+test "a stack segment that cannot be reserved is E0241, naming the depth" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena, "module m; real r; analog r = ");
+    try src.appendNTimes(arena, '(', parser.caller_levels + 1);
+    try src.appendSlice(arena, "1.0");
+    try src.appendNTimes(arena, ')', parser.caller_levels + 1);
+    try src.appendSlice(arena, "; endmodule");
+    deep_stack.refuse_for_test = true;
+    defer deep_stack.refuse_for_test = false;
+    const r = try parseForTest(arena, src.items);
+    try std.testing.expectEqual(@as(?diag.Code, .E0241), firstError(r));
+    try std.testing.expect(std.mem.indexOf(u8, firstErrorMsg(r), "levels deep") != null);
 }
 
 test "§2.9 attribute specs: the last value of a name wins, and a speculative read rewinds exactly" {
@@ -2136,14 +2178,26 @@ test "A.5 UDPs: entry shapes, symbol alphabets, input caps and §8.1.4 conflicts
         .{ .src = seq ++ "r : ? : 1; 1 : ? : 0;" ++ tail, .code = null },
     }, false);
 
-    // E1017: past `max_udp_inputs` inputs.
-    var wide: std.ArrayList(u8) = .empty;
-    try wide.appendSlice(arena, "primitive u(q");
-    for (0..65) |i| try wide.print(arena, ", i{d}", .{i});
-    try wide.appendSlice(arena, "); output q; endprimitive");
-    try expectFirstErrors(arena, &.{
-        .{ .src = wide.items, .code = .E1017 },
-    }, false);
+    // No input-count cap (E1017 retired): 65 inputs, one past the old cap of
+    // 64, and 1000, each with a full-width row and a conflicting pair, so the
+    // §8.1.4 check runs over every column of a wide table too.
+    for ([_]usize{ 65, 1000 }) |n| {
+        var wide: std.ArrayList(u8) = .empty;
+        try wide.appendSlice(arena, "primitive u(q");
+        for (0..n) |i| try wide.print(arena, ", i{d}", .{i});
+        try wide.appendSlice(arena, "); output q; input");
+        for (0..n) |i| try wide.print(arena, "{s} i{d}", .{ if (i == 0) "" else ",", i });
+        try wide.appendSlice(arena, "; table ");
+        try wide.appendNTimes(arena, '0', n);
+        try wide.appendSlice(arena, " : 0; ");
+        const ok_len = wide.items.len;
+        try wide.appendNTimes(arena, '?', n);
+        try wide.appendSlice(arena, " : 1; endtable endprimitive");
+        const r = try parseForTest(arena, wide.items);
+        try std.testing.expectEqual(@as(?diag.Code, .E0248), firstError(r));
+        try std.testing.expectEqual(@as(?diag.Code, null), firstError(try parseForTest(arena, try std.mem.concat(arena, u8, &.{ wide.items[0..ok_len], "endtable endprimitive" }))));
+        try std.testing.expectEqual(n + 1, (try parseForTest(arena, try std.mem.concat(arena, u8, &.{ wide.items[0..ok_len], "endtable endprimitive" }))).file.udps[0].ports.len);
+    }
 
     // A.5.4: a UDP instance's delay2 has no third value (E0239).
     // (`u #(...) g(...)` is A.4.1's parameter_value_assignment until
@@ -2539,23 +2593,6 @@ test "A.5.3 edge_indicator and current_state shapes the alphabet check alone adm
         .{ .src = seq ++ "0 : 01 : 1;" ++ tail, .code = .E0233 },
         .{ .src = seq ++ "0 : : 1;" ++ tail, .code = .E0233 },
     }, false);
-}
-
-test "E0241 bounds brace nesting too, which recurses without passing through a primary" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // 2000 nested braces is past `max_depth` (1024), so the refusal is the
-    // depth limit's, whatever the native stack would have held.
-    var src: std.ArrayList(u8) = .empty;
-    try src.appendSlice(arena, "module m; integer x; analog x = ");
-    try src.appendNTimes(arena, '{', 2000);
-    try src.appendSlice(arena, "1'b1");
-    try src.appendNTimes(arena, '}', 2000);
-    try src.appendSlice(arena, "; endmodule");
-    const r = try parseForTest(arena, src.items);
-    try std.testing.expectEqual(@as(?diag.Code, .E0241), firstError(r));
 }
 
 test "§14.2.5 path widths from 64-bit literal ranges: computed exactly, never trapped" {

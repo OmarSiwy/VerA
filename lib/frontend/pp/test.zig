@@ -8,7 +8,6 @@ const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");
 const pp_annex_d = @import("annex_d.zig");
 const pp_prelude = @import("prelude.zig");
-const max_expansion_depth = Preprocessor.max_expansion_depth;
 const Allocator = Preprocessor.Allocator;
 const diag = @import("diag");
 const Lexer = @import("../lexer.zig");
@@ -222,27 +221,65 @@ test "§10.4 a nested invocation in an actual argument is not recursion" {
     try expectFail("`define F(x) `F(x)\n`F(1)\n", .E0118);
     try expectFail("`define A(x) `B(x)\n`define B(y) `A(y)\n`A(1)\n", .E0118);
 
-    // E0150: depth alone does not bound a macro that doubles at every level
-    // (2^40 tokens here); the total substituted size does, by name.
+    // E0150: a macro that doubles its text 40 times expands to 2^40 tokens,
+    // past what u32 offsets address. It is refused by name when the text
+    // passes the bound; `text_limit` brings the bound to 1 MiB here so the
+    // test does not build 4 GiB first.
     {
         var dbl: std.ArrayList(u8) = .empty;
         defer dbl.deinit(testing.allocator);
         try dbl.appendSlice(testing.allocator, "`define D0 x\n");
         for (1..41) |i| try dbl.print(testing.allocator, "`define D{d} `D{d} `D{d}\n", .{ i, i - 1, i - 1 });
         try dbl.appendSlice(testing.allocator, "`D40\n");
-        try expectFail(dbl.items, .E0150);
+        var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena_state.deinit();
+        var bag: diag.Bag = .init(arena_state.allocator());
+        try testing.expectError(error.PreprocessFailed, process(arena_state.allocator(), dbl.items, .{ .std_defs = false, .bag = &bag, .text_limit = 1 << 20 }));
+        try testing.expectEqual(diag.Code.E0150, bag.at(0).code);
+        // The same doubling 17 times is 2^17 `x`s, under the bound: expanded.
+        var ok_bag: diag.Bag = .init(arena_state.allocator());
+        const ok_src = try std.mem.replaceOwned(u8, arena_state.allocator(), dbl.items, "`D40\n", "`D17\n");
+        const out = try process(arena_state.allocator(), ok_src, .{ .std_defs = false, .bag = &ok_bag, .text_limit = 1 << 20 });
+        try testing.expectEqual(@as(usize, 1 << 17), std.mem.countScalar(u8, out.text, 'x'));
     }
+}
 
-    // E0119's ceiling counts argument pre-expansion too: nested same-macro
-    // calls never repeat a name on `expanding`, so depth bounds the stack.
-    var src: std.ArrayList(u8) = .empty;
-    defer src.deinit(testing.allocator);
-    try src.appendSlice(testing.allocator, "`define M(x) (x)\n");
-    for (0..max_expansion_depth + 1) |_| try src.appendSlice(testing.allocator, "`M(");
-    try src.appendSlice(testing.allocator, "1");
-    for (0..max_expansion_depth + 1) |_| try src.appendSlice(testing.allocator, ")");
-    try src.appendSlice(testing.allocator, "\n");
-    try expectFail(src.items, .E0119);
+test "macro nesting has no depth bound: 100,000 nested uses and a 100,000-macro chain" {
+    // `M(x)` is `(x)`, so n nested uses expand to n parentheses around 1 and
+    // need n live expansions, argument pre-expansion included. 129 was one
+    // past the old 128-level cap (E0119); 10,000 crosses many stack segments
+    // (`Preprocessor.segment_levels`). Each level copies the text inside it,
+    // so the text built is quadratic: 10,000 levels is 50 MB of it.
+    for ([_]usize{ 129, 10_000 }) |n| {
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(testing.allocator);
+        var want: std.ArrayList(u8) = .empty;
+        defer want.deinit(testing.allocator);
+        try src.appendSlice(testing.allocator, "`define M(x) (x)\n");
+        try want.append(testing.allocator, '\n');
+        for (0..n) |_| try src.appendSlice(testing.allocator, "`M(");
+        try want.appendNTimes(testing.allocator, '(', n);
+        try src.append(testing.allocator, '1');
+        try want.append(testing.allocator, '1');
+        try src.appendNTimes(testing.allocator, ')', n);
+        try want.appendNTimes(testing.allocator, ')', n);
+        try expectPp(want.items, src.items);
+    }
+    // A chain: M<k> expands to M<k-1>, so the body rescan nests n deep with
+    // n distinct names on the cycle guard.
+    {
+        const n = 100_000;
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(testing.allocator);
+        try src.appendSlice(testing.allocator, "`define M0 end\n");
+        for (1..n) |k| try src.print(testing.allocator, "`define M{d} `M{d}\n", .{ k, k - 1 });
+        try src.print(testing.allocator, "`M{d}\n", .{n - 1});
+        const got = try runTest(src.items);
+        defer testing.allocator.free(got);
+        try testing.expect(std.mem.endsWith(u8, got, "end\n"));
+    }
+    // A cycle is still E0118, at any depth.
+    try expectFail("`define A `B\n`define B `A\n`A\n", .E0118);
 }
 
 test "escaped identifiers reach `undef, the conditionals and `default_discipline" {
@@ -1444,29 +1481,34 @@ test "IEEE 1364 §19.5 `include operand errors, and the annex D files by basenam
     }
 }
 
-test "IEEE 1364 §19.5: 32 nested `include files are read, a 33rd is E0125" {
-    // Two chains of files, each including the next: `a` is
-    // `max_include_depth` deep, `b` one deeper. File k of a chain is read
-    // with k + 1 includes open, so the last file of `a` is read at the limit.
+test "IEEE 1364 §19.5: include nesting is unbounded; only a repeating cycle is E0125" {
+    // A chain of 40 files (past the old cap of 32), each including the
+    // next; then one file including itself under a guard that defines one
+    // more macro each time, 301 deep, which a cap on the path alone would
+    // call a cycle; then a file including itself unchanged, the one nesting
+    // that never ends.
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var name_buf: [16]u8 = undefined;
     var data_buf: [32]u8 = undefined;
-    const chains = [_]struct { prefix: u8, files: usize }{
-        .{ .prefix = 'a', .files = Preprocessor.max_include_depth },
-        .{ .prefix = 'b', .files = Preprocessor.max_include_depth + 1 },
-    };
-    for (chains) |chain| {
-        for (0..chain.files) |k| {
-            const name = try std.mem.print(&name_buf, "{c}{d}.vh", .{ chain.prefix, k });
-            const data = if (k + 1 == chain.files)
-                "deepest\n"
-            else
-                try std.mem.print(&data_buf, "`include \"{c}{d}.vh\"\n", .{ chain.prefix, k + 1 });
-            try tmp.dir.writeFile(io, .{ .sub_path = name, .data = data });
-        }
+    const chain = 40;
+    for (0..chain) |k| {
+        const name = try std.mem.print(&name_buf, "a{d}.vh", .{k});
+        const data = if (k + 1 == chain) "deepest\n" else try std.mem.print(&data_buf, "`include \"a{d}.vh\"\n", .{k + 1});
+        try tmp.dir.writeFile(io, .{ .sub_path = name, .data = data });
     }
+    var guard: std.ArrayList(u8) = .empty;
+    defer guard.deinit(testing.allocator);
+    const depth = 300;
+    for (0..depth) |k| try guard.print(testing.allocator, "`ifndef L{d}\n`define L{d}\n`else\n", .{ k, k });
+    try guard.appendSlice(testing.allocator, "bottom\n`define DONE\n");
+    for (0..depth) |_| try guard.appendSlice(testing.allocator, "`endif\n");
+    try guard.appendSlice(testing.allocator, "`ifndef DONE\n`include \"self.vh\"\n`endif\n");
+    try tmp.dir.writeFile(io, .{ .sub_path = "self.vh", .data = guard.items });
+    try tmp.dir.writeFile(io, .{ .sub_path = "loop.vh", .data = "x\n`include \"loop.vh\"\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "p.vh", .data = "`include \"q.vh\"\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "q.vh", .data = "`include \"p.vh\"\n" });
     const first = try tmp.dir.realPathFileAlloc(io, "a0.vh", testing.allocator);
     defer testing.allocator.free(first);
     const dirs: []const []const u8 = &.{std.fs.path.dirname(first).?};
@@ -1477,11 +1519,50 @@ test "IEEE 1364 §19.5: 32 nested `include files are read, a 33rd is E0125" {
     var ok_bag: diag.Bag = .init(arena);
     const out = try process(arena, "`include \"a0.vh\"\n", .{ .std_defs = false, .bag = &ok_bag, .include_dirs = dirs });
     try testing.expect(std.mem.find(u8, out.text, "deepest") != null);
+    var self_bag: diag.Bag = .init(arena);
+    const self_out = try process(arena, "`include \"self.vh\"\n", .{ .std_defs = false, .bag = &self_bag, .include_dirs = dirs });
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, self_out.text, "bottom"));
 
-    var bag: diag.Bag = .init(arena);
-    try testing.expectError(error.PreprocessFailed, process(arena, "`include \"b0.vh\"\n", .{ .std_defs = false, .bag = &bag, .include_dirs = dirs }));
-    try testing.expectEqual(@as(usize, 1), bag.count());
-    try testing.expectEqual(diag.Code.E0125, bag.at(0).code);
+    for ([_][]const u8{ "loop.vh", "p.vh" }) |f| {
+        var bag: diag.Bag = .init(arena);
+        const src = try arena.print("`include \"{s}\"\n", .{f});
+        try testing.expectError(error.PreprocessFailed, process(arena, src, .{ .std_defs = false, .bag = &bag, .include_dirs = dirs }));
+        try testing.expectEqual(@as(usize, 1), bag.count());
+        try testing.expectEqual(diag.Code.E0125, bag.at(0).code);
+    }
+}
+
+test "IEEE 1364 §19.5: an `include past the u32 text bound is E1013, known from the file's size" {
+    // A sparse file one byte past `max_text_bytes`: its size is read, not
+    // its bytes, so the test allocates nothing large. NTFS would allocate
+    // the 4 GiB, so Windows skips it.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest; // os: a test skip; every target builds it
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    {
+        var f = try tmp.dir.createFile(io, "huge.vh", .{});
+        defer f.close(io);
+        try f.setLength(io, Preprocessor.max_text_bytes + 1);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "big.vh", .data = "" });
+    const any = try tmp.dir.realPathFileAlloc(io, "big.vh", testing.allocator);
+    defer testing.allocator.free(any);
+    const dirs: []const []const u8 = &.{std.fs.path.dirname(any).?};
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    var bag: diag.Bag = .init(arena_state.allocator());
+    try testing.expectError(error.PreprocessFailed, process(arena_state.allocator(), "`include \"huge.vh\"\n", .{ .std_defs = false, .bag = &bag, .include_dirs = dirs }));
+    try testing.expectEqual(diag.Code.E1013, bag.at(0).code);
+    // 17 MiB, past the old 16 MiB `include cap, reads.
+    {
+        var f = try tmp.dir.createFile(io, "big.vh", .{});
+        defer f.close(io);
+        try f.setLength(io, 17 << 20);
+    }
+    var ok_bag: diag.Bag = .init(arena_state.allocator());
+    const out = try process(arena_state.allocator(), "`include \"big.vh\"\n", .{ .std_defs = false, .bag = &ok_bag, .include_dirs = dirs });
+    try testing.expect(out.text.len >= 17 << 20);
 }
 
 test "§10.7: a file included through a macro numbers its own lines and owns its diagnostics" {
@@ -1594,29 +1675,6 @@ test "every successful run keeps the line count and leaves sorted provenance" {
         try expectSortedMap(&bag);
         try expectSortedEvents(out.directives, out.text);
     }
-}
-
-test "E0119 sits exactly at max_expansion_depth" {
-    // `M(x)` is `(x)`, so n nested uses expand to n parentheses around 1 and
-    // need n live expansions; `max_expansion_depth` of them is allowed (one
-    // more is the E0119 case above).
-    var src: std.ArrayList(u8) = .empty;
-    defer src.deinit(testing.allocator);
-    var want: std.ArrayList(u8) = .empty;
-    defer want.deinit(testing.allocator);
-    try src.appendSlice(testing.allocator, "`define M(x) (x)\n");
-    try want.append(testing.allocator, '\n');
-    for (0..max_expansion_depth) |_| {
-        try src.appendSlice(testing.allocator, "`M(");
-        try want.append(testing.allocator, '(');
-    }
-    try src.append(testing.allocator, '1');
-    try want.append(testing.allocator, '1');
-    for (0..max_expansion_depth) |_| {
-        try src.append(testing.allocator, ')');
-        try want.append(testing.allocator, ')');
-    }
-    try expectPp(want.items, src.items);
 }
 
 test "IEEE 1364 §19.3.1: every directive name is refused as a macro name, escaped or not" {

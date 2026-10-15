@@ -27,6 +27,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const token = @import("token.zig");
+const Preprocessor = @import("preprocessor.zig");
+const deep_stack = @import("deep_stack.zig");
 
 /// Synthesized prelude text plus the number of module declarations it holds,
 /// which `Ast.SourceFile.netlist_modules` records.
@@ -135,7 +137,7 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
     // Every line of every file, `.INCLUDE`/`.LIB` expanded in place.
     var r: Reader = .{ .arena = arena, .scratch = scratch, .refusals = &refusals };
     try r.files.append(arena, .{ .name = if (path.len == 0) "<spice netlist>" else path, .text = netlist });
-    try r.read(0, null, 0);
+    try r.read(0, null);
 
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(scratch,
@@ -218,7 +220,9 @@ const Line = struct { text: []const u8, file: u32, at: u32, len: u32 };
 /// when called. A relative file name is looked for beside the file whose
 /// card names it, as VD-091 does for `` `include ``. `.HDL file` names a
 /// Verilog-A source (`Synthesized.hdl`). A file that cannot be read, an entry
-/// it does not have, or nesting past `max_depth` is a `Refusal` at the card.
+/// it does not have, or a cycle (a file, or a `.LIB` entry of it, read again
+/// inside itself, which never ends) is a `Refusal` at the card. Any finite
+/// nesting is read.
 const Reader = struct {
     arena: Allocator,
     scratch: Allocator,
@@ -226,16 +230,16 @@ const Reader = struct {
     lines: std.ArrayList(Line) = .empty,
     files: std.ArrayList(File) = .empty,
     hdl: std.ArrayList([]const u8) = .empty,
-
-    /// SPICE netlists do not nest library files deeply; past this a
-    /// `.INCLUDE` cycle is the likelier reading.
-    const max_depth = 16;
-    /// The `--spice` netlist's own bound (E1013).
-    const max_bytes = 64 * 1024 * 1024;
+    /// The files being read now, outermost first: each one's path with `.`
+    /// and `..` resolved, and the `.LIB` entry read from it (null: all of
+    /// it). Reading one of them again is a cycle.
+    reading: std.ArrayList(struct { key: []const u8, entry: ?[]const u8 }) = .empty,
 
     /// Appends file `fi`'s lines, or with `entry` only those of its `.LIB
     /// entry` block.
-    fn read(r: *Reader, fi: u32, entry: ?[]const u8, depth: u32) Allocator.Error!void {
+    fn read(r: *Reader, fi: u32, entry: ?[]const u8) Allocator.Error!void {
+        try r.reading.append(r.scratch, .{ .key = try std.fs.path.resolve(r.scratch, &.{r.files.items[fi].name}), .entry = entry });
+        defer _ = r.reading.pop();
         const text = r.files.items[fi].text;
         // Inside a `.LIB name` block: true when it is the entry asked for.
         var in_lib: ?bool = null;
@@ -275,13 +279,22 @@ const Reader = struct {
                     try r.refusals.add(card, "`{s}` names no file", .{kw});
                     continue;
                 }
-                if (depth == max_depth) {
-                    try r.refusals.add(card, "`{s}` is nested more than {d} files deep", .{ kw, max_depth });
+                const sub = try r.open(card, kw, arg) orelse continue;
+                const sub_entry: ?[]const u8 = if (include) null else arg2;
+                if (try r.cycle(sub, sub_entry)) |chain| {
+                    try r.refusals.add(card, "`{s}` cycle: {s}", .{ kw, chain });
                     continue;
                 }
-                const sub = try r.open(card, kw, arg) orelse continue;
                 const before = r.lines.items.len;
-                try r.read(sub, if (include) null else arg2, depth + 1);
+                // Every 512 nested files continue on a fresh stack segment,
+                // so nesting is bounded by memory, not the caller's stack.
+                if (r.reading.items.len % 512 != 0) try r.read(sub, sub_entry) else deep_stack.run(512, read, .{ r, sub, sub_entry }) catch |e| switch (e) {
+                    error.DeepStackUnavailable => {
+                        try r.refusals.add(card, "`{s}`: no stack left for {d} nested files", .{ kw, r.reading.items.len });
+                        continue;
+                    },
+                    error.OutOfMemory => |oom| return oom,
+                };
                 if (!include and r.lines.items.len == before and !hasEntry(r.files.items[sub].text, arg2))
                     try r.refusals.add(card, "`{s}` has no `.lib {s}` entry", .{ r.files.items[sub].name, arg2 });
                 continue;
@@ -301,6 +314,21 @@ const Reader = struct {
         }
     }
 
+    /// The chain `a -> b -> a` when reading file `fi` (`entry` of it) now
+    /// would repeat a read still open, else null.
+    fn cycle(r: *Reader, fi: u32, entry: ?[]const u8) Allocator.Error!?[]const u8 {
+        const key = try std.fs.path.resolve(r.scratch, &.{r.files.items[fi].name});
+        for (r.reading.items, 0..) |o, k| {
+            const same_entry = if (o.entry) |a| (if (entry) |b| std.ascii.eqlIgnoreCase(a, b) else false) else entry == null;
+            if (!same_entry or !std.mem.eql(u8, o.key, key)) continue;
+            var chain: std.ArrayList(u8) = .empty;
+            for (r.reading.items[k..]) |c| try chain.print(r.scratch, "{s} -> ", .{c.key});
+            try chain.appendSlice(r.scratch, key);
+            return chain.items;
+        }
+        return null;
+    }
+
     /// `name` beside the file `fi` was opened by, or as written when absolute.
     fn resolve(r: *Reader, fi: u32, name: []const u8) Allocator.Error![]const u8 {
         if (std.fs.path.isAbsolute(name)) return r.arena.dupe(u8, name);
@@ -314,7 +342,7 @@ const Reader = struct {
     fn open(r: *Reader, card: Card, kw: []const u8, name: []const u8) Allocator.Error!?u32 {
         const full = try r.resolve(card.file, name);
         const io = std.Io.Threaded.global_single_threaded.io();
-        const text = std.Io.Dir.cwd().readFileAlloc(io, full, r.arena, .limited(max_bytes)) catch |e| switch (e) {
+        const text = Preprocessor.readText(io, .cwd(), full, r.arena) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 try r.refusals.add(card, "`{s}`: cannot read \"{s}\" ({t})", .{ kw, full, e });
@@ -1088,9 +1116,10 @@ const Expr = union(enum) {
 /// `+` and `-`; parentheses; and the `expr_fns` calls. Power binds tighter
 /// than a unary minus on its left (`-2**2` is -4), and every operation is
 /// parenthesized, so the grammar's precedence is the text's. Anything else
-/// (`.param` names, `^`, comparisons, `?:`, other functions) is refused, and
-/// so is nesting (parentheses, calls, unary signs) deeper than
-/// `ExprParser.max_depth`, which bounds the recursion on any input.
+/// (`.param` names, `^`, comparisons, `?:`, other functions) is refused.
+/// Nesting (parentheses, calls, unary signs) has no bound but memory: the
+/// recursion continues on a fresh stack segment every `ExprParser.segment`
+/// levels.
 fn expression(arena: Allocator, src: []const u8, scope: []const []const u8) Allocator.Error!Expr {
     var p: ExprParser = .{ .arena = arena, .src = src, .scope = scope };
     const text = try p.sum() orelse return .{ .refused = p.why.? };
@@ -1110,9 +1139,8 @@ const ExprParser = struct {
     /// `unary` frames open; every recursive rule passes through `unary`.
     depth: u32 = 0,
 
-    /// The deepest nesting `expression` reads. A card is a line of text a
-    /// person writes; this bounds the recursion's stack on any input.
-    const max_depth = 256;
+    /// `unary` levels one stack segment holds (`deep_stack`).
+    const segment = 1024;
 
     fn refuse(p: *ExprParser, comptime fmt: []const u8, args: anytype) Allocator.Error!?[]const u8 {
         if (p.why == null) p.why = try p.arena.print(fmt, args);
@@ -1155,7 +1183,14 @@ const ExprParser = struct {
 
     /// unary := ('+' | '-') unary | power
     fn unary(p: *ExprParser) Allocator.Error!?[]const u8 {
-        if (p.depth == max_depth) return p.refuse("nests deeper than {d}", .{max_depth});
+        if (p.depth == 0 or p.depth % segment != 0) return p.unaryHere();
+        return deep_stack.run(segment, unaryHere, .{p}) catch |e| switch (e) {
+            error.DeepStackUnavailable => p.refuse("nests {d} levels deep, past the stack memory allows", .{p.depth}),
+            error.OutOfMemory => |oom| oom,
+        };
+    }
+
+    fn unaryHere(p: *ExprParser) Allocator.Error!?[]const u8 {
         p.depth += 1;
         defer p.depth -= 1;
         if (p.eat("-")) return try p.arena.print("(-{s})", .{try p.unary() orelse return null});
@@ -1956,7 +1991,7 @@ test "spiceNumber never panics: an exponent past i32 is not a number, a huge one
     try std.testing.expectEqual(@as(?f64, null), spiceNumber("e5"));
 }
 
-test "SPICE expressions name what they refuse, and nesting past max_depth is refused" {
+test "SPICE expressions name what they refuse, and nesting has no depth bound" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1977,24 +2012,23 @@ test "SPICE expressions name what they refuse, and nesting past max_depth is ref
     }
     try std.testing.expectEqualStrings("1e0", (try expression(arena, "+1", &.{})).text);
     try std.testing.expectEqualStrings("(2e0 ** (3e0 ** 2e0))", (try expression(arena, "2**3**2", &.{})).text);
-    // Every recursive rule passes through `unary`: 200 parentheses or signs
-    // open 201 frames and are read; 300 open 301, past `max_depth`.
-    var buf: [700]u8 = undefined;
-    for ([_]usize{ 200, 300 }) |n| {
+    // Every recursive rule passes through `unary`. 257 parentheses was one
+    // past the old 256-level cap; 100,000 crosses many stack segments. An
+    // even count of signs is the value itself.
+    for ([_]usize{ 257, 100_000 }) |n| {
+        const buf = try arena.alloc(u8, 2 * n + 1);
         @memset(buf[0..n], '(');
         buf[n] = '1';
-        @memset(buf[n + 1 .. 2 * n + 1], ')');
-        const parens = try expression(arena, buf[0 .. 2 * n + 1], &.{});
-        @memset(buf[0..n], '-');
-        const signs = try expression(arena, buf[0 .. n + 1], &.{});
-        if (n <= ExprParser.max_depth) {
-            try std.testing.expectEqualStrings("1e0", parens.text);
-            try std.testing.expect(signs == .text);
-        } else {
-            try std.testing.expect(parens == .refused and signs == .refused);
-            try expectHas(parens.refused, &.{"deeper"});
-        }
+        @memset(buf[n + 1 ..], ')');
+        try std.testing.expectEqualStrings("1e0", (try expression(arena, buf, &.{})).text);
     }
+    // Signs build one `(-...)` per level, so 2,000 (past the old cap) stays
+    // a small test: the text is 2,000 levels of `(-` around 1e0.
+    const signs = try arena.alloc(u8, 2001);
+    @memset(signs[0..2000], '-');
+    signs[2000] = '1';
+    const got = (try expression(arena, signs, &.{})).text;
+    try std.testing.expect(std.mem.startsWith(u8, got, "(-(-") and std.mem.count(u8, got, "(-") == 2000);
 }
 
 test "cards: `+` continues the card above, a leading `+` is dropped, and an unterminated .SUBCKT keeps its body" {
@@ -2199,7 +2233,7 @@ test "Reader: .INCLUDE, .LIB entries and .HDL beside the netlist, and the refusa
     try std.testing.expect(std.mem.endsWith(u8, s.hdl[0], "a.va"));
 }
 
-test "Reader: an .INCLUDE cycle stops at the nesting bound with one refusal" {
+test "Reader: an .INCLUDE cycle is one refusal naming it; finite nesting has no bound" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2209,9 +2243,22 @@ test "Reader: an .INCLUDE cycle stops at the nesting bound with one refusal" {
     try tmp.dir.writeFile(io, .{ .sub_path = "self.sp", .data = ".include self.sp\n" });
     const path: []const u8 = try tmp.dir.realPathFileAlloc(io, "self.sp", arena);
     const s = try synthesize(arena, ".include self.sp\n", path);
-    try expectRefusals(s.refused, &.{"nested more than 16 files deep"});
-    // The netlist and the 16 nested reads of self.sp.
-    try std.testing.expectEqual(@as(usize, 17), s.files.len);
+    try expectRefusals(s.refused, &.{"`.include` cycle:"});
+    // The netlist, and self.sp opened once more before the cycle is seen.
+    try std.testing.expectEqual(@as(usize, 2), s.files.len);
+
+    // 20 files deep, past the old bound of 16; and one file whose `.LIB`
+    // entry calls another entry of the same file, which is no cycle.
+    const n = 20;
+    for (0..n) |k| {
+        const data = if (k + 1 == n) ".SUBCKT DEEP A B\nR1 A B 1K\n.ENDS\n" else try arena.print(".include c{d}.sp\n", .{k + 1});
+        try tmp.dir.writeFile(io, .{ .sub_path = try arena.print("c{d}.sp", .{k}), .data = data });
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "two.sp", .data = ".LIB a\n.LIB two.sp b\n.ENDL\n.LIB b\n.SUBCKT FROMB A B\nR1 A B 1K\n.ENDS\n.ENDL\n" });
+    const top = ".include c0.sp\n.lib two.sp a\n";
+    const deep = try synthesize(arena, top, try tmp.dir.realPathFileAlloc(io, "self.sp", arena));
+    try std.testing.expectEqual(@as(usize, 0), deep.refused.len);
+    try expectHas(deep.text, &.{ "module deep(a, b);", "module fromb(a, b);" });
 }
 
 /// The words `synthesizeOne` builds netlists from: cards, fields and the
