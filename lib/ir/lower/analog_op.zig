@@ -178,23 +178,27 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // one or a `constant_assignment_pattern_or_null`; VAMS 2.x's `{a, b}`
         // is the §4.2.13 concatenation, which annex G retired from this slot
         // ("Add apostrophe before opening { in list of values").
-        if ((i == 1 or i == 2) and isCoefFilter(name) and
+        const coef_slot = (i == 1 or i == 2) and isCoefFilter(name);
+        if (coef_slot and
             (self.file.exprs.tag(a) == .concat or self.file.exprs.tag(a) == .multi_concat))
         {
             try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a concatenation `{{...}}`: write the assignment pattern `'{{...}}`", .{ name, i + 1 });
             return poison;
         }
-        if (try appendVectorArg(self, &vals, a)) continue;
         // §4.5.1 "Certain analog operators require arrays or vectors to be
         // passed as arguments: Laplace filters, Z-transform filters ... An
         // array can either be passed as an array_identifier ... or an array
-        // assignment pattern." A scalar in a coefficient slot is neither; a
-        // part-select or multidimensional array is left to the ordinary path.
-        if ((i == 1 or i == 2) and isCoefFilter(name) and
-            !(self.file.exprs.tag(a) == .index or (self.file.exprs.tag(a) == .ident and self.arrays.contains(self.file.str(self.file.exprs.strOf(a))))))
-        {
-            try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a scalar", .{ name, i + 1 });
-            return poison;
+        // assignment pattern." Those two slots are the only ones: anywhere
+        // else an array or a pattern is an ordinary operand, which `lowerExpr`
+        // judges, never a vector flattened into the operator's arguments.
+        if (coef_slot) {
+            if (try appendVectorArg(self, &vals, a)) continue;
+            // A scalar in a coefficient slot is neither spelling; a
+            // part-select or multidimensional array is left to the ordinary path.
+            if (!(self.file.exprs.tag(a) == .index or (self.file.exprs.tag(a) == .ident and self.arrays.contains(self.file.str(self.file.exprs.strOf(a)))))) {
+                try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a scalar", .{ name, i + 1 });
+                return poison;
+            }
         }
         const tv = try lower_expr.lowerExpr(self, a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
@@ -667,7 +671,9 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             }
             continue;
         };
-        if (try appendVectorArg(self, &vals, a)) {
+        // The same slot is the only one a vector belongs in: anywhere else a
+        // pattern or an array is an ordinary operand, which `lowerExpr` judges.
+        if (table_input and ai == 0 and try appendVectorArg(self, &vals, a)) {
             // Indices, not a slice: `vals` keeps growing and may reallocate.
             if (tab == null) tab = .{ at + 1, vals.items.len };
             continue;

@@ -425,7 +425,9 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
         col += 1;
     }
 
-    if (sel == 0 or col + sel - 1 >= ncol) {
+    // `col + sel - 1 >= ncol`, written so a selector near `maxInt(usize)`
+    // cannot overflow the sum.
+    if (sel == 0 or col >= ncol or sel > ncol - col) {
         try self.err(self.file.exprs.mainTok(e), .E0815, "dependent selector {d} names no dependent column: the data source has {d} column(s) and {d} leading column(s)", .{ sel, ncol, col });
         return null;
     }
