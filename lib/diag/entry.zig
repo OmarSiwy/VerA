@@ -35,14 +35,17 @@ pub const Record = struct {
     span: diag_location.Span,
     message: String,
     point: String,
+    /// Rows of `labels` in use; the rest are undefined.
     n_labels: u8,
+    /// Rows of `notes` in use; the rest are undefined.
     n_notes: u8,
     labels: [max_children]LabelRec,
     notes: [max_children]NoteRec,
 
     // Budget: 156 B, children inline. At most `max_entries` (64) rows, so a
     // full bag is 10 KB; out-of-line children would save ~128 B a row and
-    // cost `detach` a fix-up pass. See docs/seams/s1-diag.md, Memory.
+    // cost `detach` a fix-up pass. See docs/seams/s1-diag.md, Memory (removed
+    // from the tree; `git show 6e59b3d4^:docs/seams/s1-diag.md`).
     comptime {
         std.debug.assert(@sizeOf(Record) == 156);
     }
@@ -68,7 +71,7 @@ pub const NoteRec = struct {
 // ---------------------------------------------------------------------------
 //
 // Produced BY VALUE from a `Record` and never stored. The strings are slices
-// into `Bag.string_bytes`, valid exactly as long as the bag is.
+// into `Bag.string_bytes`; `Bag.str` says how long they stay valid.
 
 /// A machine-applicable rewrite. `span` is what to replace; a zero-width span
 /// inserts. The renderer draws `+` under an insertion and `~` under a

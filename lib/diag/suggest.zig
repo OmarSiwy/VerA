@@ -4,11 +4,12 @@
 
 const std = @import("std");
 
-/// Optimal string alignment distance (Damerau-Levenshtein restricted to
-/// adjacent transpositions), capped at `limit` so a hopeless pair exits early.
-///
-/// No allocation: names longer than `cap` are not the ones a typo suggestion
-/// helps with.
+/// Returns the optimal string alignment distance (Damerau-Levenshtein
+/// restricted to adjacent transpositions) when it is at most `limit`, and
+/// some value above `limit` otherwise, so a hopeless pair exits early.
+/// O(a.len * b.len) at worst, no allocation: an input longer than 64 bytes
+/// always measures above `limit`, because names that long are not the ones a
+/// typo suggestion helps with.
 pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     const cap = 64;
     if (a.len > cap or b.len > cap) return limit + 1;
@@ -58,8 +59,9 @@ pub fn didYouMean(name: []const u8, candidates: []const []const u8) ?[]const u8 
     return n.best;
 }
 
-/// `didYouMean` over the keys of any `StringHashMapUnmanaged`, streamed
-/// without allocating.
+/// `didYouMean` over the keys of any `StringHashMapUnmanaged` (anything whose
+/// `keyIterator().next()` yields `?*[]const u8`), streamed without
+/// allocating. The answer does not depend on the map's iteration order.
 pub fn didYouMeanMap(name: []const u8, map: anytype) ?[]const u8 {
     var n: Nearest = .init(name);
     var it = map.keyIterator();
@@ -78,7 +80,7 @@ const Nearest = struct {
 
     fn init(name: []const u8) Nearest {
         // One edit per three characters, and always at least one, so `vd` still
-        // suggests `vds` but `a` suggests nothing.
+        // suggests `vds` but `a` suggests only another one-character name.
         const limit = @max(@as(usize, 1), name.len / 3);
         return .{ .name = name, .limit = limit, .best_d = limit + 1 };
     }
