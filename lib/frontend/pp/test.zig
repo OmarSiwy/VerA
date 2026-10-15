@@ -35,6 +35,7 @@ pub const testing = std.testing;
 
 /// Preprocess without the std-def prelude, on an arena backed by the testing
 /// allocator; the result is duped so the arena can be torn down (leak-checked).
+/// Caller owns the returned text and must free it with `testing.allocator`.
 pub fn runTest(src: []const u8) ![]u8 {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
@@ -56,11 +57,11 @@ pub fn expectPreserved(src: []const u8, present: []const []const u8, absent: []c
     const got = try runTest(src);
     defer testing.allocator.free(got);
     try testing.expectEqual(
-        std.mem.count(u8, src, "\n"),
-        std.mem.count(u8, got, "\n"),
+        std.mem.countScalar(u8, src, '\n'),
+        std.mem.countScalar(u8, got, '\n'),
     );
-    for (present) |s| try testing.expect(std.mem.indexOf(u8, got, s) != null);
-    for (absent) |s| try testing.expect(std.mem.indexOf(u8, got, s) == null);
+    for (present) |s| try testing.expect(std.mem.find(u8, got, s) != null);
+    for (absent) |s| try testing.expect(std.mem.find(u8, got, s) == null);
 }
 
 /// Expects `src` to fail with exactly one `code` diagnostic whose span lies
@@ -82,7 +83,7 @@ pub fn expectFail(src: []const u8, code: diag.Code) !void {
     try testing.expect(e.file != null);
     try testing.expect(e.span.end <= bag.fileText(e.file.?).len);
     // The title carries the condition; the message may not repeat it.
-    try testing.expect(std.mem.indexOf(u8, e.message, "LRM") == null);
+    try testing.expect(std.mem.find(u8, e.message, "LRM") == null);
 }
 
 test "findStop agrees with the scalar loop it replaced, at every tail boundary" {
@@ -354,14 +355,14 @@ test "§9.15 Table 9-27 reads `timescale back, in seconds" {
     try testing.expectEqual(@as(?Timescale, null), try T.ts("module m; endmodule\n"));
     // §19.6 `resetall returns it to that state.
     try testing.expectEqual(@as(?Timescale, null), try T.ts("`timescale 1ns/1ps\n`resetall\n"));
-    // Off Table 19-1 in each of the three ways, plus §19.9's ordering rule and
+    // Off Table 19-1 in each of the three ways, plus §19.8's ordering rule and
     // the two ways of writing the wrong number of operands: all E0142.
     for ([_][]const u8{
         "`timescale 2ns/1ps\n", // magnitude
         "`timescale 1sec/1ps\n", // unit name
         "`timescale 1ns 1ps\n", // no slash
         "`timescale 1ps/1ns\n", // precision coarser than the unit
-        "`timescale 1ns/1ps junk\n", // §19.9 takes two operands and no more
+        "`timescale 1ns/1ps junk\n", // §19.8 takes two operands and no more
         "`timescale\n", // and they are not optional
     }) |src| try expectFail(src, .E0142);
     // The last one in the stream is the one in force (one elaborated module).
@@ -656,8 +657,8 @@ test "`include resolves the built-in annex D files" {
     // fixture ch10 18_include_constants
     const got = try runTest("`include \"constants.vams\"\n`P_CELSIUS0 `P_K\n");
     defer testing.allocator.free(got);
-    try testing.expect(std.mem.indexOf(u8, got, "273.15") != null);
-    try testing.expect(std.mem.indexOf(u8, got, "1.3806503e-23") != null);
+    try testing.expect(std.mem.find(u8, got, "273.15") != null);
+    try testing.expect(std.mem.find(u8, got, "1.3806503e-23") != null);
     try expectFail("`include \"no_such_file.vams\"\n", .E0126);
     try expectFail("`include nonsense\n", .E0122);
     try expectFail("`include <constants.vams>\n", .E0122);
@@ -665,7 +666,7 @@ test "`include resolves the built-in annex D files" {
     // annex D.3 is shipped too, and is not preloaded: it has to be asked for.
     const d3 = try runTest("`include \"driver_access.vams\"\n`DRIVER_WAND\n");
     defer testing.allocator.free(d3);
-    try testing.expect(std.mem.indexOf(u8, d3, "32'b10000000000") != null);
+    try testing.expect(std.mem.find(u8, d3, "32'b10000000000") != null);
 }
 
 test "IEEE 1364 §19.5 `include opens a full path name as written" {
@@ -681,7 +682,7 @@ test "IEEE 1364 §19.5 `include opens a full path name as written" {
     defer testing.allocator.free(src);
     const got = try runTest(src);
     defer testing.allocator.free(got);
-    try testing.expect(std.mem.indexOf(u8, got, "7") != null);
+    try testing.expect(std.mem.find(u8, got, "7") != null);
 }
 
 test "§10.4 the NAME may be escaped and the TEXT may not begin with __VAMS_" {
@@ -721,7 +722,7 @@ test "annex D prelude is deterministic and self-guarded" {
     );
     // The replayed prelude is the snapshot's text, byte for byte.
     const n1 = (try pp_prelude.preludeSnapshot()).text.len;
-    try testing.expect(std.mem.indexOf(u8, a[0..n1], "nature Voltage;") != null);
+    try testing.expect(std.mem.find(u8, a[0..n1], "nature Voltage;") != null);
     // The re-`include collapses to just the newlines it consumed (line numbers
     // inside an included file are preserved even when its guard empties it).
     try testing.expectEqualStrings(
@@ -968,8 +969,8 @@ test "an ABSTOL override reaches annex D.1" {
         "`define CURRENT_ABSTOL 1e-15\n`include \"disciplines.vams\"\n",
         .{ .std_defs = false, .bag = &bag },
     )).text;
-    try testing.expect(std.mem.indexOf(u8, text, "abstol      = 1e-15;") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "abstol      = 1e-12;") == null);
+    try testing.expect(std.mem.find(u8, text, "abstol      = 1e-15;") != null);
+    try testing.expect(std.mem.find(u8, text, "abstol      = 1e-12;") == null);
 }
 
 test "a span inside an `include resolves to the included file's own line" {
@@ -983,16 +984,16 @@ test "a span inside an `include resolves to the included file's own line" {
 
     // A byte that came from the included file.
     const needle = "discipline electrical;";
-    const at: u32 = @intCast(std.mem.indexOf(u8, out, needle).?);
+    const at: u32 = @intCast(std.mem.find(u8, out, needle).?);
     const r = bag.map.resolve(at);
     try testing.expectEqualStrings("disciplines.vams", bag.fileName(r.file));
     try testing.expect(r.file != .root);
 
     // ... at its line number, not one measured in the preprocessed text.
-    const want = std.mem.count(
+    const want = std.mem.countScalar(
         u8,
-        pp_annex_d.disciplines_vams[0..std.mem.indexOf(u8, pp_annex_d.disciplines_vams, needle).?],
-        "\n",
+        pp_annex_d.disciplines_vams[0..std.mem.find(u8, pp_annex_d.disciplines_vams, needle).?],
+        '\n',
     ) + 1;
     const idx = try diag.LineIndex.build(arena, bag.fileText(r.file));
     try testing.expectEqual(@as(u32, @intCast(want)), idx.loc(r.offset).line);
@@ -1002,11 +1003,11 @@ test "a span inside an `include resolves to the included file's own line" {
     );
 
     // ... while the top-level file still resolves to itself, at line 1.
-    const top = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "module m;").?));
+    const top = bag.map.resolve(@intCast(std.mem.find(u8, out, "module m;").?));
     try testing.expectEqual(diag.FileId.root, top.file);
     try testing.expectEqual(@as(u32, 0), top.offset);
     // ... and so does what follows the `include, despite the splice.
-    const after = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "endmodule").?));
+    const after = bag.map.resolve(@intCast(std.mem.find(u8, out, "endmodule").?));
     try testing.expectEqual(diag.FileId.root, after.file);
     try testing.expectEqualStrings("endmodule\n", src[after.offset..]);
 }
@@ -1035,11 +1036,11 @@ test "a diagnostic after a comment renders the ORIGINAL line at the ORIGINAL col
     const out = aw.writer.buffered();
 
     // The line drawn is the user's, comment included ...
-    try testing.expect(std.mem.indexOf(u8, out, "| /* a leading comment */ `NOPE") != null);
+    try testing.expect(std.mem.find(u8, out, "| /* a leading comment */ `NOPE") != null);
     // ... the column is measured in it: the '`' is byte 24, column 25 ...
-    try testing.expect(std.mem.indexOf(u8, out, ":1:25") != null);
+    try testing.expect(std.mem.find(u8, out, ":1:25") != null);
     // ... and the caret row is indented to match: 24 spaces, then the span.
-    try testing.expect(std.mem.indexOf(u8, out, "|                         ^^^^^") != null);
+    try testing.expect(std.mem.find(u8, out, "|                         ^^^^^") != null);
 }
 
 test "a span inside a macro expansion resolves to the invocation site" {
@@ -1053,14 +1054,14 @@ test "a span inside a macro expansion resolves to the invocation site" {
 
     // Bytes that exist only in the expansion have no counterpart in the file;
     // the honest answer is the `SQ that produced them.
-    const inside: u32 = @intCast(std.mem.indexOfScalar(u8, out, '*').?);
+    const inside: u32 = @intCast(std.mem.findScalar(u8, out, '*').?);
     const r = bag.map.resolve(inside);
     try testing.expectEqual(diag.FileId.root, r.file);
     try testing.expect(std.mem.startsWith(u8, src[r.offset..], "`SQ(v)"));
     try testing.expectEqualStrings("SQ", bag.map.segs[r.seg].macro);
 
     // ... and the text after the expansion is verbatim again.
-    const after = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "+ 1").?));
+    const after = bag.map.resolve(@intCast(std.mem.find(u8, out, "+ 1").?));
     try testing.expectEqualStrings("+ 1;\n", src[after.offset..]);
 }
 

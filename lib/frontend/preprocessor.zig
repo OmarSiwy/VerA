@@ -6,6 +6,8 @@
 //! each output offset back to its file, include or macro origin.
 
 const std = @import("std");
+/// The allocator type every pp/ file and caller names; re-exported so they
+/// need not import `std` for it.
 pub const Allocator = std.mem.Allocator;
 const diag = @import("diag");
 /// Annex E.2 `.MODEL`/`.SUBCKT` reader; its modules follow the prelude.
@@ -40,7 +42,8 @@ pub const Options = struct {
 /// must outlive the bag.
 pub const File = struct { name: []const u8, text: []const u8 };
 
-/// `PreprocessFailed` means the diagnostic is already in `Options.bag`.
+/// `PreprocessFailed` means the diagnostic is already in `Options.bag`;
+/// `OutOfMemory` means an allocation failed and nothing was reported.
 pub const Error = Allocator.Error || error{PreprocessFailed};
 
 /// What `process` publishes. Every slice is owned by the caller's arena.
@@ -53,6 +56,7 @@ pub const Output = struct {
     /// `spice_cards.Synthesized.unsupported`: the netlist's `.MODEL` cards of
     /// a type VerA has no primitive for.
     netlist_unsupported: []const []const u8 = &.{},
+    /// The positional directive events, each list in text-stream order.
     directives: Directives = .{},
     /// Where each of `Options.more` begins in `text`.
     more_starts: []const u32 = &.{},
@@ -70,7 +74,7 @@ pub const Directives = struct {
     disciplines: []const DefaultDiscipline = &.{},
     /// §10.3 `default_transition, for §4.5.8's rise/fall defaulting.
     transitions: []const DefaultTransition = &.{},
-    /// IEEE 1364 §19.9 `timescale; a null value is §19.6's `resetall.
+    /// IEEE 1364 §19.8 `timescale; a null value is §19.6's `resetall.
     timescales: []const TimescaleEvent = &.{},
     /// IEEE 1364 §19.2 `default_nettype, for §3.6.5 implicit-net creation
     /// (`Lower.rejectImplicitNet`).
@@ -121,7 +125,7 @@ pub const Directive = enum {
     default_discipline, // §10.2: parsed here, applied by discipline resolution
     default_transition, // §10.3: parsed here, applied by §4.5.8 codegen
     line, // IEEE 1364 §19.7: remaps §10.7 `__LINE__` / `__FILE__`
-    timescale, // IEEE 1364 §19.9: read back by §9.15 Table 9-27
+    timescale, // IEEE 1364 §19.8: read back by §9.15 Table 9-27
     default_nettype, // IEEE 1364 §19.2: read by implicit-net creation
     celldefine, // IEEE 1364 §19.1: cell membership, `endcelldefine closes it
     endcelldefine,
@@ -166,7 +170,7 @@ pub const DefaultDiscipline = struct {
 /// filter" (§10.3), which is `Region.inForce` at the filter's offset.
 pub const DefaultTransition = Region(?f64);
 
-/// One IEEE 1364 §19.9 `` `timescale <unit> / <precision> ``; null after
+/// One IEEE 1364 §19.8 `` `timescale <unit> / <precision> ``; null after
 /// `resetall. Nothing rescales time (§9.10 `$abstime` is always seconds); the
 /// operands exist to be read back by §9.15 Table 9-27.
 pub const TimescaleEvent = Region(?Timescale);
@@ -195,6 +199,9 @@ pub fn Region(comptime T: type) type {
 
         /// Returns the value in force at output offset `off`, or `initial` (IEEE
         /// 1364 §19.6's default value) before the first event. O(events).
+        /// `events` must be in text-stream order (`at` non-decreasing), as every
+        /// list `process` publishes is; of two events at one offset the later
+        /// one is in force.
         ///
         /// ponytail: backwards linear scan, one entry per directive occurrence;
         /// `std.sort.upperBound` over `at` if a generated file carries thousands.
@@ -281,7 +288,7 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "line", .line },
     .{ "default_transition", .default_transition }, // §10.3, read by §4.5.8
 
-    .{ "timescale", .timescale }, // IEEE 1364 §19.9, read back by §9.15
+    .{ "timescale", .timescale }, // IEEE 1364 §19.8, read back by §9.15
 
     // The three IEEE 1364 directives that, like §10.2's, carry state past their
     // own line: §19.2 decides whether an undeclared name may become a net at
@@ -328,9 +335,12 @@ pub const builtin_includes = std.StaticStringMap([]const u8).initComptime(.{
 /// conditionals, expands macros (§10.4), inlines `include, and prepends the
 /// annex D and Table E.1 definitions when `opts.std_defs` is set.
 ///
-/// Registers `source` as the bag's `.root` file, so the bag must be empty.
-/// Sets `opts.bag.map`. Returns arena-owned output; on failure the diagnostic
-/// is in `opts.bag` and the error is `error.PreprocessFailed`.
+/// Registers `source` as the bag's `.root` file, so the bag must be empty;
+/// with `opts.std_defs`, asserts that it was. Sets `opts.bag.map`. Returns
+/// output owned by `arena`. Fails with `error.PreprocessFailed` once the
+/// diagnostic is in `opts.bag` (the first error ends the call), or with
+/// `error.OutOfMemory`. O(output) apart from `__LINE__`, which is O(offset)
+/// per use.
 pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output {
     // Everything that dies with this call (the macro table, the stacks, every
     // expansion's arguments and substituted body, and the output while it
@@ -489,6 +499,7 @@ const Cond = struct {
     active: bool,
     /// Some arm of this level was taken, so later `elsif/`else are dead.
     taken: bool,
+    /// The level's `else has been read, so another `else or `elsif is E0106.
     seen_else: bool = false,
     /// The `ifdef that opened this level, for E0101's label.
     span: diag.Span = .{},
@@ -521,8 +532,14 @@ pub const Events = struct {
 /// published copies `process` makes at the end. Every table below lives on
 /// `scratch`, which `process` frees on return; a slice of a macro body (also
 /// on scratch) that must outlive it is copied to `arena` where it is stored.
+///
+/// Offsets are `u32`, the unit `diag.Span` and `diag.Segment` store: an
+/// output or a file past 4 GiB is a safety-checked `@intCast` failure, not a
+/// diagnostic.
 pub const Pp = struct {
+    /// The caller's allocator; holds what outlives `process`.
     arena: Allocator,
+    /// Freed when `process` returns; holds every table below.
     scratch: Allocator,
     opts: Options,
 
@@ -584,8 +601,8 @@ pub const Pp = struct {
     /// Emits only the newlines in `span`, so dropped text (a dead `ifdef arm,
     /// a collapsed directive) keeps the output's line count.
     pub fn putNewlines(pp: *Pp, span: []const u8) Error!void {
-        // Count-then-fill: a one-byte-needle `std.mem.count` is vectorized.
-        try pp.out.appendNTimes(pp.scratch, '\n', std.mem.count(u8, span, "\n"));
+        // Count-then-fill: `std.mem.countScalar` is vectorized.
+        try pp.out.appendNTimes(pp.scratch, '\n', std.mem.countScalar(u8, span, '\n'));
     }
 
     /// Returns a file-local span for `[start, end)` of the text being scanned,
@@ -600,7 +617,7 @@ pub const Pp = struct {
     pub fn physicalLine(pp: *const Pp, at: usize) u32 {
         const off = pp.expand_site orelse @as(u32, @intCast(at));
         const text = pp.opts.bag.fileText(pp.cur_file_id);
-        return @intCast(1 + std.mem.count(u8, text[0..@min(off, text.len)], "\n"));
+        return @intCast(1 + std.mem.countScalar(u8, text[0..@min(off, text.len)], '\n'));
     }
 
     /// Returns §10.7 `__LINE__` at `at`: the physical line, remapped by an
@@ -679,7 +696,7 @@ pub const Pp = struct {
     /// Registers `raw`, strips its comments and scans it. Saves and restores
     /// the file context, so an error inside an `include names the right file.
     /// `existing` is the id of an already-registered file (the compilation
-    /// unit), or null to register a new one.
+    /// unit), or null to register a new one. Fails as `process` does.
     pub fn runFile(pp: *Pp, raw: []const u8, file: []const u8, existing: ?diag.FileId) Error!void {
         const saved_id = pp.cur_file_id;
         defer pp.cur_file_id = saved_id;
@@ -747,9 +764,10 @@ const pp_comments = @import("pp/comments.zig");
 pub const scan_stops = "\"\\`";
 
 /// Returns the first index at or after `from` whose byte is in `stops`, else
-/// `text.len`.
+/// `text.len`. O(result - from). Asserts that `from` is at most `text.len`.
 pub fn findStop(text: []const u8, from: usize, comptime stops: []const u8) usize {
-    // `std.mem.indexOfAnyPos` is a scalar loop per (byte, needle); only
+    std.debug.assert(from <= text.len);
+    // `std.mem.findAnyPos` is a scalar loop per (byte, needle); only
     // single-needle searches are vectorized in std. So: splat each stop and OR
     // the compare masks. Most scanned bytes sit in runs of 32 or more, so this
     // pays even though the median run is shorter. The scalar loop below is the
@@ -839,9 +857,11 @@ const pp_directive = @import("pp/directive.zig");
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/// Returns the index of the closing quote, an unescaped newline, or EOF;
-/// `start` is the opening quote.
+/// Returns the index of the closing quote, an unescaped newline, or EOF.
+/// A `\` escapes the byte after it, a newline included. Asserts that
+/// `text[start]` is the opening quote.
 pub fn stringStop(text: []const u8, start: usize) usize {
+    std.debug.assert(text[start] == '"');
     // ponytail: the lexer and `substitute` have their own string scans. The
     // lexer rejects escaped newlines and `substitute` crosses bare ones; share
     // one scan only if those rules converge.

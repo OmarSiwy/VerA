@@ -25,7 +25,9 @@ const escapedEnd = Preprocessor.escapedEnd;
 
 /// Parses a §10.4 `define and adds or replaces its macro. `rest` is everything
 /// after the word on one logical line, starting at offset `off`; `at` is the
-/// '`'.
+/// '`'. The macro borrows `rest`, which must outlive `pp.macros`. Fails with
+/// E0109 (no name), E0143 (a directive's name), E0110-E0112 (the formal
+/// list), E0139 (text begins with __VAMS_) or E0145 (text splits a string).
 pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     // Syntax 10-3 writes two different nonterminals into adjacent lines:
@@ -98,7 +100,8 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
 }
 
 /// Parses a §10.4 `undef and removes the macro; a §10.5 predefined macro is
-/// left alone. Arguments as for `handleDefine`.
+/// left alone, and an undefined name is not an error. Arguments as for
+/// `handleDefine`. Fails with E0113 when no name follows.
 pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     // Syntax 10-3: the operand is an identifier, simple or escaped (A.9.3),
@@ -115,7 +118,7 @@ pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
 /// A macro body is one logical line: `\`+newline collapses to a space. The
 /// newlines it swallowed are re-emitted by the caller, so lines still line up.
 fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
-    if (std.mem.indexOfScalar(u8, body, '\n') == null) return body;
+    if (std.mem.findScalar(u8, body, '\n') == null) return body;
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.scratch, body.len);
     var i: usize = 0;
@@ -145,7 +148,11 @@ fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
 
 /// Expands the macro use whose '`' is at `at`, with `after_name` just past the
 /// name, into `pp.out`. Handles §10.7 `__LINE__` and `__FILE__`. Returns the
-/// offset to resume scanning from.
+/// offset to resume scanning from; inside an inactive arm that is
+/// `after_name`, with nothing emitted. Fails with E0115 (undefined),
+/// E0116/E0117 (argument list), E0118 (recursion), E0119 (depth) or E0120
+/// (unbalanced arguments), and with E0150 once
+/// `Preprocessor.max_expanded_bytes` of bodies have been substituted.
 pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const u8) Error!usize {
     if (!pp.emitting()) return after_name;
     // The whole use, backtick included: `FOO.
@@ -221,7 +228,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     const body = if (m.is_func) blk: {
         var actuals = args;
         for (args, 0..) |a, first| {
-            if (std.mem.indexOfScalar(u8, a, '`') == null) continue;
+            if (std.mem.findScalar(u8, a, '`') == null) continue;
             // Some argument invokes a macro: expand from here on into a copy.
             // Backtick-free arguments are substituted verbatim.
             const copy = try pp.scratch.dupe([]const u8, args);
@@ -280,7 +287,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
 /// '`', so diagnostics and `__LINE__` behave as in a body rescan.
 /// Backtick-free text is returned as is.
 fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
-    if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
+    if (std.mem.findScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
     const saved_site = pp.expand_site;
     pp.out = .empty;
@@ -298,8 +305,10 @@ pub const MacroArgs = struct { args: []const []const u8, end: usize };
 
 /// Splits the top-level comma list opening at `lparen`. Nested (), [], {},
 /// string literals and escaped identifiers are opaque. A closer that does not
-/// match its opener, or a missing `)`, is E0120.
+/// match its opener, or a missing `)`, is E0120. The arguments slice `text`;
+/// the list is on `pp.scratch`. Asserts that `text[lparen]` is `(`.
 pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []const u8) Error!MacroArgs {
+    std.debug.assert(text[lparen] == '(');
     var args: std.ArrayList([]const u8) = .empty;
     var opens: std.ArrayList(u8) = .empty;
     var i = lparen;
@@ -340,8 +349,9 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
 
 /// Returns `body` with each whole-identifier formal replaced by its actual,
 /// on `pp.scratch`. Strings, escaped identifiers, numbers and the name after a
-/// '`' are never substituted into.
+/// '`' are never substituted into. Asserts one actual per formal.
 pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: []const []const u8) Error![]const u8 {
+    std.debug.assert(params.len == args.len);
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.scratch, body.len);
 
@@ -378,7 +388,7 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             const start = i;
             while (i < body.len and isIdentChar(body[i])) i += 1;
             const word = body[start..i];
-            const idx = indexOfString(params, word);
+            const idx = findString(params, word);
             try out.appendSlice(pp.scratch, if (idx) |k| args[k] else word);
             // IEEE 1364 §19.3.1 substitutes each actual "literally", and an
             // escaped identifier's terminating white space (§2.8.1) is part of
@@ -444,7 +454,7 @@ fn endsInEscapedIdent(text: []const u8) bool {
 }
 
 /// Returns the index of the first element of `haystack` equal to `needle`.
-fn indexOfString(haystack: []const []const u8, needle: []const u8) ?usize {
+fn findString(haystack: []const []const u8, needle: []const u8) ?usize {
     for (haystack, 0..) |s, k| {
         if (std.mem.eql(u8, s, needle)) return k;
     }

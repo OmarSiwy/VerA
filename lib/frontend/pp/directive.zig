@@ -2,8 +2,7 @@
 //! out (a conditional level pushed or popped, an included file scanned, a
 //! `Directives` event recorded, or the word handed to `pp/macro.zig` as a
 //! macro use). `directive` is the dispatch; the handlers follow it.
-//! LRM §10.1-§10.3, §10.6; IEEE 1364 §19.1, §19.2, §19.4-§19.7, §19.9,
-//! §19.10, §28.
+//! LRM §10.1-§10.3, §10.6; IEEE 1364 §19.1, §19.2, §19.4-§19.10, §28.
 
 const std = @import("std");
 const diag = @import("diag");
@@ -30,7 +29,10 @@ const isSpace = Preprocessor.isSpace;
 // ---------------------------------------------------------------------------
 
 /// Handles the directive or macro use whose '`' is at `at`. Returns the offset
-/// to resume scanning from.
+/// to resume scanning from. Inside an inactive arm only the conditionals act;
+/// every other directive emits its newlines and nothing else. In an active
+/// arm, a '`' followed by no name is E0103; each handler names its own
+/// failures.
 pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     const name_start = at + 1;
     var j = name_start;
@@ -226,7 +228,10 @@ fn logicalLineEnd(text: []const u8, i: usize) usize {
 // ---------------------------------------------------------------------------
 
 /// Reads and scans the file an IEEE 1364 §19.5 `include names. `rest` is the
-/// line after the word, starting at offset `off`; `at` is the '`'.
+/// line after the word, starting at offset `off`; `at` is the '`'. Fails with
+/// E0121-E0124 (the name), E0144 (text after it), E0125 (nesting past
+/// `Preprocessor.max_include_depth`), E0126 (not found) or E1013 (larger
+/// than `Preprocessor.max_include_bytes`).
 pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     // The directive word, for the errors that have nothing better to point at.
     const sp = pp.spanAt(at, off);
@@ -287,8 +292,10 @@ pub const Included = struct { text: []const u8, path: []const u8 };
 /// Returns the `include file for `path`: an absolute path as written, else
 /// the first hit in the including file's directory and then the include dirs
 /// (specification/Vague_Decisions.md VD-091), else a built-in annex D file by
-/// basename. Null if nothing matched. The bytes and the path are on
-/// `pp.arena`, since the bag keeps both.
+/// basename. Null if nothing matched; a file that exists but cannot be read
+/// counts as no match. The bytes and the path are on `pp.arena`, since the
+/// bag keeps both. Fails with E1013 for a file past
+/// `Preprocessor.max_include_bytes`.
 pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.
@@ -398,7 +405,7 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
     try pp.mark(&pp.events.transitions, t);
 }
 
-/// Parses an IEEE 1364 §19.9 `` `timescale <unit> / <precision> `` and records
+/// Parses an IEEE 1364 §19.8 `` `timescale <unit> / <precision> `` and records
 /// its event. Each operand is on Table 19-1's grid (1, 10 or 100 and one of
 /// six units). Every malformed form, and a precision coarser than the unit,
 /// is E0142.
@@ -413,7 +420,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     r.i += 1;
     const precision = timeLiteral(&r) orelse return badTimescale(pp, off, &r, "a Table 19-1 time precision");
     // "The time precision shall be at least as precise as the time unit"
-    // (§19.9). A card that has them backwards is not a timescale.
+    // (§19.8). A card that has them backwards is not a timescale.
     if (precision > unit) {
         var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
         b.msg("the time precision is coarser than the time unit", .{});
@@ -426,7 +433,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     pp.events.timescales.items[event].value = .{ .unit = unit, .precision = precision };
 }
 
-/// Emits E0142 naming what §19.9's grammar wanted. `r.i` is undefined after a
+/// Emits E0142 naming what §19.8's grammar wanted. `r.i` is undefined after a
 /// failed `timeLiteral`, so the span is the whole operand list.
 fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
     const wrote = std.mem.trim(u8, r.s, " \t\r");
@@ -545,7 +552,7 @@ fn timeLiteral(r: *Rest) ?f64 {
 pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     if (pp.expand_site == null) {
         const text = pp.opts.bag.fileText(pp.cur_file_id);
-        const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..at], '\n')) |nl| nl + 1 else 0;
+        const line_start = if (std.mem.findScalarLast(u8, text[0..at], '\n')) |nl| nl + 1 else 0;
         // ponytail: linear in the file's comments; a `line is rare.
         for (pp.opts.bag.fileMarks(pp.cur_file_id)) |m| if (m.out > line_start and m.out <= off + rest.len)
             return pp.fail(pp.spanAt(at, off + rest.len), .E0128, "a comment on the directive's line", .{});

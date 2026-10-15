@@ -106,7 +106,9 @@ pub fn preludeSnapshot() Allocator.Error!*const Prelude {
 }
 
 /// Preprocesses, lexes and parses the three files on a never-freed arena and
-/// returns what they produced. Callers go through `preludeSnapshot`.
+/// returns what they produced: nobody owns or frees the result. Callers go
+/// through `preludeSnapshot`. Asserts the shipped files produce no
+/// diagnostic, no positional directive and no open parser state.
 pub fn buildPrelude() Allocator.Error!*const Prelude {
     const arena_state = try std.heap.page_allocator.create(std.heap.ArenaAllocator);
     arena_state.* = .init(std.heap.page_allocator);

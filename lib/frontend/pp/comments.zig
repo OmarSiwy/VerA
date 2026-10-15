@@ -27,7 +27,9 @@ pub const Stripped = struct { text: []const u8, marks: []const diag.StripMark };
 ///
 /// Also returns one `diag.StripMark` per comment: lines agree between the two
 /// texts, but a comment shifts every column after it, and the renderer maps
-/// back through the marks. An unterminated block comment is E0102.
+/// back through the marks. Both slices are owned by `pp.arena`. An
+/// unterminated block comment is E0102, reported in `pp.cur_file_id`, which
+/// must already name `src`. O(src.len).
 pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
     // The output never grows, so every append below fits. It is the last
     // allocation on `pp.arena` until the return, so the shrink there hands
@@ -60,7 +62,7 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
             // §2.4: to the end of the line. A single-needle search is vectorized.
-            i = std.mem.indexOfScalarPos(u8, src, i, '\n') orelse src.len;
+            i = std.mem.findScalarPos(u8, src, i, '\n') orelse src.len;
             // The output stood still while the input advanced; from here the
             // two run in lockstep again, which is one mark.
             try marks.append(pp.scratch, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
@@ -76,7 +78,7 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             // §2.2 makes a comment a token separator. A multi-line comment
             // separates through its newlines; a single-line one leaves a space,
             // or `1/*c*/2` would lex as 12. It fits: `/**/` is four bytes.
-            const lines = std.mem.count(u8, src[start..i], "\n");
+            const lines = std.mem.countScalar(u8, src[start..i], '\n');
             if (lines == 0) {
                 out.appendAssumeCapacity(' ');
             } else {
