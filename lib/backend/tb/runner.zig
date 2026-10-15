@@ -1226,3 +1226,60 @@ fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     if (std.math.isInf(x)) return w.writeAll(if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)");
     try w.print("{d}", .{x});
 }
+
+test fmtF64 {
+    // The oracle is Zig's own reading of the text. `parseNumberLiteral`
+    // classifies it as the tokenizer does: a float literal is rounded
+    // correctly (`parseFloat`), but an integer literal is a comptime_int,
+    // which an f64 holds exactly only when the double is that integer, and
+    // which has no negative zero.
+    const edge = [_]f64{
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        2.5e-3,
+        300.15,
+        1e20,
+        0x1p53,
+        0x1p53 + 2.0,
+        1e23,
+        -1e23,
+        std.math.floatMax(f64),
+        std.math.floatMin(f64),
+        std.math.floatTrueMin(f64),
+        -std.math.floatTrueMin(f64),
+    };
+    for (edge) |x| try expectExactLiteral(x);
+    var prng = std.Random.DefaultPrng.init(0x5eed_f64);
+    const r = prng.random();
+    for (0..4096) |_| {
+        const x: f64 = @bitCast(r.int(u64));
+        if (!std.math.isFinite(x)) continue;
+        try expectExactLiteral(x);
+    }
+    // inf and nan have no literal.
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("std.math.nan(f64)", try std.mem.print(&buf, "{f}", .{fmtF64(std.math.nan(f64))}));
+    try std.testing.expectEqualStrings("-std.math.inf(f64)", try std.mem.print(&buf, "{f}", .{fmtF64(-std.math.inf(f64))}));
+}
+
+/// Asserts that `fmtF64(x)` is a literal Zig reads back as `x`, bit for bit.
+fn expectExactLiteral(x: f64) !void {
+    var buf: [512]u8 = undefined;
+    const text = try std.mem.print(&buf, "{f}", .{fmtF64(x)});
+    errdefer std.debug.print("fmtF64({e}) = {s}\n", .{ x, text });
+    const digits = if (text[0] == '-') text[1..] else text;
+    switch (std.zig.parseNumberLiteral(digits)) {
+        .float => {},
+        .int => |v| {
+            try std.testing.expect(!(x == 0 and std.math.signbit(x)));
+            const nearest: f64 = @floatFromInt(v);
+            try std.testing.expect(nearest < 0x1p64 and @as(u64, @intFromFloat(nearest)) == v);
+        },
+        .big_int, .failure => return error.TestUnexpectedResult,
+    }
+    const back = try std.fmt.parseFloat(f64, text);
+    try std.testing.expectEqual(@as(u64, @bitCast(x)), @as(u64, @bitCast(back)));
+}
