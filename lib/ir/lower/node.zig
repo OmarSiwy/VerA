@@ -760,15 +760,21 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
             // §5.5.2 "The index must be a constant expression, though it may
             // include genvar variables"; `tryUnrollFor` binds the genvar in
             // `consts` for each unrolled copy.
-            const i = lower_constfold.constEval(self, ex.rhs(e)) orelse {
+            const c = lower_constfold.constEval(self, ex.rhs(e)) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0352, "index into `{s}` is not a constant expression", .{name});
                 return ground;
             };
-            if (!r.has(i.asInt())) {
-                try self.err(self.file.exprs.mainTok(e), .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i.asInt() });
+            // §4.2.1.1: a NaN, an infinity or a real past i64 rounds to no
+            // integer, so it names no element (a saturated one named one).
+            const i = c.asIntExact() orelse {
+                try self.err(self.file.exprs.mainTok(e), .E0352, "index {e} into `{s}` is no integer", .{ c.asReal(), name });
+                return ground;
+            };
+            if (!r.has(i)) {
+                try self.err(self.file.exprs.mainTok(e), .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i });
                 return ground;
             }
-            return internNodeElem(self, name, i.asInt());
+            return internNodeElem(self, name, i);
         },
         else => { // else: not a net reference: E0306
             try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
@@ -817,13 +823,24 @@ pub fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
         try self.err(tok, .E0352, "the lsb of the range is not a constant expression", .{});
         return null;
     };
-    const r: VecRange = .{ .msb = msb.asInt(), .lsb = lsb.asInt() };
+    // §4.2.1.1 rounds a real to no integer when it is a NaN, an infinity or
+    // past i64; saturating one would make a NaN bound a silent zero.
+    const r: VecRange = .{
+        .msb = msb.asIntExact() orelse return refuseBound(self, tok, "msb", msb),
+        .lsb = lsb.asIntExact() orelse return refuseBound(self, tok, "lsb", lsb),
+    };
     const n = @abs(@as(i128, r.msb) - r.lsb) + 1;
     if (n > max_nodes) {
         try self.err(tok, .E1015, "the range [{d}:{d}] has {d} elements", .{ r.msb, r.lsb, n });
         return null;
     }
     return r;
+}
+
+// E0352 for a range bound that folded to a real with no integer value.
+fn refuseBound(self: *Lower, tok: u32, which: []const u8, c: Lower.Const) Oom!?VecRange {
+    try self.err(tok, .E0352, "the {s} of the range is {e}, which is no integer", .{ which, c.asReal() });
+    return null;
 }
 
 /// Returns a port's range from whichever of its two declarations carries one. When
@@ -879,19 +896,21 @@ pub fn vecTerminal(self: *Lower, e: Ast.ExprId, tok: u32) Oom!?VecTerm {
         try self.err(tok, .E0351, "`{s}` was not declared with a range", .{name});
         return null;
     };
-    const a = lower_constfold.constEval(self, ex.lhs(sel));
-    const b = lower_constfold.constEval(self, ex.rhs(sel));
+    // §4.2.1.1: a bound that rounds to no integer (NaN, an infinity, past
+    // i64) is no bound, as one that does not fold is not.
+    const a: ?i64 = if (lower_constfold.constEval(self, ex.lhs(sel))) |c| c.asIntExact() else null;
+    const b: ?i64 = if (lower_constfold.constEval(self, ex.rhs(sel))) |c| c.asIntExact() else null;
     if (a == null or b == null) {
-        try self.err(tok, .E0352, "the part-select of `{s}` has a bound that is not a constant expression", .{name});
+        try self.err(tok, .E0352, "the part-select of `{s}` has a bound that is not a constant integer", .{name});
         return null;
     }
-    const r: VecRange = if (ex.tag(sel) == .range) .{ .msb = a.?.asInt(), .lsb = b.?.asInt() } else w: {
-        const width = b.?.asInt();
+    const r: VecRange = if (ex.tag(sel) == .range) .{ .msb = a.?, .lsb = b.? } else w: {
+        const width = b.?;
         if (width < 1) {
             try self.err(tok, .E0352, "the indexed part-select of `{s}` is {d} wide", .{ name, width });
             return null;
         }
-        break :w indexedRange(decl, a.?.asInt(), width, ex.extraOf(sel) != 0);
+        break :w indexedRange(decl, a.?, width, ex.extraOf(sel) != 0);
     };
     if (!partOf(decl, r)) {
         try self.err(tok, .E0352, "`{s}` is [{d}:{d}], so [{d}:{d}] is not a part of it", .{ name, decl.msb, decl.lsb, r.msb, r.lsb });

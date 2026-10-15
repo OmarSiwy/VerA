@@ -520,9 +520,13 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E1011, "the replication makes {d} copies of {d} bytes", .{ copies, out.items.len });
             return poison;
         }
-        const one = try self.arena.dupe(u8, out.items);
-        out.clearRetainingCapacity();
-        for (0..@intCast(copies)) |_| try out.appendSlice(self.arena, one);
+        // N copies of "" are "": the E1011 cap above bounds the bytes, not
+        // the count, so `{1e15{""}}` would spin here for the count alone.
+        if (out.items.len != 0) {
+            const one = try self.arena.dupe(u8, out.items);
+            out.clearRetainingCapacity();
+            for (0..@intCast(copies)) |_| try out.appendSlice(self.arena, one);
+        }
     }
     // The interner borrows: the bytes live in the arena, which outlives the Mir.
     return .{ .v = try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena)), .ty = .string };

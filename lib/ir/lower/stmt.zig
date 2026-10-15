@@ -829,7 +829,11 @@ pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []cons
 fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oom!?bool {
     for (s.subs, out) |e, *o| {
         const c = lower_constfold.foldExpr(self, e, false) orelse return null;
-        o.* = c.asInt();
+        // As `resolveLvalue`: a subscript with no §4.2.1.1 integer names no row.
+        o.* = c.asIntExact() orelse {
+            try self.err(self.file.exprs.mainTok(e), .E0310, "subscript {e} of `{s}` has no integer value, so it lies outside every dimension", .{ c.asReal(), s.name });
+            return false;
+        };
     }
     for (out, s.info.dims[0..s.subs.len], 0..) |i, d, k| {
         if (i >= d.lo and i <= d.hi) continue;
@@ -908,7 +912,14 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?Lvalue {
                     try self.err(self.file.exprs.mainTok(e), .E0311, "indexing `{s}`", .{name});
                     return null;
                 };
-                o.* = c.asInt();
+                // `lower_expr.lowerIndex`'s rule, so a write and a read of
+                // one subscript agree: a real with no §4.2.1.1 integer (NaN,
+                // an infinity, past i64) names no element. Saturating it
+                // wrote a NaN subscript to element 0.
+                o.* = c.asIntExact() orelse {
+                    try self.err(self.file.exprs.mainTok(s), .E0310, "subscript {e} of `{s}` has no integer value, so it lies outside every dimension", .{ c.asReal(), name });
+                    return null;
+                };
             }
             return arrayElem(self, e, name, at);
         },
