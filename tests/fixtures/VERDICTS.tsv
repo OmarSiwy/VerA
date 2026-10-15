@@ -335,6 +335,7 @@ pass	annex_e_spice/reject_spice_fet_card_model_has_no_behaviour.va
 pass	annex_e_spice/reject_spice_lib_entry_missing.va
 pass	annex_e_spice/reject_spice_model_referenced_card.va
 pass	annex_e_spice/reject_spice_nested_subckt.va
+pass	annex_e_spice/reject_spice_poly_controlled_source.va
 pass	annex_e_spice/reject_spice_subckt_params.va
 pass	annex_e_spice/reject_spice_unread_device_card.va
 pass	annex_e_spice/spice_binned_model_selects_by_l_and_w.va
@@ -364,6 +365,7 @@ pass	annex_e_spice/subckt_port_name_not_in_subckt_rejected.va
 pass	annex_e_spice/unsupported_cccs.va
 pass	annex_e_spice/unsupported_ccvs.va
 pass	annex_e_spice/unsupported_mutual_inductor.va
+pass	annex_e_spice/vcvs_inside_a_spice_subcircuit.va
 pass	annex_e_spice/verilog_module_shadowing_primitive_keeps_its_own_parameters_rejected.va
 pass	annex_f_resolution/b5_net_read_by_digital_code_resolves_digital.va
 pass	annex_f_resolution/conflicting_declarations.va
@@ -1505,6 +1507,7 @@ pass	ch06_hierarchy/defparam_upward_collect_first.va
 pass	ch06_hierarchy/defparam_upward_module_name_path.va
 pass	ch06_hierarchy/dependent_parameter_transcendental.va
 pass	ch06_hierarchy/dependent_parameters.va
+pass	ch06_hierarchy/disable_in_a_child_instance.va
 pass	ch06_hierarchy/duplicate_declaration_rejected.va
 pass	ch06_hierarchy/duplicate_named_connection_rejected.va
 pass	ch06_hierarchy/duplicate_parameter_rejected.va
@@ -1595,6 +1598,7 @@ pass	ch06_hierarchy/module_definition.va
 pass	ch06_hierarchy/module_instantiation_unsupported.va
 pass	ch06_hierarchy/multiple_analog_blocks.va
 pass	ch06_hierarchy/multiple_instances_unsupported.va
+pass	ch06_hierarchy/named_block_local_is_per_instance.va
 pass	ch06_hierarchy/named_parameter_instantiation_unsupported.va
 pass	ch06_hierarchy/named_port_instantiation_unsupported.va
 pass	ch06_hierarchy/nested_module_definition_rejected.va
@@ -1757,6 +1761,7 @@ pass	ch07_mixed_signal/connect_mode_accepted.va
 pass	ch07_mixed_signal/connect_mode_not_merged_or_split_rejected.va
 pass	ch07_mixed_signal/connect_module_manually_inserted.va
 pass	ch07_mixed_signal/connect_override_incompatible_discipline_rejected.va
+pass	ch07_mixed_signal/connect_override_names_no_discipline_rejected.va
 pass	ch07_mixed_signal/connect_parameter_accepted.va
 pass	ch07_mixed_signal/connect_parameter_not_declared_rejected.va
 pass	ch07_mixed_signal/connect_resolution_names_no_discipline_rejected.va
@@ -2401,6 +2406,7 @@ pass	ch10_directives/67_macro_name_cannot_start_with_dollar.va
 pass	ch10_directives/68_macro_text_does_not_split_a_string.va
 pass	ch10_directives/69_resetall_inside_a_module_rejected.va
 pass	ch10_directives/70_pasted_macros_do_not_form_a_comment.va
+pass	ch10_directives/71_default_transition_rise_only_sets_fall.va
 pass	ch10_directives/audit_macro_direct_recursion_rejected.va
 pass	ch10_directives/audit_macro_empty_and_spacing.va
 pass	ch10_directives/audit_macro_escaped_actual.va
@@ -2428,6 +2434,7 @@ pass	ch10_directives/d10_15_a_conditional_directive_ends_with_its_operand.va
 pass	ch10_directives/d10_16_a_directive_without_an_operand_is_one_word.va
 pass	ch10_directives/d10_17_an_escaped_identifier_is_one_macro_argument.va
 pass	ch10_directives/d10_18_compact_modeling_extension_set.va
+pass	ch10_directives/d10_19_include_through_a_macro_numbers_its_own_lines.va
 pass	ch10_directives/define_formal_list_unterminated_rejected.va
 pass	ch10_directives/define_formals_need_commas_rejected.va
 pass	ch10_directives/else_after_else_rejected.va
