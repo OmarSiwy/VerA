@@ -153,8 +153,31 @@ fn firstLink(psd: []const contract.PsdTerm, lead: []const usize, k: usize) bool 
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests. Oracles: transfer impedances solved by hand on two small networks
+// (Z = Y^-1 of a 2x2 conductance matrix; 1/(G + jwC) for an RC), and the
+// §4.6.4.3/.4 and §4.6.4.6 combination rules applied to them.
 // ---------------------------------------------------------------------------
+
+const Circuit = @import("circuit.zig").Circuit;
+
+/// Runs `sweep` on `D` at the origin, measured at unknown 0.
+fn densityAt(comptime D: type, model: D.Model, comptime freqs: []const f64) ![freqs.len]f64 {
+    var m = model;
+    var inst: D.Instance = .{};
+    var ckt: Circuit(D) = .init(&m, &inst);
+    const x: [contract.nU(D)]f64 = @splat(0);
+    var dens: [freqs.len]f64 = undefined;
+    try sweep(&ckt, &x, 0, freqs, &dens);
+    return dens;
+}
+
+/// MockNoise's network: Y = [[2e-3, -1e-3], [-1e-3, 3e-3]], so the
+/// transfers to node a are Z_aa = 600 and Z_ab = 200 ohm.
+fn twoNode(comptime D: type, comptime S: type, x: *const [2]S.V) contract.Rows(D, S) {
+    const p = contract.probes(D, S, x);
+    const ab = p[0].sub(p[1]).scale(1e-3);
+    return contract.rows(D, S, .{ p[0].scale(1e-3).add(ab), p[1].scale(2e-3).sub(ab) });
+}
 
 /// Two nodes, a and b: 1 mS from a to ground, 2 mS from b to ground, 1 mS
 /// between them, and a to-ground noise current at each, 4e-24 A^2/Hz at a
@@ -192,7 +215,6 @@ test "§4.6.4.6 a corr_with link adds 2·rho·sqrt(S_a·S_b)·Re(H_a·conj(H_b))
     //   600^2·4e-24 + 200^2·1e-24 + 2·rho·sqrt(4e-24·1e-24)·600·200
     //   = 1.48e-18 + rho·4.8e-19:  rho 0.5 -> 1.72e-18, 0 -> 1.48e-18,
     //   -0.5 -> 1.24e-18.
-    const Circuit = @import("circuit.zig").Circuit;
     const freqs = [_]f64{1e3};
     const x = [2]f64{ 0, 0 };
     for ([_]f64{ 0.5, 0, -0.5 }, [_]f64{ 1.72e-18, 1.48e-18, 1.24e-18 }) |rho, want| {
@@ -208,4 +230,233 @@ test "§4.6.4.6 a corr_with link adds 2·rho·sqrt(S_a·S_b)·Re(H_a·conj(H_b))
     var ckt: Circuit(MockNoise) = .init(&model, &inst);
     var dens: [1]f64 = undefined;
     try std.testing.expectError(error.BadCorrelation, sweep(&ckt, &x, 0, &freqs, &dens));
+}
+
+test sourcePsd {
+    try std.testing.expectEqual(1e-24, sourcePsd(.{ .white = 1e-24 }, 1e3));
+    // white + flicker / f^ef: 1 + 100/100 = 2, and 1 + 100/100^2 = 1.01.
+    try std.testing.expectEqual(2, sourcePsd(.{ .white = 1, .flicker = 100, .ef = 1 }, 100));
+    try std.testing.expectApproxEqRel(@as(f64, 1.01), sourcePsd(.{ .white = 1, .flicker = 100, .ef = 2 }, 100), 1e-15);
+    // At f <= 0 only the white half has a value.
+    try std.testing.expectEqual(1, sourcePsd(.{ .white = 1, .flicker = 100, .ef = 1 }, 0));
+    try std.testing.expectEqual(1, sourcePsd(.{ .white = 1, .flicker = 100, .ef = 1 }, -5));
+}
+
+/// A 1 mS conductance on one node and no `noise_gens`.
+const MockQuiet = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].scale(1e-3)});
+    }
+};
+
+test "a device without generators has zero output noise" {
+    try std.testing.expectEqual([2]f64{ 0, 0 }, try densityAt(MockQuiet, .{}, &.{ 1, 1e6 }));
+}
+
+/// MockNoise's network with one generator contributed at both nodes (one
+/// `source`), the second use scaled by `coeff_b`.
+const MockShared = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { coeff_b: f64 = 1 };
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return twoNode(@This(), S, x);
+    }
+
+    pub const noise_gens = [_]contract.NoiseGen(@This()){
+        .{ .row = 0, .col = 0, .kind = .thermal, .source = 0 },
+        .{ .row = 1, .col = 1, .kind = .thermal, .source = 0 },
+    };
+
+    pub fn noisePsd(comptime _: type, _: [2]f64, m: *const Model, _: *const Instance, _: contract.SimState) [2]contract.PsdTerm {
+        return .{ .{ .white = 1e-24 }, .{ .white = 1e-24, .coeff = m.coeff_b } };
+    }
+};
+
+test "§4.6.4.6 rows sharing a source add as phasors, signed by coeff" {
+    // One generator S = 1e-24 at a and, times coeff_b, at b: the transfer
+    // is 600 + coeff_b·200, so 800^2·S, 400^2·S and 700^2·S, where two
+    // independent generators would give (600^2 + 200^2)·S = 4e-19.
+    for ([_]f64{ 1, -1, 0.5 }, [_]f64{ 6.4e-19, 1.6e-19, 4.9e-19 }) |coeff, want| {
+        const d = try densityAt(MockShared, .{ .coeff_b = coeff }, &.{1e3});
+        try std.testing.expectApproxEqRel(want, d[0], 1e-12);
+    }
+}
+
+/// MockShared plus an independent generator, with row 1 linked to the
+/// generator row `link` names.
+const MockBadLink = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { link: u8 = 2 };
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return twoNode(@This(), S, x);
+    }
+
+    pub const noise_gens = [_]contract.NoiseGen(@This()){
+        .{ .row = 0, .col = 0, .kind = .thermal, .source = 0 },
+        .{ .row = 1, .col = 1, .kind = .thermal, .source = 0 },
+        .{ .row = 1, .col = 0, .kind = .thermal },
+    };
+
+    pub fn noisePsd(comptime _: type, _: [2]f64, m: *const Model, _: *const Instance, _: contract.SimState) [3]contract.PsdTerm {
+        return .{ .{ .white = 1e-24 }, .{ .white = 1e-24, .corr_with = m.link, .corr = 0.5 }, .{ .white = 1e-24 } };
+    }
+};
+
+test "a corr_with inside its own generator, or past the last row, is refused" {
+    // Row 1 is generator 0's second use: linking it to row 0 links the
+    // generator to itself.
+    try std.testing.expectError(error.BadCorrelation, densityAt(MockBadLink, .{ .link = 0 }, &.{1e3}));
+    try std.testing.expectError(error.BadCorrelation, densityAt(MockBadLink, .{ .link = 3 }, &.{1e3}));
+    _ = try densityAt(MockBadLink, .{ .link = 2 }, &.{1e3});
+}
+
+/// MockNoise with the link stated from both ends, with different rho.
+const MockTwiceLinked = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return twoNode(@This(), S, x);
+    }
+
+    pub const noise_gens = [_]contract.NoiseGen(@This()){
+        .{ .row = 0, .col = 0, .kind = .thermal },
+        .{ .row = 1, .col = 1, .kind = .thermal },
+    };
+
+    pub fn noisePsd(comptime _: type, _: [2]f64, _: *const Model, _: *const Instance, _: contract.SimState) [2]contract.PsdTerm {
+        return .{ .{ .white = 4e-24, .corr_with = 1, .corr = 0.5 }, .{ .white = 1e-24, .corr_with = 0, .corr = -0.5 } };
+    }
+};
+
+test "a pair linked from both ends is one cross term, at the first statement's rho" {
+    // As MockNoise at rho = 0.5: 1.48e-18 + 0.5·4.8e-19. Counting both
+    // statements would give 1.48e-18.
+    const d = try densityAt(MockTwiceLinked, .{}, &.{1e3});
+    try std.testing.expectApproxEqRel(@as(f64, 1.72e-18), d[0], 1e-12);
+}
+
+/// 1 mS in parallel with 1 nF on one node, and a to-ground noise current.
+const MockRcNoise = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].scale(1e-3)});
+    }
+
+    pub fn q(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Sites(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.sites(@This(), S, .{p[0].scale(1e-9)});
+    }
+
+    pub const noise_gens = [_]contract.NoiseGen(@This()){.{ .row = 0, .col = 0, .kind = .thermal }};
+
+    pub fn noisePsd(comptime _: type, _: [1]f64, _: *const Model, _: *const Instance, _: contract.SimState) [1]contract.PsdTerm {
+        return .{.{ .white = 1e-24 }};
+    }
+};
+
+test "the charge plane enters as jwC: an RC's density halves at its corner" {
+    // |Z|^2 = 1/(G^2 + (wC)^2): 1e6 at DC, 5e5 at w = G/C = 1e6 rad/s.
+    const d = try densityAt(MockRcNoise, .{}, &.{ 0, 1e6 / (2.0 * std.math.pi) });
+    try std.testing.expectApproxEqRel(@as(f64, 1e-18), d[0], 1e-12);
+    try std.testing.expectApproxEqRel(@as(f64, 5e-19), d[1], 1e-12);
+}
+
+/// A 1 mS node whose noise current is a §4.6.4.3 linear table over
+/// (10 Hz, 1e-24), (20 Hz, 3e-24).
+const MockTable = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].scale(1e-3)});
+    }
+
+    pub const noise_tables = [_]contract.NoiseTable{
+        .{ .interp = .linear, .points = &.{ .{ 10, 1e-24 }, .{ 20, 3e-24 } } },
+    };
+    pub const noise_gens = [_]contract.NoiseGen(@This()){.{ .row = 0, .col = 0, .kind = .table, .table = 0 }};
+
+    pub fn noisePsd(comptime _: type, _: [1]f64, _: *const Model, _: *const Instance, _: contract.SimState) [1]contract.PsdTerm {
+        return .{.{ .white = 0 }};
+    }
+};
+
+test "§4.6.4.3 a table generator's PSD is its table, clamped at both ends" {
+    // |Z|^2 = 1e6: 1e-24 below the table, 2e-24 halfway, 3e-24 above.
+    const d = try densityAt(MockTable, .{}, &.{ 5, 15, 40 });
+    for ([_]f64{ 1e-18, 2e-18, 3e-18 }, d) |want, got| try std.testing.expectApproxEqRel(want, got, 1e-12);
+}
+
+/// A 1 mS node whose conductance is frequency dependent (an `absdelay` of
+/// zero, say): under `.ac`/`.noise`, `eval` omits the partial
+/// (`ac_dyn_slots`) and `acDyn` supplies it, as `contract.acDynSlots`
+/// requires.
+const MockAcDyn = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { g: f64 = 1e-3 };
+    pub const Instance = struct {};
+    pub const ac_dyn_slots = [_]u32{0};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, m: *const Model, _: *const Instance, sim: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const small_signal = sim.kind == .ac or sim.kind == .noise;
+        const i = if (small_signal) p[0].scale(0).addC(m.g * x[0]) else p[0].scale(m.g);
+        return contract.rows(@This(), S, .{i});
+    }
+
+    pub fn acDyn(comptime F: type, m: *const Model, _: *const Instance, _: *const [1]f64, _: contract.SimState, _: F, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {
+        out[0] = .{ .re = m.g, .im = 0 };
+    }
+
+    pub const noise_gens = [_]contract.NoiseGen(@This()){.{ .row = 0, .col = 0, .kind = .thermal }};
+
+    pub fn noisePsd(comptime _: type, _: [1]f64, _: *const Model, _: *const Instance, _: contract.SimState) [1]contract.PsdTerm {
+        return .{.{ .white = 4e-24 }};
+    }
+};
+
+test "§4.6.1 the sweep linearizes as a .noise analysis, so ac_dyn_slots count once" {
+    // A(w) = G + acDyn = 0 + 1e-3: 4e-24 / 1e-6 = 4e-18. Evaluated in the
+    // operating point's kind, G would carry the partial too and the slot
+    // would count twice: 4e-24 / 4e-6 = 1e-18.
+    var model: MockAcDyn.Model = .{};
+    var inst: MockAcDyn.Instance = .{};
+    var ckt: Circuit(MockAcDyn) = .init(&model, &inst);
+    ckt.setSimState(.{ .kind = .static, .analog_initial = false });
+    var dens: [1]f64 = undefined;
+    try sweep(&ckt, &.{0}, 0, &.{1e3}, &dens);
+    try std.testing.expectApproxEqRel(@as(f64, 4e-18), dens[0], 1e-12);
+    // The operating point's analysis is left as it was.
+    try std.testing.expectEqual(contract.AnalysisKind.static, ckt.sim.kind);
 }

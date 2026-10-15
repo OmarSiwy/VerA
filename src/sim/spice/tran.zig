@@ -370,8 +370,143 @@ fn almostEqualUlps(a: f64, b: f64, max_ulps: i64) bool {
     return @abs(lex(a) - lex(b)) <= max_ulps;
 }
 
+// ---------------------------------------------------------------------------
+// Tests. Oracles: closed-form responses of a ramp into a resistor and into
+// an RC, ngspice 45's measured step ceiling, and §9.17.2's bound.
+// ---------------------------------------------------------------------------
+
+const contract = @import("contract");
+const op = @import("op.zig");
+const Circuit = @import("circuit.zig").Circuit;
+
 test "almostEqualUlps counts representable doubles across zero" {
     try std.testing.expect(almostEqualUlps(1.0, std.math.nextAfter(f64, 1.0, 2.0), 1));
     try std.testing.expect(!almostEqualUlps(1.0, 1.0 + 1e-12, 100));
     try std.testing.expect(almostEqualUlps(-0.0, 0.0, 0));
+    // The smallest positive and negative subnormals are 2 apart, via 0.
+    const tiny = std.math.floatTrueMin(f64);
+    try std.testing.expect(almostEqualUlps(-tiny, tiny, 2));
+    try std.testing.expect(!almostEqualUlps(-tiny, tiny, 1));
+}
+
+test predict {
+    // cur + xfact·(cur - prev): 1 + 0.5·1 and 2 + 0.5·(-2).
+    var trial: [2]f64 = undefined;
+    predict(&trial, &.{ 1, 2 }, &.{ 0, 4 }, 0.5);
+    try std.testing.expectEqual([2]f64{ 1.5, 1 }, trial);
+}
+
+/// A source V(in) = slope·t into 1 kOhm to ground; no charge.
+const MockRamp = struct {
+    pub const U = enum(u8) { in, br };
+    pub const num_ports: usize = 0;
+    pub const contract_abi = contract.abi_version;
+    pub const u_kinds = [_]contract.UnknownKind{ .voltage, .current };
+    pub const Model = struct { slope: f64 = 1e3 };
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, m: *const Model, _: *const Instance, sim: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{ p[0].scale(1e-3).add(p[1]), p[0].addC(-m.slope * sim.t) });
+    }
+};
+
+/// A source V(in) = slope·t through R to `out`, C from `out` to ground.
+/// From rest, V(out) = slope·(t - RC·(1 - e^(-t/RC))); at t = RC = 1 ms
+/// and slope 1 kV/s that is e^-1 = 0.36787944117144233.
+const MockRc = struct {
+    pub const U = enum(u8) { in, out, br };
+    pub const num_ports: usize = 0;
+    pub const contract_abi = contract.abi_version;
+    pub const u_kinds = [_]contract.UnknownKind{ .voltage, .voltage, .current };
+    pub const Model = struct { r: f64 = 1e3, c: f64 = 1e-6, slope: f64 = 1e3 };
+    /// §9.17.2: 0 is "no bound".
+    pub const Instance = struct { bound_step: f64 = 0 };
+
+    pub fn eval(comptime S: type, x: *const [3]S.V, m: *const Model, _: *const Instance, sim: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const ir = p[0].sub(p[1]).scale(1.0 / m.r);
+        return contract.rows(@This(), S, .{ ir.add(p[2]), ir.neg(), p[0].addC(-m.slope * sim.t) });
+    }
+
+    pub fn q(comptime S: type, x: *const [3]S.V, m: *const Model, _: *const Instance, _: contract.SimState) contract.Sites(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.sites(@This(), S, .{ p[0].scale(0), p[1].scale(m.c), p[2].scale(0) });
+    }
+};
+
+/// Records the accepted points: how many, the widest gap between two, and
+/// the last value of unknown `out`. Fails a time that does not increase.
+const StepLog = struct {
+    out: usize,
+    points: u32 = 0,
+    t_last: f64 = 0,
+    dt_max: f64 = 0,
+    x_last: f64 = 0,
+
+    pub fn record(self: *StepLog, t: f64, x: []const f64) !void {
+        if (self.points != 0) {
+            try std.testing.expect(t > self.t_last);
+            self.dt_max = @max(self.dt_max, t - self.t_last);
+        } else try std.testing.expectEqual(0, t);
+        self.points += 1;
+        self.t_last = t;
+        self.x_last = x[self.out];
+    }
+};
+
+/// The deck runner's `.tran`: the transient's own operating point, then
+/// `simulate`.
+fn runTran(comptime D: type, model: *D.Model, inst: *D.Instance, options: Options, log: *StepLog) !SimResult {
+    var ckt: Circuit(D) = .init(model, inst);
+    var ws: converger.Workspace(contract.nU(D)) = .{};
+    var x: [contract.nU(D)]f64 = undefined;
+    _ = try op.solve(&ckt, &ws, &x, .ic);
+    return simulate(&ckt, &ws, &x, options, log);
+}
+
+test simulate {
+    var model: MockRc.Model = .{};
+    var inst: MockRc.Instance = .{};
+    var log: StepLog = .{ .out = 1 };
+    const r = try runTran(MockRc, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-4 }, &log);
+    try std.testing.expect(r.completed);
+    try std.testing.expectEqual(1e-3, r.t_final);
+    try std.testing.expectEqual(1e-3, log.t_last);
+    try std.testing.expectEqual(r.steps + 1, log.points);
+    // reltol 1e-3 bounds each step's local error, not the sum; the
+    // trapezoid's global error here is about 1e-4 relative.
+    try std.testing.expectApproxEqRel(@as(f64, 0.36787944117144233), log.x_last, 1e-3);
+}
+
+test "§9.17.2 $bound_step bounds every step, trapezoidal ones included" {
+    // The RC's truncation error allows steps up to tmax = 2e-5 once the
+    // run promotes to the trapezoid; the device's bound is 5e-6.
+    var model: MockRc.Model = .{};
+    var inst: MockRc.Instance = .{ .bound_step = 5e-6 };
+    var log: StepLog = .{ .out = 1 };
+    const r = try runTran(MockRc, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-4 }, &log);
+    try std.testing.expect(r.completed);
+    // t + dt - t rounds to within an ulp or two of dt.
+    try std.testing.expect(log.dt_max <= 5e-6 * (1 + 1e-9));
+    try std.testing.expectApproxEqRel(@as(f64, 0.36787944117144233), log.x_last, 1e-3);
+}
+
+test "the default step ceiling is ngspice's min(tstep, tstop/50)" {
+    // ngspice 45 on `.tran 1e-6 1e-3` over a 1 kHz sine into 1 kOhm takes
+    // no step past 1e-6, tstep, though tstop/50 is 2e-5 (traninit.c).
+    var model: MockRamp.Model = .{};
+    var inst: MockRamp.Instance = .{};
+    var log: StepLog = .{ .out = 0 };
+    const r = try runTran(MockRamp, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-6 }, &log);
+    try std.testing.expect(r.completed);
+    try std.testing.expect(log.dt_max <= 1e-6 * (1 + 1e-9));
+    // A resistive ramp is exact at every point: slope·t_stop = 1 V.
+    try std.testing.expectApproxEqRel(@as(f64, 1), log.x_last, 1e-12);
+
+    // An explicit ceiling overrides the default.
+    var wide: StepLog = .{ .out = 0 };
+    _ = try runTran(MockRamp, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-6, .dt_max = 2e-5 }, &wide);
+    try std.testing.expect(wide.dt_max > 1e-6);
+    try std.testing.expect(wide.dt_max <= 2e-5 * (1 + 1e-9));
 }

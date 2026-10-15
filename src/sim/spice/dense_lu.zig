@@ -320,3 +320,174 @@ fn swapRowsSimd(a: []f64, n: usize, r1: usize, r2: usize) void {
     }
     while (j < n) : (j += 1) std.mem.swap(f64, &a[r1 * n + j], &a[r2 * n + j]);
 }
+
+// ---------------------------------------------------------------------------
+// Tests. Oracles: hand-solved systems, LAPACK's scaled residual ratio
+// (LAWN 41 §7.1: ‖Ax - b‖ / (n·‖A‖·‖x‖·eps) <= 30, independent of how the
+// solve got there), and a naive triple-loop LU that performs the same
+// roundings in the same order, which the blocked path claims to match bit
+// for bit. Sizes sweep 1..64: every vector tail, and both sides of
+// `blocked_min`.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+const n_max = 64;
+
+/// Fills `a` (n x n) and `b` with uniform values in [-1, 1).
+fn randomSystem(rnd: std.Random, n: usize, a: []f64, b: []f64) void {
+    for (a[0 .. n * n]) |*e| e.* = 2 * rnd.float(f64) - 1;
+    for (b[0..n]) |*e| e.* = 2 * rnd.float(f64) - 1;
+}
+
+/// ‖op(A)·x - s·b‖∞ / (n·‖op(A)‖∞·‖x‖∞·eps), op = A or A^T, s = ±1.
+fn residualRatio(n: usize, a: []const f64, x: []const f64, b: []const f64, transpose: bool, s: f64) f64 {
+    var r_max: f64 = 0;
+    var a_norm: f64 = 0;
+    var x_norm: f64 = 0;
+    for (0..n) |i| {
+        var r = -s * b[i];
+        var row_sum: f64 = 0;
+        for (0..n) |j| {
+            const e = if (transpose) a[j * n + i] else a[i * n + j];
+            r += e * x[j];
+            row_sum += @abs(e);
+        }
+        r_max = @max(r_max, @abs(r));
+        a_norm = @max(a_norm, row_sum);
+        x_norm = @max(x_norm, @abs(x[i]));
+    }
+    return r_max / (@as(f64, @floatFromInt(n)) * a_norm * x_norm * std.math.floatEps(f64));
+}
+
+/// The textbook LU with the unblocked loops' pivot rule and roundings:
+/// first maximal |a[i][k]|, multiplier a[i][k] * (1 / pivot), then
+/// a[i][j] - f * a[k][j] for j > k in increasing k. No singular check.
+fn naiveFactor(n: usize, a: []f64, piv: []u32) void {
+    for (0..n) |k| {
+        var p = k;
+        for (k + 1..n) |i| {
+            if (@abs(a[i * n + k]) > @abs(a[p * n + k])) p = i;
+        }
+        piv[k] = @intCast(p);
+        if (p != k) for (0..n) |j| std.mem.swap(f64, &a[k * n + j], &a[p * n + j]);
+        const inv = @as(f64, 1.0) / a[k * n + k];
+        for (k + 1..n) |i| {
+            const f = a[i * n + k] * inv;
+            a[i * n + k] = f;
+            for (k + 1..n) |j| a[i * n + j] = a[i * n + j] - f * a[k * n + j];
+        }
+    }
+}
+
+test factorizeSolveNeg {
+    // A·(1, -2, 3) = (-1, 2, 0) by hand; A[0][0] = 0 forces a row swap.
+    var a = [_]f64{ 0, 2, 1, 1, 1, 1, 2, 1, 0 };
+    var x: [3]f64 = undefined;
+    try factorizeSolveNeg(3, &a, &.{ -1, 2, 0 }, &x);
+    for ([_]f64{ -1, 2, -3 }, x) |want, got| try testing.expectApproxEqAbs(want, got, 1e-15);
+}
+
+test "factorizeSolveNeg and factorize refuse a singular matrix, and n = 0 is a no-op" {
+    // Row 2 = 2 · row 1: after one elimination step the second pivot is
+    // exactly 0, below eps^2.
+    var a = [_]f64{ 1, 2, 2, 4 };
+    var x: [2]f64 = undefined;
+    try testing.expectError(error.Singular, factorizeSolveNeg(2, &a, &.{ 1, 1 }, &x));
+    var lu = [_]f64{ 1, 2, 2, 4 };
+    var piv: [2]u32 = undefined;
+    try testing.expectError(error.Singular, factorize(2, &lu, &piv));
+    // A zero column is singular at its first step.
+    var z = [_]f64{ 0, 1, 0, 1 };
+    try testing.expectError(error.Singular, factorize(2, &z, &piv));
+    try factorizeSolveNeg(0, &.{}, &.{}, &.{});
+    try factorize(0, &.{}, &.{});
+}
+
+test "factorizeSolveNeg's residual is backward-stable at every size, blocked or not" {
+    var prng: std.Random.DefaultPrng = .init(0x5eed);
+    const rnd = prng.random();
+    var a: [n_max * n_max]f64 = undefined;
+    var work: [n_max * n_max]f64 = undefined;
+    var b: [n_max]f64 = undefined;
+    var x: [n_max]f64 = undefined;
+    for (1..n_max + 1) |n| {
+        randomSystem(rnd, n, &a, &b);
+        @memcpy(work[0 .. n * n], a[0 .. n * n]);
+        try factorizeSolveNeg(n, work[0 .. n * n], b[0..n], x[0..n]);
+        // x = -A^-1 b, so A·x + b ≈ 0.
+        try testing.expect(residualRatio(n, &a, &x, &b, false, -1) <= 30);
+    }
+}
+
+test "factorize matches the naive LU bit for bit, across blocked_min" {
+    var prng: std.Random.DefaultPrng = .init(41);
+    const rnd = prng.random();
+    var a: [n_max * n_max]f64 = undefined;
+    var ref: [n_max * n_max]f64 = undefined;
+    var b: [n_max]f64 = undefined;
+    var piv: [n_max]u32 = undefined;
+    var ref_piv: [n_max]u32 = undefined;
+    for ([_]usize{ 1, 2, 3, 5, 8, 9, 17, 39, 40, 41, 47, 48, 49, 64 }) |n| {
+        randomSystem(rnd, n, &a, &b);
+        @memcpy(ref[0 .. n * n], a[0 .. n * n]);
+        try factorize(n, a[0 .. n * n], piv[0..n]);
+        naiveFactor(n, ref[0 .. n * n], ref_piv[0..n]);
+        try testing.expectEqualSlices(u32, ref_piv[0..n], piv[0..n]);
+        for (ref[0 .. n * n], a[0 .. n * n]) |want, got| {
+            try testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
+        }
+    }
+}
+
+test solveFactoredT {
+    var prng: std.Random.DefaultPrng = .init(7);
+    const rnd = prng.random();
+    var a: [n_max * n_max]f64 = undefined;
+    var lu: [n_max * n_max]f64 = undefined;
+    var b: [n_max]f64 = undefined;
+    var y: [n_max]f64 = undefined;
+    var piv: [n_max]u32 = undefined;
+    for (1..n_max + 1) |n| {
+        randomSystem(rnd, n, &a, &b);
+        @memcpy(lu[0 .. n * n], a[0 .. n * n]);
+        try factorize(n, lu[0 .. n * n], piv[0..n]);
+        solveFactoredT(n, lu[0 .. n * n], piv[0..n], b[0..n], y[0..n]);
+        try testing.expect(residualRatio(n, &a, &y, &b, true, 1) <= 30);
+        // In place: `b` and `x` may alias.
+        solveFactoredT(n, lu[0 .. n * n], piv[0..n], b[0..n], b[0..n]);
+        for (y[0..n], b[0..n]) |want, got| try testing.expectEqual(want, got);
+    }
+    // By hand: A = [[2, 1], [0, 4]], A^T y = (2, 9) gives y = (1, 2).
+    var small = [_]f64{ 2, 1, 0, 4 };
+    var p2: [2]u32 = undefined;
+    try factorize(2, &small, &p2);
+    var y2: [2]f64 = undefined;
+    solveFactoredT(2, &small, &p2, &.{ 2, 9 }, &y2);
+    try testing.expectApproxEqAbs(@as(f64, 1), y2[0], 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 2), y2[1], 1e-15);
+}
+
+test buildComplexAdmittance {
+    // Every block entry of [G, -ωC; ωC, G], at sizes that end in a vector
+    // tail and at ones that do not.
+    var g: [9 * 9]f64 = undefined;
+    var c: [9 * 9]f64 = undefined;
+    for (&g, &c, 0..) |*ge, *ce, k| {
+        ge.* = @floatFromInt(k + 1);
+        ce.* = 0.5 * @as(f64, @floatFromInt(k)) - 3;
+    }
+    var a: [18 * 18]f64 = undefined;
+    const omega = 2.5;
+    for (1..10) |n| {
+        const nn = 2 * n;
+        buildComplexAdmittance(n, nn, g[0 .. n * n], c[0 .. n * n], omega, a[0 .. nn * nn]);
+        for (0..n) |r| for (0..n) |col| {
+            const gv = g[r * n + col];
+            const cv = c[r * n + col];
+            try testing.expectEqual(gv, a[r * nn + col]);
+            try testing.expectEqual(-omega * cv, a[r * nn + n + col]);
+            try testing.expectEqual(omega * cv, a[(n + r) * nn + col]);
+            try testing.expectEqual(gv, a[(n + r) * nn + n + col]);
+        };
+    }
+}

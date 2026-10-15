@@ -203,3 +203,144 @@ fn minDel(comptime w: usize, comptime method: Method, comptime cur_method: Metho
     const tail: [4][]const f64 = .{ q[0][i..], q[1][i..], q[2][i..], q[3][i..] };
     return @min(min_del, minDel(1, method, cur_method, tail, i_prev[i..], c, lte));
 }
+
+// ---------------------------------------------------------------------------
+// Tests. Oracles: the methods' exactness on low-degree charge histories
+// (BDF2 and the trapezoid differentiate a quadratic exactly), hand-evaluated
+// CKTterr bounds on polynomial charges, and the `w == 1` instantiation for
+// the vector bodies, which must agree bit for bit.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+const methods = [_]Method{ .backward_euler, .trapezoidal, .gear_2 };
+
+fn expectBits(want: f64, got: f64) !void {
+    try testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
+}
+
+test coeffs {
+    const dt = 1e-9;
+    const be = coeffs(.backward_euler, dt, 5e-9, 0.5);
+    try expectBits(1.0 / dt, be.ag0);
+    try testing.expectEqual(0, be.ag2);
+    // At xmu = 0.5 the trapezoid's coefficients are exactly 2/dt and 1.
+    const tr = coeffs(.trapezoidal, dt, 5e-9, 0.5);
+    try expectBits(2.0 / dt, tr.ag0);
+    try testing.expectEqual(1, tr.ag1);
+    // Uniform-step BDF2: 3/(2dt) and 1/(2dt).
+    const g2 = coeffs(.gear_2, dt, dt, 0.5);
+    try expectBits(3.0 / (2.0 * dt), g2.ag0);
+    try expectBits(1.0 / (2.0 * dt), g2.ag2);
+    // dt = 2 after 1, r = 2: (1 + 2r)/((1 + r)dt) = 5/6 and
+    // r^2/((1 + r)dt) = 2/3.
+    const v = coeffs(.gear_2, 2, 1, 0.5);
+    try testing.expectApproxEqAbs(@as(f64, 5.0 / 6.0), v.ag0, 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 2.0 / 3.0), v.ag2, 1e-15);
+}
+
+test lteCoeff {
+    try testing.expectEqual(0.5, lteCoeff(.backward_euler));
+    try testing.expectEqual(0.08333333333, lteCoeff(.trapezoidal));
+    try testing.expectEqual(0.2222222222, lteCoeff(.gear_2));
+}
+
+test "companionAt differentiates q = t^2 as each method should" {
+    // q(t) = t^2 at t = 0, 1, 3 (steps 1 then 2), so q = 0, 1, 9 and
+    // dq/dt(3) = 6, dq/dt(1) = 2. BDF2 and the trapezoid are exact on a
+    // quadratic; backward Euler gives the chord (9 - 1)/2 = 4.
+    const q0 = [_]f64{9};
+    const q1 = [_]f64{1};
+    const q2 = [_]f64{0};
+    const i_prev = [_]f64{2};
+    var out: [1]f64 = undefined;
+    companionAt(.backward_euler, false, &out, &q0, &q1, &q2, &i_prev, coeffs(.backward_euler, 2, 1, 0.5));
+    try testing.expectEqual(4, out[0]);
+    companionAt(.trapezoidal, false, &out, &q0, &q1, &q2, &i_prev, coeffs(.trapezoidal, 2, 1, 0.5));
+    try testing.expectEqual(6, out[0]);
+    companionAt(.gear_2, false, &out, &q0, &q1, &q2, &i_prev, coeffs(.gear_2, 2, 1, 0.5));
+    try testing.expectApproxEqAbs(@as(f64, 6), out[0], 1e-14);
+    // Accumulating adds onto what is there: (10 + 8) - 2.
+    out = .{10};
+    companionAt(.trapezoidal, true, &out, &q0, &q1, &q2, &i_prev, coeffs(.trapezoidal, 2, 1, 0.5));
+    try testing.expectEqual(16, out[0]);
+}
+
+test advanceCurrent {
+    // In place, the trapezoid's previous current is its own output slot:
+    // i = 2/2·(9 - 1) - 2 = 6, as above.
+    var i_cur = [_]f64{2};
+    advanceCurrent(.trapezoidal, &i_cur, &.{9}, &.{1}, &.{0}, coeffs(.trapezoidal, 2, 1, 0.5));
+    try testing.expectEqual(6, i_cur[0]);
+}
+
+test "companionAt gives each element the same bits wherever it sits" {
+    var prng: std.Random.DefaultPrng = .init(5);
+    const rnd = prng.random();
+    const len_max = 40; // past 3 vectors at every width up to 8
+    var q: [3][len_max]f64 = undefined;
+    var ip: [len_max]f64 = undefined;
+    var out: [len_max]f64 = undefined;
+    var base: [len_max]f64 = undefined;
+    for (&q) |*row| {
+        for (row) |*e| e.* = rnd.float(f64) * 1e-12;
+    }
+    for (&ip, &base) |*e, *b| {
+        e.* = rnd.float(f64) - 0.5;
+        b.* = rnd.float(f64);
+    }
+    inline for (methods) |m| inline for (.{ false, true }) |acc| {
+        const c = coeffs(m, 1e-9, 3e-9, 0.5);
+        for (0..len_max + 1) |len| {
+            @memcpy(out[0..len], base[0..len]);
+            companionAt(m, acc, out[0..len], q[0][0..len], q[1][0..len], q[2][0..len], ip[0..len], c);
+            for (0..len) |j| {
+                var one = [1]f64{base[j]};
+                companionAt(m, acc, &one, q[0][j..][0..1], q[1][j..][0..1], q[2][j..][0..1], ip[j..][0..1], c);
+                try expectBits(one[0], out[j]);
+            }
+        }
+    };
+}
+
+test stepBound {
+    const lte: LteIn = .{ .dt = 1, .dt1 = 1, .dt2 = 1, .reltol = 1e-3, .abstol = 1e-12, .chgtol = 1e-14, .trtol = 7 };
+    // Order 1 on q = t^2 at t = 2, 1, 0: the divided difference is 1.
+    // i_new = 1·(4 - 1) = 3; tol = max(1e-12 + 1e-3·3, 1e-3·4/1) = 4e-3;
+    // del = 7·4e-3 / max(1e-12, 0.5·1) = 0.056.
+    const be = coeffs(.backward_euler, 1, 1, 0.5);
+    const d1 = stepBound(1, .backward_euler, .backward_euler, .{ &.{4}, &.{1}, &.{0}, &.{0} }, &.{0}, be, lte);
+    try testing.expectApproxEqRel(@as(f64, 0.056), d1, 1e-14);
+    // Order 2 on q = t^3 at t = 3, 2, 1, 0: the third divided difference
+    // is 1. Trapezoid: i_prev = q'(2) = 12, i_new = 2·(27 - 8) - 12 = 26;
+    // tol = max(1e-12 + 1e-3·26, 1e-3·27/1) = 0.027;
+    // del = sqrt(7·0.027 / 0.08333333333) = 1.5059880477914558.
+    const tr = coeffs(.trapezoidal, 1, 1, 0.5);
+    const d2 = stepBound(1, .trapezoidal, .trapezoidal, .{ &.{27}, &.{8}, &.{1}, &.{0} }, &.{12}, tr, lte);
+    try testing.expectApproxEqRel(@as(f64, 1.5059880477914558), d2, 1e-14);
+    // q = t^2 at t = 2, 1, 0, -1 has no third difference: only the
+    // abstol floor bounds it, sqrt(7·6e-3 / 1e-12) ≈ 2e5.
+    const flat = stepBound(1, .trapezoidal, .trapezoidal, .{ &.{4}, &.{1}, &.{0}, &.{1} }, &.{0}, tr, lte);
+    try testing.expect(flat > 1e5);
+    // No states: nothing bounds the step.
+    try testing.expectEqual(std.math.inf(f64), stepBound(W, .gear_2, .gear_2, .{ &.{}, &.{}, &.{}, &.{} }, &.{}, tr, lte));
+}
+
+test "stepBound's vector body equals its scalar instantiation bit for bit" {
+    var prng: std.Random.DefaultPrng = .init(9);
+    const rnd = prng.random();
+    const len_max = 40;
+    var q: [4][len_max]f64 = undefined;
+    var ip: [len_max]f64 = undefined;
+    for (&q) |*row| {
+        for (row) |*e| e.* = (rnd.float(f64) - 0.5) * 1e-12;
+    }
+    for (&ip) |*e| e.* = (rnd.float(f64) - 0.5) * 1e-3;
+    const lte: LteIn = .{ .dt = 1e-9, .dt1 = 2e-9, .dt2 = 1.5e-9, .reltol = 1e-3, .abstol = 1e-12, .chgtol = 1e-14, .trtol = 7 };
+    for (1..len_max + 1) |len| {
+        const hist: [4][]const f64 = .{ q[0][0..len], q[1][0..len], q[2][0..len], q[3][0..len] };
+        for (methods) |m| for (methods) |cm| {
+            const c = coeffs(cm, lte.dt, lte.dt1, 0.5);
+            try expectBits(stepBound(1, m, cm, hist, ip[0..len], c, lte), stepBound(W, m, cm, hist, ip[0..len], c, lte));
+        };
+    }
+}
