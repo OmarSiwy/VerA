@@ -4,6 +4,7 @@ pub const num_ports: usize = 2;
 pub const contract_abi: u32 = 6;
 pub const u_abstol = [n_u]f64{
 pub const Model = struct {
+pub fn checkRange(model: *const Model) ?[]const u8 {
 pub const Setup = struct {
 pub const Instance = struct {
 pub const setup_simparams = [_][]const u8{};

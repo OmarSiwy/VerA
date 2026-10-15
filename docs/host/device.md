@@ -67,6 +67,9 @@ The order in which a host prepares a card is fixed:
    fixed value of. Refuse the card.
 4. `checkCard(&model)`, optional: names a system parameter outside LRM
    Table 9-29's allowed values.
+   `checkRange(&model)`, when declared: names a parameter the card puts
+   outside its declared `from`/`exclude` ranges (LRM §3.4.2, "an error ...
+   during simulation"). Refuse the card.
 5. `setup(V, &model)`: fills `model.su`, the solve-invariant values `eval`
    would otherwise recompute every iterate (`Setup`). Once per `Model` row,
    and again after every write to the card, `temperature__`, or a
@@ -146,4 +149,4 @@ can.
 | metadata and output | `u_kinds`, `u_abstol`, `decl_meta`, `mc_param`, `status_sites`, `say_sites`, `say`, `file_io`, `systf_calls`, `display` | [tables](tables.md) |
 | analog VPI | `vpiContribs`, `vpi_contrib_access`, `vpi_contrib_hi`, `vpi_contrib_lo`, `vpi_contrib_flow_u`: the contribution rows an LRM chapter 12 analog VPI host reads, emitted only when a program that embeds VerA as a library sets `Options.vpi_contribs` (VerA's VPI host does; no command-line flag sets it). `vpiShares`, `vpi_share_row`: when two instances' unnamed branches over one node pair share a row, each instance's own share of it (the flow of that instance's branch), by row | none |
 | batching | `batch_ok`, `batch_lead`, `batch_inst`, `mutable_eval` | [batching](batching.md) |
-| card | `derive`, `checkShape`, `checkCard`, `Setup`, `setup`, `setup_simparams`, `setup_chunks`, `setupInstance`, `attempt`, `precompute` | above, and [linking](linking.md) |
+| card | `derive`, `checkShape`, `checkCard`, `checkRange`, `Setup`, `setup`, `setup_simparams`, `setup_chunks`, `setupInstance`, `attempt`, `precompute` | above, and [linking](linking.md) |

@@ -45,7 +45,7 @@ In short:
 | eval | one `evalQ` (or `eval`) over the sparse reference family at the limited point: `seed` under ngspice's `INIT_LIM`, `limit` against the previous limited point under `ENABLE_LIM`. The results are kept in the instance, and the `load_*` calls stamp them |
 | noise | one OSDI source per `noise_gens` row, its density `coeff² · (white + flicker/f^ef + table)` from `noisePsd` at the last evaluated point |
 | `$mfactor` | LRM §6.3.6's scaling, which the device leaves to its host: the rows (and the noise power) times `Instance.mfactor` |
-| temperature | each instance runs on its own `Model` row: the card, the instance's own parameters and `temperature__`, then `derive`, `checkShape`, `setup`, `setupInstance` |
+| temperature | each instance runs on its own `Model` row: the card, the instance's own parameters and `temperature__`, then `derive`, `checkShape`, `checkRange`, `setup`, `setupInstance` |
 | collapse | a flow unknown whose branch the card switches off collapses into ground; every other `collapse` alias is left unapplied, which is exact |
 | `$bound_step` | `bound_step_offset` |
 | breakpoints | `pendingBreakpoint` bounds the step after each point through the same `bound_step_offset`: the distance to the next breakpoint, or, when one is due at the point itself (its consequences known only once the point is accepted), the length of the step that reached it |

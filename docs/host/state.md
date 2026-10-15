@@ -15,6 +15,7 @@ calls it:
 derive(S, *model)            after writing a card, before building instances
 checkShape(&model)           after derive; non-null: refuse the card
 checkCard(&model)            after derive (optional; the host decides)
+checkRange(&model)           after derive; non-null: refuse the card
 setup(S, &model)             after derive, and after every card,
                              temperature__ or setup_simparams write
 setupInstance(&model, &inst) per instance after every setup

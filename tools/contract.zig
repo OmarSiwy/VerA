@@ -3688,6 +3688,9 @@ pub fn InstancePtr(comptime D: type) type {
 ///   checkCard(&model)            after derive; non-null names a §9.18 system
 ///                                parameter the card put outside Table 9-29
 ///                                (optional; the host decides what to do)
+///   checkRange(&model)           after derive; non-null names a §3.4
+///                                parameter the card put outside its §3.4.2
+///                                `from`/`exclude` ranges, so refuse the card
 ///   setup(S, &model)             after derive, and after every card,
 ///                                `temperature__` or `setup_simparams` write;
 ///                                fills `model.su`, once per Model row
@@ -4066,6 +4069,11 @@ pub fn validate(comptime D: type) void {
     // Optional, and additive: no `abi_version` change.
     if (@hasDecl(D, "checkCard"))
         expectFn(D, "checkCard", fn (*const D.Model) ?[]const u8);
+    // §3.4.2 a parameter's declared `from`/`exclude` ranges, for a value
+    // the host wrote on the card (#80). Optional, and additive: no
+    // `abi_version` change.
+    if (@hasDecl(D, "checkRange"))
+        expectFn(D, "checkRange", fn (*const D.Model) ?[]const u8);
 
     // Hand-written devices' per-instance preparation before a solve.
     if (@hasDecl(D, "precompute"))
@@ -4262,6 +4270,7 @@ const AllowedPubDecl = enum {
     derive,
     checkShape,
     checkCard,
+    checkRange,
     precompute,
     constant,
     nextBreakpoint,
@@ -4889,6 +4898,9 @@ const MockAll = struct {
     }
     pub fn checkCard(m: *const Model) ?[]const u8 {
         return if (!(m.g > 0.0)) "$mfactor" else null;
+    }
+    pub fn checkRange(m: *const Model) ?[]const u8 {
+        return if (!(m.g > 0.0 and m.g < 1.0)) "g" else null;
     }
     pub fn precompute(_: *Instance, _: *const Model) void {}
     pub fn nextBreakpoint(_: *const Model, _: f64) ?f64 {

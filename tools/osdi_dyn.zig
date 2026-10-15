@@ -36,7 +36,7 @@
 //!                KCL rows (and noise power) times `Instance.mfactor`
 //!   temperature  each instance runs on its own `Model` row: the card,
 //!                the instance's own parameters and `temperature__`, then
-//!                `derive`, `checkShape`, `setup`, `setupInstance`
+//!                `derive`, `checkShape`, `checkRange`, `setup`, `setupInstance`
 //!   collapse     a flow unknown whose branch a card switches off
 //!                (`<flow>__retained` = 0 after `derive`) collapses into
 //!                ground; every other `collapse` alias is left unapplied
@@ -70,7 +70,7 @@
 //! Host-only: never imported by the device text, so the device stays
 //! GPU-compilable.
 //!
-//! Clauses: LRM §3.4 (parameters, shape refusal), §4.6.4 and §4.6.4.6 (noise),
+//! Clauses: LRM §3.4 (parameters, shape refusal), §3.4.2 (range refusal), §4.6.4 and §4.6.4.6 (noise),
 //! §5.4.2 (a switched-off branch's flow collapses), §6.3.6 (`$mfactor`),
 //! §9.15 (`$simparam`), §9.17.3 (limiting and seeds), §9.19
 //! (`$port_connected`).
@@ -615,12 +615,20 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             return if (id < np) @intFromBool(self.given[id]) else 0;
         }
 
-        /// `derive` and `checkShape` on `m`; false (and a fatal log) when
-        /// the card moves a shape parameter.
+        /// `derive`, `checkShape` and `checkRange` on `m`; false (and a fatal
+        /// log) when the card moves a shape parameter or puts one outside its
+        /// §3.4.2 range ("It shall be an error ... during simulation", #80).
         fn derive(handle: ?*anyopaque, m: *D.Model) bool {
             if (@hasDecl(D, "derive")) D.derive(Val, m);
             if (@hasDecl(D, "checkShape")) if (D.checkShape(m)) |why| {
                 log(handle, log_lvl_fatal, why);
+                return false;
+            };
+            if (@hasDecl(D, "checkRange")) if (D.checkRange(m)) |param| {
+                var buf: [512]u8 = undefined;
+                const at = "error[E0377]: LRM 3.4.2: parameter `";
+                const msg = std.mem.print(&buf, at ++ "{s}` is outside its declared range", .{param}) catch at;
+                log(handle, log_lvl_fatal, msg);
                 return false;
             };
             if (@hasDecl(D, "checkCard")) if (D.checkCard(m)) |why| log(handle, log_lvl_err, why);
@@ -1166,6 +1174,10 @@ const Rc = struct {
     pub fn evalQ(comptime S: type, x: *const [2]S.V, m: *const Model, i: *const Instance, sim: contract.SimState) struct { res: contract.Rows(Rc, S), q: contract.Sites(Rc, S) } {
         return .{ .res = eval(S, x, m, i, sim), .q = q(S, x, m, i, sim) };
     }
+    /// `parameter real r = 1k from (0:inf);`, as VerA emits it (§3.4.2).
+    pub fn checkRange(m: *const Model) ?[]const u8 {
+        return if (!(m.r > 0.0 and m.r < std.math.inf(f64))) "r" else null;
+    }
 };
 
 /// A conductance with one named thermal generator across it.
@@ -1483,6 +1495,29 @@ test "setup_instance refuses more connected terminals than the device has, fatal
     try testing.expectEqual(@as(u32, 0), info.flags);
     d.setup_instance(null, &inst, &model, 300.15, 1, &no_paras, &info);
     try testing.expectEqual(@as(u32, 0), info.flags);
+}
+
+test "a card value outside a §3.4.2 range is fatal at setup_model and setup_instance (#80)" {
+    const H = Osdi(Rc, "rc");
+    const d = &H.descriptors[0];
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    // r = -1 on the card (model-side id 3): outside (0:inf).
+    real(d, null, &model, 3, access_flag_set).* = -1;
+    d.setup_model(null, &model, &no_paras, &info);
+    try testing.expectEqual(eval_ret_flag_fatal, info.flags);
+    // The legal neighbour: r = 2k on the card.
+    real(d, null, &model, 3, access_flag_set).* = 2e3;
+    d.setup_model(null, &model, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    // An instance's own r is checked too: 0 is outside the open bound.
+    real(d, &inst, &model, 0, access_flag_set | access_flag_instance).* = 0;
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(eval_ret_flag_fatal, info.flags);
 }
 
 test "a transient time behind the accepted point restarts dt from 0, never negative" {

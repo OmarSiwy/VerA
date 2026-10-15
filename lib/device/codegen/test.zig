@@ -2639,6 +2639,56 @@ test "codegen: §3.4.7 a card write through an alias sets the original and its _
     try std.testing.expect(std.mem.find(u8, src, "c__given = true") == null);
 }
 
+test "codegen: §3.4.2 checkRange names a card value outside its from/exclude ranges (#80)" {
+    // §3.4.2: "It shall be an error only if the value of the parameter is out
+    // of range during simulation." Several `from` ranges are a union and an
+    // `exclude` removes from it, so `r` is refused outside (0:inf) or at 2,
+    // and `k` outside [1:5] ∪ [10:12]. `s`'s bound reads `lo`, which the card
+    // can move, so it has no literal value and `s` is not checked (VD-125).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module rg(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real r = 1 from (0:inf) exclude 2;
+        \\  parameter integer k = 3 from [1:5] from [10:12];
+        \\  parameter real lo = 0;
+        \\  parameter real s = 1 from [lo:10];
+        \\  analog I(p, n) <+ V(p, n) * (k + s + lo) / r;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, src, "pub fn checkRange(model: *const Model) ?[]const u8 {\n") != null);
+    try std.testing.expect(std.mem.find(u8, src,
+        \\        const v: f64 = model.r;
+        \\        if (!((v > 0.0 and v < @as(f64, @bitCast(@as(u64, 0x7ff0000000000000))))) or (v >= 2.0 and v <= 2.0)) return "r";
+        \\
+    ) != null);
+    try std.testing.expect(std.mem.find(u8, src,
+        \\        const v: f64 = @floatFromInt(model.k);
+        \\        if (!((v >= 1.0 and v <= 5.0) or (v >= 10.0 and v <= 12.0))) return "k";
+        \\
+    ) != null);
+    try std.testing.expect(std.mem.find(u8, src, "return \"s\";") == null);
+    try std.testing.expect(std.mem.find(u8, src, "return \"lo\";") == null);
+}
+
+test "codegen: §3.4.2 a device with no checkable range has no checkRange" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module nr(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real r = 1;
+        \\  analog I(p, n) <+ V(p, n) / r;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, src, "checkRange") == null);
+}
+
 test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
     // `tnom` must not fold to the constant 27: a SPICE deck setting `.options
     // tnom` would be ignored, and a compact model derives its whole parameter

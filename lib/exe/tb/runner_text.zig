@@ -91,6 +91,10 @@ pub const runner_body =
     \\        std.debug.print("error[E0890]: LRM 9.18: the model card puts `{s}` outside Table 9-29's allowed values\n", .{name});
     \\        std.process.exit(1);
     \\    };
+    \\    if (comptime @hasDecl(D, "checkRange")) if (D.checkRange(m)) |name| {
+    \\        std.debug.print("error[E0377]: LRM 3.4.2: the model card puts parameter `{s}` outside its declared range\n", .{name});
+    \\        std.process.exit(1);
+    \\    };
     \\    if (comptime !@hasDecl(D, "checkShape")) return;
     \\    const name = D.checkShape(m) orelse return;
     \\    std.debug.print("error: LRM 3.4: the model card sets shape parameter `{s}` to a value this device was not compiled for\n", .{name});

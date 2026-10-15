@@ -243,6 +243,7 @@ pub const Code = enum(u16) {
     E0374,
     E0375,
     E0376,
+    E0377,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -3072,6 +3073,30 @@ fn infoOf(c: Code) Info {
             \\(`--run` of a `.v` design) reports the same omission as E1100.
             ,
         },
+        .E0377 => .{
+            .title = "a model-card parameter value is outside its range",
+            .lrm = "3.4.2",
+            .explain =
+            \\LRM 3.4.2: "The parameter value shall be within the range from the
+            \\smallest value specified to the largest value specified", minus
+            \\what an `exclude` removes, and "It shall be an error only if the
+            \\value of the parameter is out of range during simulation."
+            \\
+            \\    parameter real r = 1 from (0:inf) exclude 2;
+            \\
+            \\A `#(...)` override is elaborated with the design and judged at
+            \\compile time (E0361). A value the HOST writes on the model card
+            \\(a `//! param` or `//! psweep` card, a SPICE `.model` line) exists
+            \\only when the card is written, so the device's `checkRange`, which
+            \\every host calls after `derive`, names the first parameter outside
+            \\its ranges. The testbench stops with this code (exit 1); the OSDI
+            \\library reports it as a fatal setup error.
+            \\
+            \\Only bounds that fold over literals are checked: a bound written
+            \\over another parameter, and a string-set range, are not
+            \\(specification/Vague_Decisions.md VD-125).
+            ,
+        },
         .E0342 => .{
             .title = "nature or discipline is already declared",
             .lrm = "3.13.1",
@@ -3465,7 +3490,9 @@ fn infoOf(c: Code) Info {
             \\where a model card meets a model's declared legal range.
             \\
             \\3.4.2 states the error at simulation time; VerA elaborates the
-            \\instance at compile time, so it is reported here.
+            \\instance at compile time, so it is reported here. A value the
+            \\host writes on the model card is checked when it is written
+            \\(E0377).
             ,
         },
         .E0362 => .{

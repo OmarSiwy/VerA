@@ -131,6 +131,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitDerive(self);
     try emitShapeCheck(self);
     try emitCardCheck(self);
+    try emitRangeCheck(self);
     try gen_setup.emitSetupDecl(self);
     try gen_instance.emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
@@ -748,6 +749,66 @@ fn emitCardCheck(self: *Gen) Error!void {
         \\pub fn checkCard({s}: *const Model) ?[]const u8 {{
         \\
     , .{if (std.mem.find(u8, body.items, "model.") != null) "model" else "_"});
+    try self.w("{s}    return null;\n}}\n\n", .{body.items});
+}
+
+/// Emits `checkRange`, which names the first §3.4 parameter whose value (after
+/// `derive`) lies in none of its §3.4.2 `from` ranges or in one of its
+/// `exclude` ranges, or returns null (#80). "It shall be an error only if the
+/// value of the parameter is out of range during simulation": a `#(...)`
+/// override is judged at compile time (E0361), a value the host writes on the
+/// card only here. A range whose bounds do not fold over literals
+/// (`Lowered.Range`), a string-set range and a string parameter are not
+/// checked (VD-125). Not emitted when no parameter has a checkable range.
+fn emitRangeCheck(self: *Gen) Error!void {
+    var body: std.ArrayList(u8) = .empty;
+    for (self.lowered.params.items, 0..) |p, i| {
+        const ty = Analysis.tyOfParam(p.ty);
+        if (ty == .str) continue;
+        // `inside` ORs the `from` intervals (§3.4.2: several are a union);
+        // `excluded` ORs the `exclude` ones. A `from` with an unfoldable bound
+        // might admit any value, so it drops the whole `from` test.
+        var inside: std.ArrayList(u8) = .empty;
+        var excluded: std.ArrayList(u8) = .empty;
+        var from_known = true;
+        for (p.ranges) |r| {
+            if (r.strings) continue;
+            const lo = r.lo orelse {
+                if (r.kind == .from) from_known = false;
+                continue;
+            };
+            const hi = r.hi orelse {
+                if (r.kind == .from) from_known = false;
+                continue;
+            };
+            const list = switch (r.kind) {
+                .from => &inside,
+                .exclude => &excluded,
+            };
+            try list.print(self.arena, "{s}(v {s} {s} and v {s} {s})", .{
+                if (list.items.len == 0) "" else " or ",
+                if (r.lo_inclusive) ">=" else ">",
+                try fmtF64(self, lo),
+                if (r.hi_inclusive) "<=" else "<",
+                try fmtF64(self, hi),
+            });
+        }
+        if (!from_known) inside.clearRetainingCapacity();
+        if (inside.items.len == 0 and excluded.items.len == 0) continue;
+        try body.print(self.arena, "    {{\n        const v: f64 = {s}model.{s}{s};\n        if (", .{
+            if (ty == .int) "@floatFromInt(" else "", self.names.p_names[i], if (ty == .int) ")" else "",
+        });
+        if (inside.items.len != 0) try body.print(self.arena, "!({s})", .{inside.items});
+        if (inside.items.len != 0 and excluded.items.len != 0) try body.appendSlice(self.arena, " or ");
+        try body.print(self.arena, "{s}) return \"{f}\";\n    }}\n", .{ excluded.items, std.zig.fmtString(p.name) });
+    }
+    if (body.items.len == 0) return;
+    try self.w(
+        \\/// §3.4.2 the declared `from`/`exclude` ranges: the first parameter the
+        \\/// card (after `derive`) puts outside its range, or null.
+        \\pub fn checkRange(model: *const Model) ?[]const u8 {{
+        \\
+    , .{});
     try self.w("{s}    return null;\n}}\n\n", .{body.items});
 }
 
