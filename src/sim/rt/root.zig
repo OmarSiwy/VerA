@@ -1915,10 +1915,7 @@ pub const State = struct {
     /// One `%b`/`%o`/`%h`/`%d` operand (§17.1.1.3).
     pub fn value(self: *State, a: anytype, w: u32, signed: bool, radix: fmt.Radix, width: ?u32) Error!void {
         var buf = logic.planesOf(a);
-        fmt.value(self.out, literal(&buf, w, signed), radix, width) catch |e| return switch (e) {
-            error.TooWide => self.fail("decimal display of an operand wider than 64 bits is not implemented", .{}),
-            error.WriteFailed => error.WriteFailed,
-        };
+        return fmt.value(self.out, self.gpa, literal(&buf, w, signed), radix, width);
     }
 
     /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).

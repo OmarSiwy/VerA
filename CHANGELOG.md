@@ -19,6 +19,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 - Digital engine: `$display("%d")` of a 127-bit or wider x/z value is padded to the full width; releasing a whole net keeps a select forced on its own, as the native executable already did (IEEE 1364-2005 §9.3.2); a fork in an untimed task or function, `disable` of a fork from one of its arms, a `repeat` count with its top bit set and a negative signed delay all behave as §9.7/§9.8 say (#29).
 - VPI: `vpiRealVal` of a signed value wider than 64 bits, a time past 2^64 (now `BADTIME`), analog `%e`/`%g` of inf/nan, and `vpi_put_delays` on a generate-scope object are fixed (#29).
 - CLI: a NaN `--param` or `--unknown-bound` is refused; `--emit-exe` with `--emit-so` exits 2; `--deny` on a `.v` with `--emit-zig` exits 1; `--emit-osdi` compiles devices whose names contain `Z` (`Zener`, `Zth`) and keeps their source names (#29).
+- Digital engine and native executable: `%d` of a known value wider than 64 bits prints every digit (IEEE 1364-2005 §17.1.1.3; it was E1100) (#29).
 - Contract: `contract.laneMasks` called at run time on a device without `lane_masks` returned a slice into a stack temporary; it now returns a constant (#29).
 
 ## v1.1.0 — 2026-10-08
