@@ -6,11 +6,13 @@
 //! argument helpers here serve both. The §9.2 context tables
 //! (`isDigitalOnlySysFunc` and its siblings) end the file.
 //!
-//! LRM clauses this file's code cites: §2.8.3, §2.9, §3.3, §3.4.7, §4.3, §4.3.1, §4.4,
-//! §4.5.13, §4.5.15, §4.6.1, §4.7, §4.7.2, §5.6.1.2, §6.6.3, §6.7, §7, §7.6, §9.2, §9.4.1,
-//! §9.4.2, §9.5, §9.5.1, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1, §9.5.4.2, §9.5.7, §9.6, §9.7,
-//! §9.8, §9.9, §9.10, §9.11, §9.12, §9.13, §9.14, §9.15, §9.17, §9.17.3, §9.18, §9.19,
-//! §9.20, §9.21, §9.22, §9.22.1, §9.22.2, §9.22.3, §9.23, §9.23.1, §9.23.4.
+//! LRM clauses this file's code cites: §2.8.3, §2.9, §3.3, §3.4.7, §4.2.1.1, §4.3,
+//! §4.3.1, §4.4, §4.5.13, §4.5.15, §4.6.1, §4.7, §4.7.2, §5.6.1.2, §6.6.3, §6.7, §7,
+//! §7.6, §9.2, §9.4, §9.4.1, §9.4.2, §9.5, §9.5.1, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1,
+//! §9.5.4.2, §9.5.7, §9.6, §9.7, §9.8, §9.9, §9.10, §9.11, §9.12, §9.13, §9.14, §9.15,
+//! §9.17, §9.17.3, §9.18, §9.19, §9.20, §9.21, §9.22, §9.22.1, §9.22.2, §9.22.3, §9.23,
+//! §9.23.1, §9.23.4, §12.32.1.
+//! IEEE 1364-2005 clauses cited: §17.1.1.1, §17.10, §17.11.1.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
@@ -558,7 +560,7 @@ pub fn outputLiteral(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
     const span = self.tokenSpan(self.file.exprs.mainTok(e));
     const raw = self.src[span.start..span.end];
     if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"' or
-        std.mem.indexOfScalar(u8, raw, '\\') == null) return null;
+        std.mem.findScalar(u8, raw, '\\') == null) return null;
     return try Lexer.stringContents(self.arena, raw);
 }
 
@@ -683,8 +685,8 @@ fn sysFuncTy(name: []const u8) Ty {
 /// A name test, with no context flag: every statement lowering sees is in the
 /// analog context (A.6.2 `analog_construct`, with §4.7.2 function bodies
 /// inlined into one).
-/// ponytail: add the flag when a §7 digital block is lowered here.
 pub fn isDigitalOnlySysFunc(name: []const u8) bool {
+    // ponytail: add the flag when a §7 digital block is lowered here.
     const digital_only = [_][]const u8{
         // Table 9-1 (§9.4.1) — radix variants and the $monitor mode switches.
         "$displayb",         "$displayh",         "$displayo",
@@ -785,3 +787,51 @@ pub fn isConnectModuleOnlySysFunc(name: []const u8) bool {
 /// §9.15 Table 9-28: the string parameter names `$simparam$str` "shall"
 /// support, and the only ones VerA knows.
 const simparam_str_names = [_][]const u8{ "analysis_name", "analysis_type", "cwd", "module", "instance", "path" };
+
+test isDigitalOnlySysFunc {
+    try std.testing.expect(isDigitalOnlySysFunc("$time")); // Table 9-7
+    try std.testing.expect(isDigitalOnlySysFunc("$async$and$array")); // Table 9-5, one token (§2.8.3)
+    try std.testing.expect(isDigitalOnlySysFunc("$displayb")); // Table 9-1
+    try std.testing.expect(!isDigitalOnlySysFunc("$abstime")); // Yes in both columns
+    try std.testing.expect(!isDigitalOnlySysFunc("$realtobits")); // §9.11 extends it to analog
+    try std.testing.expect(!isDigitalOnlySysFunc("$strobe"));
+}
+
+test isAnalogOnlySysFunc {
+    try std.testing.expect(isAnalogOnlySysFunc("$bound_step"));
+    try std.testing.expect(isAnalogOnlySysFunc("$fatal"));
+    try std.testing.expect(!isAnalogOnlySysFunc("$display"));
+}
+
+test isConnectModuleOnlySysFunc {
+    try std.testing.expect(isConnectModuleOnlySysFunc("$driver_count"));
+    try std.testing.expect(isConnectModuleOnlySysFunc("$receiver_count"));
+    try std.testing.expect(isConnectModuleOnlySysFunc("$driver_type"));
+    try std.testing.expect(!isConnectModuleOnlySysFunc("$port_connected"));
+}
+
+test simparamValueIn {
+    // No `timescale: §9.15's two source rows are unknown.
+    const d: Preprocessor.Directives = .{};
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "timeUnit"));
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "timePrecision"));
+    try std.testing.expectEqual(@as(?f64, 1e-12), simparamValueIn(&d, "gmin"));
+    try std.testing.expectEqual(@as(?f64, 27.0), simparamValueIn(&d, "tnom"));
+    try std.testing.expectEqual(@as(?f64, 1.0), simparamValueIn(&d, "shrink"));
+    // Table 9-27 applies "if they support the parameter"; VerA does not.
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(&d, "gdev"));
+}
+
+test simparamHostField {
+    try std.testing.expectEqualStrings("nom_temp__", simparamHostField("tnom").?);
+    try std.testing.expectEqualStrings("source_scale__", simparamHostField("sourceScaleFactor").?);
+    try std.testing.expect(simparamHostField("timeUnit") == null);
+    // Every row's field ends `__`, the suffix `naming.sanitize` never emits.
+    for (host_simparams) |h| try std.testing.expect(std.mem.endsWith(u8, h.field, "__"));
+}
+
+test simparamIsRuntime {
+    try std.testing.expect(simparamIsRuntime("iteration"));
+    try std.testing.expect(simparamIsRuntime("dt"));
+    try std.testing.expect(!simparamIsRuntime("gmin"));
+}
