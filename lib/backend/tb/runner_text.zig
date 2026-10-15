@@ -129,7 +129,7 @@ pub const runner_body =
     \\fn ix(comptime name: []const u8) usize {
     \\    const u = comptime std.meta.stringToEnum(D.U, name) orelse
     \\        @compileError(title ++ ": `//!` names unknown `" ++ name ++ "`, which this module does not have");
-    \\    return @intFromEnum(u);
+    \\    return @backingInt(u);
     \\}
     \\
     \\/// A `//! seed` or `//! limit` want: equal to the 12 significant digits a
@@ -496,7 +496,7 @@ pub const runner_body =
     \\    for (0..n_u) |i| {
     \\        var k: f64 = 0.0;
     \\        inline for (comptime contract.jacConst(D)) |e| {
-    \\            if (@intFromEnum(e.row) == i and @intFromEnum(e.col) == c and
+    \\            if (@backingInt(e.row) == i and @backingInt(e.col) == c and
     \\                contract.jacConstApplies(D, e, model, Dl.collapse_applied)) k = if (react) e.c else e.g;
     \\        }
     \\        const moved = r1[i].v - r0[i].v;
@@ -563,7 +563,7 @@ pub const runner_body =
     \\    var out = rows;
     \\    inline for (comptime contract.jacConst(D)) |e| {
     \\        if (contract.jacConstApplies(D, e, model, Dl.collapse_applied))
-    \\            out[@intFromEnum(e.row)].d[@intFromEnum(e.col)] = if (react) e.c else e.g;
+    \\            out[@backingInt(e.row)].d[@backingInt(e.col)] = if (react) e.c else e.g;
     \\    }
     \\    return out;
     \\}

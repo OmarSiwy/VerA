@@ -108,8 +108,11 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         const rest = std.mem.trim(u8, body[kw_end..], " \t");
 
         switch (kw) {
-            .param => try parseBindings(arena, rest, &params),
-            .bias => try parseBindings(arena, rest, &bias),
+            .param, .bias => {
+                // An empty list sets nothing: a forgotten operand, as `abstol`.
+                if (rest.len == 0) return error.BadSyntax;
+                try parseBindings(arena, rest, if (kw == .param) &params else &bias);
+            },
             .sweep, .wave, .psweep => {
                 const at = std.mem.findScalar(u8, rest, '=') orelse return error.BadSyntax;
                 // A parameter has no access-function spelling, so `psweep` takes the
@@ -126,7 +129,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                     .append(arena, entry);
             },
             .temp => d.temp = try number(rest),
-            .time => d.times = try parseNumbers(arena, rest),
+            .time => {
+                const times = try parseNumbers(arena, rest);
+                // `dt` is the step from the previous time, and `sim.mixed.run`
+                // requires the order. `!(b > a)` also refuses a NaN.
+                for (times[0 .. times.len - 1], times[1..]) |a, b| if (!(b > a)) return error.BadSyntax;
+                d.times = times;
+            },
             .solve => {
                 // A bare flag, and it composes with `bias`: `bias` still pins what
                 // it names, `solve` frees only the rest. So a fixture that needs one
@@ -145,6 +154,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 if (name.len != 0) d.analysis_name = try arena.dupe(u8, name);
             },
             .exit => {
+                // `parseInt` alone also takes `+1` and `1_0`; `checks` refuses both.
+                if (!digits(rest)) return error.BadNumber;
                 d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber;
                 exit_set = true;
             },
@@ -575,14 +586,25 @@ fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     }
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
         const inner = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
-        s = if ((inner.len != 0 and inner[0] == '<') or std.mem.findScalar(u8, inner, ',') != null)
-            try arena.print("flow({s})", .{inner})
-        else
-            try arena.print("flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
+        if (std.mem.findScalar(u8, inner, ',')) |comma| {
+            // Each terminal trimmed, as codegen spells `flow(a,b)`.
+            const a = std.mem.trim(u8, inner[0..comma], " \t");
+            const b = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+            if (a.len == 0 or b.len == 0) return error.BadSyntax;
+            s = try arena.print("flow({s},{s})", .{ a, b });
+        } else if (inner.len != 0 and inner[0] == '<') {
+            if (std.mem.trim(u8, inner, "<> \t").len == 0) return error.BadSyntax;
+            s = try arena.print("flow({s})", .{inner});
+        } else {
+            if (inner.len == 0) return error.BadSyntax;
+            s = try arena.print("flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
+        }
     }
     if (std.mem.startsWith(u8, s, "x[") and std.mem.endsWith(u8, s, "]")) s = s[2 .. s.len - 1];
     s = std.mem.trim(u8, s, " \t");
-    if (s.len == 0 or std.zig.isValidId(s)) return s;
+    // `V()`, `x[]`: an access function that names nothing.
+    if (s.len == 0) return error.BadSyntax;
+    if (std.zig.isValidId(s)) return s;
     // Worst case is three bytes out per byte in (`Z` plus two hex digits),
     // plus the one `Z` a Zig-reserved word picks up.
     const buf = try arena.alloc(u8, s.len * 3 + 1);

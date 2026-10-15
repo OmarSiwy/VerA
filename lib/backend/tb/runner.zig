@@ -193,8 +193,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\                // Every field is comptime, so the row is too, at any length.
             \\                const got = comptime std.fmt.comptimePrint("{s}({s},{s})#{?d}", .{
             \\                    @tagName(g.kind),
-            \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
-            \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+            \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.row)))),
+            \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.col)))),
             \\                    g.source,
             \\                });
             \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
@@ -230,7 +230,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // --- §3.6.1.2 the published tolerances ----------------------------------
     for (d.abstols) |b| try out.print(arena,
         \\    if (comptime std.meta.stringToEnum(D.U, "{0f}")) |u| {{
-        \\        const g = u_abstol[@intFromEnum(u)];
+        \\        const g = u_abstol[@backingInt(u)];
         \\        std.debug.print("abstol[{0f}] got={{e}} want={{e}} ok={{d}}\n", .{{ g, @as(f64, {1f}), @intFromBool(near(g, {1f})) }});
         \\    }} else std.debug.print("abstol[{0f}] got=none want={{e}} ok=0\n", .{{@as(f64, {1f})}});
         \\
@@ -245,7 +245,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try out.print(arena, "    @import(\"sim\").spice.deck.runTran(D, title, &model, &inst, {f}, {f});\n", .{ fmtF64(tr[0]), fmtF64(tr[1]) });
         } else {
             const on = d.onoise.?;
-            try out.print(arena, "    @import(\"sim\").spice.deck.runNoise(D, title, &model, &inst, @enumFromInt(ix(\"{f}\")), &.{{", .{std.zig.fmtString(on.name)});
+            try out.print(arena, "    @import(\"sim\").spice.deck.runNoise(D, title, &model, &inst, @fromBackingInt(@intCast(ix(\"{f}\"))), &.{{", .{std.zig.fmtString(on.name)});
             for (on.values, 0..) |f, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(f) });
             try out.appendSlice(arena, " });\n");
         }
@@ -647,7 +647,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     try deriveCard(&out, arena, "    ", "g_model", d.temp);
     try out.appendSlice(arena, "    g_inst = .{};\n");
     try out.appendSlice(arena,
-        \\    sim_state = .{ .kind = @enumFromInt(kind) };
+        \\    sim_state = .{ .kind = @fromBackingInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
         \\    if (comptime @hasField(D.Instance, "cwd")) g_inst.cwd = cwdPath();
@@ -1016,8 +1016,8 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
         \\                // `U`'s tag names ARE the spelling contract, same as the
         \\                // `//! noise` block and the same as `//! bias`.
         \\                const got = comptime std.fmt.comptimePrint("({s},{s})", .{
-        \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
-        \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+        \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.row)))),
+        \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.col)))),
         \\                });
         \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
         \\                std.debug.print("acstim[{d}] got={s} want={s} ok={d}\n", .{
@@ -1135,18 +1135,20 @@ fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error
         \\    // §9.17.3 the cold start a host writes into its limited image.
         \\    {
         \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(Val, &model, &inst, sim_state) else @splat(null);
-        \\        var want: [n_u]?f64 = @splat(null);
         \\
     );
+    // `//! seed none` writes no lane, and a `var` nothing writes is an
+    // AstGen error ("never mutated").
+    try out.print(arena, "        {s} want: [n_u]?f64 = @splat(null);\n", .{if (d.seeds.len == 0) "const" else "var"});
     for (d.seeds) |b| try out.print(arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
     try out.appendSlice(arena,
         \\        const writes: u64 = if (comptime @hasDecl(D, "limit_writes")) D.limit_writes else 0;
         \\        for (got, want, 0..) |g, w, i| {
         \\            if (g == null and w == null) continue;
         \\            const ok = g != null and w != null and near(g.?, w.?);
-        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @enumFromInt(i))), g, w, @intFromBool(ok) });
+        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @fromBackingInt(@intCast(i)))), g, w, @intFromBool(ok) });
         \\            if (g != null) std.debug.print("seed[{s}] in limit_writes ok={d}\n", .{
-        \\                @tagName(@as(D.U, @enumFromInt(i))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
+        \\                @tagName(@as(D.U, @fromBackingInt(@intCast(i)))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
         \\            });
         \\        }
         \\    }
@@ -1224,6 +1226,11 @@ fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
 fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     if (std.math.isNan(x)) return w.writeAll("std.math.nan(f64)");
     if (std.math.isInf(x)) return w.writeAll(if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)");
+    // `{d}` writes these as integer literals, which Zig reads as a
+    // comptime_int: `-0` loses its sign, and past 2^53 the shortest digits
+    // are not the double's own integer. `{e}` is a float literal.
+    if (x == 0 and std.math.signbit(x)) return w.writeAll("-0.0");
+    if (@abs(x) >= 0x1p53) return w.print("{e}", .{x});
     try w.print("{d}", .{x});
 }
 

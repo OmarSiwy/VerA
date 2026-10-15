@@ -267,7 +267,7 @@ fn batchRoot(arena: Allocator, n: usize) Allocator.Error![]const u8 {
         \\const std = @import("std");
         \\pub fn main(init: std.process.Init.Minimal) void {{
         \\    const argv = init.args.toSlice(std.heap.page_allocator) catch @panic("argv");
-        \\    const at = std.mem.lastIndexOf(u8, argv[0], "{s}") orelse @panic("argv[0] names no batch member");
+        \\    const at = std.mem.findLast(u8, argv[0], "{s}") orelse @panic("argv[0] names no batch member");
         \\    const i = std.fmt.parseInt(usize, argv[0][at + {d} ..], 10) catch @panic("argv[0] names no batch member");
         \\    switch (i) {{
         \\
