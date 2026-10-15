@@ -1970,11 +1970,7 @@ pub const State = struct {
         var k = buf.len;
         while (k != 0) {
             k -= 1;
-            var c: u8 = 0;
-            for (0..8) |b| {
-                const at: u32 = @intCast(k * 8 + b);
-                if (at < w and v.bit(at) == .one) c |= @as(u8, 1) << @intCast(b);
-            }
+            const c = fmt.byteAt(v, @intCast(k));
             if (c == 0 and n == 0) continue;
             buf[n] = c;
             n += 1;

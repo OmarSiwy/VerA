@@ -324,6 +324,7 @@ pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     const k = t.drivers[i].source.udp;
     const u = t.udps[k];
     var buf: [64]Int.Bit = undefined;
+    std.debug.assert(ins.len <= buf.len);
     const bits = buf[0..ins.len];
     // §8.1.6: a z input is read as x.
     for (ins, bits) |b, *o| o.* = if (b == .z) .x else int(b);
