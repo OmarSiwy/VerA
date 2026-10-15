@@ -272,3 +272,84 @@ test "tickAtOrBefore: a time within rounding of a tick is that tick" {
     try testing.expectEqual(@as(u64, 20), tickAtOrBefore(20e-9, 1e-9));
     try testing.expectEqual(@as(u64, 600000000), tickAtOrBefore(0.6000000006, 1e-9));
 }
+
+test "tickAtOrBefore: below zero and NaN are tick 0, past the last tick is the last" {
+    try testing.expectEqual(@as(u64, 0), tickAtOrBefore(-1e-9, 1e-9));
+    try testing.expectEqual(@as(u64, 0), tickAtOrBefore(-0.0, 1e-9));
+    try testing.expectEqual(@as(u64, 0), tickAtOrBefore(std.math.nan(f64), 1e-9));
+    // 3.999 ticks is more than rounding short of 4: tick 3.
+    try testing.expectEqual(@as(u64, 3), tickAtOrBefore(3.999e-9, 1e-9));
+    // 3e-9 / 1e-9 is 2.9999999999999996: within rounding of tick 3.
+    try testing.expectEqual(@as(u64, 3), tickAtOrBefore(3e-9, 1e-9));
+    // 1e300 s at 1 fs is past binary64 itself; 2^64 ticks is one past the last.
+    try testing.expectEqual(@as(u64, std.math.maxInt(u64)), tickAtOrBefore(1e300, 1e-15));
+    try testing.expectEqual(@as(u64, std.math.maxInt(u64)), tickAtOrBefore(std.math.inf(f64), 1e-15));
+    try testing.expectEqual(@as(u64, std.math.maxInt(u64)), tickAtOrBefore(0x1p64, 1));
+}
+
+test "every §19.8 operand round-trips through fromSeconds" {
+    var buf: [8]u8 = undefined;
+    var e: i32 = -15;
+    while (e <= 2) : (e += 1) {
+        // What the preprocessor folds `1e<e>` to: binary64's nearest value.
+        const seconds = try std.fmt.parseFloat(f64, try std.mem.print(&buf, "1e{d}", .{e}));
+        try testing.expectEqual(e, @as(i32, @backingInt(try Quantum.fromSeconds(seconds))));
+    }
+}
+
+test "Scale.init over every unit, precision and global operand" {
+    const all = std.enums.values(Quantum);
+    for (all) |u| for (all) |p| for (all) |g| {
+        const ue: i32 = @backingInt(u);
+        const pe: i32 = @backingInt(p);
+        const ge: i32 = @backingInt(g);
+        const got = Scale.init(u, p, g);
+        if (pe > ue) {
+            try testing.expectError(error.PrecisionTooCoarse, got);
+        } else if (ge > pe) {
+            try testing.expectError(error.GlobalPrecisionTooCoarse, got);
+        } else {
+            const scale = try got;
+            try testing.expectEqual(std.math.pow(u64, 10, @intCast(ue - pe)), scale.local_per_unit);
+            try testing.expectEqual(std.math.pow(u64, 10, @intCast(pe - ge)), scale.global_per_local);
+        }
+    };
+}
+
+test "unitsAt rounds half away from zero, up to the last tick" {
+    // 1000 ticks per ns and 10 ns per unit: 4.999 ns is 0 units, 5 ns is 1,
+    // 14.999 ns is 1 and 15 ns is 2 (§17.7.1, `realDelay`'s rounding).
+    const scale = try Scale.init(.ten_ns, .ns, .ps);
+    try testing.expectEqual(@as(u64, 0), scale.unitsAt(4_999));
+    try testing.expectEqual(@as(u64, 1), scale.unitsAt(5_000));
+    try testing.expectEqual(@as(u64, 1), scale.unitsAt(14_999));
+    try testing.expectEqual(@as(u64, 2), scale.unitsAt(15_000));
+    // Below the precision is dropped before the unrounded division too.
+    try testing.expectEqual(@as(f64, 1.5), scale.realAt(15_500));
+    // (2^64 - 1) ns is 1844674407370955161.5 units of 10 ns: away from zero.
+    const coarse = try Scale.init(.ten_ns, .ns, .ns);
+    try testing.expectEqual(@as(u64, 1_844_674_407_370_955_162), coarse.unitsAt(std.math.maxInt(u64)));
+    try testing.expectEqual(@as(u64, 1_844_674_407_370_955_161), coarse.unitsAt(std.math.maxInt(u64) - 5));
+}
+
+test "crosses: §5.10.3.1's directions over every sign pair" {
+    const levels = [_]f64{ -1, 0, 1 };
+    // The crossings, listed: a rise ends above zero from at or below it, a
+    // fall ends below zero from at or above it.
+    const rises = [_][2]f64{ .{ -1, 1 }, .{ 0, 1 } };
+    const falls = [_][2]f64{ .{ 1, -1 }, .{ 0, -1 } };
+    for (levels) |v0| for (levels) |v1| {
+        const rise = listedPair(&rises, v0, v1);
+        const fall = listedPair(&falls, v0, v1);
+        try testing.expectEqual(rise, crosses(1, v0, v1));
+        try testing.expectEqual(fall, crosses(-1, v0, v1));
+        try testing.expectEqual(rise or fall, crosses(0, v0, v1));
+        // Any other direction makes no event.
+        for ([_]f64{ 0.5, 2, -2, std.math.nan(f64) }) |dir| try testing.expect(!crosses(dir, v0, v1));
+    };
+}
+
+fn listedPair(rows: []const [2]f64, v0: f64, v1: f64) bool {
+    for (rows) |r| if (r[0] == v0 and r[1] == v1) return true;
+    return false;
+}
