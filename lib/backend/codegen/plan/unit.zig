@@ -592,7 +592,9 @@ fn boundInlineDepth(self: *UnitPlan) void {
         var d: u16 = 1;
         for (ops) |o0| {
             const o = @backingInt(self.an.rv(o0));
-            if (o >= Mir.Value.first_dynamic and self.inlined[o]) d = @max(d, self.inl_depth[o] + 1);
+            // Saturating: an arm-inlined chain may run past a u16, and every
+            // depth over `max_inline_depth` already decides the same way.
+            if (o >= Mir.Value.first_dynamic and self.inlined[o]) d = @max(d, self.inl_depth[o] +| 1);
         }
         if (d > max_inline_depth and self.eager_use[v] != 0) {
             self.inlined[v] = false;
