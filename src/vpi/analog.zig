@@ -134,7 +134,8 @@ pub fn failConverge() bool {
 const gpa = std.heap.smp_allocator;
 
 /// Binds the loaded library and reads its row table and system-function call
-/// names. Precondition: a design is open (`root.design`).
+/// names. Precondition: a design is open (`root.design`), and any earlier
+/// library was `detach`ed, whose tables this overwrites.
 pub fn attach(l: Lib) error{OutOfMemory}!void {
     lib = l;
     // The library names each call by its name and source token, and the
@@ -530,7 +531,7 @@ fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
 fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
-    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const at = std.mem.findScalar(u8, raw, 'e') orelse return null;
     const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
     const sign: u8 = if (exp < 0) '-' else '+';
     return std.mem.printSentinel(buf, "{s}e{c}{d:0>2}", .{ raw[0..at], sign, @abs(exp) }, 0) catch null;
@@ -546,12 +547,12 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
     }
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.5}", .{x}) catch return null;
-    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const at = std.mem.findScalar(u8, raw, 'e') orelse return null;
     const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
     if (exp < -4 or exp >= 6) {
         chose.* = vpiExpStrVal;
         var m: []const u8 = raw[0..at];
-        if (std.mem.indexOfScalar(u8, m, '.') != null) {
+        if (std.mem.findScalar(u8, m, '.') != null) {
             m = std.mem.trimEnd(u8, m, "0");
             m = std.mem.trimEnd(u8, m, ".");
         }
@@ -561,7 +562,7 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
     chose.* = vpiDecStrVal;
     const decimals: usize = @intCast(5 - exp);
     var fixed: []const u8 = std.mem.print(&tmp, "{d:.[1]}", .{ x, decimals }) catch return null;
-    if (std.mem.indexOfScalar(u8, fixed, '.') != null) {
+    if (std.mem.findScalar(u8, fixed, '.') != null) {
         fixed = std.mem.trimEnd(u8, fixed, "0");
         fixed = std.mem.trimEnd(u8, fixed, ".");
     }

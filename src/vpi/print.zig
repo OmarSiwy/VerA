@@ -277,15 +277,11 @@ fn channelFile(i: usize) error{NotOpen}!?Io.File {
     };
 }
 
-/// The body of `varargs.c`'s vpi_printf (mcd 1 | 4: stdout and the log),
-/// vpi_mcd_printf and their IEEE 1364-2005 §27.37/§27.27 `v` forms over a
-/// started `va_list`.
-///
-/// §12.28 "shall write to both stdout and the current product log file ...
-/// shall return the number of characters printed or EOF if an error occurred."
-/// VD-044's startup gate for `varargs.c`'s wrappers, which cannot name a
-/// routine to the comptime `root.refused`: 0 vpi_printf, 1 vpi_mcd_printf,
-/// 2 vpi_vprintf, 3 vpi_mcd_vprintf, 4 vpi_control (vpi_sim_control too).
+/// Returns 1 when the startup gate refuses the variadic routine `which`, with
+/// the error recorded, else 0 (VD-044). `varargs.c`'s wrappers cannot name a
+/// routine to the comptime `root.refused`, so they pass its number: 0
+/// vpi_printf, 1 vpi_mcd_printf, 2 vpi_vprintf, 3 vpi_mcd_vprintf, anything
+/// else vpi_control (vpi_sim_control too).
 export fn vera_vpi_refused(which: c_int) c_int {
     return @intFromBool(switch (which) {
         0 => root.refused("vpi_printf"),
@@ -296,6 +292,12 @@ export fn vera_vpi_refused(which: c_int) c_int {
     });
 }
 
+/// The body of `varargs.c`'s vpi_printf (mcd 1 | 4: stdout and the log),
+/// vpi_mcd_printf and their IEEE 1364-2005 §27.37/§27.27 `v` forms, over a
+/// `va_list` the C side started. Clears the §12.2 status first.
+///
+/// §12.28 "shall write to both stdout and the current product log file ...
+/// shall return the number of characters printed or EOF if an error occurred."
 /// §12.27: the return is the number of characters in ONE expansion, however
 /// many channels receive it: "the number of characters printed" is a property
 /// of the format and its arguments, and a count multiplied by the channel set
@@ -396,7 +398,7 @@ fn expand(w: *Io.Writer, fmt: []const u8, ap: *va.List) Io.Writer.Error!void {
     var i: usize = 0;
     while (i < fmt.len) {
         if (fmt[i] != '%') {
-            const end = std.mem.indexOfScalarPos(u8, fmt, i, '%') orelse fmt.len;
+            const end = std.mem.findScalarPos(u8, fmt, i, '%') orelse fmt.len;
             try w.writeAll(fmt[i..end]);
             i = end;
             continue;
@@ -650,7 +652,7 @@ const max_sci = 17;
 fn exponentAfterRounding(a: f64, p: usize) i32 {
     var buf: [64]u8 = undefined;
     const r = std.fmt.float.render(&buf, a, .{ .mode = .scientific, .precision = @min(p, max_sci) }) catch return 0;
-    const e = std.mem.indexOfScalar(u8, r, 'e') orelse return 0;
+    const e = std.mem.findScalar(u8, r, 'e') orelse return 0;
     return std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
 }
 
@@ -668,7 +670,7 @@ fn fixed(buf: []u8, a: f64, p: usize, alt: bool) Body {
 fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) Body {
     var tmp: [64]u8 = undefined;
     const r = std.fmt.float.render(&tmp, a, .{ .mode = .scientific, .precision = @min(p, max_sci) }) catch return .{ .head = "?" };
-    const e = std.mem.indexOfScalar(u8, r, 'e') orelse return .{ .head = "?" };
+    const e = std.mem.findScalar(u8, r, 'e') orelse return .{ .head = "?" };
     const x = std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
     const mant = r[0..e];
     const dot = if (p == 0 and alt) "." else "";
@@ -683,7 +685,7 @@ fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) Body {
 /// and the decimal-point character is removed if there is no fractional
 /// portion remaining", on a fixed result or an e-style mantissa.
 fn stripZeros(s: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    if (std.mem.findScalar(u8, s, '.') == null) return s;
     var end = s.len;
     while (end > 0 and s[end - 1] == '0') end -= 1;
     if (end > 0 and s[end - 1] == '.') end -= 1;
@@ -703,11 +705,12 @@ export fn vera_vpi_cformat(buf: [*]u8, len: usize, format: [*:0]const u8, ap: *v
     return w.end;
 }
 
-/// Calls `cformat` the way a C caller would: through a variadic, into a
-/// 512-byte buffer.
-/// `varargs.c`, for the tests below.
+/// `varargs.c`'s vpi_mcd_printf, for the tests below.
 extern fn vpi_mcd_printf(mcd: c_uint, format: [*:0]const u8, ...) c_int;
 
+/// Calls `cformat` the way a C caller would: through a variadic, into a
+/// 512-byte buffer (`varargs.c`'s `vera_vpi_format`). Returns the length
+/// written, 0 on failure.
 const formatted = @extern(*const fn (buf: [*]u8, format: [*:0]const u8, ...) callconv(.c) usize, .{ .name = "vera_vpi_format" });
 
 fn expectFormat(want: []const u8, got_len: usize, buf: []const u8) !void {
@@ -749,7 +752,7 @@ test "§12.24–§12.26: channel numbering, reopen, and the three predefined cha
     defer tmp.cleanup();
     // Channel files are created relative to the cwd, so the test names an
     // absolute path inside its own temporary directory.
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = path_buf[0..try tmp.dir.realPath(io(), &path_buf)];
     const a_path = try std.testing.allocator.printSentinel("{s}/a.log", .{dir}, 0);
     defer std.testing.allocator.free(a_path);

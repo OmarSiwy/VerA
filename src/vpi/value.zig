@@ -570,7 +570,7 @@ pub fn freeEvent(e: *Event) void {
     _ = live.remove(@intFromPtr(e));
 }
 
-/// Is the event still waiting to fire?
+/// Returns whether `e` is still waiting to fire; false with no run attached.
 pub fn scheduled(e: *const Event) bool {
     const r = run.attached() orelse return false;
     return r.scheduler.payloadOf(e.handle) != null;

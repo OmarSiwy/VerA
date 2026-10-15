@@ -336,6 +336,7 @@ pub const Relations = struct {
     /// Scope -> its `.port` rows.
     ports: Csr,
 
+    /// Frees the four indexes; `gpa` must be `Design.gpa`, which built them.
     pub fn deinit(r: *Relations, gpa: std.mem.Allocator) void {
         r.users.deinit(gpa);
         r.by_obj.deinit(gpa);

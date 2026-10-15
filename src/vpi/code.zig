@@ -1263,7 +1263,7 @@ pub const Builder = struct {
                 if (matches) return at;
             }
             if (path.len == 0) return none;
-            path = path[0 .. std.mem.lastIndexOfScalar(u8, path, '.') orelse 0];
+            path = path[0 .. std.mem.findScalarLast(u8, path, '.') orelse 0];
         }
     }
 
