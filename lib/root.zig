@@ -719,10 +719,11 @@ test "nesting has no bound: 100,000 levels lint and generate a device" {
     // the 8 MiB stack the pipeline had (it overflowed near 3,000). For if
     // and ?: chains `lint` is the depth linted and `device` the depth taken
     // through codegen: the prover's per-branch facts make a lint quadratic
-    // in their depth (7.6 s for 10,000 else-ifs in Debug), and codegen
-    // indents each nested `if`, so its text is quadratic too, until
-    // limits/elab lands; they run at 10,000 and 2,000, past the old 1,024
-    // cap. The parser takes all three at 100,000 (`parser/test.zig`).
+    // in their depth, in time and memory (Debug, 2026-10-15: 5,000 else-ifs
+    // 10 s and 2.6 GB, 10,000 `?:` 18 s and 7.2 GB), so they run at 5,000
+    // and 2,000, past the old 1,024 cap and inside a 4 GB test budget; the
+    // next test takes them through codegen at 5,000. The parser takes all
+    // three at 100,000 (`parser/test.zig`).
     const gpa = std.testing.allocator;
     for ([_]DeepCase{
         .{ .pre = "r = 1.0", .open = "", .mid = "", .close = " + 1.0", .post = ";" },
@@ -730,9 +731,9 @@ test "nesting has no bound: 100,000 levels lint and generate a device" {
         .{ .pre = "r = ", .open = "-", .mid = "1.0", .post = ";" },
         .{ .pre = "k = ", .open = "{", .mid = "1'b1", .close = "}", .post = "; r = k;" },
         .{ .open = "begin ", .mid = "r = 1.0;", .close = " end" },
-        .{ .pre = "r = ", .open = "V(p) > 1 ? 1 : ", .mid = "0", .post = ";", .lint = 10_000, .device = 2_000 },
-        .{ .open = "if (V(p) > 1) r = 1; else ", .mid = "r = 0;", .lint = 10_000, .device = 2_000 },
-        .{ .pre = "r = 0; ", .open = "if (V(p) > 1) ", .mid = "r = 1;", .lint = 10_000, .device = 2_000 },
+        .{ .pre = "r = ", .open = "V(p) > 1 ? 1 : ", .mid = "0", .post = ";", .lint = 5_000, .device = 2_000 },
+        .{ .open = "if (V(p) > 1) r = 1; else ", .mid = "r = 0;", .lint = 5_000, .device = 2_000 },
+        .{ .pre = "r = 0; ", .open = "if (V(p) > 1) ", .mid = "r = 1;", .lint = 5_000, .device = 2_000 },
     }) |c| {
         for ([_]usize{ c.lint, c.device }, [_]Target{ .lint, .build }) |n, target| {
             const src = try deepSource(gpa, n, c);
@@ -788,14 +789,14 @@ test "10,000 sequential ifs compile: SSA, the prover and codegen walk them on no
     }
 }
 
-test "100,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
-    // KNOWN: needs limits/frontend. The parser (E0241 at 1024 levels) and
-    // lowering's AST walks recurse per level on this branch; codegen does not
-    // (`cfg.emitTree`'s heap stack, `Gen.max_indent`). Live once the two
-    // branches merge.
-    if (true) return error.SkipZigTest;
+test "5,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
+    // The parser and lowering run on a `deep_stack`, codegen on heap stacks
+    // (`cfg.emitTree`, `Gen.max_indent`), so none of them bounds the depth.
+    // The prover does not either, but its facts are quadratic in an if/?:
+    // chain's depth (the test above): 100,000 levels would need terabytes,
+    // 5,000 fits a 4 GB test budget and is past the old 1,024 cap.
     const gpa = std.testing.allocator;
-    const n = 100_000;
+    const n = 5_000;
     for ([_]enum { ternary, else_if, nested }{ .ternary, .else_if, .nested }) |shape| {
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(gpa);
@@ -823,7 +824,7 @@ test "100,000-level ?: chain, else-if chain and nested ifs: device text is linea
         const text = try res.generateDevice();
         try std.testing.expect(!res.device_has_compile_error);
         // 1000 levels measured 0.6-1.6 KB a level; quadratic indentation
-        // alone would be 200 KB a level at this depth.
+        // alone would average 10 KB a level at this depth.
         try std.testing.expect(text.len < 4096 * n);
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |l| {
