@@ -230,6 +230,7 @@ pub inline fn blockInstsFlat(self: *const Analysis, bi: u32) []const Mir.Inst {
 fn buildCfg(self: *Analysis) Error!void {
     const a = self.arena;
     const nb = self.mir.blockCount();
+    std.debug.assert(nb > 0); // the entry block roots the DFS and the dominator tree
     self.nb = nb;
     self.i_op = self.mir.insts.items(.op);
     self.i_res = self.mir.insts.items(.result);

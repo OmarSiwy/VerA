@@ -188,8 +188,9 @@ pub fn fold(op: Opcode, args: []const Const) ?Const {
     return switch (table.get(op).fold) {
         .none => null,
         .identity => args[0],
-        .to_real => .{ .real = args[0].asReal() },
-        .to_int => .{ .int = std.math.lossyCast(i64, @round(args[0].asReal())) },
+        // §4.2.1.1/§4.2.1.2 convert a number; `asReal` would read a string as 0.
+        .to_real => if (args[0] == .str) null else .{ .real = args[0].asReal() },
+        .to_int => if (args[0] == .str) null else .{ .int = std.math.lossyCast(i64, @round(args[0].asReal())) },
         .unary => |k| wrapped(k.wrap, constfold.unary(k.f, as(k.int, args[0]) orelse return null)),
         .binary => |k| wrapped(k.wrap, constfold.binary(
             k.f,
