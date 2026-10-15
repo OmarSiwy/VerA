@@ -9,6 +9,7 @@ const Mir = @import("ir").Mir;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
 const strArg = @import("args.zig").strArg;
+const assert = std.debug.assert;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
@@ -18,7 +19,11 @@ const none_u32 = std.math.maxInt(u32);
 /// one `Decline` per site it does not. `plan/jobs.zig` queues the honoured
 /// sites' algorithm arguments into the core.
 pub const Limits = struct {
+    /// The honoured sites, in source order (reverse postorder of their blocks).
     calls: []LimitCall = &.{},
+    /// One per site not honoured, in the order found: first the sites refused
+    /// on their own, then the `fetlimds`/`pnjlimds` legs no ladder or rung
+    /// completes.
     declined: []Decline = &.{},
     /// `Lowered.num_ports`, what `writable` answers from.
     num_ports: usize = 0,
@@ -36,8 +41,10 @@ pub const Limits = struct {
     /// `limvds` site spans their second-named nodes (the channel), and both
     /// channel nodes are the device's own to correct. Null otherwise. Derived
     /// on demand, so the plan and the emitter cannot disagree about it.
+    /// Asserts `calls[i]` is a `fetlimds` site. O(calls).
     pub fn ladderOf(g: Limits, i: usize) ?Ladder {
         const me = g.calls[i];
+        assert(me.alg == .fetlimds);
         var partner: usize = undefined;
         var gate_legs: usize = 0;
         for (g.calls, 0..) |lc, j| {
@@ -62,9 +69,11 @@ pub const Limits = struct {
     /// exactly two `pnjlimds` sites share its first-named node (the bulk), and
     /// one `limvds` site spans their second-named nodes (the channel). Null
     /// otherwise, or when any of the three nets is ground. Derived on demand,
-    /// for `ladderOf`'s reason.
+    /// for `ladderOf`'s reason. Asserts `calls[i]` is a `pnjlimds` site.
+    /// O(calls).
     pub fn rungOf(g: Limits, i: usize) ?Rung {
         const me = g.calls[i];
+        assert(me.alg == .pnjlimds);
         var partner: usize = undefined;
         var legs: usize = 0;
         for (g.calls, 0..) |lc, j| {
@@ -86,7 +95,7 @@ pub const Limits = struct {
     }
 
     /// Is this `limvds` site the channel rung of some ladder? Then `emitLadder`
-    /// owns it and the flat list must not clamp it a second time.
+    /// owns it and the flat list must not clamp it a second time. O(calls²).
     pub fn limvdsClaimed(g: Limits, k: usize) bool {
         for (g.calls, 0..) |lc, i| {
             if (lc.alg != .fetlimds) continue;
@@ -438,6 +447,8 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
             }
             if (root == none_u32 or (u < lim.num_ports and root >= lim.num_ports)) root = u;
         }
+        // `lc0.hi` itself is in the component, so the scan found a root.
+        assert(root != none_u32);
         placed[root] = true;
         if (root != n) try steps.append(g.arena, .{ .node = root, .from = none_u32, .site = none_u32 });
         var grew = true;
@@ -579,8 +590,8 @@ test "an honoured pnjlim, and the declines that say why" {
     try std.testing.expectEqual(@as(u32, 2), lim.calls[0].lo);
     try std.testing.expect(lim.writable(2) and !lim.writable(0));
     try std.testing.expectEqual(@as(usize, 2), lim.declined.len);
-    try std.testing.expect(std.mem.indexOf(u8, lim.declined[0].msg, "§6.5 ports") != null);
-    try std.testing.expect(std.mem.indexOf(u8, lim.declined[1].msg, "too few arguments") != null);
+    try std.testing.expect(std.mem.find(u8, lim.declined[0].msg, "§6.5 ports") != null);
+    try std.testing.expect(std.mem.find(u8, lim.declined[1].msg, "too few arguments") != null);
 }
 
 test "the seed tree: an explicit seed opts in, a loop edge is dropped, ground roots its component" {
@@ -606,12 +617,176 @@ test "the seed tree: an explicit seed opts in, a loop edge is dropped, ground ro
     const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "p", "a", "b", "c" });
     try std.testing.expect(lim.seed_tree);
     try std.testing.expectEqual(@as(usize, 1), lim.seed_dropped.len);
-    try std.testing.expect(std.mem.indexOf(u8, lim.seed_dropped[0].msg, "closes a loop") != null);
+    try std.testing.expect(std.mem.find(u8, lim.seed_dropped[0].msg, "closes a loop") != null);
     // Ground is the root and writes nothing; c hangs off it, b off c, a off b.
     const want = [_]SeedStep{
         .{ .node = 3, .from = none_u32, .site = 3 },
         .{ .node = 2, .from = 3, .site = 1 },
         .{ .node = 1, .from = 2, .site = 0 },
+    };
+    try std.testing.expectEqualSlices(SeedStep, &want, lim.seed_steps);
+}
+
+test "each refusal names its reason: no algorithm, an unknown one, a flow probe, a guard, an arity, a non-real argument" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b", "flow(a,b)" });
+    defer f.deinit();
+    const a = f.alloc();
+    f.lowered.nodes.items(.kind)[2] = .{ .branch_flow = 0 };
+    const vab = try f.mir.emit(a, .entry, .fsub, &.{ try f.probe(0), try f.probe(1) });
+    const pnj = try f.mir.addStrConst(a, "pnjlim");
+    const vt = try f.mir.addFloatConst(a, 0.025);
+    const vc = try f.mir.addFloatConst(a, 0.6);
+    // 0: $limit(V(a,b)) — §4.5.15 leaves the choice to VerA, which picks none.
+    _ = try f.call("$limit", &.{vab});
+    // 1: an identifier VerA does not implement.
+    _ = try f.call("$limit", &.{ vab, try f.mir.addStrConst(a, "foolim") });
+    // 2: §5.4.2 I(a,b) is a current, not a potential to clamp.
+    _ = try f.call("$limit", &.{ try f.probe(2), pnj, vt, vc });
+    // 3: pnjlim takes vte, vcrit, sign, seed: seven arguments is too many.
+    _ = try f.call("$limit", &.{ vab, pnj, vt, vc, .f_one, .f_zero, .f_one });
+    // 4: an integer vte would land in the core as an i64.
+    _ = try f.call("$limit", &.{ vab, pnj, try f.mir.addIntConst(a, 3), vc });
+    // 5: a string sign.
+    _ = try f.call("$limit", &.{ vab, pnj, vt, vc, try f.mir.addStrConst(a, "n") });
+    // 6: under an `if`: entry branches on V(a,b) > 0 into `then`.
+    const then_b = try f.mir.addBlock(a);
+    const join = try f.mir.addBlock(a);
+    _ = try f.mir.emitBranch(a, .entry, try f.mir.emit(a, .entry, .fgt, &.{ vab, .f_zero }), then_b, join);
+    _ = try f.mir.emitCall(a, then_b, try f.mir.internString(a, "$limit"), &.{ vab, pnj, vt, vc });
+    _ = try f.mir.emitJump(a, then_b, join);
+    const an = try f.analysis();
+
+    const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "a", "b", "flow_a_b_" });
+    try std.testing.expectEqual(@as(usize, 0), lim.calls.len);
+    const want = [_][]const u8{
+        "names no algorithm, and VerA's own choice is no limiting",
+        "names no algorithm VerA implements",
+        "not a §4.4 potential probe",
+        "too many arguments",
+        "not real-valued",
+        "not real-valued",
+        "under an `if`",
+    };
+    try std.testing.expectEqual(want.len, lim.declined.len);
+    for (want, lim.declined) |w, d| try std.testing.expect(std.mem.find(u8, d.msg, w) != null);
+    // The unknown-name help lists every spelling, in declaration order.
+    try std.testing.expectEqualStrings("name one of pnjlim, fetlim, limvds, fetlimds, pnjlimds, steplim", lim.declined[1].help.?);
+    // A refused site's call spells its probe pair back.
+    try std.testing.expect(std.mem.startsWith(u8, lim.declined[3].msg, "$limit(V(a,b), \"pnjlim\")"));
+}
+
+test "a fetlimds mode ladder: both gate legs and the channel, oriented by the limvds probe" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "g", "d", "s" });
+    defer f.deinit();
+    const a = f.alloc();
+    const g = try f.probe(0);
+    const d = try f.probe(1);
+    const s = try f.probe(2);
+    const fet = try f.mir.addStrConst(a, "fetlimds");
+    const vto = try f.mir.addFloatConst(a, 0.7);
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ g, s }), fet, vto }); // vgs
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ g, d }), fet, vto }); // vgd
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ d, s }), try f.mir.addStrConst(a, "limvds") });
+    const an = try f.analysis();
+
+    const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "g", "d", "s" });
+    try std.testing.expectEqual(@as(usize, 3), lim.calls.len);
+    try std.testing.expectEqual(@as(usize, 0), lim.declined.len);
+    // limvds reads V(d,s): the leg landing on its `lo` (s) is the source leg.
+    const want: Ladder = .{ .gs = 0, .gd = 1, .ds = 2 };
+    try std.testing.expectEqual(want, lim.ladderOf(0).?);
+    try std.testing.expectEqual(want, lim.ladderOf(1).?);
+    try std.testing.expect(lim.limvdsClaimed(2));
+    // No seed and no pnjlimds: the per-junction bias, no tree.
+    try std.testing.expect(!lim.seed_tree);
+}
+
+test "a dangling fetlimds leg is declined and dropped; a port channel completes no ladder" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "d", "g", "s" }); // d is a port
+    defer f.deinit();
+    f.lowered.num_ports = 1;
+    const a = f.alloc();
+    const g = try f.probe(1);
+    const d = try f.probe(0);
+    const s = try f.probe(2);
+    const fet = try f.mir.addStrConst(a, "fetlimds");
+    const vto = try f.mir.addFloatConst(a, 0.7);
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ g, s }), fet, vto });
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ g, d }), fet, vto });
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ d, s }), try f.mir.addStrConst(a, "limvds") });
+    const an = try f.analysis();
+
+    const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "d", "g", "s" });
+    // Both legs declined (the drain is a port the host masks); limvds stays,
+    // and nothing claims it.
+    try std.testing.expectEqual(@as(usize, 1), lim.calls.len);
+    try std.testing.expectEqual(Alg.limvds, lim.calls[0].alg);
+    try std.testing.expect(!lim.limvdsClaimed(0));
+    try std.testing.expectEqual(@as(usize, 2), lim.declined.len);
+    for (lim.declined) |dc| try std.testing.expect(std.mem.find(u8, dc.msg, "no complete mode ladder") != null);
+}
+
+test "a pnjlimds bulk rung seeds the source-side leg; a seed on the derived leg is dropped" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "d", "g", "s", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    const d = try f.probe(0);
+    const s = try f.probe(2);
+    const b = try f.probe(3);
+    const pds = try f.mir.addStrConst(a, "pnjlimds");
+    const vt = try f.mir.addFloatConst(a, 0.025);
+    const vc = try f.mir.addFloatConst(a, 0.6);
+    const seed = try f.mir.addFloatConst(a, -1.0);
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ b, s }), pds, vt, vc }); // vbs
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ b, d }), pds, vt, vc, .f_one, seed }); // vbd
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ d, s }), try f.mir.addStrConst(a, "limvds") });
+    const an = try f.analysis();
+
+    const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "d", "g", "s", "b" });
+    try std.testing.expectEqual(@as(usize, 3), lim.calls.len);
+    try std.testing.expectEqual(Rung{ .bs = 0, .bd = 1, .ds = 2 }, lim.rungOf(0).?);
+    try std.testing.expect(lim.seed_tree);
+    try std.testing.expectEqual(@as(usize, 1), lim.seed_dropped.len);
+    try std.testing.expect(std.mem.find(u8, lim.seed_dropped[0].msg, "derived through vds") != null);
+    // The vbs leg's default vcrit is the one edge: s (the lower net, no port,
+    // no ground) is the root, b hangs off it.
+    const want = [_]SeedStep{
+        .{ .node = 2, .from = none_u32, .site = none_u32 },
+        .{ .node = 3, .from = 2, .site = 0 },
+    };
+    try std.testing.expectEqualSlices(SeedStep, &want, lim.seed_steps);
+}
+
+test "on one net pair an explicit seed displaces a default one, and a second explicit seed is dropped" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "p", "a", "b" });
+    defer f.deinit();
+    f.lowered.num_ports = 1;
+    const a = f.alloc();
+    const pa = try f.probe(1);
+    const pb = try f.probe(2);
+    const pnj = try f.mir.addStrConst(a, "pnjlim");
+    const vt = try f.mir.addFloatConst(a, 0.025);
+    const vc = try f.mir.addFloatConst(a, 0.6);
+    const s1 = try f.mir.addFloatConst(a, 0.1);
+    const s2 = try f.mir.addFloatConst(a, 0.2);
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pb }), pnj, vt, vc }); // default
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pb }), pnj, vt, vc, .f_one, s1 }); // explicit
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pb, pa }), pnj, vt, vc, .f_one, s2 }); // reversed pair, explicit
+    const an = try f.analysis();
+
+    const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "p", "a", "b" });
+    try std.testing.expectEqual(@as(usize, 3), lim.calls.len);
+    try std.testing.expectEqual(@as(usize, 1), lim.seed_dropped.len);
+    try std.testing.expect(std.mem.find(u8, lim.seed_dropped[0].msg, "already seeded") != null);
+    // Site 1 is the edge; a is the lowest net of {a, b}.
+    const want = [_]SeedStep{
+        .{ .node = 1, .from = none_u32, .site = none_u32 },
+        .{ .node = 2, .from = 1, .site = 1 },
     };
     try std.testing.expectEqualSlices(SeedStep, &want, lim.seed_steps);
 }

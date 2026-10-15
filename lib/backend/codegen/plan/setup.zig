@@ -34,7 +34,8 @@ pub const Sinv = struct {
     moved: []Mir.Value = &.{},
     moved_off: []u32 = &.{},
 
-    /// The values `setup` computes at the end of block `b`.
+    /// The values `setup` computes at the end of block `b`, ascending.
+    /// Asserts `b` is a block of the analysis `plan` ran over.
     pub fn movedTo(s: Sinv, b: u32) []const Mir.Value {
         if (s.moved_off.len == 0) return &.{};
         return s.moved[s.moved_off[b]..s.moved_off[b + 1]];
@@ -422,10 +423,13 @@ pub fn plan(in: Input) Error!Sinv {
     @memset(r.moved_off, 0);
     var n: u32 = 0;
     for (Mir.Value.first_dynamic..in.an.nv) |i| {
-        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        const v: Mir.Value = @fromBackingInt(@intCast(i));
         const b = in.an.def_block[i];
         if (!r.val[i] or b == none_u32 or r.blk[b] or in.an.rv(v) != v) continue;
         r.home[i] = s.homeOf(b);
+        // `Scan.rule` admits a value outside a placeable block only through
+        // `speculable`, which requires a home.
+        assert(r.home[i] != none_u32);
         r.moved_off[r.home[i] + 1] += 1;
         n += 1;
     }
@@ -433,7 +437,7 @@ pub fn plan(in: Input) Error!Sinv {
     r.moved = try a.alloc(Mir.Value, n);
     const fill = try a.dupe(u32, r.moved_off[0..in.an.nb]);
     for (r.home, 0..) |h, i| if (h != none_u32) {
-        r.moved[fill[h]] = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        r.moved[fill[h]] = @fromBackingInt(@intCast(i));
         fill[h] += 1;
     };
     return r;
@@ -504,7 +508,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
         }
         for (Mir.Value.first_dynamic..nv) |i| {
             if (!s.val[i]) continue;
-            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+            const v: Mir.Value = @fromBackingInt(@intCast(i));
             if (in.an.rv(v) != v) {
                 // An alias carries its target's answer.
                 if (!s.sv(v)) {
@@ -590,7 +594,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
         changed = false;
         for (Mir.Value.first_dynamic..nv) |i| {
             if (vary[i]) continue;
-            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+            const v: Mir.Value = @fromBackingInt(@intCast(i));
             const r = in.an.rv(v);
             const now = if (r != v) varies(in, vary, r) else tpRule(in, vary, inside, cds, v);
             if (!now) continue;
@@ -605,7 +609,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
     // An alias is the value it names, wherever that is: a pass-through phi
     // the SSA builder placed inside and then folded away reads nothing here.
     for (Mir.Value.first_dynamic..nv) |i| {
-        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        const v: Mir.Value = @fromBackingInt(@intCast(i));
         const b = in.an.def_block[i];
         if (vary[i] and in.an.rv(v) == v and b != none_u32 and inside[b]) return v;
     }
@@ -682,7 +686,7 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
     const s = try solve(in, false);
     var merges: std.ArrayList(Mir.Inst) = .empty;
     for (0..an.nb) |bi| {
-        var it = mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(bi)))));
+        var it = mir.blockInsts(@fromBackingInt(@intCast(bi)));
         while (it.next()) |inst| switch (mir.instOp(inst)) {
             .phi, .select => try merges.append(arena, inst),
             else => {}, // else: only a phi or a select merges a held value with a write
@@ -696,6 +700,9 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
             kept += 1;
             continue;
         }
+        // `.unless_invariant` is a scalar's reason only: `holdArray` rows
+        // are `.event`, so no `mem_arrays` row is left pointing here.
+        assert(h.array == none_u32);
         const seed = an.rv(h.seed);
         const inst = mir.valueDef(seed).inst_result;
         const b = an.def_block[@backingInt(seed)];
@@ -818,4 +825,97 @@ test "a pure op of parameters under a bias-dependent branch is invariant and com
     try std.testing.expect(candidate(in, s.val, p));
     // An integer divide by zero traps, so it stays under its guard.
     try std.testing.expect(!s.val[@backingInt(d)]);
+}
+
+/// entry: if (V(a) > 0) then else; then, else: join. Blocks 0..3.
+fn diamond(f: *Fixture) !struct { then_b: Mir.Block, else_b: Mir.Block, join: Mir.Block, c: Mir.Value } {
+    const a = f.alloc();
+    const then_b = try f.mir.addBlock(a);
+    const else_b = try f.mir.addBlock(a);
+    const join = try f.mir.addBlock(a);
+    const c = try f.mir.emit(a, .entry, .fgt, &.{ try f.probe(0), .f_zero });
+    _ = try f.mir.emitBranch(a, .entry, c, then_b, else_b);
+    _ = try f.mir.emitJump(a, then_b, join);
+    _ = try f.mir.emitJump(a, else_b, join);
+    return .{ .then_b = then_b, .else_b = else_b, .join = join, .c = c };
+}
+
+test "postDominators and controlDeps of a diamond: each arm hangs on one edge of the branch" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    _ = try diamond(&f);
+    const an = try f.analysis();
+    const in: Input = .{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+
+    // Every block reaches join (3); join reaches the virtual exit (4).
+    const ipdom = try postDominators(in);
+    try std.testing.expectEqualSlices(u32, &.{ 3, 3, 3, 4, 4 }, ipdom);
+    const cds = try controlDeps(in, ipdom);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 1, 2, 2 }, cds.off);
+    try std.testing.expectEqualSlices(Cd, &.{ .{ .a = 0, .then = true }, .{ .a = 0, .then = false } }, cds.cd);
+}
+
+test "postDominators: a loop with no exit flows to the virtual exit" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const l = try f.mir.addBlock(a);
+    _ = try f.mir.emitJump(a, .entry, l);
+    _ = try f.mir.emitJump(a, l, l);
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    // No block returns, so both are given an edge to the exit (2).
+    try std.testing.expectEqualSlices(u32, &.{ 2, 2, 2 }, try postDominators(in));
+}
+
+test "solve invariance: the call allowlist, a branch on a probe, and what setup may hand eval" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    try f.lowered.params.append(a, .{ .name = "g", .ty = .real, .default = .f_one });
+    const g = try f.mir.addParamRef(a, 0);
+    // In entry, before its branch: §9.15 a homotopy knob is fixed within a
+    // solve, the time is not.
+    const gmin = try f.call("$simparam", &.{try f.mir.addStrConst(a, "gmin")});
+    const t = try f.call("$abstime", &.{});
+    const root = try f.call("$sqrt", &.{g});
+    const lit = try f.mir.emit(a, .entry, .fadd, &.{ .f_one, .f_one }); // folds
+    const d = try diamond(&f);
+    // A join on a probe-steered branch: its phi moves with the iterate.
+    const sel = try f.mir.emitPhi(a, d.join, &.{ .{ .block = d.then_b, .value = g }, .{ .block = d.else_b, .value = .f_zero } });
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+
+    const s = try plan(in);
+    try std.testing.expect(s.val[@backingInt(gmin)]);
+    try std.testing.expect(!s.val[@backingInt(t)]);
+    try std.testing.expect(s.val[@backingInt(root)]);
+    // The arms depend on a per-eval branch; the join does not.
+    try std.testing.expect(!s.blk[@backingInt(d.then_b)]);
+    try std.testing.expect(!s.blk[@backingInt(d.else_b)]);
+    try std.testing.expect(s.blk[@backingInt(d.join)]);
+    try std.testing.expect(!s.val[@backingInt(sel)]);
+    // Invariant but a literal the renderer folds: not a setup root.
+    try std.testing.expect(s.val[@backingInt(lit)]);
+    try std.testing.expect(!candidate(in, s.val, lit));
+    try std.testing.expect(candidate(in, s.val, root));
+    // Nothing moved into block 0's tail here.
+    try std.testing.expectEqual(@as(usize, 0), s.movedTo(0).len);
+}
+
+test "pruneHeld leaves a module with no card-conditional retention untouched" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const seed = try f.call("$held_real", &.{.zero});
+    try f.lowered.held_vars.append(a, .{ .name = "x", .ty = .real, .init = .f_zero, .seed = seed, .final = seed, .why = .retained });
+    const n_insts = f.mir.insts.len;
+    try pruneHeld(a, &f.mir, &f.lowered);
+    try std.testing.expectEqual(@as(usize, 1), f.lowered.held_vars.items.len);
+    try std.testing.expectEqual(n_insts, f.mir.insts.len);
+    try std.testing.expect(!f.mir.hasAlias(seed));
 }

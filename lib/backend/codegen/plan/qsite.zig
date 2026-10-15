@@ -10,6 +10,7 @@ const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
+const assert = std.debug.assert;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
@@ -43,6 +44,8 @@ const Term = struct { sign: f64, contrib: u32 };
 ///   - a §5.4.3 port probe: minus the finished port row.
 /// A site whose charge is constant or solve-invariant has dq/dt = 0 and gets
 /// no slot; nor does a site that stamps no row (a ground-ground branch).
+/// `branch_u` is `Names.branch_u`, one entry per contribution; `sinv` is
+/// `Sinv.val`. O(rows · terms · sites); a module has tens of each.
 pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []const bool) Error!QSites {
     const a = in.arena;
     const lw = in.lowered;
@@ -153,6 +156,15 @@ pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []
             return if (x.row != y.row) x.row < y.row else x.slot < y.slot;
         }
     }.lt);
+    // Exit invariant `QSites.stamps` states: strictly ascending (row, slot),
+    // so no pair twice, and no zero sign.
+    for (out.items, 0..) |o, k| {
+        assert(o.sign != 0);
+        if (k != 0) {
+            const p = out.items[k - 1];
+            assert(p.row < o.row or (p.row == o.row and p.slot < o.slot));
+        }
+    }
     return .{ .sites = sites.items, .stamps = out.items };
 }
 
@@ -196,5 +208,48 @@ test "two charges on one pin are two slots; a flow contribution stamps +hi and �
         .{ .slot = 1, .row = 0, .sign = 1 },
         .{ .slot = 0, .row = 1, .sign = -1 },
         .{ .slot = 1, .row = 2, .sign = -1 },
+    }, q.stamps);
+}
+
+test "a flux on its branch row, a ground end, a port probe's mirror, and the charges that get no slot" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    // a, b; `ib` the branch current of V(a,b); `ip` the §5.4.3 probe of port a.
+    try f.init(&.{ "a", "b", "ib", "ip" });
+    defer f.deinit();
+    const a = f.alloc();
+    f.lowered.num_ports = 1;
+    const va = try f.probe(0);
+    const vb = try f.probe(1);
+    const phi_l = try f.mir.emit(a, .entry, .fmul, &.{ va, vb }); // a flux
+    const qa = try f.mir.emit(a, .entry, .fmul, &.{ va, va }); // a charge to ground
+    const qinv = try f.mir.emit(a, .entry, .fmul, &.{ try f.mir.addParamRef(a, 0), .f_two }); // card-only
+    const qlit = try f.mir.addFloatConst(a, 1e-12); // a literal
+    try f.lowered.params.append(a, .{ .name = "c0", .ty = .real, .default = .f_one });
+    // 0: V(a,b) <+ ddt(phi), unconditional: the flux stamps −1 on row ib.
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 0, .lo = 1, .wrote_val = .f_one, .react_val = phi_l });
+    // 1: I(a) <+ ddt(qa) + ddt(qinv) + ddt(qlit): only qa moves in time.
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = Lower.ground, .wrote_val = .f_one });
+    try f.lowered.charge_sites.append(a, .{ .contrib = 0, .sign = 1, .final = phi_l });
+    try f.lowered.charge_sites.append(a, .{ .contrib = 1, .sign = 1, .final = qa });
+    try f.lowered.charge_sites.append(a, .{ .contrib = 1, .sign = 1, .final = qinv });
+    try f.lowered.charge_sites.append(a, .{ .contrib = 1, .sign = 1, .final = qlit });
+    try f.lowered.port_probes.append(a, .{ .port = 0, .u = 3 });
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    // `plan/setup.zig` would find qinv solve-invariant; stated here directly.
+    const sinv = try a.alloc(bool, an.nv);
+    @memset(sinv, false);
+    sinv[@backingInt(qinv)] = true;
+
+    const q = try plan(in, &.{ 2, none_u32 }, .{}, sinv);
+    // Sites 2 (invariant) and 3 (literal) have dq/dt = 0.
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, q.sites);
+    try std.testing.expectEqualSlices(Stamp, &.{
+        // Row a: qa from I(a) (+1); ground has no row.
+        .{ .slot = 1, .row = 0, .sign = 1 },
+        // Row ib: the flux, −1 (v − dphi/dt).
+        .{ .slot = 0, .row = 2, .sign = -1 },
+        // Row ip: minus the finished port row a.
+        .{ .slot = 1, .row = 3, .sign = -1 },
     }, q.stamps);
 }

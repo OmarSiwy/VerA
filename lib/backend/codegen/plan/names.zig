@@ -15,6 +15,8 @@ const none_u32 = std.math.maxInt(u32);
 
 /// Every identifier the device declares, and the unknowns behind them.
 pub const Names = struct {
+    /// Every source unit in the canonical order `naming.enumerateUnits`
+    /// fixes: contributions, then operators.
     units: []naming.Unit = &.{},
     /// Declaration name per `units` entry.
     unit_names: [][]const u8 = &.{},
@@ -32,16 +34,21 @@ pub const Names = struct {
     a_names: [][]const u8 = &.{},
     /// §5.10 `Instance` field name per `Lowered.held_vars` entry.
     held_names: [][]const u8 = &.{},
-    /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
+    /// Per `Lowered.params` entry: the parameter gains a `__given` flag,
+    /// because §9.19 `$param_given` queries it or because it is a `derive()`
+    /// target (a card parameter whose default does not fold).
     p_given: []bool = &.{},
 
-    /// The operator `call` unit `unit` was enumerated from (`naming` records it).
+    /// The operator `call` unit `unit` was enumerated from (`naming` records
+    /// it), or null for a contribution unit. Asserts `unit` indexes `units`.
     pub fn opInstOf(self: *const Names, unit: u32) ?Mir.Inst {
         const inst = self.units[unit].inst;
         return if (inst == .none) null else inst;
     }
 
-    /// Call arguments of the operator that owns unit `i` (empty if it has none).
+    /// Call arguments of the operator that owns unit `i` (empty for a
+    /// contribution unit). The slice borrows `mir.extra` and is invalidated
+    /// by any later append to it (`Mir.instData`).
     pub fn opArgs(self: *const Names, mir: *const Mir, i: usize) []const Mir.Value {
         const inst = self.opInstOf(@intCast(i)) orelse return &.{};
         return mir.instData(inst).call.args;
@@ -109,19 +116,19 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
 
     self.u_names = try a.alloc([]const u8, self.n_u);
     for (lowered.nodes.items(.name), 0..) |n, i| {
-        self.u_names[i] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
+        self.u_names[i] = try dupeSanitized(a, &buf, n);
     }
     for (extra.items, 0..) |n, k| {
-        self.u_names[base + k] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
+        self.u_names[base + k] = try dupeSanitized(a, &buf, n);
     }
 
     self.p_names = try a.alloc([]const u8, lowered.params.items.len);
     for (lowered.params.items, 0..) |p, i| {
-        self.p_names[i] = try a.dupe(u8, naming.sanitize(&buf, p.name) catch return error.OutOfMemory);
+        self.p_names[i] = try dupeSanitized(a, &buf, p.name);
     }
     self.a_names = try a.alloc([]const u8, lowered.aliases.items.len);
     for (lowered.aliases.items, 0..) |al, i| {
-        self.a_names[i] = try a.dupe(u8, naming.sanitize(&buf, al.name) catch return error.OutOfMemory);
+        self.a_names[i] = try dupeSanitized(a, &buf, al.name);
     }
 
     // §5.10 held variables. Same `<module>__<role>__<target>` grammar
@@ -165,15 +172,23 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     return self;
 }
 
+// `name` sanitized into `buf`, then copied to `a`. `sanitize` fails only when
+// `buf` is too small, which is a name too long, never an allocation failure:
+// every source name goes through here so none can report it as one.
+fn dupeSanitized(a: std.mem.Allocator, buf: []u8, name: []const u8) Error![]const u8 {
+    return a.dupe(u8, naming.sanitize(buf, name) catch return error.NameTooLong);
+}
+
 /// Is unknown `u` already the current of a source from a contribution
 /// before `i`? Two sources in one branch need two currents.
 fn uIsDriven(branch_u: []const u32, u: u32, i: usize) bool {
     // ponytail: stdlib scans the same bounded prefix; no membership table needed.
-    return std.mem.indexOfScalar(u32, branch_u[0..i], u) != null;
+    return std.mem.findScalar(u32, branch_u[0..i], u) != null;
 }
 
 /// `nm`, or `nm#k` for the first `k` that no unknown claims yet. `sanitize`
-/// escapes `#`, so the emitted U member stays a legal, injective name.
+/// escapes `#`, so the emitted U member stays a legal, injective name. O(k ·
+/// unknowns); `k` is the number of existing spellings it collides with.
 fn freshUName(a: std.mem.Allocator, lowered: *const Lowered, nm: []const u8, extra: []const []const u8) Error![]const u8 {
     var name = nm;
     var k: u32 = 1;
@@ -183,6 +198,7 @@ fn freshUName(a: std.mem.Allocator, lowered: *const Lowered, nm: []const u8, ext
     return name;
 }
 
+/// Does any `nodes` row or already-appended unknown spell `nm`?
 fn uNameTaken(lowered: *const Lowered, nm: []const u8, extra: []const []const u8) bool {
     for (lowered.nodes.items(.name)) |n| {
         if (std.mem.eql(u8, n, nm)) return true;
@@ -216,4 +232,78 @@ test "a potential source gets a branch current; two on one branch get two" {
     try std.testing.expect(!std.mem.eql(u8, n.u_names[2], n.u_names[3]));
     try std.testing.expectEqual(@as(usize, 4), n.unit_names.len);
     try std.testing.expectEqualStrings("mymod__analog__I_a_b", n.unit_names[0]);
+}
+
+test "a probed branch's flow slot is reused; an indirect source gets one too; a spelling clash takes #k" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    // Net 2 is a plain net whose name is the spelling `flow(a,b)` (§2.8.1
+    // escaped identifiers make that legal); net 3 is the §5.4.2 slot lowering
+    // minted for a probe of I(b,a).
+    try f.init(&.{ "a", "b", "flow(a,b)", "flow(b,a)" });
+    defer f.deinit();
+    const a = f.alloc();
+    f.lowered.nodes.items(.kind)[3] = .{ .branch_flow = 1 };
+    try f.lowered.flow_unknowns.put(a, .{ .hi = 1, .lo = 0 }, 3);
+    // V(b,a) <+ …: lowering's slot 3 is its current; no new unknown.
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = 0 });
+    // §5.6.7 V(a,b) : … == …: an indirect source on (a,b) has no slot, and
+    // the spelling `flow(a,b)` is taken by net 2, so it becomes `flow(a,b)#1`.
+    try f.lowered.contributions.append(a, .{ .access = .potential, .kind = .indirect, .hi = 0, .lo = 1 });
+    const an = try f.analysis();
+
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 2);
+    try std.testing.expectEqualSlices(u32, &.{ 3, 4 }, n.branch_u);
+    try std.testing.expectEqual(@as(u32, 5), n.n_u);
+    // `sanitize` is injective, so distinct raw spellings stay distinct.
+    for (n.u_names, 0..) |x, i| for (n.u_names[i + 1 ..]) |y| {
+        try std.testing.expect(!std.mem.eql(u8, x, y));
+    };
+}
+
+test "held names, given flags: §9.19 queries and derive() targets" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    // p0 folds; p1's default reads p0 (a derive() target); p2 is local; p3 a
+    // string; p4 folds but the model asks $param_given(p4).
+    const p0 = try f.mir.addParamRef(a, 0);
+    try f.lowered.params.append(a, .{ .name = "p0", .ty = .real, .default = .f_one });
+    try f.lowered.params.append(a, .{ .name = "p1", .ty = .real, .default = p0 });
+    try f.lowered.params.append(a, .{ .name = "p2", .ty = .real, .default = p0, .is_local = true });
+    try f.lowered.params.append(a, .{ .name = "p3", .ty = .string, .default = p0 });
+    try f.lowered.params.append(a, .{ .name = "p4", .ty = .real, .default = .f_two });
+    _ = try f.call("$param_given", &.{try f.mir.addParamRef(a, 4)});
+    // A held variable spelled like a Zig keyword gets the `Z` marker.
+    try f.lowered.held_vars.append(a, .{ .name = "pub", .ty = .real, .init = .f_zero, .seed = .f_zero });
+    const an = try f.analysis();
+
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0);
+    try std.testing.expectEqualSlices(bool, &.{ false, true, false, false, true }, n.p_given);
+    try std.testing.expectEqual(@as(usize, 1), n.held_names.len);
+    try std.testing.expectEqualStrings("mymod__held__pubZ", n.held_names[0]);
+    // `$param_given` owns no state, so it is no unit.
+    try std.testing.expectEqual(@as(usize, 0), n.units.len);
+}
+
+test "a source name too long to sanitize is NameTooLong, not OutOfMemory" {
+    // `naming.sanitize` needs up to 3n+1 bytes of an 8192-byte buffer, so a
+    // 9000-character net (or parameter) overflows it. The CLI prints the
+    // error's name, and `NameTooLong` is the one diag_code documents.
+    const long: [9000]u8 = @splat('q');
+    {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{&long});
+        defer f.deinit();
+        const an = try f.analysis();
+        try std.testing.expectError(error.NameTooLong, plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0));
+    }
+    {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{"a"});
+        defer f.deinit();
+        try f.lowered.params.append(f.alloc(), .{ .name = &long, .ty = .real, .default = .f_one });
+        const an = try f.analysis();
+        try std.testing.expectError(error.NameTooLong, plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0));
+    }
 }
