@@ -1341,3 +1341,50 @@ test "§9.4.5 numeric strings preserve source width through every output sink" {
     try std.testing.expect(has(out, "@as(u64, @truncate(@as(u64"));
     try std.testing.expect(has(out, "std.mem.trimStart(u8"));
 }
+
+test severityWord {
+    try std.testing.expectEqualStrings("FATAL", severityWord(.@"$fatal").?);
+    try std.testing.expectEqualStrings("ERROR", severityWord(.@"$error").?);
+    try std.testing.expectEqualStrings("WARNING", severityWord(.@"$warning").?);
+    try std.testing.expectEqualStrings("INFO", severityWord(.@"$info").?);
+    try std.testing.expect(severityWord(.@"$display") == null);
+    try std.testing.expect(severityWord(.@"$strobe") == null);
+}
+
+test endsLine {
+    // §9.4.1: `$write` and its radix forms, and §9.5.2's `$fwrite`, do not.
+    for ([_]Mir.Callee{ .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$fwrite" }) |c|
+        try std.testing.expect(!endsLine(c));
+    for ([_]Mir.Callee{ .@"$display", .@"$strobe", .@"$monitor", .@"$fdisplay", .@"$error" }) |c|
+        try std.testing.expect(endsLine(c));
+}
+
+test sayRecords {
+    // A printing task is a record; `$monitor` (its change detection is state
+    // a device does not keep) and `$fatal`/`$error` (the status channel) are not.
+    try std.testing.expect(sayRecords(.@"$strobe"));
+    try std.testing.expect(sayRecords(.@"$display"));
+    try std.testing.expect(!sayRecords(.@"$monitor"));
+    try std.testing.expect(!sayRecords(.@"$fatal"));
+    try std.testing.expect(!sayRecords(.@"$error"));
+}
+
+test "PrintArg.scratch sizes the stack field each composed mode needs" {
+    const at = struct {
+        fn f(how: PrintArg.Mode, spec: Spec) ?usize {
+            return (PrintArg{ .v = .f_zero, .want = .int, .how = how, .spec = spec }).scratch();
+        }
+    }.f;
+    try std.testing.expectEqual(@as(?usize, 8), at(.ascii, .{}));
+    try std.testing.expectEqual(@as(?usize, 24), at(.pad, .{}));
+    // The widest decimal, or the whole zero-filled field plus sign room.
+    try std.testing.expectEqual(@as(?usize, 24), at(.cint, .{}));
+    try std.testing.expectEqual(@as(?usize, 32), at(.cint, .{ .width = 30 }));
+    // A sign, 309 integer digits, the point and the precision, or the width.
+    try std.testing.expectEqual(@as(?usize, 6 + 320 + 8), at(.creal, .{}));
+    try std.testing.expectEqual(@as(?usize, 400 + 8), at(.creal, .{ .width = 400, .prec = 10 }));
+    // The rest render into the argument tuple.
+    try std.testing.expectEqual(@as(?usize, null), at(.plain, .{}));
+    try std.testing.expectEqual(@as(?usize, null), at(.bits, .{}));
+    try std.testing.expectEqual(@as(?usize, null), at(.chr, .{}));
+}

@@ -83,3 +83,15 @@ test "the core is strict if any served job is; the f32 knob normalises host ⇒ 
     try std.testing.expectEqual(Jac.permit, Jac.of(true, false));
     try std.testing.expectEqual(Jac.off, Jac.of(false, false));
 }
+
+test coreMode {
+    // No served job (a display-only model) forces nothing: the join's identity.
+    try std.testing.expectEqual(proof.FloatMode.optimized, coreMode(&.{}));
+}
+
+test unitMode {
+    try std.testing.expectEqual(proof.FloatMode.optimized, unitMode(&.{ .optimized, .strict }, 0));
+    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{ .optimized, .strict }, 1));
+    // An analog-operator unit the prover never rated takes the safe side.
+    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{}, 0));
+}

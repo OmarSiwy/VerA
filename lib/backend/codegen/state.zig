@@ -905,3 +905,14 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\
     , .{});
 }
+
+test readsM {
+    try std.testing.expect(readsM("const in = m.f0.val();"));
+    try std.testing.expect(readsM("m.f12"));
+    try std.testing.expect(readsM("(m.f2.val())"));
+    // `m.f` inside a longer name is not the core result.
+    try std.testing.expect(!readsM("const m = zm.f0;"));
+    try std.testing.expect(!readsM("_m.f1"));
+    try std.testing.expect(!readsM("m.x"));
+    try std.testing.expect(!readsM(""));
+}

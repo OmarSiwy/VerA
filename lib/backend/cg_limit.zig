@@ -677,3 +677,13 @@ fn emitSeedTree(g: *Gen) Error!void {
 fn seedValue(lc: LimitCall) Mir.Value {
     return if (lc.seed != .undef) lc.seed else lc.argv[1];
 }
+
+test ubit {
+    // No node, no bit.
+    try std.testing.expectEqual(@as(u64, 0), ubit(none_u32));
+    try std.testing.expectEqual(@as(u64, 1), ubit(0));
+    try std.testing.expectEqual(@as(u64, 1) << 63, ubit(63));
+    // Past the mask, every bit: `Live`'s masks must stay supersets.
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), ubit(64));
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), ubit(255));
+}

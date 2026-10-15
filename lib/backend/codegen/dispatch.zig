@@ -1195,3 +1195,11 @@ pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
     const k = self.core.lo_idx[@backingInt(v)];
     return if (k == none_u32) null else k;
 }
+
+test uBit {
+    try std.testing.expectEqual(@as(u64, 1), uBit(0));
+    try std.testing.expectEqual(@as(u64, 1) << 63, uBit(63));
+    // Past the mask, the dense fallback: every column.
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), uBit(64));
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), uBit(none_u32));
+}

@@ -783,3 +783,16 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     }
     try gen_setup.emitRoot(self, target);
 }
+
+test zigTy {
+    try std.testing.expectEqualStrings("S", zigTy(.real));
+    try std.testing.expectEqualStrings("i64", zigTy(.int));
+    try std.testing.expectEqualStrings("[]const u8", zigTy(.str));
+}
+
+test zeroOf {
+    // The hoisted seed and `renderVal`'s `.undef` operand: one spelling per type.
+    try std.testing.expectEqualStrings("S.con(0.0)", zeroOf(.real));
+    try std.testing.expectEqualStrings("0", zeroOf(.int));
+    try std.testing.expectEqualStrings("\"\"", zeroOf(.str));
+}
