@@ -1226,6 +1226,7 @@ test udpRows {
     defer arena.deinit();
     const a = arena.allocator();
     const decl: Ast.UdpDecl = .{
+        .name = .none,
         .ports = &.{ .none, .none, .none },
         .is_sequential = true,
         .rows = &.{
@@ -1248,7 +1249,7 @@ test udpRows {
     // A.5.3 gives each input exactly one field: one too few, one too many,
     // and an edge whose parenthesis does not close are malformed.
     for ([_][]const u8{ "0", "000", "(01", "(0)1" }) |bad| {
-        const one: Ast.UdpDecl = .{ .ports = &.{ .none, .none, .none }, .rows = &.{.{ .inputs = bad, .output = '0' }} };
+        const one: Ast.UdpDecl = .{ .name = .none, .ports = &.{ .none, .none, .none }, .rows = &.{.{ .inputs = bad, .output = '0' }} };
         try std.testing.expect((try udpRows(a, &one)) == null);
     }
 }
@@ -1259,6 +1260,7 @@ test udpEval {
     const a = arena.allocator();
     // A combinational AND table.
     const comb: Ast.UdpDecl = .{
+        .name = .none,
         .ports = &.{ .none, .none, .none },
         .rows = &.{
             .{ .inputs = "11", .output = '1' },
@@ -1276,6 +1278,7 @@ test udpEval {
     // falling clk with d = 0 holds, and clk at x with d = 0 sets only from
     // state 1.
     const seq: Ast.UdpDecl = .{
+        .name = .none,
         .ports = &.{ .none, .none, .none },
         .is_sequential = true,
         .rows = &.{
