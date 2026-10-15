@@ -135,8 +135,12 @@ folds: [2]FoldColumn = .{ .{}, .{} },
 /// or a string's index in `strs`. 9 bytes a Value instead of 24, in the
 /// table with one row per Value that codegen keeps for the whole emit.
 pub const FoldColumn = struct {
+    /// Which `Const` arm each Value folded to, `.none` for no fold.
     kind: []Kind = &.{},
+    /// The arm's payload: an integer's or a real's bits, or an index into
+    /// `strs`. Meaningless where `kind` is `.none`.
     bits: []u64 = &.{},
+    /// The string folds, in the order they were found; borrowed slices.
     strs: std.ArrayList([]const u8) = .empty,
 
     const Kind = enum(u8) { none, int, real, str };
@@ -173,6 +177,8 @@ pub const FoldColumn = struct {
 
 /// Builds every table above. Tables are allocated in `arena` and borrow
 /// `mir`/`lowered`, which must outlive the result and not change after.
+/// `mir` must have its entry block. Writes `mir`'s alias table (path
+/// compression) and nothing else.
 pub fn build(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -190,6 +196,7 @@ pub fn build(
 /// empty. For the prover, which runs before codegen's own `build` and needs
 /// no value types; building them twice per compile measured slower. It adds
 /// only `buildLiteralFolds` to identify provably untaken runtime-error paths.
+/// `mir` must have its entry block.
 pub fn buildStructure(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -223,6 +230,7 @@ pub inline fn blockInstsFlat(self: *const Analysis, bi: u32) []const Mir.Inst {
 fn buildCfg(self: *Analysis) Error!void {
     const a = self.arena;
     const nb = self.mir.blockCount();
+    std.debug.assert(nb > 0); // the entry block roots the DFS and the dominator tree
     self.nb = nb;
     self.i_op = self.mir.insts.items(.op);
     self.i_res = self.mir.insts.items(.result);
@@ -507,7 +515,8 @@ fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
 }
 
 /// Returns whether block `a` dominates block `x`. O(1) via the Euler-tour
-/// interval. Unreachable blocks dominate only themselves.
+/// interval. Unreachable blocks dominate only themselves. Both must be
+/// below `nb`.
 pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
     const ia = self.dom_in[a];
     const ix = self.dom_in[x];
@@ -632,6 +641,7 @@ fn buildArrOf(self: *Analysis) Error!void {
 }
 
 /// §3.2.2 the array a Value is a version of, or null for a scalar.
+/// Requires `build`, not `buildStructure`.
 pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
     const a = self.arr_of[@backingInt(self.rv(v))];
     return if (a == none_u32) null else a;
@@ -842,6 +852,7 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCo
 /// Conservative: `false` is always sound. Worth knowing because
 /// `@setFloatMode(.strict)` forbids folding a multiply by a literal zero, so a
 /// dual holding `splat(0)` would pay full-width arithmetic at every use.
+/// Requires `build`; so do `xDep`, `pointDep`, `unknownDeps` and `acDynDeps`.
 pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
     return self.depsOf(v) == 0;
 }
@@ -910,7 +921,8 @@ fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
 }
 
 /// Returns the phi `inst`'s incoming value on the edge from block `from`, or
-/// `.undef` if it has none.
+/// `.undef` if it has none; the first pair wins if two name `from`. `inst`
+/// must be a phi. This operation is O(pairs).
 pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
     const d = self.mir.instData(inst).phi;
     var i: u32 = 0;
@@ -1037,4 +1049,349 @@ fn foldStep(self: *const Analysis, v: Mir.Value, col: *const FoldColumn, resolve
         },
         .undef, .str_const, .block_param => return null,
     }
+}
+
+test "analysis: CFG facts agree with their naive definitions on random structured CFGs" {
+    // Oracles, each computed from the terminators alone:
+    //   dominance   `a` dominates reachable `x` iff `x` is unreachable once
+    //               `a` is removed (unreachable blocks dominate only themselves);
+    //   RPO         every edge that is not a back edge goes forward;
+    //   loops       a header dominates a predecessor, and its natural loop is
+    //               every reachable block that reaches a back-edge source
+    //               without passing the header; `loop_of` names the
+    //               outermost (lowest-RPO) header whose loop holds the block.
+    // The CFGs are lowering's shapes (if/else, one-armed if, loops, straight
+    // jumps), so reducible, plus unreachable blocks jumping into them.
+    const gpa = std.testing.allocator;
+    var file: Ast.SourceFile = .empty;
+    const lowered: Lowered = .{ .file = &file };
+    var prng = std.Random.DefaultPrng.init(0xd0_d0);
+    const r = prng.random();
+
+    const Gen = struct {
+        mir: *Mir,
+        r: std.Random,
+        cur: Mir.Block = .entry,
+
+        fn seq(g: *@This(), depth: u32) anyerror!void {
+            const al = std.testing.allocator;
+            for (0..g.r.uintLessThan(u32, 3)) |_| {
+                const kind = if (depth >= 2) 3 else g.r.uintLessThan(u32, 4);
+                switch (kind) {
+                    0 => {
+                        const t = try g.mir.addBlock(al);
+                        const e = try g.mir.addBlock(al);
+                        const j = try g.mir.addBlock(al);
+                        _ = try g.mir.emitBranch(al, g.cur, .one, t, e);
+                        g.cur = t;
+                        try g.seq(depth + 1);
+                        _ = try g.mir.emitJump(al, g.cur, j);
+                        g.cur = e;
+                        try g.seq(depth + 1);
+                        _ = try g.mir.emitJump(al, g.cur, j);
+                        g.cur = j;
+                    },
+                    1 => {
+                        const t = try g.mir.addBlock(al);
+                        const j = try g.mir.addBlock(al);
+                        _ = try g.mir.emitBranch(al, g.cur, .one, t, j);
+                        g.cur = t;
+                        try g.seq(depth + 1);
+                        _ = try g.mir.emitJump(al, g.cur, j);
+                        g.cur = j;
+                    },
+                    2 => {
+                        const h = try g.mir.addBlock(al);
+                        const body = try g.mir.addBlock(al);
+                        const exit = try g.mir.addBlock(al);
+                        _ = try g.mir.emitJump(al, g.cur, h);
+                        _ = try g.mir.emitBranch(al, h, .one, body, exit);
+                        g.cur = body;
+                        try g.seq(depth + 1);
+                        _ = try g.mir.emitJump(al, g.cur, h);
+                        g.cur = exit;
+                    },
+                    else => {
+                        const n = try g.mir.addBlock(al);
+                        _ = try g.mir.emitJump(al, g.cur, n);
+                        g.cur = n;
+                    },
+                }
+            }
+        }
+    };
+    const Naive = struct {
+        fn succs(m: *const Mir, b: u32, buf: *[2]u32) []const u32 {
+            var it = m.blockInsts(@fromBackingInt(b));
+            while (it.next()) |inst| switch (m.instData(inst)) {
+                .branch => |d| {
+                    buf.* = .{ @backingInt(d.then_block), @backingInt(d.else_block) };
+                    return buf[0..2];
+                },
+                .jump => |d| {
+                    buf[0] = @backingInt(d.target);
+                    return buf[0..1];
+                },
+                .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => {},
+            };
+            return buf[0..0];
+        }
+
+        /// Blocks reachable from the entry without passing through `skip`
+        /// (`skip` past the last block skips nothing).
+        fn reach(m: *const Mir, out: []bool, stack: []u32, skip: u32) void {
+            @memset(out, false);
+            if (skip == 0) return;
+            out[0] = true;
+            stack[0] = 0;
+            var sp: usize = 1;
+            while (sp > 0) {
+                sp -= 1;
+                const b = stack[sp];
+                var buf: [2]u32 = undefined;
+                for (succs(m, b, &buf)) |s| {
+                    if (s == skip or out[s]) continue;
+                    out[s] = true;
+                    stack[sp] = s;
+                    sp += 1;
+                }
+            }
+        }
+    };
+
+    for (0..200) |round| {
+        errdefer std.debug.print("analysis model: round {d}\n", .{round});
+        var mir: Mir = .{};
+        defer mir.deinit(gpa);
+        _ = try mir.addBlock(gpa);
+        var g: Gen = .{ .mir = &mir, .r = r };
+        try g.seq(0);
+        for (0..r.uintLessThan(u32, 3)) |_| {
+            const dead = try mir.addBlock(gpa);
+            const into: Mir.Block = @fromBackingInt(1 + r.uintLessThan(u32, mir.blockCount() - 1));
+            _ = try mir.emitJump(gpa, dead, into);
+        }
+
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const aa = arena.allocator();
+        const an = try buildStructure(aa, &mir, &lowered);
+        const nb = mir.blockCount();
+        try std.testing.expectEqual(nb, an.nb);
+
+        const stack = try aa.alloc(u32, nb);
+        const live = try aa.alloc(bool, nb);
+        Naive.reach(&mir, live, stack, nb);
+        // dom[a * nb + x]
+        const dom = try aa.alloc(bool, @as(usize, nb) * nb);
+        const tmp = try aa.alloc(bool, nb);
+        for (0..nb) |ai| {
+            Naive.reach(&mir, tmp, stack, @intCast(ai));
+            for (0..nb) |xi| dom[ai * nb + xi] = if (!live[ai] or !live[xi]) ai == xi else (ai == xi or !tmp[xi]);
+        }
+        for (0..nb) |ai| for (0..nb) |xi| {
+            try std.testing.expectEqual(dom[ai * nb + xi], an.dominates(@intCast(ai), @intCast(xi)));
+        };
+
+        // Reachability, successors, predecessors, RPO direction, merges.
+        const pred_n = try aa.alloc(u32, nb);
+        @memset(pred_n, 0);
+        for (0..nb) |ui| {
+            try std.testing.expectEqual(live[ui], an.rpo_num[ui] != none_u32);
+            var buf: [2]u32 = undefined;
+            const ss = Naive.succs(&mir, @intCast(ui), &buf);
+            try std.testing.expectEqualSlices(u32, ss, an.succs[ui]);
+            if (!live[ui]) continue;
+            for (ss) |v| {
+                pred_n[v] += 1;
+                try std.testing.expect(std.mem.findScalar(u32, an.preds[v], @intCast(ui)) != null);
+                if (!dom[v * nb + ui]) try std.testing.expect(an.rpo_num[ui] < an.rpo_num[v]);
+            }
+        }
+        for (0..nb) |v| {
+            try std.testing.expectEqual(@as(usize, pred_n[v]), an.preds[v].len);
+            try std.testing.expectEqual(v != 0 and pred_n[v] >= 2, an.is_merge[v]);
+        }
+
+        // Immediate dominators, and the dominator tree's child lists.
+        var kids: usize = 0;
+        for (0..nb) |x| {
+            kids += an.domKids(@intCast(x)).len;
+            for (an.domKids(@intCast(x))) |k| try std.testing.expectEqual(@as(u32, @intCast(x)), an.idom[k]);
+            if (!live[x]) {
+                try std.testing.expectEqual(none_u32, an.idom[x]);
+                continue;
+            }
+            if (x == 0) continue;
+            const id = an.idom[x];
+            try std.testing.expect(id != x and dom[id * nb + x]);
+            for (0..nb) |d| if (d != x and dom[d * nb + x]) try std.testing.expect(dom[d * nb + id]);
+        }
+        var n_live: usize = 0;
+        for (live) |l| n_live += @intFromBool(l);
+        try std.testing.expectEqual(n_live - 1, kids);
+        try std.testing.expectEqual(n_live, an.rpo.len);
+
+        // Loop headers, natural loops and the outermost owner.
+        const owner = try aa.alloc(u32, nb);
+        @memset(owner, none_u32);
+        const member = try aa.alloc(bool, nb);
+        for (an.rpo) |h| {
+            var header = false;
+            for (0..nb) |p| {
+                if (!live[p]) continue;
+                var buf: [2]u32 = undefined;
+                const ss = Naive.succs(&mir, @intCast(p), &buf);
+                if (std.mem.findScalar(u32, ss, h) != null and dom[h * nb + p]) header = true;
+            }
+            try std.testing.expectEqual(header, an.is_loop[h]);
+            if (!header) continue;
+            // Every live block that reaches a back-edge source without
+            // passing `h`, to a fixpoint.
+            @memset(member, false);
+            member[h] = true;
+            var grew = true;
+            while (grew) {
+                grew = false;
+                for (0..nb) |b| {
+                    if (!live[b] or member[b]) continue;
+                    var buf: [2]u32 = undefined;
+                    for (Naive.succs(&mir, @intCast(b), &buf)) |s| {
+                        const back_edge = s == h and dom[h * nb + b];
+                        if (back_edge or (s != h and member[s])) {
+                            member[b] = true;
+                            grew = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            for (0..nb) |b| if (member[b] and owner[b] == none_u32) {
+                owner[b] = h;
+            };
+        }
+        for (0..nb) |b| {
+            try std.testing.expectEqual(owner[b], an.loop_of[b]);
+            try std.testing.expectEqual(owner[b] != none_u32, an.inLoop(@intCast(b)));
+        }
+    }
+}
+
+test "analysis: an unknown at index 64 folds the table and keeps dFree exact" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var file: Ast.SourceFile = .empty;
+    const lowered: Lowered = .{ .file = &file };
+    _ = try mir.addBlock(a);
+    const far = try mir.addBlockParam(a, 64);
+    const near = try mir.addBlockParam(a, 1);
+    const prod = try mir.emit(a, .entry, .fmul, &.{ far, .f_two });
+    const sum = try mir.emit(a, .entry, .fadd, &.{ near, .f_one });
+    const k = try mir.emit(a, .entry, .fadd, &.{ .f_one, .f_two });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    try std.testing.expect(an.deps_folded);
+    // Unknown 64 sets bit 64 & 63 = 0: a raw word stays nonzero exactly when
+    // the value depends on something, so `dFree` is still exact.
+    try std.testing.expectEqual(@as(u64, 1), an.deps[@backingInt(prod)]);
+    try std.testing.expect(!an.dFree(prod) and !an.dFree(sum) and an.dFree(k));
+    // The bit index is no longer the unknown, so every answer is all ones.
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), an.unknownDeps(sum));
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), an.unknownDeps(k));
+    try std.testing.expectEqual(@as(u64, 0), an.acDynDeps(prod));
+}
+
+test foldConst {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var file: Ast.SourceFile = .empty;
+    var lowered: Lowered = .{ .file = &file };
+    defer lowered.params.deinit(a);
+    _ = try mir.addBlock(a);
+    const k_default = try mir.addFloatConst(a, 2.5);
+    try lowered.params.append(a, .{ .name = "k", .ty = .real, .default = k_default });
+    const k = try mir.addParamRef(a, 0);
+    const twice = try mir.emit(a, .entry, .fmul, &.{ k, .f_two });
+    // §4.2.12 is lazy: `0 > 0 ? 1 % 0 : 10` folds to 10 although `1 % 0`
+    // has no value (§4.2.4).
+    const c = try mir.emit(a, .entry, .fgt, &.{ .f_zero, .f_zero });
+    const bad = try mir.emit(a, .entry, .fmod, &.{ .f_one, .f_zero });
+    const sel = try mir.emit(a, .entry, .select, &.{ c, bad, .f_ten });
+    const isum = try mir.emit(a, .entry, .iadd, &.{ .one, .one });
+    const probe = try mir.addBlockParam(a, 0);
+    const varies = try mir.emit(a, .entry, .fadd, &.{ probe, .f_one });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    // Only a Model default looks through a parameter to its declaration.
+    try std.testing.expectEqual(@as(?Folded, null), an.foldConst(twice, false));
+    try std.testing.expectEqual(@as(f64, 5), an.foldConst(twice, true).?.f);
+    try std.testing.expectEqual(@as(?Folded, null), an.foldConst(bad, true));
+    try std.testing.expectEqual(@as(f64, 10), an.foldConst(sel, false).?.f);
+    try std.testing.expectEqual(@as(f64, 2), an.foldConst(isum, false).?.f);
+    try std.testing.expectEqual(@as(?Folded, null), an.foldConst(varies, true));
+    try std.testing.expectEqual(@as(?Folded, null), an.foldConst(.undef, true));
+}
+
+test "analysis: §3.2.2 array versions, value types and per-instance reads" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var file: Ast.SourceFile = .empty;
+    var lowered: Lowered = .{ .file = &file };
+    defer lowered.mem_arrays.deinit(a);
+    defer lowered.params.deinit(a);
+    try lowered.mem_arrays.append(a, .{ .name = "m", .len = 4, .ty = .integer });
+    try lowered.params.append(a, .{ .name = "n", .ty = .integer, .default = .one });
+
+    const entry = try mir.addBlock(a);
+    const next = try mir.addBlock(a);
+    const a0 = try mir.emitAnew(a, entry, 0);
+    const st = try mir.emit(a, entry, .store, &.{ a0, .zero, .one });
+    const ld = try mir.emit(a, entry, .iload, &.{ st, .zero });
+    const held = try mir.emitCall(a, entry, try mir.internString(a, "$held_real"), &.{.zero});
+    const from_held = try mir.emit(a, entry, .fadd, &.{ held, .f_one });
+    const given = try mir.emitCall(a, entry, try mir.internString(a, "$param_given"), &.{});
+    const text = try mir.addStrConst(a, "s");
+    const n = try mir.addParamRef(a, 0);
+    const probe = try mir.addBlockParam(a, 0);
+    const isel = try mir.emit(a, entry, .select, &.{ probe, .one, .zero });
+    const fsel = try mir.emit(a, entry, .select, &.{ probe, .f_one, .zero });
+    _ = try mir.emitJump(a, entry, next);
+    const ph = try mir.emitPhi(a, next, &.{.{ .block = entry, .value = st }});
+    const phi_inst = mir.valueDef(ph).inst_result;
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    // An `anew`, a `store` from it and a phi over that are one array; a load
+    // is a scalar. A version's type is its element type.
+    for ([_]Mir.Value{ a0, st, ph }) |v| {
+        try std.testing.expectEqual(@as(?u32, 0), an.arrOf(v));
+        try std.testing.expectEqual(VTy.int, an.tyOf(v));
+    }
+    try std.testing.expectEqual(@as(?u32, null), an.arrOf(ld));
+    try std.testing.expectEqual(VTy.int, an.tyOf(ld));
+    // A call's type is its callee's; a select's is its then arm's.
+    try std.testing.expectEqual(VTy.int, an.tyOf(given));
+    try std.testing.expectEqual(VTy.real, an.tyOf(held));
+    try std.testing.expectEqual(VTy.str, an.tyOf(text));
+    try std.testing.expectEqual(VTy.int, an.tyOf(n));
+    try std.testing.expectEqual(VTy.int, an.tyOf(isel));
+    try std.testing.expectEqual(VTy.real, an.tyOf(fsel));
+    // A held read varies per instance but not with x.
+    try std.testing.expect(an.pointDep(from_held) and !an.xDep(from_held) and an.dFree(from_held));
+    try std.testing.expect(!an.pointDep(given));
+    // §4.2.12: the select's condition does not enter its derivative.
+    try std.testing.expect(an.dFree(isel));
+    // `phiIn` is the pair for the edge, `.undef` for an edge with none.
+    try std.testing.expectEqual(st, an.phiIn(phi_inst, @backingInt(entry)));
+    try std.testing.expectEqual(Mir.Value.undef, an.phiIn(phi_inst, @backingInt(next)));
+    try std.testing.expectEqual(@as(u32, @backingInt(entry)), an.def_block[@backingInt(st)]);
+    try std.testing.expectEqual(none_u32, an.def_block[@backingInt(probe)]);
 }

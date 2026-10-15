@@ -3,6 +3,8 @@
 //! backend's per-operator rows (`Instance` fields, `dt`, `enable`) are
 //! `backend/codegen/op_zig.zig`, a table total over this enum.
 
+const std = @import("std");
+
 /// Every operator that owns per-instance state or a monitored event.
 /// `naming.enumerateUnits` gives each occurrence of one a unit; `.none` is the
 /// answer for every other `call` callee.
@@ -35,4 +37,13 @@ pub fn acDynamic(k: OpKind) bool {
         .absdelay, .laplace, .zi => true,
         .none, .idt_hold, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => false,
     };
+}
+
+test acDynamic {
+    // §4.5.7 e^(−jω·td), §4.5.11 H(jω) and §4.5.12 H(e^(jωT)) vary with ω.
+    try std.testing.expect(acDynamic(.absdelay) and acDynamic(.laplace) and acDynamic(.zi));
+    // §4.5.8 `transition` is unity in small signal and §4.5.9 `slew` 1 or 0;
+    // the events and §9.17 tasks have no small-signal path at all.
+    for ([_]OpKind{ .none, .transition, .slew, .idt_hold, .idtmod, .cross, .timer, .bound_step }) |k|
+        try std.testing.expect(!acDynamic(k));
 }

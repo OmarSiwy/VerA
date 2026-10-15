@@ -11,7 +11,8 @@ const proof = @import("proof.zig");
 
 /// Converts every pure diamond, to a fixpoint, and returns how many converted.
 /// Blocks are visited in index order, so equal MIR converts identically.
-/// `gpa` backs one temporary per-block pred count.
+/// `gpa` backs one temporary per-block pred count and the emitted rows.
+/// Invalidates every `Mir.InstIterator` and any `Analysis` built over `mir`.
 pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
     const nb = mir.blockCount();
     if (nb == 0) return 0;
@@ -347,4 +348,355 @@ test "a phi row after the branch neither blocks the conversion nor leaves the ch
     }
     try std.testing.expect(saw_late);
     try std.testing.expectEqual(join, mir.instData(terminator(&mir, entry).?).jump.target);
+}
+
+/// Test scaffold: `entry: branch (p > 0) then else; arm: one row, jump join;
+/// join: phi`. An arm of kind `.direct` is the edge straight to the join (a
+/// triangle), carrying a value computed in the entry block.
+const Shape = struct {
+    mir: Mir = .{},
+    entry: Mir.Block = .entry,
+    then_b: Mir.Block = .entry,
+    else_b: Mir.Block = .entry,
+    join: Mir.Block = .entry,
+    phi: Mir.Value = .undef,
+    then_val: Mir.Value = .undef,
+    else_val: Mir.Value = .undef,
+
+    const Arm = enum { direct, value, call, store, barrier, sqrt, fmod, fdiv };
+
+    fn init(a: std.mem.Allocator, then_arm: Arm, else_arm: Arm) !Shape {
+        var s: Shape = .{};
+        errdefer s.mir.deinit(a);
+        const m = &s.mir;
+        s.entry = try m.addBlock(a);
+        const p = try m.addBlockParam(a, 0);
+        const c = try m.emit(a, s.entry, .fgt, &.{ p, .f_zero });
+        const entry_val = try m.emit(a, s.entry, .fneg, &.{p});
+        s.join = try m.addBlock(a);
+        s.then_b = if (then_arm == .direct) s.join else try m.addBlock(a);
+        s.else_b = if (else_arm == .direct) s.join else try m.addBlock(a);
+        _ = try m.emitBranch(a, s.entry, c, s.then_b, s.else_b);
+        s.then_val = if (then_arm == .direct) entry_val else try fillArm(a, m, s.then_b, s.join, p, then_arm);
+        s.else_val = if (else_arm == .direct) entry_val else try fillArm(a, m, s.else_b, s.join, p, else_arm);
+        s.phi = try m.emitPhi(a, s.join, &.{
+            .{ .block = if (then_arm == .direct) s.entry else s.then_b, .value = s.then_val },
+            .{ .block = if (else_arm == .direct) s.entry else s.else_b, .value = s.else_val },
+        });
+        return s;
+    }
+
+    fn fillArm(a: std.mem.Allocator, m: *Mir, arm: Mir.Block, join: Mir.Block, p: Mir.Value, kind: Arm) !Mir.Value {
+        const v = switch (kind) {
+            .direct => unreachable,
+            .value => try m.emit(a, arm, .fmul, &.{ p, .f_two }),
+            .call => try m.emitCall(a, arm, try m.internString(a, "$abstime"), &.{}),
+            // The pass reads only the opcode, so the operands need not be an
+            // array version.
+            .store => try m.emit(a, arm, .store, &.{ p, .zero, p }),
+            .barrier => try m.emit(a, arm, .opt_barrier, &.{p}),
+            .sqrt => try m.emit(a, arm, .sqrt, &.{p}),
+            .fmod => try m.emit(a, arm, .fmod, &.{ p, .f_two }),
+            .fdiv => try m.emit(a, arm, .fdiv, &.{ .f_one, p }),
+        };
+        _ = try m.emitJump(a, arm, join);
+        return v;
+    }
+
+    /// The select the join phi now aliases to, or null if it is still a phi.
+    fn select(s: *const Shape) ?Mir.InstData {
+        const r = s.mir.resolveAlias(s.phi);
+        if (r == s.phi) return null;
+        return s.mir.instData(s.mir.valueDef(r).inst_result);
+    }
+};
+
+test "if-conversion: a diamond and both triangles become one select" {
+    const a = std.testing.allocator;
+    // §4.2.12: `cond ? then : else`, with a direct edge's value read in X.
+    for ([_][2]Shape.Arm{ .{ .value, .value }, .{ .value, .direct }, .{ .direct, .value } }) |arms| {
+        var s = try Shape.init(a, arms[0], arms[1]);
+        defer s.mir.deinit(a);
+        try std.testing.expectEqual(@as(u32, 1), try run(a, &s.mir));
+        const sel = s.select().?.ternary;
+        try std.testing.expectEqual(s.then_val, sel.then_val);
+        try std.testing.expectEqual(s.else_val, sel.else_val);
+        // X now jumps to the join, and no branch is left in it.
+        try std.testing.expectEqual(s.join, s.mir.instData(terminator(&s.mir, .entry).?).jump.target);
+        // A second run finds nothing more: the pass is at its fixpoint.
+        try std.testing.expectEqual(@as(u32, 0), try run(a, &s.mir));
+    }
+}
+
+test "if-conversion: an arm that is not pure value code keeps its branch" {
+    const a = std.testing.allocator;
+    // A call, a §3.2.2 store, the optimization fence and the domain-restricted
+    // `sqrt` and `%` refuse; IEEE `x/0` is not a domain error, so `/` converts.
+    const cases = [_]struct { Shape.Arm, u32 }{
+        .{ .call, 0 },
+        .{ .store, 0 },
+        .{ .barrier, 0 },
+        .{ .sqrt, 0 },
+        .{ .fmod, 0 },
+        .{ .fdiv, 1 },
+    };
+    for (cases) |c| {
+        errdefer std.debug.print("arm `{s}`\n", .{@tagName(c[0])});
+        var s = try Shape.init(a, c[0], .value);
+        defer s.mir.deinit(a);
+        try std.testing.expectEqual(c[1], try run(a, &s.mir));
+        try std.testing.expectEqual(c[1] == 1, s.select() != null);
+    }
+}
+
+test "if-conversion: a first-evaluation guard stays a branch" {
+    // §5.2.1 `analog initial`, VerA's `$tp_hit` cache, and an argument-less
+    // §5.10.2 `initial_step`; `initial_step("tran")` is an ordinary condition.
+    const a = std.testing.allocator;
+    const guards = [_]struct { []const u8, bool, u32 }{
+        .{ "analog_initial", false, 0 },
+        .{ "$tp_hit", true, 0 },
+        .{ "initial_step", false, 0 },
+        .{ "initial_step", true, 1 },
+    };
+    for (guards) |g| {
+        errdefer std.debug.print("guard `{s}`\n", .{g[0]});
+        var mir: Mir = .{};
+        defer mir.deinit(a);
+        const entry = try mir.addBlock(a);
+        const arg = try mir.addStrConst(a, "tran");
+        const args: []const Mir.Value = if (g[1]) &.{arg} else &.{};
+        const cond = try mir.emitCall(a, entry, try mir.internString(a, g[0]), args);
+        const p = try mir.addBlockParam(a, 0);
+        const t = try mir.addBlock(a);
+        const e = try mir.addBlock(a);
+        const j = try mir.addBlock(a);
+        _ = try mir.emitBranch(a, entry, cond, t, e);
+        const tv = try mir.emit(a, t, .fneg, &.{p});
+        _ = try mir.emitJump(a, t, j);
+        const ev = try mir.emit(a, e, .fmul, &.{ p, p });
+        _ = try mir.emitJump(a, e, j);
+        _ = try mir.emitPhi(a, j, &.{ .{ .block = t, .value = tv }, .{ .block = e, .value = ev } });
+        try std.testing.expectEqual(g[2], try run(a, &mir));
+    }
+}
+
+test "if-conversion: shapes that are not a diamond are left alone" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const entry = try mir.addBlock(a);
+    const t = try mir.addBlock(a);
+    const e = try mir.addBlock(a);
+    const j = try mir.addBlock(a);
+    const other = try mir.addBlock(a);
+    const p = try mir.addBlockParam(a, 0);
+    _ = try mir.emitBranch(a, entry, p, t, e);
+    const tv = try mir.emit(a, t, .fneg, &.{p});
+    _ = try mir.emitJump(a, t, j);
+    const ev = try mir.emit(a, e, .fneg, &.{tv});
+    _ = try mir.emitJump(a, e, j);
+    // The join phi has no pair for the else arm: there is nothing to select.
+    _ = try mir.emitPhi(a, j, &.{ .{ .block = t, .value = tv }, .{ .block = other, .value = ev } });
+    try std.testing.expectEqual(@as(u32, 0), try run(a, &mir));
+
+    // Both edges to one block; an arm that loops back to X; an arm another
+    // block also jumps into.
+    var m2: Mir = .{};
+    defer m2.deinit(a);
+    const x = try m2.addBlock(a);
+    const arm = try m2.addBlock(a);
+    const out = try m2.addBlock(a);
+    const y = try m2.addBlock(a);
+    const shared = try m2.addBlock(a);
+    const z = try m2.addBlock(a);
+    const w = try m2.addBlock(a);
+    const q = try m2.addBlockParam(a, 0);
+    _ = try m2.emitBranch(a, x, q, arm, arm);
+    _ = try m2.emitBranch(a, arm, q, x, out);
+    _ = try m2.emitBranch(a, out, q, shared, y);
+    _ = try m2.emitJump(a, y, z);
+    _ = try m2.emitJump(a, shared, z);
+    _ = try m2.emitJump(a, w, shared); // `shared` now has two predecessors
+    try std.testing.expectEqual(@as(u32, 0), try run(a, &m2));
+}
+
+test "if-conversion: a `toBool` wrapper on a comparison is peeled off the select" {
+    // `ine(flt(p, 0), 0)` asserts nothing `flt` does not; `ine(iadd, 0)` is
+    // the §4.2.4 nonzero fact the prover mines, so it stays.
+    const a = std.testing.allocator;
+    for ([_]bool{ true, false }) |predicate| {
+        var mir: Mir = .{};
+        defer mir.deinit(a);
+        const entry = try mir.addBlock(a);
+        const t = try mir.addBlock(a);
+        const j = try mir.addBlock(a);
+        const p = try mir.addBlockParam(a, 0);
+        const inner = if (predicate)
+            try mir.emit(a, entry, .flt, &.{ p, .f_zero })
+        else
+            try mir.emit(a, entry, .iadd, &.{ .one, .one });
+        const cond = try mir.emit(a, entry, .ine, &.{ inner, .zero });
+        _ = try mir.emitBranch(a, entry, cond, t, j);
+        const tv = try mir.emit(a, t, .fneg, &.{p});
+        _ = try mir.emitJump(a, t, j);
+        const phi = try mir.emitPhi(a, j, &.{ .{ .block = t, .value = tv }, .{ .block = entry, .value = p } });
+        try std.testing.expectEqual(@as(u32, 1), try run(a, &mir));
+        const sel = mir.instData(mir.valueDef(mir.resolveAlias(phi)).inst_result).ternary;
+        try std.testing.expectEqual(if (predicate) inner else cond, sel.cond);
+    }
+}
+
+test "if-conversion preserves what the module computes (differential)" {
+    // Oracle: a direct interpreter over the pure opcodes, run on a copy that
+    // is not converted. Two shapes: a diamond, and a triangle nested in one
+    // arm of a diamond, every input sign combination. The converted MIR must
+    // also still pass `verify`.
+    const a = std.testing.allocator;
+    const Ast = @import("frontend").Ast;
+    const Lowered = @import("lower.zig").Lowered;
+    const verify = @import("verify.zig");
+    const T = struct {
+        fn build(m: *Mir, shape: u32) !Mir.Value {
+            const al = std.testing.allocator;
+            const entry = try m.addBlock(al);
+            const p0 = try m.addBlockParam(al, 0);
+            const p1 = try m.addBlockParam(al, 1);
+            const b1 = try m.addBlock(al);
+            const b2 = try m.addBlock(al);
+            const j = try m.addBlock(al);
+            const c1 = try m.emit(al, entry, .flt, &.{ p0, p1 });
+            _ = try m.emitBranch(al, entry, c1, b1, b2);
+            var v1: Mir.Value = undefined;
+            var from1 = b1;
+            if (shape == 0) {
+                v1 = try m.emit(al, b1, .fmul, &.{ p0, .f_two });
+            } else {
+                // A triangle inside the then arm: `if (p0 > 0) v = p0 * 10`.
+                const inner = try m.addBlock(al);
+                const ij = try m.addBlock(al);
+                const c2 = try m.emit(al, b1, .fgt, &.{ p0, .f_zero });
+                _ = try m.emitBranch(al, b1, c2, inner, ij);
+                const iv = try m.emit(al, inner, .fmul, &.{ p0, .f_ten });
+                _ = try m.emitJump(al, inner, ij);
+                v1 = try m.emitPhi(al, ij, &.{ .{ .block = inner, .value = iv }, .{ .block = b1, .value = p1 } });
+                from1 = ij;
+            }
+            _ = try m.emitJump(al, from1, j);
+            const v2 = try m.emit(al, b2, .fsub, &.{ p1, p0 });
+            _ = try m.emitJump(al, b2, j);
+            const ph = try m.emitPhi(al, j, &.{ .{ .block = from1, .value = v1 }, .{ .block = b2, .value = v2 } });
+            return m.emit(al, j, .fadd, &.{ ph, .f_one });
+        }
+
+        fn eval(m: *const Mir, vals: []const f64, x: [2]f64, v: Mir.Value) f64 {
+            const r = m.resolveAlias(v);
+            return switch (m.valueDef(r)) {
+                .float_const => |f| f,
+                .int_const => |i| @floatFromInt(i),
+                .block_param => |u| x[u],
+                .inst_result => vals[@backingInt(r)],
+                .undef, .str_const, .param_ref => unreachable,
+            };
+        }
+
+        fn interpret(m: *const Mir, x: [2]f64, out: Mir.Value) !f64 {
+            const vals = try std.testing.allocator.alloc(f64, m.defs.len + Mir.Value.first_dynamic);
+            defer std.testing.allocator.free(vals);
+            @memset(vals, std.math.nan(f64));
+            var prev: Mir.Block = .entry;
+            var cur: Mir.Block = .entry;
+            for (0..64) |_| {
+                // Phis first, as a parallel copy from the edge taken.
+                var it = m.blockInsts(cur);
+                var buf: [8]struct { Mir.Value, f64 } = undefined;
+                var n: usize = 0;
+                while (it.next()) |inst| if (m.instOp(inst) == .phi) {
+                    const res = m.instResult(inst);
+                    if (m.resolveAlias(res) != res) continue;
+                    const d = m.instData(inst).phi;
+                    for (0..d.count) |k| {
+                        const pp = m.phiPair(inst, @intCast(k));
+                        if (pp.block == prev) {
+                            buf[n] = .{ res, eval(m, vals, x, pp.value) };
+                            n += 1;
+                        }
+                    }
+                };
+                for (buf[0..n]) |e| vals[@backingInt(e[0])] = e[1];
+                var next: ?Mir.Block = null;
+                it = m.blockInsts(cur);
+                while (it.next()) |inst| {
+                    const res = m.instResult(inst);
+                    switch (m.instData(inst)) {
+                        .phi => {},
+                        .unary => |u| vals[@backingInt(res)] = switch (u.op) {
+                            .fneg => -eval(m, vals, x, u.operand),
+                            else => unreachable, // else: the shapes use no other unary op
+                        },
+                        .binary => |b| {
+                            const l = eval(m, vals, x, b.lhs);
+                            const rr = eval(m, vals, x, b.rhs);
+                            vals[@backingInt(res)] = switch (b.op) {
+                                .fadd => l + rr,
+                                .fsub => l - rr,
+                                .fmul => l * rr,
+                                .flt => @floatFromInt(@intFromBool(l < rr)),
+                                .fgt => @floatFromInt(@intFromBool(l > rr)),
+                                else => unreachable, // else: the shapes use no other binary op
+                            };
+                        },
+                        .ternary => |t| vals[@backingInt(res)] = if (eval(m, vals, x, t.cond) != 0)
+                            eval(m, vals, x, t.then_val)
+                        else
+                            eval(m, vals, x, t.else_val),
+                        .branch => |br| next = if (eval(m, vals, x, br.cond) != 0) br.then_block else br.else_block,
+                        .jump => |jp| next = jp.target,
+                        .call, .anew, .load, .store => unreachable,
+                    }
+                    if (next != null) break;
+                }
+                prev = cur;
+                cur = next orelse return eval(m, vals, x, out);
+            }
+            return error.TestInterpreterDidNotStop;
+        }
+    };
+    const inputs = [_]f64{ -2, 0, 3 };
+    for (0..2) |shape| {
+        var plain: Mir = .{};
+        defer plain.deinit(a);
+        var conv: Mir = .{};
+        defer conv.deinit(a);
+        const out_plain = try T.build(&plain, @intCast(shape));
+        const out_conv = try T.build(&conv, @intCast(shape));
+        try std.testing.expect(try run(a, &conv) >= 1);
+        var file: Ast.SourceFile = .empty;
+        var lw: Lowered = .{ .file = &file };
+        defer lw.nodes.deinit(a);
+        for (0..2) |_| try lw.nodes.append(a, .{ .name = "n", .kind = .net, .disc = "", .dir = .unspecified });
+        if (try verify.verify(&conv, &lw)) |v| {
+            std.debug.print("verify: `{s}`: {s}\n", .{ @tagName(v.invariant), v.what });
+            return error.TestUnexpectedResult;
+        }
+        for (inputs) |x0| for (inputs) |x1| {
+            const want = try T.interpret(&plain, .{ x0, x1 }, out_plain);
+            const got = try T.interpret(&conv, .{ x0, x1 }, out_conv);
+            try std.testing.expectEqual(want, got);
+        };
+    }
+}
+
+test "if-conversion is deterministic: equal MIR converts to equal MIR" {
+    const a = std.testing.allocator;
+    var s1 = try Shape.init(a, .value, .direct);
+    defer s1.mir.deinit(a);
+    var s2 = try Shape.init(a, .value, .direct);
+    defer s2.mir.deinit(a);
+    _ = try run(a, &s1.mir);
+    _ = try run(a, &s2.mir);
+    inline for (.{ .op, .a, .b, .c, .result, .next, .block }) |col|
+        try std.testing.expectEqualSlices(@TypeOf(s1.mir.insts.items(col)[0]), s1.mir.insts.items(col), s2.mir.insts.items(col));
+    try std.testing.expectEqualSlices(u32, s1.mir.extra.items, s2.mir.extra.items);
+    try std.testing.expectEqualSlices(Mir.Value, s1.mir.alias.items, s2.mir.alias.items);
 }

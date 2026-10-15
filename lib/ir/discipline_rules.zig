@@ -10,7 +10,9 @@ const Ast = @import("frontend").Ast;
 
 /// §3.11.1 Derived Nature Rule — the base a (possibly derived) nature bottoms
 /// out at. Two natures are RELATED when this answers the same name for both.
-/// `.none` when the name resolves to no nature at all.
+/// `.none` when the name resolves to no nature at all; an undeclared parent
+/// is answered as the base. Climbs at most 16 parents, so a cyclic
+/// derivation terminates on whichever name it holds at the cap.
 pub fn baseNatureOf(file: *const Ast.SourceFile, name: Ast.StrId) Ast.StrId {
     var want = name;
     var hops: u32 = 0;
@@ -169,4 +171,128 @@ pub fn disciplineConflict(file: *const Ast.SourceFile, an: Ast.StrId, bn: Ast.St
     if (!naturesCompatible(file, a.flow, b.flow))
         return "3.11.1 Flow Incompatibility Rule: the two flow natures are " ++ unrelated;
     return null;
+}
+
+test "discipline rules: §3.6 lookups and §3.11.1 compatibility on a hand-built table" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const n = struct {
+        fn id(f: *Ast.SourceFile, al: std.mem.Allocator, s: []const u8) !Ast.StrId {
+            return f.intern(al, s);
+        }
+        fn ident(f: *Ast.SourceFile, al: std.mem.Allocator, s: []const u8) !Ast.ExprId {
+            return f.exprs.add(al, .{ .tag = .ident, .str = try f.intern(al, s) });
+        }
+        fn str(f: *Ast.SourceFile, al: std.mem.Allocator, s: []const u8) !Ast.ExprId {
+            return f.exprs.add(al, .{ .tag = .str_literal, .str = try f.intern(al, s) });
+        }
+    };
+    const voltage = try n.id(&file, a, "Voltage");
+    const current = try n.id(&file, a, "Current");
+    const milli = try n.id(&file, a, "MilliVolt");
+    const volt2 = try n.id(&file, a, "Volt2");
+    const odd = try n.id(&file, a, "Odd");
+    const cyc1 = try n.id(&file, a, "Cyc1");
+    const cyc2 = try n.id(&file, a, "Cyc2");
+    const via = try n.id(&file, a, "ViaDisc");
+    const dcur = try n.id(&file, a, "DerivCur");
+    const flux = try n.id(&file, a, "Flux");
+    const units = try n.id(&file, a, "units");
+    const access = try n.id(&file, a, "access");
+    const idt_nature = try n.id(&file, a, "idt_nature");
+    const ddt_nature = try n.id(&file, a, "ddt_nature");
+    const electrical = try n.id(&file, a, "electrical");
+    const logic = try n.id(&file, a, "logic");
+    const bare = try n.id(&file, a, "bare");
+    const mv = try n.id(&file, a, "mv");
+    const v2 = try n.id(&file, a, "v2");
+    const oddp = try n.id(&file, a, "oddp");
+    const oddf = try n.id(&file, a, "oddf");
+    const halfway = try n.id(&file, a, "halfway");
+    const nowhere = try n.id(&file, a, "nowhere");
+
+    const voltage_attrs = [_]Ast.NatureAttr{
+        .{ .name = units, .value = try n.str(&file, a, "V") },
+        .{ .name = access, .value = try n.ident(&file, a, "V") },
+        .{ .name = idt_nature, .value = try n.ident(&file, a, "Flux") },
+    };
+    const current_attrs = [_]Ast.NatureAttr{
+        .{ .name = units, .value = try n.str(&file, a, "A") },
+        .{ .name = access, .value = try n.ident(&file, a, "I") },
+        .{ .name = ddt_nature, .value = try n.str(&file, a, "q") },
+    };
+    const volt2_attrs = [_]Ast.NatureAttr{.{ .name = units, .value = try n.str(&file, a, "V") }};
+    const odd_attrs = [_]Ast.NatureAttr{.{ .name = units, .value = try n.str(&file, a, "X") }};
+    const natures = [_]Ast.NatureDecl{
+        .{ .name = voltage, .attrs = &voltage_attrs },
+        .{ .name = current, .attrs = &current_attrs },
+        .{ .name = milli, .parent = voltage },
+        .{ .name = volt2, .attrs = &volt2_attrs },
+        .{ .name = odd, .attrs = &odd_attrs },
+        .{ .name = cyc1, .parent = cyc2 },
+        .{ .name = cyc2, .parent = cyc1 },
+        // A.1.6 `nature ViaDisc : electrical.potential`.
+        .{ .name = via, .parent = electrical, .parent_access = .potential },
+        .{ .name = dcur, .parent = current },
+    };
+    const disciplines = [_]Ast.DisciplineDecl{
+        // The Annex D prelude's `electrical`, then a description's own.
+        .{ .name = electrical, .potential = voltage, .flow = current },
+        .{ .name = logic, .domain = .discrete },
+        .{ .name = bare },
+        .{ .name = mv, .potential = milli, .flow = current },
+        .{ .name = v2, .potential = volt2, .flow = current },
+        .{ .name = oddp, .potential = odd, .flow = current },
+        .{ .name = oddf, .potential = voltage, .flow = odd },
+        .{ .name = halfway, .potential = voltage },
+        .{ .name = electrical, .potential = voltage, .flow = current, .domain = .continuous },
+    };
+    file.natures = &natures;
+    file.disciplines = &disciplines;
+    const t = std.testing;
+
+    // §3.13.1: the last declaration of a name wins.
+    try t.expectEqual(&file.disciplines[8], declOf(&file, electrical).?);
+    try t.expectEqual(@as(?*const Ast.DisciplineDecl, null), declOf(&file, nowhere));
+    // §3.6.2.2: no `domain` but natures bound is continuous; nothing at all
+    // is domainless.
+    try t.expectEqual(@as(?Ast.DisciplineDecl.Domain, .continuous), domainOf(&file.disciplines[0]));
+    try t.expectEqual(@as(?Ast.DisciplineDecl.Domain, null), domainOf(&file.disciplines[2]));
+    try t.expectEqual(@as(?Ast.DisciplineDecl.Domain, .discrete), domainOf(&file.disciplines[1]));
+    try t.expect(isContinuous(&file, electrical) and !isContinuous(&file, logic));
+    try t.expect(!isContinuous(&file, bare) and !isContinuous(&file, nowhere) and !isContinuous(&file, .none));
+    // §3.6.1.4 access spellings, inherited through a derived nature.
+    try t.expectEqualStrings("V", file.str(accessOf(&file, electrical, .potential).?));
+    try t.expectEqualStrings("I", file.str(accessOf(&file, electrical, .flow).?));
+    try t.expectEqualStrings("V", file.str(accessOf(&file, mv, .potential).?));
+    try t.expectEqual(@as(?Ast.StrId, null), accessOf(&file, logic, .potential));
+    try t.expectEqual(@as(?Ast.StrId, null), accessOf(&file, halfway, .flow));
+    try t.expectEqual(@as(?Ast.StrId, null), accessOf(&file, nowhere, .potential));
+    // §3.11.1 base natures: a base answers itself, a derived nature its
+    // root, a discipline-half parent the nature that half binds.
+    try t.expectEqual(voltage, baseNatureOf(&file, voltage));
+    try t.expectEqual(voltage, baseNatureOf(&file, milli));
+    try t.expectEqual(voltage, baseNatureOf(&file, via));
+    try t.expectEqual(Ast.StrId.none, baseNatureOf(&file, nowhere));
+    // A cyclic derivation still terminates on a declared nature.
+    const cyc = baseNatureOf(&file, cyc1);
+    try t.expect(cyc == cyc1 or cyc == cyc2);
+    // §3.6.1.2: the parent's `idt_nature` (an identifier), the parent itself
+    // when it gives none, `.none` for a base nature or a non-name value.
+    try t.expectEqual(flux, parentDerivNatureOf(&file, &file.natures[2], "idt_nature"));
+    try t.expectEqual(voltage, parentDerivNatureOf(&file, &file.natures[2], "ddt_nature"));
+    try t.expectEqual(Ast.StrId.none, parentDerivNatureOf(&file, &file.natures[0], "idt_nature"));
+    try t.expectEqual(Ast.StrId.none, parentDerivNatureOf(&file, &file.natures[8], "ddt_nature"));
+    // §3.11.1's discipline rules.
+    try t.expectEqual(@as(?[]const u8, null), disciplineConflict(&file, electrical, electrical));
+    try t.expect(std.mem.startsWith(u8, disciplineConflict(&file, electrical, logic).?, "3.11.1 Domain Incompatibility Rule"));
+    try t.expectEqual(@as(?[]const u8, null), disciplineConflict(&file, electrical, bare)); // domainless
+    try t.expectEqual(@as(?[]const u8, null), disciplineConflict(&file, electrical, mv)); // derived nature
+    try t.expectEqual(@as(?[]const u8, null), disciplineConflict(&file, electrical, v2)); // same units
+    try t.expectEqual(@as(?[]const u8, null), disciplineConflict(&file, electrical, halfway)); // no flow bound
+    try t.expectEqual(@as(?[]const u8, null), disciplineConflict(&file, electrical, nowhere));
+    try t.expect(std.mem.startsWith(u8, disciplineConflict(&file, electrical, oddp).?, "3.11.1 Potential Incompatibility Rule"));
+    try t.expect(std.mem.startsWith(u8, disciplineConflict(&file, oddf, electrical).?, "3.11.1 Flow Incompatibility Rule"));
 }
