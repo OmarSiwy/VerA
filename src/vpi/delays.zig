@@ -5,7 +5,9 @@
 //! assignment rewrites the engine driver its statement became, and the row;
 //! on a path or timing check, the row alone (no simulation applies a specify
 //! block). Either way vpi_get_delays reads the put back, a path's pulse
-//! limits included (`limits`).
+//! limits included (`limits`). §12.22's inter-module paths live here too
+//! (`InterModPath`): objects made on demand from two port rows, whose delays
+//! the model holds as it holds a module path's.
 
 const std = @import("std");
 const callback = @import("callback.zig");
@@ -34,9 +36,12 @@ const vpiUdp = code.vpiUdp;
 const Limits = struct { reject: []const f64, err: []const f64 };
 var limits: std.AutoHashMapUnmanaged(usize, Limits) = .empty;
 
-/// Forgets every path's pulse limits (`root.close`).
+/// Forgets every path's pulse limits and every inter-module path
+/// (`root.close`).
 pub fn reset() void {
     limits.clearAndFree(std.heap.smp_allocator);
+    for (paths.items) |m| std.heap.smp_allocator.destroy(m);
+    paths.clearAndFree(std.heap.smp_allocator);
 }
 
 fn objIndex(o: *const root.Obj) usize {
@@ -72,6 +77,7 @@ pub const Delay = extern struct {
 /// default, an inertial delay).
 pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     if (root.refused("vpi_get_delays")) return;
+    if (asPath(obj)) |m| return getPathDelays(m, delay_p);
     const o = root.asObj(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_delays: that handle is not an object", .{});
         return;
@@ -128,6 +134,13 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     const lim = if (o.vtype == vpiModPath) limits.get(objIndex(o)) else null;
     const rejects: []const f64 = if (lim) |l| pathDelays(l.reject, &reject_buf) else values;
     const errs: []const f64 = if (lim) |l| pathDelays(l.err, &err_buf) else values;
+    fill(d, values, rejects, errs, obj);
+}
+
+/// Writes `values` (with their `rejects` and `errs`) into the user's `da` as
+/// Table 12-5 lays them out, in `d.time_type`; a vpiSimTime counts ticks
+/// of `unit_of`'s module's unit.
+fn fill(d: *Delay, values: []const f64, rejects: []const f64, errs: []const f64, unit_of: root.vpiHandle) void {
     const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
     const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
     var at: usize = 0;
@@ -142,7 +155,7 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
             };
             var t: callback.Time = .{ .type = d.time_type, .high = 0, .low = 0, .real = v };
             if (d.time_type == callback.vpiSimTime) {
-                const ticks = run.ticksOf(.{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = v }, obj) orelse return;
+                const ticks = run.ticksOf(.{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = v }, unit_of) orelse return;
                 t = .{ .type = callback.vpiSimTime, .high = @truncate(ticks >> 32), .low = @truncate(ticks), .real = 0 };
             }
             d.da[at] = t;
@@ -179,6 +192,7 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
 /// other limits onto one is refused rather than dropped.
 pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     if (root.refused("vpi_put_delays")) return;
+    if (asPath(obj)) |m| return putPathDelays(m, delay_p);
     const o = root.asObj(obj) orelse {
         root.fail("BADHANDLE", "vpi_put_delays: that handle is not an object", .{});
         return;
@@ -368,6 +382,164 @@ fn putEngineLimits(obj: root.vpiHandle, o: *const root.Obj, d: *const Delay) voi
 fn noMem() bool {
     root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// §12.22 inter-module paths
+// ---------------------------------------------------------------------------
+
+/// IEEE 1364-2005 §26.6.16's inter-module path: the interconnect from port
+/// row `ports[0]` (an output or inout) to port row `ports[1]` (an input or
+/// inout), and the rise, fall and turn-off delays a put gave it, in
+/// `ports[0]`'s module's time unit. An interconnect nothing was put on has no
+/// delay, so they start at 0. Like a module path's, the delays are the
+/// model's: no simulation applies one (VD-113).
+pub const InterModPath = struct { ports: [2]u32, delays: [3]f64 = .{ 0, 0, 0 } };
+
+/// Every inter-module path made since the design opened, each a handle.
+/// ponytail: scanned per lookup; an application asks for a handful. Key a
+/// map by the port pair when one asks for thousands.
+var paths: std.ArrayList(*InterModPath) = .empty;
+
+/// `h` as an inter-module path this design made, or null; never
+/// dereferences a foreign pointer.
+pub fn asPath(h: root.vpiHandle) ?*InterModPath {
+    const p = h orelse return null;
+    for (paths.items) |m| if (@intFromPtr(m) == @intFromPtr(p)) return m;
+    return null;
+}
+
+/// §12.22: "vpi_handle_multi() shall return a handle to objects of type
+/// vpiInterModPath associated with a list of output port and input port
+/// reference objects. The ports shall be of the same size and can be at
+/// different levels of the hierarchy." The same pair is the same path, the
+/// same handle (vpi_compare_objects reads identity). Two distinct ports,
+/// `from` driving out (output or inout) and `to` reading in (input or
+/// inout), of one size; whether a net joins them is not asked, as §12.22
+/// does not ask it.
+pub fn interModPath(ref1: root.vpiHandle, ref2: root.vpiHandle) root.vpiHandle {
+    const who = "vpi_handle_multi(vpiInterModPath)";
+    const a = root.asObj(ref1);
+    const b = root.asObj(ref2);
+    if (a == null or b == null or a.?.kind != .port or b.?.kind != .port) {
+        root.fail("BADHANDLE", who ++ ": an inter-module path joins two port handles", .{});
+        return null;
+    }
+    const from = a.?;
+    const to = b.?;
+    if (from == to) {
+        root.fail("BADPORT", who ++ ": `{s}` is both ends; a path joins two ports", .{from.full});
+        return null;
+    }
+    if (from.direction != .output and from.direction != .inout) {
+        root.fail("BADPORT", who ++ ": `{s}` is not an output or inout port, and the path leaves the first one", .{from.full});
+        return null;
+    }
+    if (to.direction != .input and to.direction != .inout) {
+        root.fail("BADPORT", who ++ ": `{s}` is not an input or inout port, and the path enters the second one", .{to.full});
+        return null;
+    }
+    if (from.size != to.size or from.size == 0) {
+        root.fail("BADPORT", who ++ ": `{s}` and `{s}` are not of the same size", .{ from.full, to.full });
+        return null;
+    }
+    const key = [2]u32{ @intCast(objIndex(from)), @intCast(objIndex(to)) };
+    for (paths.items) |m| if (std.mem.eql(u32, &m.ports, &key)) return @ptrCast(m);
+    const gpa = std.heap.smp_allocator;
+    const m = gpa.create(InterModPath) catch {
+        root.fail("NOMEM", who ++ ": out of memory", .{});
+        return null;
+    };
+    m.* = .{ .ports = key };
+    paths.append(gpa, m) catch {
+        gpa.destroy(m);
+        root.fail("NOMEM", who ++ ": out of memory", .{});
+        return null;
+    };
+    return @ptrCast(m);
+}
+
+/// The port row `i` as a handle, for a time unit or an iteration.
+fn portHandle(i: u32) root.vpiHandle {
+    return @ptrCast(&root.design.?.objects[i]);
+}
+
+/// §12.11: "For inter-module path objects, the no_of_delays value shall be 2
+/// or 3": rise and fall, then turn-off, IEEE 1364 §7.14's min(rise, fall)
+/// until a put of three writes it. The reject and error limits are the delay
+/// itself (§14.6.1's default): no put keeps others.
+fn getPathDelays(m: *const InterModPath, delay_p: ?*Delay) void {
+    const d = delay_p orelse {
+        root.fail("BADDELAY", "vpi_get_delays: delay_p is NULL", .{});
+        return;
+    };
+    if (!pathStruct("vpi_get_delays", d)) return;
+    if (d.time_type != callback.vpiScaledRealTime and d.time_type != callback.vpiSimTime) {
+        root.fail("BADDELAY", "vpi_get_delays: time_type {d} is neither vpiScaledRealTime nor vpiSimTime", .{d.time_type});
+        return;
+    }
+    fill(d, &m.delays, &m.delays, &m.delays, portHandle(m.ports[0]));
+}
+
+/// §12.29, with the count §12.11 gives: 2 or 3 delays, as vpiScaledRealTime
+/// in the first port's time unit, as a module path's are put. Two leave
+/// turn-off IEEE 1364 §7.14's min(rise, fall). Pulse limits other than the
+/// delay are refused, not dropped. A put needs the digital run, whose
+/// diagnostics get W0251: no simulation applies an interconnect delay.
+fn putPathDelays(m: *InterModPath, delay_p: ?*Delay) void {
+    const d = delay_p orelse {
+        root.fail("BADDELAY", "vpi_put_delays: delay_p is NULL", .{});
+        return;
+    };
+    if (!pathStruct("vpi_put_delays", d)) return;
+    if (d.time_type != callback.vpiScaledRealTime) {
+        root.fail("BADDELAY", "vpi_put_delays: an inter-module path's delays are put as vpiScaledRealTime", .{});
+        return;
+    }
+    const r = run.attached() orelse {
+        root.fail("NOENGINE", "vpi_put_delays: an inter-module path's delays are put on a digital run, and none is running", .{});
+        return;
+    };
+    const n: usize = @intCast(d.no_of_delays);
+    const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
+    const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
+    var got: [3]f64 = undefined;
+    for (got[0..n], 0..) |*v, k| {
+        v.* = d.da[element(k, 0, mtm, pulse)].real;
+        if (pulse != 3) continue;
+        for (1..3) |p| {
+            if (d.da[element(k, p, mtm, pulse)].real == v.*) continue;
+            root.fail("NOTSUPPORTED", "vpi_put_delays: an inter-module path's pulse limits are its delay (IEEE 1364 §14.6.1); others are not held", .{});
+            return;
+        }
+    }
+    if (n < 3) got[2] = @min(got[0], got[1]);
+    m.delays = got;
+    const objects = root.design.?.objects;
+    const from = &objects[m.ports[0]];
+    if (r.bag.enabled(.W0251)) {
+        const start = r.starts[@min(from.src_tok, r.starts.len - 1)];
+        r.bag.add(.lower, .W0251, .{ .start = start, .end = start }, "vpi_put_delays: the inter-module path from `{s}` to `{s}` holds its delays for vpi_get_delays; no simulation applies an interconnect delay", .{
+            from.full,
+            objects[m.ports[1]].full,
+        }) catch {
+            root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
+            return;
+        };
+    }
+}
+
+/// The checks a get and a put share: §12.11's count and a `da` to use.
+fn pathStruct(comptime who: []const u8, d: *const Delay) bool {
+    if (d.no_of_delays != 2 and d.no_of_delays != 3) {
+        root.fail("BADDELAY", who ++ ": an inter-module path takes 2 or 3 delays, not {d} (§12.11)", .{d.no_of_delays});
+        return false;
+    }
+    if (d.da == null) {
+        root.fail("BADDELAY", who ++ ": da is NULL", .{});
+        return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
