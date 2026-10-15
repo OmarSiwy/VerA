@@ -333,7 +333,9 @@ fn terminalWidth(self: *const Parser, b: *const parse_module.Body, t: Ast.ExprId
         const rg = ex.rhs(t);
         return switch (ex.tag(rg)) {
             .range => parse_decl.literalWidth(self, .{ .msb = ex.lhs(rg), .lsb = ex.rhs(rg) }),
-            .indexed_range => if (ex.tag(ex.rhs(rg)) == .int_literal) @intCast(ex.intValue(ex.rhs(rg))) else null,
+            // A negative width (`+: 4'shf` is -1) has no width to compare;
+            // the part-select's legality is elaboration's question.
+            .indexed_range => if (ex.tag(ex.rhs(rg)) == .int_literal) std.math.cast(u64, ex.intValue(ex.rhs(rg))) else null,
             else => 1, // else: a bit-select
         };
     }

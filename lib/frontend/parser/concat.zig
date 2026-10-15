@@ -98,6 +98,10 @@ pub fn parseAssignPattern(self: *Parser, tok: u32) Error!Ast.ExprId {
 /// `.multi_concat` (§3.3 Table 3-3 allows one for a string, `{i{"Hi"}}`).
 /// Digital mode keeps every group and count unflattened.
 fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
+    // An analog `{{{...` recurses here through `braceGroup` without passing
+    // `parseUnary`, so each brace counts against E0241 itself.
+    try self.enter();
+    defer self.depth -= 1;
     _ = try self.expect(.lbrace);
     if (self.eat(.rbrace)) return null;
 
