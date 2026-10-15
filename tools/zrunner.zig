@@ -1,6 +1,9 @@
 //! zrunner: the test runner for every module's test artifact (`zig build
 //! test`); runs the tests and prints a per-module report to stdout. Set
 //! `CLICOLOR_FORCE` for colour when the build captures the output.
+//!
+//! Every test runs on a fresh `std.testing.allocator` and `std.testing.io`,
+//! as the stock 0.17 runner sets them up. Clauses: none (tooling).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -59,8 +62,8 @@ fn fuzzOne(
 /// Runs this artifact's tests (`run`). Its own allocations are leak-checked:
 /// a leak in the runner itself is `unreachable`.
 pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .{};
-    defer if (gpa.deinit() == .leak) unreachable;
+    var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
+    defer if (gpa.deinit() != 0) unreachable;
 
     var threaded: std.Io.Threaded = .init(gpa.allocator(), .{ .environ = init.environ });
     defer threaded.deinit();
@@ -152,7 +155,9 @@ fn writeTestResults(
     report: Report,
 ) !void {
     const alloc = arena.allocator();
-    var grouped_tests: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(TestResult)) = .empty;
+    // Insertion-ordered, so namespaces print in the order their first test
+    // ran and two runs of one artifact print the same report.
+    var grouped_tests: std.array_hash_map.String(std.ArrayList(TestResult)) = .empty;
     for (report.test_results) |test_result| {
         const gop = try grouped_tests.getOrPut(alloc, test_result.@"test"().namespace);
         if (gop.found_existing) {
@@ -191,10 +196,13 @@ const Test = struct {
         // Possible templates of full test name are expected:
         //  - "<namespace>.test.<test name>"
         //  - "<namespace>.decltest.<test name>"
-        const names = if (std.mem.indexOf(u8, test_fn.name, ".test.")) |idx|
-            .{ test_fn.name[0..idx], test_fn.name[idx + 6 ..] }
-        else if (std.mem.indexOf(u8, test_fn.name, ".decltest.")) |idx|
+        //
+        // The LAST marker splits: a file named test.zig is a namespace
+        // ending in `.test` (`ns.test.test.<name>`, `ns.test.decltest.<decl>`).
+        const names: [2][]const u8 = if (std.mem.findLast(u8, test_fn.name, ".decltest.")) |idx|
             .{ test_fn.name[0..idx], test_fn.name[idx + 10 ..] }
+        else if (std.mem.findLast(u8, test_fn.name, ".test.")) |idx|
+            .{ test_fn.name[0..idx], test_fn.name[idx + 6 ..] }
         else
             .{ "", test_fn.name };
         instance.namespace = names[0];
@@ -216,6 +224,10 @@ const Test = struct {
             .check_write_after_free = true,
         });
         std.testing.io_instance = .init(std.testing.allocator, .{ .environ = environ });
+        // Undefined until set: a test reading `std.testing.environ` read
+        // garbage. The level is reset because a test may change it.
+        std.testing.environ = environ;
+        std.testing.log_level = .warn;
 
         const start = std.Io.Clock.Timestamp.now(io, .awake);
         // Try to run the test:
@@ -302,11 +314,12 @@ pub const TestResult = union(enum) {
 const Report = struct {
     process_name: []const u8,
     test_results: []TestResult,
-    // `u16`: counts per artifact; one module already has more than 255 tests.
-    passed_count: u16 = 0,
-    failed_count: u16 = 0,
-    skipped_count: u16 = 0,
-    xfail_count: u16 = 0,
+    // `u32`: counts per artifact, and `writeSummary` adds all four, so no
+    // module's test count may overflow the sum (one already has > 255).
+    passed_count: u32 = 0,
+    failed_count: u32 = 0,
+    skipped_count: u32 = 0,
+    xfail_count: u32 = 0,
     total_duration: Duration = .zero,
     is_mem_leak: bool = false,
 };
@@ -361,7 +374,9 @@ const FileReporter = struct {
 
         if (tests_count == 0) {
             try self.colorizeLine(colors.no_tests, "No one test was found in {s}", .{process_name});
-            return;
+            // `writeSummary` prints nothing for no tests, so it never
+            // flushes this line.
+            return self.file_writer.interface.flush();
         }
         try self.colorize(colors.title, "Run ", .{});
         try self.colorizeLine(colors.process_name, "{s}", .{process_name});
@@ -416,10 +431,10 @@ const FileReporter = struct {
     /// The totals line, then a flush. Prints nothing for an artifact with no tests.
     pub fn writeSummary(
         self: *FileReporter,
-        passed: u16,
-        failed: u16,
-        skipped: u16,
-        xfail: u16,
+        passed: u32,
+        failed: u32,
+        skipped: u32,
+        xfail: u32,
         total_duration: Duration,
         is_mem_leak: bool,
     ) anyerror!void {
@@ -469,3 +484,38 @@ const FileReporter = struct {
         try t.setColor(.reset);
     }
 };
+
+// zrunner is the runner, not a module under test, so no artifact collects
+// these; `zig test tools/zrunner.zig` runs them on the stock runner.
+
+test "Test.wrap: the namespace before `.test.`/`.decltest.`, the name after" {
+    const f = struct {
+        fn f() anyerror!void {}
+    }.f;
+    const cases = [_][3][]const u8{
+        .{ "ir.lower.test.adds two", "ir.lower", "adds two" },
+        .{ "ir.lower.decltest.parse", "ir.lower", "parse" },
+        .{ "bare", "", "bare" },
+        // A file named test.zig is a namespace ending in `.test`.
+        .{ "backend.codegen.test.test.emits", "backend.codegen.test", "emits" },
+        .{ "backend.codegen.test.decltest.emit", "backend.codegen.test", "emit" },
+    };
+    for (cases) |c| {
+        const t = Test.wrap(.{ .name = c[0], .func = &f });
+        try std.testing.expectEqualStrings(c[1], t.namespace);
+        try std.testing.expectEqualStrings(c[2], t.name);
+    }
+}
+
+test "TestResult: the test it is for, and a skip never leaks" {
+    const f = struct {
+        fn f() anyerror!void {}
+    }.f;
+    const t = Test.wrap(.{ .name = "m.test.x", .func = &f });
+    const skipped: TestResult = .{ .skipped = t };
+    try std.testing.expect(!skipped.isMemoryLeak());
+    try std.testing.expectEqualStrings("x", skipped.@"test"().name);
+    const xfailed: TestResult = .{ .xfailed = .{ .@"test" = t, .is_mem_leak = true } };
+    // An xfail excuses the failure, never the leak.
+    try std.testing.expect(xfailed.isMemoryLeak());
+}

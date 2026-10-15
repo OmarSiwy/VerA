@@ -14,6 +14,12 @@
 //! tables (noise, AC, VPI, files, limiting and Jacobian masks); §5.6.1.2 charge
 //! sites; scalar families (the lead protocol, `RefFamily`, `Rows`/`Sites`);
 //! `validate`/`validateHost`; tests.
+//!
+//! Clauses: LRM §2.9.2 (`DeclMeta`), §3.4 (shape parameters), §3.6 (unknown
+//! metadata), §4.5 (operators, `ac_dyn_slots`), §4.6.3/§4.6.4 (AC stimuli,
+//! noise and its tables), §5.4-§5.6 (rows, charge sites, collapse), §5.10
+//! (held state), §6.3.6 (`$mfactor`), §9.4/§9.5/§9.7.3 (display records,
+//! files, status), §9.15 (`$simparam`), §9.17 (limiting), §12.32 (`Systf`).
 
 const std = @import("std");
 
@@ -82,7 +88,10 @@ pub const StatusSite = struct {
 
 /// The `vera_status__` value site index `site` (0-based) of severity `sev`
 /// latches: the severity in the top byte (1 fatal, 2 error), `site + 1` below.
+/// Asserts that `site + 1` fits the low 24 bits, so the code cannot spill
+/// into the severity byte.
 pub fn statusCode(sev: @FieldType(StatusSite, "severity"), site: usize) u32 {
+    std.debug.assert(site < 0xff_ffff);
     return (@as(u32, if (sev == .fatal) 1 else 2) << 24) | @as(u32, @intCast(site + 1));
 }
 
@@ -191,6 +200,8 @@ pub const SayPass = enum {
 /// Writes the records `D.say` put in `s`, each as its site's format renders
 /// it, `name` standing for `%m`; then, if any record did not fit, a line
 /// saying how many. Empties `s` for the next accepted point.
+/// Precondition: every record was put by `D.say`, so its site indexes
+/// `D.say_sites` and carries that site's `nargs` values.
 pub fn formatSay(comptime D: type, s: *Say, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
     var i: usize = 0;
     while (i < s.len) {
@@ -207,8 +218,12 @@ pub fn formatSay(comptime D: type, s: *Say, name: []const u8, w: *std.Io.Writer)
 /// real conversions) over `args`, each conversion taking the next value, 0
 /// past the end. Integer conversions round the value (§4.2.1.1); `%h`, `%x`,
 /// `%o` and `%b` print its 64-bit two's complement, `%c` its low byte, `%r`
-/// is §2.6.2 engineering notation, `%t` is `%g`, `%s` writes `?`, and
-/// `%m`/`%l` write `name`. Precision past 64 is cut to 64.
+/// is §2.6.2 engineering notation (a mantissa in [1, 1000) and one scale
+/// letter, the mantissa's shortest digits, or a precision's fractional
+/// digits, as the device's display kernels print it), `%t` is `%g`, `%s`
+/// writes `?`, and `%m`/`%l` write `name`. Precision past 64 is cut to 64.
+/// A `%` that ends `fmt` is written as is; one cut off after its flags,
+/// width or precision writes nothing.
 fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
     var next: usize = 0;
     var i: usize = 0;
@@ -259,12 +274,12 @@ fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writ
                 const n: i64 = if (std.math.isNan(v)) 0 else @intFromFloat(@round(std.math.clamp(v, -0x1p63, 0x1p63 - 1024)));
                 const u: u64 = @bitCast(n);
                 const digits = switch (conv) {
-                    'd', 'D', 'i' => std.fmt.bufPrint(&buf, "{d}", .{@abs(n)}),
-                    'h', 'x' => std.fmt.bufPrint(&buf, "{x}", .{u}),
-                    'H', 'X' => std.fmt.bufPrint(&buf, "{X}", .{u}),
-                    'o', 'O' => std.fmt.bufPrint(&buf, "{o}", .{u}),
-                    'b', 'B' => std.fmt.bufPrint(&buf, "{b}", .{u}),
-                    else => std.fmt.bufPrint(&buf, "{c}", .{@as(u8, @truncate(u))}),
+                    'd', 'D', 'i' => std.mem.print(&buf, "{d}", .{@abs(n)}),
+                    'h', 'x' => std.mem.print(&buf, "{x}", .{u}),
+                    'H', 'X' => std.mem.print(&buf, "{X}", .{u}),
+                    'o', 'O' => std.mem.print(&buf, "{o}", .{u}),
+                    'b', 'B' => std.mem.print(&buf, "{b}", .{u}),
+                    else => std.mem.print(&buf, "{c}", .{@as(u8, @truncate(u))}),
                 } catch unreachable;
                 const signed = conv == 'd' or conv == 'D' or conv == 'i';
                 try cPad(w, if (signed) cSign(n < 0, f) else "", digits, f, true);
@@ -276,7 +291,7 @@ fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writ
                     try cPad(w, cSign(v < 0, f), t, f, false);
                     continue;
                 }
-                const body = cReal(&buf, @abs(v), std.ascii.toLower(conv), f.prec orelse 6, f.alt);
+                const body = cReal(&buf, @abs(v), std.ascii.toLower(conv), f.prec, f.alt);
                 // `%E`/`%G` spell the exponent marker upper case; `%R`'s scale
                 // letters keep their case (`m` is milli, `M` mega).
                 if (conv == 'E' or conv == 'G') for (@constCast(body)) |*b| {
@@ -328,38 +343,29 @@ fn cPad(w: *std.Io.Writer, sign: []const u8, body: []const u8, f: CSpec, number:
 }
 
 /// `v` (finite, not negative) as C's `%e`, `%f` or `%g` at precision `p`, or
-/// §9.4.3's `%r`: `%g`'s digits over a §2.6.2 scale factor (`T G M K k m u
-/// n p f a`; `k` for 1e3, Table 2-1's spelling).
-fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
+/// §9.4.3's `%r`: a mantissa in [1, 1000) over a §2.6.2 scale factor (`T G M
+/// K k m u n p f a`; `k` for 1e3, Table 2-1's spelling).
+fn cReal(buf: *[512]u8, v: f64, conv: u8, prec: ?usize, alt: bool) []const u8 {
     const float = std.fmt.float;
+    const p = prec orelse 6;
     switch (conv) {
         'f' => return float.render(buf, v, .{ .mode = .decimal, .precision = p }) catch "?",
         'e' => return cExp(buf, float.render(buf[256..], v, .{ .mode = .scientific, .precision = p }) catch return "?"),
-        'r' => {
-            const scales = "afpnum kMGT";
-            var e: i32 = if (v == 0) 0 else @intFromFloat(@floor(@log10(v) / 3.0));
-            e = std.math.clamp(e, -6, 4);
-            const m = v / std.math.pow(f64, 1000.0, @floatFromInt(e));
-            const g = cReal(buf, m, 'g', p, alt);
-            const c = scales[@intCast(e + 6)];
-            if (c == ' ') return g;
-            buf[g.len] = c;
-            return buf[0 .. g.len + 1];
-        },
+        'r' => return cEng(buf, v, prec),
         else => {
             // C11 7.21.6.1 %g: P significant digits; X the exponent %e would
             // print; %f with P - 1 - X decimals when P > X >= -4, else %e.
             const sig = @max(p, 1);
             const sci = float.render(buf[256..], v, .{ .mode = .scientific, .precision = sig - 1 }) catch return "?";
-            const x = std.fmt.parseInt(i32, sci[std.mem.indexOfScalar(u8, sci, 'e').? + 1 ..], 10) catch 0;
+            const x = std.fmt.parseInt(i32, sci[std.mem.findScalar(u8, sci, 'e').? + 1 ..], 10) catch 0;
             var out = if (x < -4 or x >= @as(i32, @intCast(sig)))
                 cExp(buf, sci)
             else
                 float.render(buf, v, .{ .mode = .decimal, .precision = @intCast(@as(i32, @intCast(sig)) - 1 - x) }) catch return "?";
             if (alt) return out;
             // Trailing zeros of the fraction go, then a bare point.
-            const e_at = std.mem.indexOfScalar(u8, out, 'e') orelse out.len;
-            if (std.mem.indexOfScalar(u8, out[0..e_at], '.') == null) return out;
+            const e_at = std.mem.findScalar(u8, out, 'e') orelse out.len;
+            if (std.mem.findScalar(u8, out[0..e_at], '.') == null) return out;
             var end = e_at;
             while (out[end - 1] == '0') end -= 1;
             if (out[end - 1] == '.') end -= 1;
@@ -371,10 +377,96 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
     }
 }
 
+// `cReal`'s `%r`, as `str_kernels.zCReal` prints it: the value's shortest
+// round-trip digits with the point moved to the multiple-of-three exponent
+// Table 2-1 has a letter for (clamped to a..T, the mantissa absorbing the
+// rest), rounded to `prec` fractional digits, ties to the even digit, when a
+// precision is given. Decimal digits, never a division, so 4.7e-9 is 4.7n
+// and not 4.699999999999999n. A carry out of the mantissa is not
+// renormalized: 999.996 at %.2r is 1000.00, as in the kernel. Writes at most
+// 1 + 1 + 322 + 1 bytes (a subnormal, unclamped digits) into `buf`.
+fn cEng(buf: *[512]u8, v: f64, prec: ?usize) []const u8 {
+    var ds: [24]u8 = undefined;
+    ds[0] = '0';
+    var n: usize = 1;
+    var x: i32 = 0;
+    if (v != 0) {
+        const sci = std.fmt.float.render(buf[256..], v, .{ .mode = .scientific }) catch return "?";
+        const e = std.mem.findScalar(u8, sci, 'e') orelse return "?";
+        n = 0;
+        for (sci[0..e]) |c| if (c != '.') {
+            ds[n] = c;
+            n += 1;
+        };
+        x = std.fmt.parseInt(i32, sci[e + 1 ..], 10) catch return "?";
+    }
+    const g = std.math.clamp(@divFloor(x, 3) * 3, -18, 12);
+    // Digits before the point; 0 or fewer below the `a` clamp.
+    var int_len: i32 = x - g + 1;
+    if (prec) |p| {
+        const keep = int_len + @as(i32, @intCast(p));
+        if (keep < 0) {
+            n = 0;
+        } else if (keep < @as(i32, @intCast(n))) {
+            const k: usize = @intCast(keep);
+            var up = ds[k] > '5';
+            if (ds[k] == '5') {
+                const rest = for (ds[k + 1 .. n]) |c| {
+                    if (c != '0') break true;
+                } else false;
+                up = rest or (k > 0 and (ds[k - 1] - '0') % 2 == 1);
+            }
+            n = k;
+            if (up) {
+                var i = k;
+                while (i > 0) {
+                    i -= 1;
+                    if (ds[i] != '9') {
+                        ds[i] += 1;
+                        break;
+                    }
+                    ds[i] = '0';
+                } else {
+                    // Every kept digit was a 9, or none was kept: one more
+                    // integer digit, a leading 1.
+                    std.mem.copyBackwards(u8, ds[1 .. n + 1], ds[0..n]);
+                    ds[0] = '1';
+                    n += 1;
+                    int_len += 1;
+                }
+            }
+        }
+    }
+    const frac: usize = prec orelse @intCast(@max(@as(i32, @intCast(n)) - int_len, 0));
+    var o: usize = 0;
+    if (int_len <= 0) {
+        buf[o] = '0';
+        o += 1;
+    } else for (0..@intCast(int_len)) |i| {
+        buf[o] = if (i < n) ds[i] else '0';
+        o += 1;
+    }
+    if (frac != 0) {
+        buf[o] = '.';
+        o += 1;
+        for (0..frac) |j| {
+            const at = int_len + @as(i32, @intCast(j));
+            buf[o] = if (at >= 0 and at < @as(i32, @intCast(n))) ds[@intCast(at)] else '0';
+            o += 1;
+        }
+    }
+    const letter = "afpnum kMGT"[@intCast(@divExact(g, 3) + 6)];
+    if (letter != ' ') {
+        buf[o] = letter;
+        o += 1;
+    }
+    return buf[0..o];
+}
+
 /// Zig's `1.5e-7` as C's `1.5e-07`: a signed exponent of at least two
 /// digits, copied to the front of `buf`.
 fn cExp(buf: *[512]u8, sci: []const u8) []const u8 {
-    const e = std.mem.indexOfScalar(u8, sci, 'e').?;
+    const e = std.mem.findScalar(u8, sci, 'e').?;
     var exp = sci[e + 1 ..];
     const neg = exp.len != 0 and exp[0] == '-';
     if (neg) exp = exp[1..];
@@ -438,6 +530,7 @@ pub const gm = struct {
         const r = 1 - 2.0 / (armExp(2 * ax) + 1);
         return if (x < 0) -r else r;
     }
+    /// sinh(x); on a GPU a Taylor series below 0.5, else (e^|x| - e^-|x|)/2.
     pub inline fn sinh(x: f64) f64 {
         if (comptime !dev) return std.math.sinh(x);
         const ax = @abs(x);
@@ -451,6 +544,7 @@ pub const gm = struct {
         const r = 0.5 * e - 0.5 / e;
         return if (x < 0) -r else r;
     }
+    /// cosh(x); on a GPU (e^|x| + e^-|x|)/2.
     pub inline fn cosh(x: f64) f64 {
         if (comptime !dev) return std.math.cosh(x);
         const e = armExp(@abs(x));
@@ -461,6 +555,7 @@ pub const gm = struct {
     pub inline fn sin(x: f64) f64 {
         return if (comptime dev) softSin(x) else @sin(x);
     }
+    /// cos(x), with `sin`'s accuracy on each target.
     pub inline fn cos(x: f64) f64 {
         return if (comptime dev) softCos(x) else @cos(x);
     }
@@ -2082,7 +2177,10 @@ pub const SystfHost = struct {
     /// `out`, or, when it is null, argument j unchanged: the value an
     /// argument calltf did not put keeps (`args[j - 1]`, partial 1 on itself
     /// and 0 elsewhere). Writes every slot of `partials`.
+    /// Asserts that `j` is 1-based and in range (1 <= j <= `args.len`) and
+    /// that `partials.len == args.len`.
     pub fn output(h: *const SystfHost, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
+        std.debug.assert(j >= 1 and j <= args.len and partials.len == args.len);
         if (h.out) |f| return f(h.ctx, k, j, args, partials);
         @memset(partials, 0);
         partials[j - 1] = 1;
@@ -2797,8 +2895,8 @@ pub fn RefFamily(comptime L: type, comptime lane: []const u8, comptime opts: Ref
     return if (opts.dense) RefDense(L, lane, opts.collapse_applied) else RefSparse(L, lane, opts.collapse_applied);
 }
 
-const fma_lanes = switch (@import("builtin").cpu.arch) {
-    .x86_64 => std.Target.x86.featureSetHas(@import("builtin").cpu.features, .fma),
+const fma_lanes = switch (@import("builtin").target.cpu.arch) {
+    .x86_64 => std.Target.x86.featureSetHas(@import("builtin").target.cpu.features, .fma),
     .aarch64, .nvptx64, .amdgcn => true,
     else => false,
 };
@@ -5157,4 +5255,377 @@ test "RefFamily dense: one type, lanes where `lane` puts them" {
     try testing.expectEqual(@as(f64, 0.0), x.ddxAt(1)); // not carried
     try testing.expectEqual(@as(f64, 3.0), x.ddxAt(2));
     try testing.expectEqual([2]f64{ 3.0, 5.0 }, x.d);
+}
+
+test "statusCode/statusSite: the severity byte over the 1-based site; a site past the table is none" {
+    try testing.expectEqual(@as(u32, 0x0100_0001), statusCode(.fatal, 0));
+    try testing.expectEqual(@as(u32, 0x0200_0003), statusCode(.@"error", 2));
+    var inst: MockAll.Instance = .{};
+    try testing.expect(statusSite(MockAll, &inst) == null); // 0: nothing latched
+    inst.vera_status__ = statusCode(.fatal, 0);
+    try testing.expectEqual(@as(u32, 3), statusSite(MockAll, &inst).?.line);
+    // MockAll has one site; a code naming a second names none.
+    inst.vera_status__ = statusCode(.@"error", 1);
+    try testing.expect(statusSite(MockAll, &inst) == null);
+    // A severity byte over site bits 0: the 1-based index wraps, still none.
+    inst.vera_status__ = 0x0100_0000;
+    try testing.expect(statusSite(MockAll, &inst) == null);
+}
+
+test "Say: a record that fills the buffer exactly is kept; the next is lost whole" {
+    var store: [3]f64 = undefined;
+    var s: Say = .{ .buf = &store };
+    s.put(4, &.{ 1.5, 2.5 });
+    try testing.expectEqual(@as(usize, 3), s.len);
+    try testing.expectEqualSlices(f64, &.{ 4, 1.5, 2.5 }, store[0..3]);
+    s.put(0, &.{}); // even a bare site index no longer fits
+    try testing.expectEqual(@as(usize, 3), s.len);
+    try testing.expectEqual(@as(usize, 1), s.lost);
+    // A zero-length buffer loses every record the pass takes, and only those.
+    var empty: [0]f64 = .{};
+    var none: Say = .{ .buf = &empty, .pass = .iteration };
+    none.putDebug(0, &.{});
+    none.put(0, &.{}); // not `$debug`: the iteration pass skips it, uncounted
+    try testing.expectEqual(@as(usize, 1), none.lost);
+    // formatSay with only losses prints the count and resets it.
+    var buf: [96]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try formatSay(MockAll, &none, "", &w);
+    try testing.expectEqualStrings("[1 display record(s) did not fit the host's buffer]\n", w.buffered());
+    try testing.expectEqual(@as(usize, 0), none.lost);
+}
+
+test "formatC: the C11 7.21.6.1 corners a model's format can reach" {
+    const nan = std.math.nan(f64);
+    const inf = std.math.inf(f64);
+    const zeros64: [64]u8 = @splat('0');
+    const cases = [_]struct { fmt: []const u8, args: []const f64, want: []const u8 }{
+        .{ .fmt = "%", .args = &.{}, .want = "%" }, // a `%` that ends the format
+        .{ .fmt = "50%", .args = &.{}, .want = "50%" },
+        .{ .fmt = "%5", .args = &.{}, .want = "" }, // cut off after its width
+        .{ .fmt = "a%q", .args = &.{}, .want = "a%q" }, // no such conversion: as written
+        .{ .fmt = "%d %d", .args = &.{7}, .want = "7 0" }, // past the arguments: 0
+        .{ .fmt = "%d", .args = &.{nan}, .want = "0" },
+        // Clamped into i64: 2^63 - 1024 is the largest double below 2^63.
+        .{ .fmt = "%d", .args = &.{1e300}, .want = "9223372036854774784" },
+        .{ .fmt = "%d", .args = &.{-1e300}, .want = "-9223372036854775808" },
+        .{ .fmt = "%x", .args = &.{-2}, .want = "fffffffffffffffe" },
+        .{ .fmt = "%X", .args = &.{255}, .want = "FF" },
+        .{ .fmt = "%c", .args = &.{321}, .want = "A" }, // 321 & 0xff = 65
+        .{ .fmt = "%f", .args = &.{-0.0}, .want = "-0.000000" },
+        .{ .fmt = "%g", .args = &.{0}, .want = "0" },
+        .{ .fmt = "%g", .args = &.{0.0001}, .want = "0.0001" }, // X = -4: still %f
+        .{ .fmt = "%g", .args = &.{0.00001}, .want = "1e-05" }, // X = -5: %e
+        .{ .fmt = "%#g", .args = &.{1}, .want = "1.00000" }, // `#` keeps the zeros
+        .{ .fmt = "%e", .args = &.{-1.5}, .want = "-1.500000e+00" },
+        .{ .fmt = "%.0e", .args = &.{12345}, .want = "1e+04" },
+        .{ .fmt = "%+g", .args = &.{inf}, .want = "+inf" },
+        .{ .fmt = "%G", .args = &.{nan}, .want = "NAN" },
+        .{ .fmt = "% g", .args = &.{-inf}, .want = "-inf" },
+        .{ .fmt = "%5g|", .args = &.{nan}, .want = "  nan|" },
+        .{ .fmt = "%-5s|", .args = &.{}, .want = "?    |" },
+        .{ .fmt = "%3m|", .args = &.{}, .want = "  x|" },
+        .{ .fmt = "%l", .args = &.{}, .want = "x" },
+        .{ .fmt = "%5%", .args = &.{}, .want = "%" }, // `%%` takes no width
+        .{ .fmt = "%t", .args = &.{0.5}, .want = "0.5" },
+        .{ .fmt = "%05.1f", .args = &.{-2.3}, .want = "-02.3" }, // zeros after the sign
+        .{ .fmt = "%-+4d|", .args = &.{5}, .want = "+5  |" },
+        .{ .fmt = "%.100f", .args = &.{1}, .want = "1." ++ &zeros64 }, // precision cut to 64
+    };
+    for (cases) |c| {
+        var buf: [256]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try formatC(c.fmt, c.args, "x", &w);
+        testing.expectEqualStrings(c.want, w.buffered()) catch |e| {
+            std.debug.print("format \"{s}\"\n", .{c.fmt});
+            return e;
+        };
+    }
+}
+
+test "formatC %r: §2.6.2 engineering notation, as the display kernels print it" {
+    // The mantissa is in [1, 1000) and the scale letter picks the exponent,
+    // a multiple of three (`str_kernels.zCReal`). Without a precision the
+    // mantissa is the value's shortest digits; with one, that many fractional
+    // digits, ties to even.
+    const cases = [_]struct { fmt: []const u8, v: f64, want: []const u8 }{
+        .{ .fmt = "%r", .v = 4.7e-9, .want = "4.7n" },
+        .{ .fmt = "%r", .v = 2200, .want = "2.2k" },
+        .{ .fmt = "%r", .v = 1234567, .want = "1.234567M" }, // every digit, not %g's six
+        .{ .fmt = "%r", .v = 999.9999999, .want = "999.9999999" }, // not rounded up to 1000
+        .{ .fmt = "%r", .v = 0.999, .want = "999m" },
+        .{ .fmt = "%r", .v = -0.5, .want = "-500m" },
+        .{ .fmt = "%R", .v = 2.2e6, .want = "2.2M" }, // the letter keeps its case
+        .{ .fmt = "%r", .v = 0, .want = "0" },
+        .{ .fmt = "%.3r", .v = 0, .want = "0.000" },
+        // Past the table the mantissa absorbs the rest: T is the largest
+        // letter, a the smallest.
+        .{ .fmt = "%r", .v = 1e15, .want = "1000T" },
+        .{ .fmt = "%r", .v = 1.5e-20, .want = "0.015a" },
+        // A precision is the mantissa's fractional digits, never %g's
+        // significant ones (which printed `1.2e+02k` here).
+        .{ .fmt = "%.2r", .v = 123456, .want = "123.46k" },
+        .{ .fmt = "%.1r", .v = 4.75e-9, .want = "4.8n" }, // 4.75: a tie, to even
+        .{ .fmt = "%.1r", .v = 4.25e-9, .want = "4.2n" },
+        .{ .fmt = "%.2r", .v = 999.996, .want = "1000.00" }, // the carry is not renormalized
+        .{ .fmt = "%8.1r|", .v = 1500, .want = "    1.5k|" },
+    };
+    for (cases) |c| {
+        var buf: [128]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try formatC(c.fmt, &.{c.v}, "", &w);
+        testing.expectEqualStrings(c.want, w.buffered()) catch |e| {
+            std.debug.print("format \"{s}\" of {e}\n", .{ c.fmt, c.v });
+            return e;
+        };
+    }
+}
+
+test "LeadState.markI: the leader's integer decides; a point that rounds elsewhere re-runs" {
+    var s: LeadState(4, false) = .{};
+    s.begin();
+    try testing.expectEqual(@as(i64, 3), s.markI(.{ 3, 3, 4, 3 }));
+    try testing.expectEqual(@Vector(4, bool){ true, true, false, true }, s.keep());
+    try testing.expect(s.next());
+    try testing.expectEqual(@as(u2, 2), s.leader);
+    // Run 2 under point 2: the others differ, but they are done.
+    try testing.expectEqual(@as(i64, 4), s.markI(.{ 3, 3, 4, 3 }));
+    try testing.expectEqual(@Vector(4, bool){ false, false, true, false }, s.keep());
+    try testing.expect(!s.next());
+
+    // One point: every decision is unanimous, and one run finishes it.
+    var one: LeadState(1, false) = .{};
+    one.begin();
+    try testing.expect(one.mark(.{true}));
+    try testing.expect(!one.mark(.{false}));
+    try testing.expect(!one.next());
+}
+
+test "LeadState.regions: each point's signature hashes its own decisions, as `region` does" {
+    var s: LeadState(2, true) = .{};
+    s.begin();
+    // Run 1, leader 0: point 1 decides the other way and diverges.
+    try testing.expect(s.mark(.{ true, false }));
+    try testing.expect(s.next());
+    // Run 2, leader 1, on its own decision; point 0 is done.
+    try testing.expect(!s.mark(.{ true, false }));
+    try testing.expect(!s.next());
+    const r = s.regions();
+    try testing.expectEqual(sigFold(sigMix(sig_seed, @as(u64, 1))), r[0]);
+    try testing.expectEqual(sigFold(sigMix(sig_seed, @as(u64, 0))), r[1]);
+}
+
+/// A `batch_lead` device with one comparison and one rounding: the two
+/// decisions `region` hashes.
+const MockLead = struct {
+    pub const U = enum(u8) { p, n };
+    pub const num_ports: usize = 2;
+    pub const batch_lead = true;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: SimState) Rows(@This(), S) {
+        const p = probes(@This(), S, x);
+        const v = if (S.decide(.gt, p[0], p[1])) p[0].sub(p[1]) else S.con(0.0).to(denseMask(@This()));
+        const i = v.scale(@floatFromInt(S.decideI(p[0])));
+        return rows(@This(), S, .{ i, i.neg() });
+    }
+};
+
+test "region: the hash of a point's decision sequence; 0 for a device that never diverges" {
+    // 1.5 > 0.5, then round(1.5) = 2: two outcomes, in order.
+    const want = sigFold(sigMix(sigMix(sig_seed, @as(u64, 1)), @as(u64, 2)));
+    try testing.expectEqual(want, region(MockLead, &.{ 1.5, 0.5 }, &.{}, &.{}, .{}));
+    // 0.25 > 2 is false, and round(0.25) = 0.
+    const off = sigFold(sigMix(sigMix(sig_seed, @as(u64, 0)), @as(u64, 0)));
+    try testing.expectEqual(off, region(MockLead, &.{ 0.25, 2 }, &.{}, &.{}, .{}));
+    try testing.expectEqual(@as(u16, 0), region(MockR, &.{ 1, 0 }, &.{}, &.{}, .{}));
+}
+
+test "leadMergeInto: through structs and arrays to each value's own per-point keep" {
+    const Pt = struct {
+        v: @Vector(2, f64),
+        pub fn leadKeep(self: *@This(), new: @This(), keep: @Vector(2, bool)) void {
+            self.v = @select(f64, keep, new.v, self.v);
+        }
+    };
+    const R = struct { a: Pt, b: [2]Pt };
+    var out: R = .{ .a = .{ .v = .{ 1, 2 } }, .b = .{ .{ .v = .{ 3, 4 } }, .{ .v = .{ 5, 6 } } } };
+    const new: R = .{ .a = .{ .v = .{ 10, 20 } }, .b = .{ .{ .v = .{ 30, 40 } }, .{ .v = .{ 50, 60 } } } };
+    leadMergeInto(&out, new, @Vector(2, bool){ false, true });
+    try testing.expectEqual(@Vector(2, f64){ 1, 20 }, out.a.v);
+    try testing.expectEqual(@Vector(2, f64){ 3, 40 }, out.b[0].v);
+    try testing.expectEqual(@Vector(2, f64){ 5, 60 }, out.b[1].v);
+}
+
+test "pow and sqrt lane coefficients at the edges the numerics table pins" {
+    try testing.expectEqual(@as(f64, 12), powSlope(2, 3, 8)); // c·p/x
+    try testing.expectEqual(@as(f64, 1), powSlope(0, 1, 0)); // c·pow(0, 0)
+    try testing.expectEqual(@as(f64, 0), powSlope(0, 2, 0)); // c·pow(0, 1)
+    try testing.expectEqual(@as(f64, 0), powSlope(0, 0.5, 0)); // 0.5·pow(0, -0.5) = inf
+    try testing.expectEqual(@as(f64, 0), powSlope(std.math.nan(f64), 2, std.math.nan(f64)));
+    try testing.expectEqual(@as(f64, 0.125), sqrtSlope(4)); // 0.5/4
+    try testing.expectEqual(@as(f64, 0), sqrtSlope(0));
+    try testing.expectEqual(@as(f64, 0), sqrtSlope(std.math.nan(f64)));
+    try testing.expectEqual(@as(usize, 0), comptime laneWidth(&.{}));
+    try testing.expectEqual(@as(usize, 0), comptime laneWidth(&.{ no_lane, no_lane }));
+    try testing.expectEqual(@as(usize, 4), comptime laneWidth(&.{ 3, no_lane }));
+    try testing.expectEqual(@as(usize, 1), comptime laneWidth(&.{ 0, 0 }));
+}
+
+/// A device shape with `n` unknowns and nothing else, for the mask helpers.
+fn MockN(comptime n: usize) type {
+    return struct {
+        pub const U = @Enum(u8, .exhaustive, &names, &std.simd.iota(u8, n));
+        const names = blk: {
+            @setEvalBranchQuota(100_000);
+            var a: [n][]const u8 = undefined;
+            for (&a, 0..) |*s, u| s.* = std.fmt.comptimePrint("u{d}", .{u});
+            break :blk a;
+        };
+    };
+}
+
+test "unknownsMask: 63 unknowns are the low 63 bits; 64 fill the u64 with no shift past it" {
+    try testing.expectEqual(@as(u64, std.math.maxInt(u63)), comptime unknownsMask(MockN(63)));
+    try testing.expectEqual(~@as(u64, 0), comptime unknownsMask(MockN(64)));
+    try testing.expectEqual(@as(u64, 1), comptime denseMask(MockN(1)));
+    try testing.expectEqual(@as(u64, 0), comptime denseMask(MockVsrc));
+}
+
+test "isDenseEnum: an unsigned tag of 8 bits or more, values 0..n-1" {
+    try testing.expect(comptime isDenseEnum(enum(u8) { a, b }));
+    try testing.expect(comptime isDenseEnum(enum(u16) { a }));
+    try testing.expect(comptime !isDenseEnum(enum(i8) { a, b }));
+    try testing.expect(comptime !isDenseEnum(enum(u4) { a, b }));
+    try testing.expect(comptime !isDenseEnum(enum(u8) { a = 1, b = 2 }));
+}
+
+test "isValueType: what a Model or Instance field may be, and what it may not" {
+    inline for (.{ f64, u32, bool, enum(u8) { a }, [3]f32, struct { a: f64, b: [2]u8 }, void, []const u8, ?*const SystfHost, []const [:0]const u8 }) |T|
+        try testing.expect(comptime isValueType(T));
+    inline for (.{ *f64, ?f64, []const f64, struct { p: *u8 }, [2]*u8 }) |T|
+        try testing.expect(comptime !isValueType(T));
+}
+
+test "requireWith and the generic-entry check refuse their own mistakes" {
+    const PsdOnly = struct {
+        pub const noisePsd = 0;
+    };
+    try testing.expect(comptime requireWithError(PsdOnly, "noisePsd", "noise_gens") != null);
+    try testing.expect(comptime requireWithError(MockAll, "noisePsd", "noise_gens") == null);
+    try testing.expect(comptime requireWithError(MockR, "noisePsd", "noise_gens") == null);
+    const NotFn = struct {
+        pub const eval = 3;
+    };
+    try testing.expect(comptime genericFnError(NotFn, "eval", "Rows(D, S)") != null);
+}
+
+test "stateClass, SimState and LimitResult defaults" {
+    try testing.expectEqual(StateClass.none, stateClass(MockR));
+    try testing.expectEqual(StateClass.history, stateClass(MockSw)); // updateState, undeclared
+    try testing.expectEqual(StateClass.path_latch, stateClass(struct {
+        pub const state_class: StateClass = .path_latch;
+    }));
+    // A DC operating point at t = 0, the first iterate of an analog initial.
+    const s: SimState = .{};
+    try testing.expectEqual(AnalysisKind.dc, s.kind);
+    try testing.expect(s.analog_initial and !s.initial_step and !s.final_step);
+    try testing.expectEqual(@as(u32, 1), s.iteration);
+    try testing.expectEqual(@as(f64, 0), s.t);
+    try testing.expectEqual(@as(f64, 0), s.dt);
+    const r: LimitResult(2) = .{ .x = .{ 1, 2 } };
+    try testing.expect(!r.converged);
+}
+
+test "§4.6.4.3 noiseTable: the declared table without the row's knots; table k's own slice with them" {
+    const Declared = struct {
+        pub const Model = struct {};
+        pub const noise_tables = [_]NoiseTable{
+            .{ .interp = .linear, .points = &.{.{ 1, 2 }} },
+            .{ .interp = .log, .points = &.{ .{ 1, 1 }, .{ 10, 0.1 } } },
+        };
+    };
+    const t = noiseTable(Declared, &.{}, 1);
+    try testing.expect(t.interp == .log);
+    try testing.expectEqual(@as(usize, 2), t.points.len);
+    const Card = struct {
+        pub const Model = struct { noise_table_points__: [3][2]f64 = .{ .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 } } };
+        pub const noise_tables = [_]NoiseTable{
+            .{ .interp = .linear, .points = &.{.{ 1, 0 }} },
+            .{ .interp = .linear, .points = &.{ .{ 2, 0 }, .{ 3, 0 } } },
+        };
+    };
+    const m: Card.Model = .{};
+    // Table 0 holds one knot, so table 1 starts at the row's second.
+    try testing.expectEqualSlices([2]f64, &.{ .{ 2, 6 }, .{ 3, 7 } }, noiseTable(Card, &m, 1).points);
+}
+
+test "sortNoiseTable sorts by frequency; noiseTableAt propagates a NaN frequency" {
+    // §4.6.4.3: "the simulator shall internally sort the pairs".
+    var pts = [_][2]f64{ .{ 3, 1 }, .{ 1, 2 }, .{ 2, 3 } };
+    sortNoiseTable(&pts);
+    try testing.expectEqualSlices([2]f64, &.{ .{ 1, 2 }, .{ 2, 3 }, .{ 3, 1 } }, &pts);
+    // NaN is below no knot and above none: outside the precondition, NaN out.
+    const t: NoiseTable = .{ .interp = .linear, .points = &pts };
+    try testing.expect(std.math.isNan(noiseTableAt(t, std.math.nan(f64))));
+}
+
+test "hostString: an empty table answers every index with the fallback" {
+    const saved = host_strings;
+    defer host_strings = saved;
+    host_strings = &.{};
+    try testing.expectEqualStrings("fb", hostString(1, "fb"));
+}
+
+test "SystfHost.output: without `out` an argument keeps its value, partial 1 on itself" {
+    const h: SystfHost = .{ .ctx = undefined, .call = undefined };
+    var partials: [3]f64 = @splat(9);
+    try testing.expectEqual(@as(f64, 2), h.output(0, 2, &.{ 1, 2, 3 }, &partials));
+    try testing.expectEqualSlices(f64, &.{ 0, 1, 0 }, &partials);
+    // With `out`, the application answers: 10·k + j + args[0] here.
+    const Echo = struct {
+        fn out(_: *anyopaque, k: usize, j: usize, args: []const f64, p: []f64) f64 {
+            @memset(p, 0.5);
+            return @as(f64, @floatFromInt(10 * k + j)) + args[0];
+        }
+    };
+    const e: SystfHost = .{ .ctx = undefined, .call = undefined, .out = &Echo.out };
+    try testing.expectEqual(@as(f64, 31.25), e.output(3, 1, &.{0.25}, partials[0..1]));
+    try testing.expectEqual(@as(f64, 0.5), partials[0]);
+}
+
+test "the optional tables' defaults: every lane, no slot, one charge site per row" {
+    try testing.expectEqual(@as(usize, 0), acDynSlots(MockR).len);
+    try testing.expectEqual(~@as(u64, 0), limitReads(MockR));
+    try testing.expectEqual(~@as(u64, 0), limitWrites(MockR));
+    try testing.expectEqual(~@as(u64, 0), ddxReads(MockR));
+    try testing.expect(fileIo(MockR) == null);
+    try testing.expect(fileIo(MockAll) != null);
+    try testing.expectEqual(2, comptime nQ(MockR));
+    try testing.expectEqual([2]bool{ true, true }, qLte(MockR));
+    const lm = laneMasks(MockR);
+    try testing.expectEqual(@as(usize, 1), lm.len);
+    try testing.expectEqual(@as(u64, 0b11), lm[0].mask);
+    try testing.expect(InstancePtr(MockR) == *const MockR.Instance);
+    const Mut = struct {
+        pub const Instance = struct {};
+        pub const mutable_eval = true;
+    };
+    try testing.expect(InstancePtr(Mut) == *Mut.Instance);
+}
+
+test "qRows: a stamp's sign other than ±1 scales its charge" {
+    const U1 = enum(u8) { a };
+    const Values = RefFamily(f64, &@as([1]u8, @splat(no_lane)), .{ .dense = true });
+    inline for (.{ 0.5, -0.25 }, .{ 2.0, -1.0 }) |sign, want| {
+        const Scaled = struct {
+            pub const U = U1;
+            pub const n_q: usize = 1;
+            pub const q_stamps = [_]QStamp(U1){.{ .site = 0, .row = .a, .sign = sign }};
+        };
+        try testing.expect(comptime qSitesError(Scaled) == null);
+        // 4 · sign, the stamp's own product.
+        try testing.expectEqual(@as(f64, want), qRows(Scaled, Values, .{Values.con(4.0)})[0].v);
+    }
 }

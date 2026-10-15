@@ -56,6 +56,11 @@
 //!
 //! Host-only: never imported by the device text, so the device stays
 //! GPU-compilable.
+//!
+//! Clauses: LRM §3.4 (parameters, shape refusal), §4.6.4 and §4.6.4.6 (noise),
+//! §5.4.2 (a switched-off branch's flow collapses), §6.3.6 (`$mfactor`),
+//! §9.15 (`$simparam`), §9.17.3 (limiting and seeds), §9.19
+//! (`$port_connected`).
 
 /// Opt into the contract's conformance checks (AGENTS.md §6).
 pub const vera_validate_contract = true;
@@ -206,10 +211,15 @@ const osdi_descriptor_size: u32 = @sizeOf(Descriptor);
 /// ngspice writes its logger here when it loads the library (INIT_CALLBACK).
 var osdi_log: ?*const fn (?*anyopaque, [*:0]const u8, u32) callconv(.c) void = null;
 
+/// Sends `msg` and a newline to the simulator's logger at level `lvl`; does
+/// nothing before the simulator installed one.
 fn log(handle: ?*anyopaque, lvl: u32, msg: []const u8) void {
     const f = osdi_log orelse return;
     var buf: [1024]u8 = undefined;
-    const z = std.fmt.bufPrintSentinel(&buf, "{s}\n", .{msg}, 0) catch return;
+    // Cut to what fits with the newline and the NUL rather than dropped: a
+    // fatal status names its file and line first.
+    const cut = msg[0..@min(msg.len, buf.len - 2)];
+    const z = std.mem.printSentinel(&buf, "{s}\n", .{cut}, 0) catch unreachable;
     f(handle, z.ptr, lvl);
 }
 
@@ -229,6 +239,16 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 
 /// `name` as a C string, VerA's identifier escape undone (`naming.sanitize`:
 /// `Z<hex><hex>` is one byte, a trailing lone `Z` marks a Zig keyword).
+// A source name as written, NUL-terminated: the module name a `.model` card
+// names and a noise generator's label are not sanitized identifiers, so
+// `cName` would misread a `Z` in them as an escape.
+fn zStr(comptime s: []const u8) [:0]const u8 {
+    comptime {
+        const z = s ++ [_]u8{0};
+        return z[0..s.len :0];
+    }
+}
+
 fn cName(comptime s: []const u8) [:0]const u8 {
     comptime {
         @setEvalBranchQuota(100_000);
@@ -245,6 +265,10 @@ fn cName(comptime s: []const u8) [:0]const u8 {
     }
 }
 
+/// The OSDI 0.4 host of device `D`: its descriptor (`descriptors`) and the
+/// C callbacks the descriptor names, over the `Model` and `Instance` blobs
+/// the simulator allocates (`model_size`, `instance_size`) and fills through
+/// `access` before `setup_model` and `setup_instance`.
 fn Osdi(comptime D: type, comptime name: []const u8) type {
     @setEvalBranchQuota(10_000_000);
     return struct {
@@ -283,7 +307,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             var ps: []const Param = &.{};
             const s = @typeInfo(D.Model).@"struct";
             for (s.field_names, s.field_types) |f, T| {
-                if (std.mem.indexOf(u8, f, "__") != null or std.mem.eql(u8, f, "su") or std.mem.eql(u8, f, "su_ok")) continue;
+                if (std.mem.find(u8, f, "__") != null or std.mem.eql(u8, f, "su") or std.mem.eql(u8, f, "su_ok")) continue;
                 const k: Kind = switch (@typeInfo(T)) {
                     .float => .real,
                     .int => .int,
@@ -844,7 +868,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             @setEvalBranchQuota(10_000_000);
             var a: [gens.len]NoiseSource = undefined;
             for (&a, gens, 0..) |*s, g, k| s.* = .{
-                .name = if (g.name.len != 0) cName(g.name) else std.fmt.comptimePrint("noise{d}", .{k}),
+                .name = if (g.name.len != 0) zStr(g.name) else std.fmt.comptimePrint("noise{d}", .{k}),
                 .nodes = .{ .node_1 = g.row, .node_2 = if (g.row == g.col) no_off else g.col },
             };
             break :blk a;
@@ -884,7 +908,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         };
 
         pub const descriptors = [1]Descriptor{.{
-            .name = cName(name),
+            .name = zStr(name),
             .num_nodes = n,
             .num_terminals = D.num_ports,
             .nodes = &nodes,
@@ -938,4 +962,214 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             .absdelay_info = null,
         }};
     };
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the descriptor driven as ngspice's osdi*.c drive it, over hand-written
+// linear devices whose every stamp is known exactly.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+/// A conductance 1/r in parallel with a capacitance c between two ports, plus
+/// `$mfactor`: every resistive and reactive path, and an instance parameter
+/// over the card.
+const Rc = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { r: f64 = 1e3, c: f64 = 1e-12, temperature__: f64 = 300.15 };
+    pub const Instance = struct { mfactor: f64 = 1 };
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, m: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const i = p[0].sub(p[1]).scale(1.0 / m.r);
+        return contract.rows(@This(), S, .{ i, i.neg() });
+    }
+    pub fn q(comptime S: type, x: *const [2]S.V, m: *const Model, _: *const Instance, _: contract.SimState) contract.Sites(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const v = p[0].sub(p[1]).scale(m.c);
+        return contract.sites(@This(), S, .{ v, v.neg() });
+    }
+    pub fn evalQ(comptime S: type, x: *const [2]S.V, m: *const Model, i: *const Instance, sim: contract.SimState) struct { res: contract.Rows(@This(), S), q: contract.Sites(@This(), S) } {
+        return .{ .res = eval(S, x, m, i, sim), .q = q(S, x, m, i, sim) };
+    }
+};
+
+/// A conductance with one named thermal generator across it.
+const Gn = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { r: f64 = 1e3, temperature__: f64 = 300.15 };
+    pub const Instance = struct {};
+    pub const noise_gens = [_]contract.NoiseGen(@This()){.{ .row = 0, .col = 1, .kind = .thermal, .name = "Zth" }};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, m: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const i = p[0].sub(p[1]).scale(1.0 / m.r);
+        return contract.rows(@This(), S, .{ i, i.neg() });
+    }
+    pub fn noisePsd(comptime _: type, _: [2]f64, m: *const Model, _: *const Instance, _: contract.SimState) [1]contract.PsdTerm {
+        return .{.{ .white = 4 * 1.380649e-23 * m.temperature__ / m.r }};
+    }
+};
+
+const no_paras: SimParas = .{ .names = null, .vals = null, .names_str = null, .vals_str = null };
+
+/// The parameter slot `id` of `d.access` as a `*f64`.
+fn real(d: *const Descriptor, ip: ?*anyopaque, mp: ?*anyopaque, id: u32, flags: u32) *f64 {
+    return @ptrCast(@alignCast(d.access(ip, mp, id, flags).?));
+}
+
+/// `x` through `eval` at DC, the flags ngspice passes outside a transient.
+fn evalAt(d: *const Descriptor, ip: *anyopaque, mp: *anyopaque, x: *const [2]f64) u32 {
+    const si: SimInfo = .{ .paras = no_paras, .abstime = 0, .prev_solve = x, .prev_state = null, .next_state = null, .flags = 0 };
+    return d.eval(null, ip, mp, &si);
+}
+
+test "cName undoes naming.sanitize's escape" {
+    try testing.expectEqualStrings("vth", cName("vth"));
+    try testing.expectEqualStrings("a_b", cName("aZ5Fb")); // `_` (0x5f) escaped
+    try testing.expectEqualStrings("pub", cName("pubZ")); // the keyword marker
+    try testing.expectEqualStrings("Z", cName("Z5A")); // a source `Z`
+}
+
+test "the descriptor: two terminals, four dense entries, each parameter as instance and model" {
+    const H = Osdi(Rc, "rc");
+    const d = &H.descriptors[0];
+    try testing.expectEqualStrings("rc", std.mem.span(d.name.?));
+    try testing.expectEqual(@as(u32, 2), d.num_nodes);
+    try testing.expectEqual(@as(u32, 2), d.num_terminals);
+    // No pattern declared: (a,a) (a,b) (b,a) (b,b), each resistive and reactive.
+    try testing.expectEqual(@as(u32, 4), d.num_jacobian_entries);
+    try testing.expectEqual(@as(u32, 4), d.num_resistive_jacobian_entries);
+    try testing.expectEqual(@as(u32, 4), d.num_reactive_jacobian_entries);
+    // `r` and `c` (not `temperature__`), each twice, plus `$mfactor`.
+    try testing.expectEqual(@as(u32, 5), d.num_params);
+    try testing.expectEqual(@as(u32, 3), d.num_instance_params);
+    try testing.expectEqualStrings("r", std.mem.span(d.param_opvar[0].name[0].?));
+    try testing.expectEqual(para_ty_real | para_kind_inst, d.param_opvar[0].flags);
+    try testing.expectEqualStrings("$mfactor", std.mem.span(d.param_opvar[2].name[0].?));
+    try testing.expectEqualStrings("r", std.mem.span(d.param_opvar[3].name[0].?));
+    try testing.expectEqual(para_ty_real, d.param_opvar[3].flags);
+    try testing.expectEqualStrings("a", std.mem.span(d.nodes[0].name.?));
+    try testing.expect(!d.nodes[1].is_flow);
+    try testing.expectEqual(@as(u32, 0), d.num_noise_src);
+    try testing.expectEqual(@as(u32, 0), d.num_collapsible);
+}
+
+test "setup, eval and every load: the stamps of a linear RC, and $mfactor over its KCL rows" {
+    const H = Osdi(Rc, "rc");
+    const d = &H.descriptors[0];
+    // ngspice allocates both blobs zeroed and writes parameters through `access`.
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    // The card sets r = 2k (model-side id: after the 3 instance parameters).
+    real(d, null, &model, 3, access_flag_set).* = 2e3;
+    d.setup_model(null, &model, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    // `c` was not given: its slot reads back the default.
+    try testing.expectEqual(@as(f64, 1e-12), @as(f64, @bitCast(model.vals[1])));
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+
+    const g: f64 = 1.0 / 2e3;
+    const c: f64 = 1e-12;
+    try testing.expectEqual(@as(u32, 0), evalAt(d, &inst, &model, &.{ 1, 0 }));
+    var res: [2]f64 = @splat(0);
+    d.load_residual_resist(&inst, &model, &res);
+    try testing.expectEqualSlices(f64, &.{ g, -g }, &res);
+    var react: [2]f64 = @splat(0);
+    d.load_residual_react(&inst, &model, &react);
+    try testing.expectEqualSlices(f64, &.{ c, -c }, &react);
+    // A linear device's SPICE right-hand side J·x − f is 0 at every x.
+    var rhs: [2]f64 = @splat(0);
+    d.load_spice_rhs_dc(&inst, &model, &rhs, undefined);
+    try testing.expectEqualSlices(f64, &.{ 0, 0 }, &rhs);
+
+    var mat: [4]f64 = @splat(0);
+    var mat_q: [4]f64 = @splat(0);
+    inst.jac_ptr = .{ &mat[0], &mat[1], &mat[2], &mat[3] };
+    inst.react_ptr = .{ &mat_q[0], &mat_q[1], &mat_q[2], &mat_q[3] };
+    d.load_jacobian_resist(&inst, &model);
+    try testing.expectEqualSlices(f64, &.{ g, -g, -g, g }, &mat);
+    d.load_jacobian_react(&inst, &model, 2);
+    try testing.expectEqualSlices(f64, &.{ 2 * c, -2 * c, -2 * c, 2 * c }, &mat_q);
+    var arr: [4]f64 = undefined;
+    d.write_jacobian_array_react(&inst, &model, &arr);
+    try testing.expectEqualSlices(f64, &.{ c, -c, -c, c }, &arr);
+
+    // §6.3.6: $mfactor = 2 doubles every KCL row, value and Jacobian.
+    real(d, &inst, &model, 2, access_flag_set | access_flag_instance).* = 2;
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    _ = evalAt(d, &inst, &model, &.{ 1, 0 });
+    try testing.expectEqual(2 * g, inst.res[0]);
+    try testing.expectEqual(2 * c, inst.q[0]);
+    try testing.expectEqual(-2 * g, inst.jac[1]);
+    // An instance's own r overrides the card's; the card keeps its own.
+    real(d, &inst, &model, 0, access_flag_set | access_flag_instance).* = 4e3;
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    _ = evalAt(d, &inst, &model, &.{ 1, 0 });
+    try testing.expectEqual(@as(f64, 1.0 / 4e3) * 2, inst.res[0]);
+    try testing.expectEqual(@as(f64, 2e3), model.card.r);
+
+    try testing.expectEqual(@as(u32, 1), d.given_flag_model(&model, 3)); // r, on the card
+    try testing.expectEqual(@as(u32, 0), d.given_flag_model(&model, 4)); // c
+    try testing.expectEqual(@as(u32, 0), d.given_flag_model(&model, 0)); // an instance id
+    try testing.expectEqual(@as(u32, 1), d.given_flag_instance(&inst, 0));
+    try testing.expectEqual(@as(u32, 1), d.given_flag_instance(&inst, 2)); // $mfactor
+    try testing.expectEqual(@as(u32, 0), d.given_flag_instance(&inst, 1));
+    // Past the table: no slot, and no given flag.
+    try testing.expect(d.access(&inst, &model, 5, 0) == null);
+    try testing.expectEqual(@as(u32, 0), d.given_flag_model(&model, 5));
+}
+
+test "noise: one source per generator row, its PSD coeff²·white at the last evaluated point" {
+    const H = Osdi(Gn, "gn");
+    const d = &H.descriptors[0];
+    try testing.expectEqual(@as(u32, 1), d.num_noise_src);
+    try testing.expectEqual(@as(u32, 0), d.noise_sources.?[0].nodes.node_1);
+    try testing.expectEqual(@as(u32, 1), d.noise_sources.?[0].nodes.node_2);
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    _ = evalAt(d, &inst, &model, &.{ 1, 0 });
+    var dens: [1]f64 = undefined;
+    d.load_noise(&inst, &model, 1e3, &dens);
+    try testing.expectEqual(4 * 1.380649e-23 * @as(f64, 300.15) / 1e3, dens[0]);
+}
+
+test "the module and noise names are the source's, not undone escapes" {
+    // `Zener` and `Zth` are legal Verilog-A names. Read as VerA's
+    // `Z<hex><hex>` escape, "en" and "th" are no hex pair.
+    try testing.expectEqualStrings("Zener", std.mem.span(Osdi(Gn, "Zener").descriptors[0].name.?));
+    try testing.expectEqualStrings("Zth", std.mem.span(Osdi(Gn, "gn").descriptors[0].noise_sources.?[0].name.?));
+}
+
+test "log: a message past the buffer is cut, not dropped" {
+    const Capture = struct {
+        var got: [2048]u8 = undefined;
+        var len: usize = 0;
+        fn f(_: ?*anyopaque, msg: [*:0]const u8, _: u32) callconv(.c) void {
+            const s = std.mem.span(msg);
+            @memcpy(got[0..s.len], s);
+            len = s.len;
+        }
+    };
+    const saved = osdi_log;
+    defer osdi_log = saved;
+    osdi_log = &Capture.f;
+    log(null, log_lvl_err, "short");
+    try testing.expectEqualStrings("short\n", Capture.got[0..Capture.len]);
+    // 1024 bytes hold 1022 of the message, its newline and the NUL.
+    const long: [3000]u8 = @splat('x');
+    log(null, log_lvl_err, &long);
+    try testing.expectEqual(@as(usize, 1023), Capture.len);
+    try testing.expectEqual(@as(u8, '\n'), Capture.got[1022]);
 }
