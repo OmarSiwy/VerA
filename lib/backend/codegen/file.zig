@@ -750,7 +750,7 @@ fn emitCardCheck(self: *Gen) Error!void {
         \\/// (after `derive`) puts outside its allowed values, or null.
         \\pub fn checkCard({s}: *const Model) ?[]const u8 {{
         \\
-    , .{if (std.mem.indexOf(u8, body.items, "model.") != null) "model" else "_"});
+    , .{if (std.mem.find(u8, body.items, "model.") != null) "model" else "_"});
     try self.w("{s}    return null;\n}}\n\n", .{body.items});
 }
 
@@ -867,7 +867,7 @@ pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
     var buf: [512]u8 = undefined;
     const s = std.mem.print(&buf, "{d}", .{x}) catch unreachable;
     // ponytail: use the stdlib byte-set search; formatting stays unchanged.
-    const has_point = std.mem.indexOfAny(u8, s, ".eE") != null;
+    const has_point = std.mem.findAny(u8, s, ".eE") != null;
     gop.value_ptr.* = if (has_point)
         try self.arena.dupe(u8, s)
     else

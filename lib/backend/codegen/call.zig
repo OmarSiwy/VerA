@@ -1149,7 +1149,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     float_lanes.instPin(self); // the operator's history is the instance's
     // Every sim-state read below is spelled `sim.<field>`.
     const at = self.out.items.len;
-    defer if (std.mem.indexOf(u8, self.out.items[at..], "sim.") != null) {
+    defer if (std.mem.find(u8, self.out.items[at..], "sim.") != null) {
         self.uses.sim = true;
     };
     // A kernel runs at the result's mask `fm`, as `gen_render.kernelOpen`

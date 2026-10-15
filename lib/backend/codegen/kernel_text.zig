@@ -18,6 +18,7 @@ const naming = @import("../naming.zig");
 /// field default is evaluated in one comptime context, so a device with
 /// ~140 timer/setup defaults exceeded the 1000-branch quota.
 pub const nan_lit = "@as(f64, @bitCast(@as(u64, 0x7ff8000000000000)))";
+/// +inf as a bit-pattern literal; `nan_lit` says why not `std.math.inf`.
 pub const inf_lit = "@as(f64, @bitCast(@as(u64, 0x7ff0000000000000)))";
 
 /// The device.zig header: the generated-file banner and its imports.
@@ -650,7 +651,7 @@ pub const tp_txt =
 
 /// §5.10.3.3 timer scheduling, shared with the mixed coordinator.
 pub const timer_txt = "// ---- §5.10.3.3 timer schedule ----\n\n" ++
-    timer_src[std.mem.indexOf(u8, timer_src, "\n\n").? + 2 ..];
+    timer_src[std.mem.find(u8, timer_src, "\n\n").? + 2 ..];
 // A file-level //! header cannot be spliced into the middle of device.zig.
 const timer_src = @embedFile("../kernels/timer_kernels.zig");
 
