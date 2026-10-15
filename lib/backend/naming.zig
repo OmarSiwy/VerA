@@ -366,3 +366,129 @@ test "§9.17 kernel-control units drop the `$` and stay after the operator units
     try std.testing.expectEqualStrings("mymod__analog_op__bound_step", got.items[2]);
     try std.testing.expectEqualStrings("mymod__analog_op__discontinuity", got.items[3]);
 }
+
+/// Fails unless `s` is a sanitized leaf: a Zig identifier that is neither a
+/// keyword nor a primitive, with no `__` and no `_` at either end.
+fn expectLeaf(s: []const u8) !void {
+    try std.testing.expect(std.zig.isValidId(s));
+    try std.testing.expect(!std.zig.primitives.isPrimitive(s));
+    try std.testing.expect(std.mem.find(u8, s, "__") == null);
+    try std.testing.expect(s[0] != '_' and s[s.len - 1] != '_');
+}
+
+test "sanitize is injective and legal over every one-byte name" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    var buf: [8]u8 = undefined;
+    for (0..256) |c| {
+        const byte: [1]u8 = .{@intCast(c)};
+        const s = try a.dupe(u8, try sanitize(&buf, &byte));
+        try expectLeaf(s);
+        try seen.put(a, s, {});
+    }
+    // 256 inputs, 256 distinct outputs.
+    try std.testing.expectEqual(@as(u32, 256), seen.count());
+}
+
+test "sanitize is injective over every short name of the colliding bytes" {
+    // `_` (the separator), `Z` (the escape marker), a digit (illegal first),
+    // a byte outside the identifier alphabet, and a plain letter: every
+    // string of one to three of them, 5 + 25 + 125 = 155 names.
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const alphabet = "a_Z0.";
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    var buf: [16]u8 = undefined;
+    var n: u32 = 0;
+    for (1..4) |len| {
+        var digits: [3]usize = @splat(0);
+        while (true) {
+            var name: [3]u8 = undefined;
+            for (name[0..len], digits[0..len]) |*ch, d| ch.* = alphabet[d];
+            const s = try a.dupe(u8, try sanitize(&buf, name[0..len]));
+            try expectLeaf(s);
+            try seen.put(a, s, {});
+            n += 1;
+            // Next string: count in base `alphabet.len`.
+            var k: usize = 0;
+            while (k < len) : (k += 1) {
+                digits[k] += 1;
+                if (digits[k] < alphabet.len) break;
+                digits[k] = 0;
+            }
+            if (k == len) break;
+        }
+    }
+    try std.testing.expectEqual(@as(u32, 155), n);
+    try std.testing.expectEqual(n, seen.count());
+}
+
+test "sanitize fails at the exact byte it cannot write" {
+    var buf: [4]u8 = undefined;
+    // `pub` takes three bytes and its keyword marker a fourth.
+    try std.testing.expectError(error.NoSpaceLeft, sanitize(buf[0..3], "pub"));
+    try std.testing.expectEqualStrings("pubZ", try sanitize(buf[0..4], "pub"));
+    // An escape takes three bytes.
+    try std.testing.expectError(error.NoSpaceLeft, sanitize(buf[0..2], "Z"));
+    try std.testing.expectEqualStrings("Z5a", try sanitize(buf[0..3], "Z"));
+    try std.testing.expectEqualStrings("", try sanitize(buf[0..0], ""));
+}
+
+test unitName {
+    var buf: [64]u8 = undefined;
+    const u: Unit = .{ .role = .analog_op, .target = "ddt", .disambig = 2 };
+    // The module leaf is sanitized; the role and the pre-sanitized target are not.
+    const want = "myZ20mod__analog_op__ddt__2";
+    try std.testing.expectEqualStrings(want, try unitName(&buf, "my mod", u));
+    try std.testing.expectEqualStrings(want, try unitName(buf[0..want.len], "my mod", u));
+    try std.testing.expectError(error.NoSpaceLeft, unitName(buf[0 .. want.len - 1], "my mod", u));
+    // The roles codegen names directly print the same way.
+    try std.testing.expectEqualStrings("m__display__x", try unitName(&buf, "m", .{ .role = .display, .target = "x" }));
+    try std.testing.expectEqualStrings("m__common__x", try unitName(&buf, "m", .{ .role = .common, .target = "x" }));
+}
+
+test "a synthetic operator variant shares its operator's name and state" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&nets);
+    defer f.deinit();
+    const a = f.arena.allocator();
+
+    _ = try f.mir.emitCall(a, .entry, try f.mir.internString(a, "absdelay"), &.{});
+    _ = try f.mir.emitCall(a, .entry, try f.mir.internString(a, "absdelay$quad"), &.{});
+
+    const units = try enumerateUnits(a, &f.mir, &f.lowered);
+    try std.testing.expectEqual(@as(usize, 2), units.len);
+    for (units, 0..) |u, i| {
+        try std.testing.expectEqual(Role.analog_op, u.role);
+        try std.testing.expectEqualStrings("absdelay", u.target);
+        try std.testing.expectEqual(opdb.OpKind.absdelay, u.op);
+        try std.testing.expectEqual(@as(u32, @intCast(i)), u.disambig);
+        try std.testing.expect(u.inst != .none);
+    }
+    assertCanonicalOrder(units, &f.lowered, 0);
+}
+
+test "contribution targets: ground is 0, a net is sanitized, a `_`-join collision stays unique" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "0", "a_b", "c", "a", "b_c" });
+    defer f.deinit();
+    const a = f.arena.allocator();
+
+    // I(<net "0">) and V(a_b, c), V(a, b_c): the last two join to the same
+    // `V_a_b_c`, and `disambig` keeps their names apart.
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = Lower.ground });
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = 2 });
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 3, .lo = 4 });
+
+    var got: std.ArrayList([]const u8) = .empty;
+    try names(&f, &got);
+    try std.testing.expectEqual(@as(usize, 3), got.items.len);
+    // A net's leading digit is escaped, so it never reads as ground's `0`.
+    try std.testing.expectEqualStrings("mymod__analog__I_Z30_0", got.items[0]);
+    try std.testing.expectEqualStrings("mymod__analog__V_a_b_c", got.items[1]);
+    try std.testing.expectEqualStrings("mymod__analog__V_a_b_c__1", got.items[2]);
+    assertCanonicalOrder(try enumerateUnits(a, &f.mir, &f.lowered), &f.lowered, 3);
+}

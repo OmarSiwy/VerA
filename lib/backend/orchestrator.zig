@@ -1116,3 +1116,334 @@ test "a split build links one object per part into a library that runs" {
     native.backend = .self_hosted;
     try std.testing.expect(!splits(native, .{ .text = big }));
 }
+
+test "Backend.auto keeps LLVM for every optimized mode" {
+    for ([_]std.lang.Optimize{ .safe, .fast, .small }) |m|
+        try std.testing.expectEqual(Backend.llvm, Backend.auto(m, .x86_64));
+}
+
+test strip {
+    // Only fast and small drop safety, and only they strip; debug_info vetoes.
+    for (std.enums.values(std.lang.Optimize)) |m| {
+        try std.testing.expect(!strip(m, true));
+        try std.testing.expectEqual(m == .fast or m == .small, strip(m, false));
+    }
+}
+
+test fileStem {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A short plain name is itself, not a copy.
+    const plain: []const u8 = "nmos_1";
+    try std.testing.expect((try fileStem(a, plain)).ptr == plain.ptr);
+    const max: [128]u8 = @splat('a');
+    try std.testing.expectEqualStrings(&max, try fileStem(a, &max));
+
+    // One byte longer: its first 64 bytes, `-`, 16 hex digits.
+    const over: [129]u8 = @splat('a');
+    const s = try fileStem(a, &over);
+    try std.testing.expectEqual(@as(usize, 64 + 1 + 16), s.len);
+    try std.testing.expectEqualStrings(over[0..64], s[0..64]);
+    try std.testing.expectEqual(@as(u8, '-'), s[64]);
+    for (s[65..]) |c| try std.testing.expect(std.ascii.isHex(c) and !std.ascii.isUpper(c));
+
+    // Not plain: the plain prefix, so `a.b` and `a,b` share `a-` and differ
+    // only in the hash; a name with no plain prefix starts at the `-`.
+    const dot = try fileStem(a, "a.b");
+    const comma = try fileStem(a, "a,b");
+    try std.testing.expectEqual(@as(usize, 1 + 1 + 16), dot.len);
+    try std.testing.expect(std.mem.startsWith(u8, dot, "a-"));
+    try std.testing.expect(!std.mem.eql(u8, dot, comma));
+    try std.testing.expectEqualStrings(dot, try fileStem(a, "a.b"));
+    try std.testing.expectEqual(@as(usize, 17), (try fileStem(a, ".x")).len);
+
+    // A hashed stem has a `-`; a kept one cannot.
+    try std.testing.expect(std.mem.findScalar(u8, try fileStem(a, plain), '-') == null);
+    try std.testing.expect(std.mem.findScalar(u8, dot, '-') != null);
+}
+
+test "layoutHash: dependencies count, field boundaries count, placement does not" {
+    const base_mods = [_]Module{
+        .{ .name = "contract", .root = "c.zig" },
+        .{ .name = "dyn", .root = "d.zig", .deps = &.{"contract"} },
+    };
+    const base: Options = .{ .work_dir = "w", .name = "dev", .optimize = .debug, .backend = .llvm, .modules = &base_mods };
+    const h = layoutHash(base);
+
+    // A dropped dependency is a different graph.
+    const no_dep = [_]Module{ base_mods[0], .{ .name = "dyn", .root = "d.zig" } };
+    var o = base;
+    o.modules = &no_dep;
+    try std.testing.expect(layoutHash(o) != h);
+
+    // The same bytes split differently between name and root, or between a
+    // dependency and the next module, are different graphs.
+    const ab_c = [_]Module{.{ .name = "ab", .root = "c" }};
+    const a_bc = [_]Module{.{ .name = "a", .root = "bc" }};
+    o.modules = &ab_c;
+    const h_ab_c = layoutHash(o);
+    o.modules = &a_bc;
+    try std.testing.expect(layoutHash(o) != h_ab_c);
+    const dep_b = [_]Module{.{ .name = "a", .root = "r", .deps = &.{"b"} }};
+    const then_b = [_]Module{ .{ .name = "a", .root = "r" }, .{ .name = "b", .root = "" } };
+    o.modules = &dep_b;
+    const h_dep_b = layoutHash(o);
+    o.modules = &then_b;
+    try std.testing.expect(layoutHash(o) != h_dep_b);
+
+    // `Options` documents these as unhashed: none changes a type layout.
+    o = base;
+    o.zig_exe = "/opt/zig/zig";
+    o.debug_info = true;
+    o.split = true;
+    o.engine = "vera_engine.o";
+    try std.testing.expectEqual(h, layoutHash(o));
+}
+
+test "splits: an explicit choice wins over the size rule" {
+    const tiny: codegen.Output = .{ .text = "x" };
+    var o: Options = .{ .work_dir = "w", .name = "d", .optimize = .fast, .backend = .self_hosted, .modules = &.{}, .split = true };
+    try std.testing.expect(splits(o, tiny));
+    o.backend = .llvm;
+    o.split = false;
+    const huge = try std.testing.allocator.alloc(u8, split_min_bytes);
+    defer std.testing.allocator.free(huge);
+    try std.testing.expect(!splits(o, .{ .text = huge }));
+    // One byte under the threshold stays whole.
+    o.split = null;
+    try std.testing.expect(!splits(o, .{ .text = huge[1..] }));
+}
+
+/// Fails unless `got` is `want`, element by element.
+fn expectArgv(want: []const []const u8, got: []const []const u8) !void {
+    for (want, 0..) |w, i| {
+        if (i >= got.len) return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings(w, got[i]);
+    }
+    try std.testing.expectEqual(want.len, got.len);
+}
+
+const sep = std.fs.path.sep_str;
+
+test buildArgv {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const mods = [_]Module{
+        .{ .name = "contract", .root = "c.zig" },
+        .{ .name = "dyn", .root = "d.zig", .deps = &.{"contract"} },
+    };
+
+    // The whole library: every support module is a dependency of the root
+    // and of the device, and each `--dep` applies to the `-M` after it.
+    const whole = [_][]const u8{
+        "zig",
+        "build-lib",
+        "--listen=-",
+        "-dynamic",
+        "-Ofast",
+        "--name",
+        "dev",
+        "--cache-dir",
+        "w" ++ sep ++ ".zig-cache",
+        "-fllvm",
+        "-fstrip",
+        "eng.o",
+        "--dep",
+        "contract",
+        "--dep",
+        "dyn",
+        "--dep",
+        "device",
+        "-Mroot=w" ++ sep ++ "shim.zig",
+        "--dep",
+        "contract",
+        "--dep",
+        "dyn",
+        "-Mdevice=w" ++ sep ++ "device.zig",
+        "-Mcontract=c.zig",
+        "--dep",
+        "contract",
+        "-Mdyn=d.zig",
+    };
+    try expectArgv(&whole, try buildArgv(a, .{
+        .work_dir = "w",
+        .name = "dev",
+        .optimize = .fast,
+        .backend = .llvm,
+        .modules = &mods,
+        .engine = "eng.o",
+    }, null));
+
+    // One part: an object, position independent, named for its piece, rooted
+    // at its own shim, with no engine (only the link takes it). Self-hosted
+    // adds `-fincremental`; Debug keeps its symbols.
+    const piece = [_][]const u8{
+        "zig",
+        "build-obj",
+        "--listen=-",
+        "-fPIC",
+        "-Odebug",
+        "--name",
+        "dev_setup",
+        "--cache-dir",
+        "w" ++ sep ++ ".zig-cache",
+        "-fno-llvm",
+        "-fno-lld",
+        "-fincremental",
+        "--dep",
+        "device",
+        "-Mroot=w" ++ sep ++ "shim_setup.zig",
+        "-Mdevice=w" ++ sep ++ "device.zig",
+    };
+    try expectArgv(&piece, try buildArgv(a, .{
+        .work_dir = "w",
+        .name = "dev",
+        .optimize = .debug,
+        .backend = .self_hosted,
+        .modules = &.{},
+        .engine = "eng.o",
+    }, "setup"));
+}
+
+test linkArgv {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const o: Options = .{ .work_dir = "w", .name = "dev", .optimize = .small, .backend = .llvm, .modules = &.{}, .engine = "eng.o" };
+    const want = [_][]const u8{
+        "zig",
+        "build-lib",
+        "--listen=-",
+        "-dynamic",
+        "-fno-entry",
+        "-Osmall",
+        "--name",
+        "dev",
+        "--cache-dir",
+        "w" ++ sep ++ ".zig-cache",
+        "-fstrip",
+        "a.o",
+        "b.o",
+        "eng.o",
+    };
+    try expectArgv(&want, try linkArgv(arena.allocator(), o, &.{ "a.o", "b.o" }));
+}
+
+test pieceNames {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    try expectArgv(&.{ "setup", "state", "eval" }, try pieceNames(arena.allocator(), 0));
+    try expectArgv(&.{ "setup", "state", "eval", "setup0", "setup1" }, try pieceNames(arena.allocator(), 2));
+}
+
+test "writeTree writes an un-split device alone, and rewrites only what changed" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try gpa.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer gpa.free(work);
+    var o: Options = .{ .work_dir = work, .name = "testdev", .optimize = .debug, .backend = .self_hosted, .modules = &.{} };
+
+    // shim.zig + device.zig, then nothing.
+    try std.testing.expectEqual(@as(usize, 2), try writeTree(io, gpa, o, .{ .text = "abcdef" }));
+    try std.testing.expectEqual(@as(usize, 0), try writeTree(io, gpa, o, .{ .text = "abcdef" }));
+
+    // A text that is a prefix of the file on disk is still a change.
+    try std.testing.expectEqual(@as(usize, 1), try writeTree(io, gpa, o, .{ .text = "abc" }));
+    const dev = try tmp.dir.readFileAlloc(io, "device.zig", gpa, .limited(64));
+    defer gpa.free(dev);
+    try std.testing.expectEqualStrings("abc", dev);
+
+    // Linking an engine changes the shim alone.
+    o.engine = "eng.o";
+    try std.testing.expectEqual(@as(usize, 1), try writeTree(io, gpa, o, .{ .text = "abc" }));
+    const shim_text = try tmp.dir.readFileAlloc(io, "shim.zig", gpa, .limited(4096));
+    defer gpa.free(shim_text);
+    try std.testing.expect(std.mem.find(u8, shim_text, "vera_prebuilt_engine") != null);
+
+    // No split, so no helpers file and no unit directory.
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "h.zig", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "u", .{}));
+}
+
+test "writeTree keeps a unit's doc comment and an existing `pub`, and prunes only stale .zig files" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try gpa.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer gpa.free(work);
+    const o: Options = .{ .work_dir = work, .name = "testdev", .optimize = .debug, .backend = .self_hosted, .modules = &.{} };
+
+    // unit_a: a doc comment before `fn` (lo < fn); unit_b: already `pub`.
+    const doc = "/// a\n";
+    const fn_a = "fn unit_a(y: f64) f64 {\n    return y;\n}\n";
+    const pub_b = "pub fn unit_b(y: f64) f64 {\n    return y;\n}\n";
+    const lo_b = split_prologue.len + doc.len + fn_a.len;
+    const out: codegen.Output = .{
+        .text = split_prologue ++ doc ++ fn_a ++ pub_b ++ split_tail,
+        .names = &.{ "unit_a", "unit_b" },
+        .unit_lo = &.{ split_prologue.len, lo_b },
+        .unit_fn = &.{ split_prologue.len + doc.len, lo_b },
+        .unit_hi = &.{ lo_b, lo_b + pub_b.len },
+        .prelude = split_prelude,
+    };
+    try std.testing.expectEqual(@as(usize, 5), try writeTree(io, gpa, o, out));
+
+    const a = try tmp.dir.readFileAlloc(io, "u/unit_a.zig", gpa, .limited(4096));
+    defer gpa.free(a);
+    try std.testing.expectEqualStrings(split_prelude ++ doc ++ "pub " ++ fn_a, a);
+    const b = try tmp.dir.readFileAlloc(io, "u/unit_b.zig", gpa, .limited(4096));
+    defer gpa.free(b);
+    try std.testing.expectEqualStrings(split_prelude ++ pub_b, b);
+
+    // A stale unit goes; a file that is not `.zig`, and a directory, stay.
+    try tmp.dir.writeFile(io, .{ .sub_path = "u/old.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "u/notes.txt", .data = "" });
+    try tmp.dir.createDirPath(io, "u/dir.zig");
+    try std.testing.expectEqual(@as(usize, 1), try writeTree(io, gpa, o, out));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "u/old.zig", .{}));
+    _ = try tmp.dir.statFile(io, "u/notes.txt", .{});
+    _ = try tmp.dir.statFile(io, "u/dir.zig", .{});
+}
+
+test "a split build that fails returns one report and leaks the others' none" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try gpa.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer gpa.free(work);
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "contract.zig", .data = "pub const k: f64 = 2.0;\n" });
+    // Every part reaches `eval`, so every piece fails and two reports are
+    // dropped (`std.testing.allocator` sees a leak if one is not freed).
+    try tmp.dir.writeFile(io, .{ .sub_path = "dyn.zig", .data =
+        \\pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
+        \\    _ = name;
+        \\    @export(&D.eval, .{ .name = "arp_eval" });
+        \\}
+        \\pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: @TypeOf(.setup)) void {
+        \\    _ = .{ name, part };
+        \\    @export(&D.eval, .{ .name = "arp_eval" });
+        \\}
+        \\
+    });
+    const mods = [_]Module{
+        .{ .name = "contract", .root = try std.fs.path.join(gpa, &.{ work, "contract.zig" }) },
+        .{ .name = "dyn", .root = try std.fs.path.join(gpa, &.{ work, "dyn.zig" }) },
+    };
+    defer for (mods) |m| gpa.free(m.root);
+    const o: Options = .{ .work_dir = work, .name = "faildev", .optimize = .fast, .backend = .llvm, .modules = &mods, .split = true };
+    const dev = "pub fn eval() callconv(.c) void { @compileError(\"boom\"); }\n";
+    var r = compileRelease(gpa, io, o, .{ .text = dev }, 1) catch |err| switch (err) {
+        error.CompilerGone => return error.SkipZigTest,
+        else => return err,
+    };
+    defer r.deinit(gpa);
+    try std.testing.expect(r == .failed);
+    try std.testing.expect(r.failed.errorMessageCount() > 0);
+}
