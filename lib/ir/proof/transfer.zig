@@ -18,38 +18,47 @@ pub const Abstract = struct { iv: proof_lattice.Interval, finite: bool };
 /// can never make a unit `.strict`. Relational/logical results are 0/1.
 pub fn integerIv(op: Mir.Opcode) proof_lattice.Interval {
     if (Mir.opcode.get(op).bool01) return .{ .lo = 0, .hi = 1 };
-    return .{ .lo = -9.223372036854776e18, .hi = 9.223372036854776e18 };
+    return int_range;
+}
+
+// §3.2 an integer is an i64 in the device: every one lies in this range.
+const int_range: proof_lattice.Interval = .{ .lo = -9.223372036854776e18, .hi = 9.223372036854776e18 };
+
+// f(x) for each unary op the device computes as a non-decreasing function,
+// null for every other op. NaN means x is outside f's domain.
+fn monotoneAt(op: Mir.Opcode, x: f64) ?f64 {
+    return switch (op) {
+        .exp => gm.exp(x),
+        .expm1 => math.expm1(x),
+        .ln => gm.log(x),
+        .ln1p => math.log1p(x),
+        .log10 => @log10(x),
+        .sqrt => @sqrt(x),
+        .sinh => math.sinh(x),
+        .tanh => math.tanh(x),
+        .asinh => math.asinh(x),
+        .atan => math.atan(x),
+        .asin => math.asin(x),
+        .atanh => math.atanh(x),
+        .acosh => math.acosh(x),
+        .floor => @floor(x),
+        .ceil => @ceil(x),
+        // .path_prev/.path_acc take `else` (unbounded): the latch holds a
+        // value from an EARLIER solve, which current branch guards do not
+        // constrain, so an identity interval here would be too narrow.
+        // `dstop` (§2.9 `vera_nodiff`) is its operand's value with no
+        // derivative lanes.
+        .if_cast, .opt_barrier, .dstop => x,
+        else => null, // else: not monotone, or no transfer: `unaryTransfer`'s switch
+    };
 }
 
 /// Returns unary `op` over an operand with interval `a` and finite bit `af`.
 /// A monotone function maps the endpoints; an opcode with no rule answers
 /// top and not finite, which is sound and only loses precision.
 pub fn unaryTransfer(op: Mir.Opcode, a: proof_lattice.Interval, af: bool) Abstract {
-    const monotone: ?[2]f64 = switch (op) {
-        .exp => .{ gm.exp(a.lo), gm.exp(a.hi) },
-        .expm1 => .{ math.expm1(a.lo), math.expm1(a.hi) },
-        .ln => .{ gm.log(a.lo), gm.log(a.hi) },
-        .ln1p => .{ math.log1p(a.lo), math.log1p(a.hi) },
-        .log10 => .{ @log10(a.lo), @log10(a.hi) },
-        .sqrt => .{ @sqrt(a.lo), @sqrt(a.hi) },
-        .sinh => .{ math.sinh(a.lo), math.sinh(a.hi) },
-        .tanh => .{ math.tanh(a.lo), math.tanh(a.hi) },
-        .asinh => .{ math.asinh(a.lo), math.asinh(a.hi) },
-        .atan => .{ math.atan(a.lo), math.atan(a.hi) },
-        .asin => .{ math.asin(a.lo), math.asin(a.hi) },
-        .atanh => .{ math.atanh(a.lo), math.atanh(a.hi) },
-        .acosh => .{ math.acosh(a.lo), math.acosh(a.hi) },
-        .floor => .{ @floor(a.lo), @floor(a.hi) },
-        .ceil => .{ @ceil(a.lo), @ceil(a.hi) },
-        // .path_prev/.path_acc take `else` (unbounded): the latch holds a
-        // value from an EARLIER solve, which current branch guards do not
-        // constrain, so an identity interval here would be too narrow.
-        .if_cast, .opt_barrier => .{ a.lo, a.hi },
-        else => null, // else: not monotone, or no transfer: the switch below
-    };
-    if (monotone) |bounds| {
-        const lo = bounds[0];
-        const hi = bounds[1];
+    if (monotoneAt(op, a.lo)) |lo| {
+        const hi = monotoneAt(op, a.hi).?;
         // A NaN endpoint means the operand straddles the function's domain
         // edge (ln(-1), sqrt(-4), asin(2), acosh(0.5)), and the endpoints
         // then do not span the in-domain range: sqrt over [-4,9] is [0,3],
@@ -57,11 +66,19 @@ pub fn unaryTransfer(op: Mir.Opcode, a: proof_lattice.Interval, af: bool) Abstra
         // operand, so the only sound interval is top. Endpoints at the edge
         // stay exact and wide: ln(0) = -inf and atanh(1) = +inf are not NaN.
         if (math.isNan(lo) or math.isNan(hi)) return .{ .iv = .top, .finite = false };
+        // An open end stays open only where the device's rounding keeps it
+        // open. f is non-decreasing as computed, so every double past an open
+        // end maps past f(end) exactly when the next double does. Underflow
+        // (exp(-800) = 0), saturation (tanh(20) = 1) and flat steps (floor)
+        // all close the end; a NaN there (past the domain edge) closes it too.
+        // ponytail: trusts the computed f to be monotone. A faithful libm may
+        // step back one ulp; covering that means widening every end by an ulp.
+        const inf = math.inf(f64);
         const iv: proof_lattice.Interval = .{
             .lo = @min(lo, hi),
             .hi = @max(lo, hi),
-            .lo_open = a.lo_open,
-            .hi_open = a.hi_open,
+            .lo_open = a.lo_open and monotoneAt(op, math.nextAfter(f64, a.lo, inf)).? > lo,
+            .hi_open = a.hi_open and monotoneAt(op, math.nextAfter(f64, a.hi, -inf)).? < hi,
         };
         const overflows = op == .exp or op == .expm1 or op == .sinh;
         return .{ .iv = iv, .finite = af and (!overflows or iv.bounded()) };
@@ -103,21 +120,30 @@ pub fn unaryTransfer(op: Mir.Opcode, a: proof_lattice.Interval, af: bool) Abstra
 pub fn binaryTransfer(op: Mir.Opcode, x: proof_lattice.Interval, y: proof_lattice.Interval, f: bool) Abstract {
     // Rule 3 on `FloatMode`: `+ - * /` on finite operands stay finite.
     switch (op) {
+        // A sum's end is open only if the smallest (largest) sum the open
+        // operand ends admit still rounds past it: the rounded sum is
+        // monotone in each operand, so testing the doubles just inside the
+        // open ends decides it. 0.5 + 1e20 rounds to 1e20, so (0:1] + 1e20 is
+        // [1e20, 1e20], not (1e20, 1e20].
         .fadd => {
+            const lo = addLo(x.lo, y.lo);
+            const hi = addHi(x.hi, y.hi);
             const iv: proof_lattice.Interval = .{
-                .lo = addLo(x.lo, y.lo),
-                .hi = addHi(x.hi, y.hi),
-                .lo_open = x.lo_open or y.lo_open,
-                .hi_open = x.hi_open or y.hi_open,
+                .lo = lo,
+                .hi = hi,
+                .lo_open = (x.lo_open or y.lo_open) and addLo(inLo(x), inLo(y)) > lo,
+                .hi_open = (x.hi_open or y.hi_open) and addHi(inHi(x), inHi(y)) < hi,
             };
             return .{ .iv = iv, .finite = f };
         },
         .fsub => {
+            const lo = addLo(x.lo, -y.hi);
+            const hi = addHi(x.hi, -y.lo);
             const iv: proof_lattice.Interval = .{
-                .lo = addLo(x.lo, -y.hi),
-                .hi = addHi(x.hi, -y.lo),
-                .lo_open = x.lo_open or y.hi_open,
-                .hi_open = x.hi_open or y.lo_open,
+                .lo = lo,
+                .hi = hi,
+                .lo_open = (x.lo_open or y.hi_open) and addLo(inLo(x), -inHi(y)) > lo,
+                .hi_open = (x.hi_open or y.lo_open) and addHi(inHi(x), -inLo(y)) < hi,
             };
             return .{ .iv = iv, .finite = f };
         },
@@ -182,7 +208,20 @@ pub fn callAbstract(c: Mir.Callee) Abstract {
     // operation happens only in the display unit (`codegen.Gen.emitting_display`).
     // No interval: §9.5.1's fd has bit 31 set, so there is nothing useful to bound.
     if (Mir.callee.isFileCall(c)) return .{ .iv = .top, .finite = true };
+    // §3.2 an integer-valued call (`callee.ty`) is an i64 in the device, and
+    // §2.7 a string never reaches a float operation: neither is inf or NaN.
+    switch (Mir.callee.ty(c)) {
+        .int => return .{ .iv = int_range, .finite = true },
+        .str => return .{ .iv = .top, .finite = true },
+        .real => {},
+    }
     return switch (c) {
+        // §4.6.1 analysis(), the §5.2.1 `analog initial` flag, the §5.10.2
+        // initial_step/final_step events, the §5.10.3 cross/above/timer
+        // events and §4.5.4's static-solve test render as 0.0 or 1.0
+        // (`codegen/call.zig`). An event's arguments are still compared, so
+        // the unit's slice still reads them.
+        .analysis, .analog_initial, .initial_step, .final_step, .cross, .above, .timer, .@"op$static" => .{ .iv = .{ .lo = 0, .hi = 1 }, .finite = true },
         // §9.10 environment parameter functions; §9.18 $mfactor. `limexp` is
         // not here: its range is its argument's (`Prover.callTransfer`).
         .@"$vt", // thermal voltage kT/q > 0, argument-free; see callTransfer
@@ -209,6 +248,15 @@ fn addLo(a: f64, b: f64) f64 {
 fn addHi(a: f64, b: f64) f64 {
     const r = a + b;
     return if (math.isNan(r)) math.inf(f64) else r;
+}
+
+// The least member of `i` as a double: `lo`, or the next double up when `lo`
+// is open. `inHi` is the greatest.
+fn inLo(i: proof_lattice.Interval) f64 {
+    return if (i.lo_open) math.nextAfter(f64, i.lo, math.inf(f64)) else i.lo;
+}
+fn inHi(i: proof_lattice.Interval) f64 {
+    return if (i.hi_open) math.nextAfter(f64, i.hi, -math.inf(f64)) else i.hi;
 }
 
 /// `a * b`, the `combine` kernel of `*`.
