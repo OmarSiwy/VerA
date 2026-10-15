@@ -1,14 +1,16 @@
 //! The direct Newton loop and its acceptance gates, generic over the system:
 //! stamp, factor, solve, accept.
 //!
-//! `sys` is a pointer with fields `n`, `diag_slots`, `rhs` and `current_row`,
-//! and optional methods beginSolve, advanceIteration, checkConvergence,
-//! applyLimits, updateStates and clearLimits. `hook` provides assemble(sys,
-//! x, t) and vals(sys) (the Jacobian, row-major n x n).
+//! In: a system `sys` and a start `x`; out: the converged `x`, or a report
+//! that it did not converge. `sys` is a pointer with fields `n`,
+//! `diag_slots`, `rhs` and `current_row`, and optional pub methods
+//! beginSolve, advanceIteration, checkConvergence, applyLimits and
+//! updateStates. `hook` provides assemble(sys, x, t) and vals(sys) (the
+//! Jacobian, row-major n x n).
 //!
 //! Copied from OmarSiwy/ESPice src/solver/converger.zig at
 //! 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d: `newton`, `finalizeStep`,
-//! `updateAndNorm`, `Options`, `Result` and `run`'s limit clearing. Adapted:
+//! `updateAndNorm`, `Options` and `Result`. Adapted:
 //! the sparse `direct.Solver` is `dense_lu.factorizeSolveNeg` on a copy of
 //! the matrix (the deck runner's systems are a device's handful of
 //! unknowns), so `Workspace` is fixed-size and allocates nothing, and the
@@ -17,12 +19,14 @@
 //! profiler, the GPU `deviceSolve`, `loadCheck`, `evalFollows`, `checkpoint`,
 //! `force` holds and `gmin_stamps` (Sparse's preorder twins: here gmin is on
 //! every voltage row's diagonal, which moves no answer, since the operating
-//! point's last solve carries none).
+//! point's last solve carries none), `run`'s limit clearing and the
+//! per-gate rejection reason (ESPice's traces; no system here clears limits
+//! or reads the reason).
+//!
+//! LRM: §9.17.3 `$limit` (the `applyLimits` gate); the gates themselves are
+//! SPICE's (ngspice niiter.c, niconv.c), not the LRM's.
 const std = @import("std");
 const dense_lu = @import("dense_lu.zig");
-
-/// Why `finalizeStep` refused an iterate. ESPice keeps it for its traces.
-const Reject = enum { converged, first_iter, delta, limited, flipped, residual, device };
 
 fn Deref(comptime P: type) type {
     return if (@typeInfo(P) == .pointer) @typeInfo(P).pointer.child else P;
@@ -30,9 +34,11 @@ fn Deref(comptime P: type) type {
 
 /// Controls for one nonlinear solve. Defaults are SPICE's `.options`.
 pub const Options = struct {
+    /// Newton iterations before the solve gives up (SPICE's itl1).
     max_iter: u16 = 100,
     /// Current-row absolute tolerance, amperes.
     abstol: f64 = 1e-12,
+    /// Relative tolerance of both the delta and the residual gate.
     reltol: f64 = 1e-3,
     /// Voltage-row absolute tolerance, volts.
     vntol: f64 = 1e-6,
@@ -52,13 +58,16 @@ pub const Options = struct {
 /// Outcome of a nonlinear solve.
 pub const Result = struct {
     converged: bool,
+    /// Iterations run, the converging one included; `max_iter` when not
+    /// converged.
     iterations: u16,
     /// Largest scaled step of the accepted iterate; 0 when not converged.
     max_dx: f64,
 };
 
-/// Per-system Newton scratch for `n` unknowns: the matrix copy the factor
-/// destroys, and the step vectors.
+/// Returns the per-system Newton scratch for `n` unknowns: the matrix copy
+/// the factor destroys, and the step vectors. Fixed-size, so `.{}` is the
+/// whole setup and nothing allocates.
 pub fn Workspace(comptime n: usize) type {
     return struct {
         a: [n * n]f64 = undefined,
@@ -67,8 +76,10 @@ pub fn Workspace(comptime n: usize) type {
     };
 }
 
-/// Direct Newton: assemble, factor, solve, accept. Clears device limiting
-/// on exit (ESPice `run`). The only error is a singular matrix.
+/// Runs direct Newton from `x`: assemble, factor, solve, accept. The only
+/// error is a singular matrix (`error.Singular`), returned at once, with
+/// `x` at the last iterate. Asserts that `x` and every `ws` array hold at
+/// least `sys.n` (n²) values.
 ///
 /// A converged `x` is the last linearization point x_k, not the x_k+1 of the
 /// final solve, which only feeds the acceptance gates. ngspice's NIiter
@@ -84,7 +95,6 @@ pub fn newton(
     hook: anytype,
 ) dense_lu.Error!Result {
     const S = Deref(@TypeOf(sys));
-    defer if (comptime @hasDecl(S, "clearLimits")) sys.clearLimits();
     const n = sys.n;
     const dx = ws.dx[0..n];
     const x_old = ws.x_old[0..n];
@@ -113,7 +123,8 @@ pub fn newton(
     return .{ .converged = false, .iterations = opts.max_iter, .max_dx = 0 };
 }
 
-const Step = struct { converged: bool, scaled: f64, flipped: bool = false, why: Reject = .converged };
+/// One iterate's verdict, and its scaled step for `Result.max_dx`.
+const Step = struct { converged: bool, scaled: f64 };
 
 /// Applies `dx` and runs the acceptance gates in order: device limiting,
 /// first iterate, per-row delta, row-scaled residual, device convergence,
@@ -134,9 +145,9 @@ fn finalizeStep(
 
     const limited = if (comptime @hasDecl(S, "applyLimits")) sys.applyLimits(x, x_old) else false;
 
-    if (limited) return .{ .converged = false, .scaled = scaled, .why = .limited };
-    if (iter == 0) return .{ .converged = false, .scaled = scaled, .why = .first_iter };
-    if (scaled >= 1.0) return .{ .converged = false, .scaled = scaled, .why = .delta };
+    if (limited) return .{ .converged = false, .scaled = scaled };
+    if (iter == 0) return .{ .converged = false, .scaled = scaled };
+    if (scaled >= 1.0) return .{ .converged = false, .scaled = scaled };
     for (0..n) |i| {
         const scale = @abs(vals[sys.diag_slots[i]]);
         // A zero diagonal is a voltage-defined branch row (V/E/H source):
@@ -146,15 +157,15 @@ fn finalizeStep(
         if (scale == 0) continue;
         const tol = @max(opts.residual_tol, 10.0 * scale * (opts.reltol * @abs(x[i]) + opts.vntol));
         // Negated, so a NaN residual fails too.
-        if (!(@abs(residual[i]) <= tol)) return .{ .converged = false, .scaled = scaled, .why = .residual };
+        if (!(@abs(residual[i]) <= tol)) return .{ .converged = false, .scaled = scaled };
     }
     if (comptime @hasDecl(S, "checkConvergence")) {
-        if (!sys.checkConvergence(x)) return .{ .converged = false, .scaled = scaled, .why = .device };
+        if (!sys.checkConvergence(x)) return .{ .converged = false, .scaled = scaled };
     }
     // Last, at the x_k `newton` publishes. A device that flips here forces
     // one more iterate.
     if (comptime @hasDecl(S, "updateStates")) {
-        if (sys.updateStates(x_old[0..n])) |_| return .{ .converged = false, .scaled = scaled, .flipped = true, .why = .flipped };
+        if (sys.updateStates(x_old[0..n])) |_| return .{ .converged = false, .scaled = scaled };
     }
     return .{ .converged = true, .scaled = scaled };
 }

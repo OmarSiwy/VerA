@@ -3,6 +3,10 @@
 //! `//! onoise`. Each prints one full-precision row per accepted point or
 //! frequency to stderr, for `zig build test-spice` to grade against the
 //! deck's oracle, and exits 1 naming the failure.
+//!
+//! In: a derived, set-up `Model`/`Instance` and the deck's card values; out:
+//! the stderr rows. LRM: §4.6.1 Table 4-22 (the analysis kind each phase
+//! publishes).
 const std = @import("std");
 const contract = @import("contract");
 const Circuit = @import("circuit.zig").Circuit;
@@ -28,10 +32,12 @@ fn TranRows(comptime D: type) type {
     };
 }
 
-/// `//! tran tstep, tstop`: the operating point (a transient's own, so
-/// `analysis("ic")`), then `tran.simulate`. `model` and `inst` are derived
-/// and set up; the operating point's homotopy writes `model`'s §9.15
-/// knobs while it steps and restores them.
+/// Runs `//! tran tstep, tstop`: the operating point (a transient's own, so
+/// `analysis("ic")`), then `tran.simulate`, printing
+/// `tran t=<t> <unknown>=<x> ...` per accepted point. `model` and `inst`
+/// must be derived and set up; the operating point's homotopy writes
+/// `model`'s §9.15 knobs while it steps and restores them. Exits the process
+/// with status 1 when no operating point is found or the step underflows.
 pub fn runTran(comptime D: type, title: []const u8, model: *D.Model, inst: *D.Instance, tstep: f64, tstop: f64) void {
     var ckt: Circuit(D) = .init(model, inst);
     var ws: converger.Workspace(contract.nU(D)) = .{};
@@ -41,8 +47,11 @@ pub fn runTran(comptime D: type, title: []const u8, model: *D.Model, inst: *D.In
     if (!r.completed) fail(title, "transient: timestep too small at t = {e}", .{r.t_final});
 }
 
-/// `//! onoise V(out) = f, ...`: the operating point, then `noise.sweep`;
-/// prints `noise f=<f> onoise=<V/sqrt(Hz)>`.
+/// Runs `//! onoise V(out) = f, ...`: the operating point, then
+/// `noise.sweep`, printing `noise f=<f> onoise=<V/sqrt(Hz)>` per frequency.
+/// `model` and `inst` must be derived and set up. Exits the process with
+/// status 1 when no operating point is found, the small-signal matrix is
+/// singular, or a `corr_with` link is malformed.
 pub fn runNoise(comptime D: type, title: []const u8, model: *D.Model, inst: *D.Instance, out: D.U, comptime freqs: []const f64) void {
     var ckt: Circuit(D) = .init(model, inst);
     var ws: converger.Workspace(contract.nU(D)) = .{};

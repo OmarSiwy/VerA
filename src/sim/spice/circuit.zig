@@ -17,9 +17,15 @@
 //! A deck's top module is the whole circuit, so every unknown is solved for:
 //! nothing is forced. Host-only by construction (it is never imported by the
 //! device text), so the device stays GPU-compilable.
+//!
+//! LRM: §9.15 (`gmin`, `sourceScaleFactor`), §9.17.2 `$bound_step`, §9.17.3
+//! `$limit`, §9.4 display output, §5.10.3.3 breakpoints.
 const std = @import("std");
 const contract = @import("contract");
 
+/// Returns the system type for device `D`: its unknowns are the circuit's,
+/// its planes are fixed-size arrays (n_u² for `g`/`c`), and nothing in it
+/// allocates. `D` must satisfy `tools/contract.zig`'s device contract.
 pub fn Circuit(comptime D: type) type {
     const n_u = contract.nU(D);
     return struct {
@@ -33,24 +39,38 @@ pub fn Circuit(comptime D: type) type {
             for (&l, 0..) |*e, u| e.* = u;
             break :blk l;
         };
+        /// The device's `State`, or `void` for a device without
+        /// `updateState`/`initState`.
         pub const State = if (@hasDecl(D, "updateState") and @hasDecl(D, "initState")) D.State else void;
+        /// Whether the device has charges (`q`), so `c_vals`/`q_vec` are live.
         pub const has_charge = @hasDecl(D, "q");
+        /// |U|, the number of unknowns and of residual rows.
         pub const unknowns = n_u;
+        /// The device type, for the analyses' own `@hasDecl` checks.
         pub const Device = D;
 
+        /// |U| at run time, the field `converger.newton` reads.
         n: usize = n_u,
         /// Mutable for the operating point's homotopy knobs (`setHomotopy`).
         model: *D.Model,
+        /// The working instance; `.revert` overwrites it with `saved_inst`.
         inst: *D.Instance,
+        /// The working device state.
         state: State,
         /// The last accepted `inst` and `state`, which `.revert` restores.
         saved_inst: D.Instance,
         saved_state: State,
+        /// The analysis every hook is called with; `setSimState` writes it.
         sim: contract.SimState = .{},
+        /// dI/dx at the last `eval`, row-major n_u x n_u.
         g_vals: [n_u * n_u]f64 = undefined,
+        /// dQ/dx at the last `eval`/`evalQ`, row-major n_u x n_u.
         c_vals: [n_u * n_u]f64 = undefined,
+        /// I(x) at the last `eval`, one per row.
         rhs: [n_u]f64 = undefined,
+        /// Q(x) at the last `eval`/`evalQ`, one per row.
         q_vec: [n_u]f64 = undefined,
+        /// Index of each row's diagonal in `g_vals`, `i * n_u + i`.
         diag_slots: [n_u]u32 = blk: {
             var d: [n_u]u32 = undefined;
             for (&d, 0..) |*e, i| e.* = i * n_u + i;
@@ -70,8 +90,10 @@ pub fn Circuit(comptime D: type) type {
         reject_at: ?f64 = null,
         state_staged: bool = false,
 
-        /// `model` is derived and set up, `inst` set up; the device's own
-        /// `initState` gives the first state.
+        /// Returns the system over `model` and `inst`, which must be derived
+        /// and set up and must outlive it (both are borrowed, not copied).
+        /// The device's own `initState` gives the first state, which is also
+        /// the first accepted one.
         pub fn init(model: *D.Model, inst: *D.Instance) Self {
             const st: State = if (State == void) {} else D.initState(model, inst);
             return .{ .model = model, .inst = inst, .state = st, .saved_inst = inst.*, .saved_state = st };
@@ -118,7 +140,9 @@ pub fn Circuit(comptime D: type) type {
             return out;
         }
 
-        /// Stamps every plane at `x`. `t` is in `sim` already.
+        /// Stamps every plane at `x`, `c_vals`/`q_vec` too when the device
+        /// has charge. `t` is ignored: the time is in `sim` already.
+        /// Asserts that `x` holds at least n_u values.
         pub fn eval(self: *Self, x: []const f64, _: f64) void {
             const r = self.withConst(D.eval(Dual, x[0..n_u], self.model, self.inst, self.sim), false);
             for (r, 0..) |row, i| {
@@ -128,7 +152,8 @@ pub fn Circuit(comptime D: type) type {
             if (has_charge) self.evalQ(x, 0);
         }
 
-        /// The charge planes only.
+        /// Stamps the charge planes only (`c_vals`, `q_vec`); a no-op for a
+        /// device without charge. Asserts that `x` holds at least n_u values.
         pub fn evalQ(self: *Self, x: []const f64, _: f64) void {
             if (!has_charge) return;
             const qq = self.withConst(contract.qRows(D, Dual, D.q(Dual, x[0..n_u], self.model, self.inst, self.sim)), true);
@@ -138,30 +163,34 @@ pub fn Circuit(comptime D: type) type {
             }
         }
 
-        /// G + alpha*C into `out` (ESPice `combineGC`).
+        /// Writes G + alpha*C into `out` (ESPice `combineGC`), from the
+        /// planes of the last `eval`. Asserts that `out` holds n_u² values.
         pub fn combineGC(self: *const Self, alpha: f64, out: []f64) void {
             for (out[0 .. n_u * n_u], self.g_vals, self.c_vals) |*o, g, c| o.* = g + alpha * c;
         }
 
-        /// Starts a nonlinear solve: `$simparam("iteration")` reads 1.
+        /// Starts a nonlinear solve: §9.15 `$simparam("iteration")` reads 1.
         pub fn beginSolve(self: *Self) void {
             self.sim.iteration = 1;
         }
 
-        /// Hands the device the previous Newton iterate, then counts it.
+        /// Hands the device the previous Newton iterate, then counts it
+        /// (saturating). Asserts that `previous_x` holds n_u values.
         pub fn advanceIteration(self: *Self, previous_x: []const f64) void {
             if (@hasDecl(D, "advanceIteration")) D.advanceIteration(Val, self.model, self.inst, previous_x[0..n_u].*, self.sim);
             self.sim.iteration +|= 1;
         }
 
-        /// False when the device vetoes convergence at `x`.
+        /// Returns false when the device vetoes convergence at `x`; true for
+        /// a device without `checkConvergence`.
         pub fn checkConvergence(self: *const Self, x: []const f64) bool {
             if (!@hasDecl(D, "checkConvergence")) return true;
             return D.checkConvergence(Val, self.model, self.inst, x[0..n_u].*, self.sim);
         }
 
-        /// §9.17.3 the device's clamp of `x` against `x_old`; true when it
-        /// moved anything (the iterate is then not converged).
+        /// Applies §9.17.3 the device's clamp of `x` against `x_old` in
+        /// place. Returns true when it moved anything or the device says the
+        /// iterate is not converged (`LimitResult.converged`).
         pub fn applyLimits(self: *const Self, x: []f64, x_old: []const f64) bool {
             if (!@hasDecl(D, "limit")) return false;
             const r = D.limit(Val, self.model, self.inst, x[0..n_u].*, x_old[0..n_u].*, self.sim);
@@ -191,7 +220,8 @@ pub fn Circuit(comptime D: type) type {
             return null;
         }
 
-        /// Commits, reverts or queries the accepted device state. `.commit`
+        /// Commits, reverts or queries the accepted device state, and returns
+        /// the query's answer (false for `.commit`/`.revert`). `.commit`
         /// at every accepted point, the operating point included; `.revert`
         /// after every rejected attempt. `.query`: did a `cross`/`above`
         /// flip move the working state off the last accepted one?
@@ -231,7 +261,8 @@ pub fn Circuit(comptime D: type) type {
             } else if (@hasDecl(D, "display")) D.display(Dual, x[0..n_u], self.model, &inst, self.sim);
         }
 
-        /// §9.17.2 the tightest `$bound_step` the device asked for, or null.
+        /// Returns §9.17.2 the tightest `$bound_step` the device asked for,
+        /// or null when it asked for none (0, infinite, or no field).
         /// Only meaningful after an accepted step ran `updateStates`.
         pub fn boundStep(self: *const Self) ?f64 {
             if (!@hasField(D.Instance, "bound_step")) return null;
@@ -239,7 +270,8 @@ pub fn Circuit(comptime D: type) type {
             return if (b > 0 and b < std.math.inf(f64)) b else null;
         }
 
-        /// §5.10.3.3 the earliest device breakpoint after `t`, or null.
+        /// Returns §5.10.3.3 the earliest device breakpoint after `t` from
+        /// either hook, or null when neither has one.
         pub fn nextBreakpoint(self: *const Self, t: f64) ?f64 {
             var best = std.math.inf(f64);
             if (@hasDecl(D, "nextBreakpoint")) if (D.nextBreakpoint(self.model, t)) |bp| {

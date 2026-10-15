@@ -19,6 +19,10 @@
 //! later ladder does, and restore the deck's before the solve that ends the
 //! rung. Not taken: JFNK, OPtran and the floating-node check; a deck no rung
 //! solves fails with `error.NoOperatingPoint`.
+//!
+//! In: a `Circuit` and its kind of static analysis; out: the operating point
+//! in `x`, committed. LRM: §4.6.1 (the analysis kind), §5.10.2
+//! (`initial_step`), §9.15 (the homotopy knobs), §9.17.3 (cold-start seeds).
 const std = @import("std");
 const contract = @import("contract");
 const converger = @import("converger.zig");
@@ -37,6 +41,7 @@ const gmin_start: f64 = 1e-2;
 
 /// Zeroes `x`, then applies the device's §9.17.3 cold-start seeds (SPICE
 /// MODEINITJCT) so the first iteration linearizes there instead of at 0.
+/// Asserts that `x` holds exactly n_u values when the device has `seed`.
 pub fn coldStart(ckt: anytype, x: []f64) void {
     @memset(x, 0);
     const D = @TypeOf(ckt.*).Device;
@@ -47,20 +52,26 @@ pub fn coldStart(ckt: anytype, x: []f64) void {
     };
 }
 
-/// Plain Newton (`hook.assemble` is one eval, the matrix G).
+/// The `converger.newton` hook of a static solve: `assemble` is one eval,
+/// the matrix G itself.
 pub const EvalHook = struct {
+    /// Stamps every plane of `ckt` at `x`.
     pub fn assemble(_: EvalHook, ckt: anytype, x: []const f64, t: f64) void {
         ckt.eval(x, t);
     }
+    /// Returns `ckt`'s G plane, which the solve may modify (gmin).
     pub fn vals(_: EvalHook, ckt: anytype) []f64 {
         return &ckt.g_vals;
     }
 };
 
 /// Solves the operating point into `x` from a cold start, as a static
-/// analysis of `kind` (`.dc`, or `.ic` for a transient's own: §4.6.1), and
-/// on convergence commits the device state. `initial_step` holds for this
-/// solve only (§5.10.2), so every later eval at this point does not re-latch.
+/// analysis of `kind` (`.dc`, `.static` for one that precedes a
+/// small-signal analysis, or `.ic` for a transient's own: §4.6.1), and on
+/// convergence commits the device state and returns the rung that solved
+/// it. `initial_step` holds for this solve only (§5.10.2), so every later
+/// eval at this point does not re-latch. `error.NoOperatingPoint` when no
+/// rung converges; the deck's knobs are restored either way.
 pub fn solve(ckt: anytype, ws: anytype, x: []f64, kind: contract.AnalysisKind) !Rung {
     ckt.setSimState(.{ .kind = kind, .initial_step = true });
     const rung = try ladder(ckt, ws, x);
