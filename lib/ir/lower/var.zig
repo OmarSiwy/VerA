@@ -401,7 +401,8 @@ const Exposed = struct {
             if (ex.tag(ex.rhs(i)) == .range) return null;
             // Not through a parameter: a model card may override it (§3.4).
             const c = lower_constfold.foldExpr(x.l, ex.rhs(i), false) orelse return null;
-            try idx.insert(x.l.arena, 0, c.asInt());
+            // A subscript with no integer names no element (E0310 when lowered).
+            try idx.insert(x.l.arena, 0, c.asIntExact() orelse return null);
         }
         return try lower_shape.elemName(x.l, k, idx.items);
     }
@@ -411,11 +412,16 @@ const Exposed = struct {
     fn allCells(x: *Exposed, k: []const u8, name: []const u8) bool {
         const decl = x.declOf(name) orelse return false;
         if (decl.dims.len == 0) return false;
+        // This walk runs before `dimsBounds` has refused a shape (E0308,
+        // E1016), so a bound may be anything a fold gives: one with no
+        // integer, or a count no `usize` holds, can have no cell left
+        // unassigned that the walk could name, so the answer is "not all".
         var cells: usize = 1;
         for (decl.dims) |d| {
-            const a = lower_constfold.constEval(x.l, d.msb) orelse return false;
-            const b = lower_constfold.constEval(x.l, d.lsb) orelse return false;
-            cells *= @abs(a.asInt() - b.asInt()) + 1;
+            const a = (lower_constfold.constEval(x.l, d.msb) orelse return false).asIntExact() orelse return false;
+            const b = (lower_constfold.constEval(x.l, d.lsb) orelse return false).asIntExact() orelse return false;
+            const n = std.math.cast(usize, @abs(@as(i128, a) - b) + 1) orelse return false;
+            cells = std.math.mul(usize, cells, n) catch return false;
         }
         var have: usize = 0;
         for (x.list.items) |d| have += @intFromBool(d.len > k.len and std.mem.startsWith(u8, d, k) and d[k.len] == '[');
@@ -546,7 +552,7 @@ pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     while (blocks.next()) |b| for (b.vars) |v| try vars.put(self.arena, v.name, {});
     const ex = &self.file.exprs;
     for (0..ex.nodes.len) |i| {
-        const e: Ast.ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        const e: Ast.ExprId = @fromBackingInt(@intCast(i));
         if (ex.tag(e) != .index or !runtimeSub(self, &vars, module.genvars, ex.rhs(e))) continue;
         var base = ex.lhs(e);
         while (ex.tag(base) == .index) base = ex.lhs(base);
@@ -1084,4 +1090,70 @@ pub fn zeroOf(ty: Ty) Mir.Value {
         .integer => .zero,
         .string => .undef,
     };
+}
+
+test zeroOf {
+    // §3.2 "Real variables are initialized to zero (0)", an integer too; a
+    // string has no numeric zero.
+    try std.testing.expectEqual(Mir.Value.f_zero, zeroOf(.real));
+    try std.testing.expectEqual(Mir.Value.zero, zeroOf(.integer));
+    try std.testing.expectEqual(Mir.Value.undef, zeroOf(.string));
+}
+
+test "checkOneItemPerScope: §6.8 one identifier declares one item in a scope (E0362)" {
+    try Lower.expectBodyVerdict("  real x;\n  integer x;", "", .E0362);
+    try Lower.expectBodyVerdict("  parameter real x = 1.0;\n  real x;", "", .E0362);
+    // A named block is a scope of its own (§5.3.2): shadowing is no clash.
+    try Lower.expectBodyVerdict("  real x;", "    begin : b\n      real x;\n      x = 1.0;\n    end", null);
+}
+
+test "closeScope: §5.3.2 a block's declaration shadows for the block, and its name stays reachable" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer x;
+        \\  analog begin
+        \\    begin : b
+        \\      real x;
+        \\      x = 1.5;
+        \\    end
+        \\    x = 2;
+        \\    I(p) <+ x * V(p);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    // The block closed: `x` is the module's integer again, and the local is
+    // §5.3.2's `b.x`, "accessed outside the scope in which [it is] declared".
+    try std.testing.expectEqual(Ty.integer, h.low.vars.get("x").?.ty);
+    try std.testing.expectEqual(Ty.real, h.low.vars.get("b.x").?.ty);
+    try std.testing.expect(h.low.block_locals.contains("b.x"));
+}
+
+test "declareVarDecl: §2.9 vera_scratch values and owners" {
+    // Any string but "uninit" (E0538); "uninit" with an initializer (E0539);
+    // on anything but a variable (E0535).
+    try Lower.expectBodyVerdict("  (* vera_scratch *) real s;", "    s = 1.0;", null);
+    try Lower.expectBodyVerdict("  (* vera_scratch = \"nope\" *) real s;", "    s = 1.0;", .E0538);
+    try Lower.expectBodyVerdict("  (* vera_scratch = \"uninit\" *) real s = 1.0;", "", .E0539);
+    try Lower.expectBodyVerdict("  (* vera_scratch *) parameter real g = 1.0;", "", .E0535);
+    // §7.3.1 a `reg`'s packed range is a constant (E0352).
+    try Lower.expectBodyVerdict("  integer w;\n  reg [w:0] r;", "", .E0352);
+}
+
+test "markHeldVars: an array too large to count is judged by its declaration, not by a crash" {
+    // The read `x[i]...` makes the walk ask whether every cell is assigned,
+    // which counts the cells before `dimsBounds` has refused the shape. The
+    // count overflows a 64-bit integer in both declarations; E1016 is the
+    // answer either way.
+    const decls = [_][]const u8{
+        "  real x[0:2000000000][0:2000000000][0:2000000000];\n  integer i;\n  real y;",
+        "  real x[-9223372036854775807:9223372036854775807][0:0][0:0];\n  integer i;\n  real y;",
+    };
+    for (decls) |d| try Lower.expectBodyVerdict(d, "    i = 0;\n    y = x[i][0][0];", .E1016);
 }

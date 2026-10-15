@@ -172,7 +172,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
         .ident => if (self.out.vectors.get(self.file.str(ex.strOf(ref)))) |r| {
             const rname = self.file.str(ex.strOf(ref));
             for (0..r.size()) |k| {
-                const elem = try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ rname, r.at(@intCast(k)) });
+                const elem = try self.arena.print("{s}[{d}]", .{ rname, r.at(@intCast(k)) });
                 const idx = self.hier_name_state.alias_home.get(elem) orelse self.node_voltages.get(elem) orelse ground;
                 if (idx == ground) {
                     try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
@@ -259,7 +259,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
 /// the first element's answer is the call's.
 fn aliasVector(self: *Lower, fname: []const u8, ref_name: []const u8, r: Lower.VecRange, target: []const u8) Oom!lower_limit.AliasResult {
     for (0..r.size()) |k| {
-        const elem = try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ ref_name, r.at(@intCast(k)) });
+        const elem = try self.arena.print("{s}[{d}]", .{ ref_name, r.at(@intCast(k)) });
         const home = self.hier_name_state.alias_home.get(elem) orelse self.node_voltages.get(elem).?;
         if (!self.hier_name_state.alias_home.contains(elem)) try self.hier_name_state.alias_home.put(self.arena, elem, home);
         if (try bindAlias(self, fname, elem, home, target) != .bound) return .unresolved;
@@ -444,4 +444,78 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     b.help("supply the fallback expression §9.16 defines for this case: `$simprobe(inst, param, <value>)`", .{});
     try b.emit();
     return poison;
+}
+
+test callerParentPath {
+    // §9.16 "the parent of the current instance": the instance path with its
+    // own last segment dropped, separator kept, "" at the top and for a unit
+    // the table does not hold.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator, "module m; endmodule");
+    defer h.deinit();
+    const units = [_]Elaborate.UnitPath{
+        .{ .module = "top", .path = "", .decl = undefined },
+        .{ .module = "a", .path = "u1.", .decl = undefined },
+        .{ .module = "b", .path = "u1.u2.", .decl = undefined },
+    };
+    h.low.out.unit_paths = &units;
+    const want = [_][]const u8{ "", "", "u1.", "" };
+    for (want, 0..) |w, unit| {
+        h.low.cur_unit = @intCast(unit);
+        try std.testing.expectEqualStrings(w, callerParentPath(&h.low));
+    }
+}
+
+test resolveAliasNode {
+    // §6.7 resolution of a §9.20 hierarchical_reference_string in a design of
+    // one module: the bare name, the module-qualified one and §6.2.1's
+    // `$root.` spelling all reach the same node, and only a node is a hit.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module top(a, g);
+        \\  inout a, g; electrical a, g;
+        \\  electrical n1;
+        \\  analog I(a, g) <+ V(a, g);
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    const a = h.low.node_voltages.get("a").?;
+    for ([_][]const u8{ "a", "top.a", "$root.top.a", "$root.a" }) |path| {
+        const hit = resolveAliasNode(&h.low, path) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(a, hit.idx);
+        try std.testing.expect(hit.direct);
+    }
+    try std.testing.expectEqual(h.low.node_voltages.get("n1").?, resolveAliasNode(&h.low, "top.n1").?.idx);
+    for ([_][]const u8{ "top", "top.", "nosuch", "top.nosuch", "$root.", "other.a" }) |path|
+        try std.testing.expect(resolveAliasNode(&h.low, path) == null);
+}
+
+test pushCond {
+    // Outside an `analog initial` block no alias call can be, so a condition
+    // is not recorded.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator, "module m; endmodule");
+    defer h.deinit();
+    try pushCond(&h.low, .{ .e = .none, .pol = true, .pure = true });
+    try std.testing.expectEqual(0, h.low.hier_name_state.conds.items.len);
+    popCond(&h.low);
+    h.low.in_analog_initial = true;
+    try pushCond(&h.low, .{ .e = .none, .pol = true, .pure = true });
+    try std.testing.expectEqual(1, h.low.hier_name_state.conds.items.len);
+    popCond(&h.low);
+    try std.testing.expectEqual(0, h.low.hier_name_state.conds.items.len);
+}
+
+test "lowerSimprobe: §9.16's two outcomes for a name that does not resolve" {
+    const decls = "  real y;\n  string s;";
+    // "If ... the optional expression is not supplied, then an error".
+    try Lower.expectBodyVerdict(decls, "    y = $simprobe(\"nosuch\", \"gain\");", .E0817);
+    // With it, the expression is the value.
+    try Lower.expectBodyVerdict(decls, "    y = $simprobe(\"nosuch\", \"gain\", 2.0);", null);
+    // A string variable has no value until the block runs (E0823).
+    try Lower.expectBodyVerdict(decls, "    s = \"u\";\n    y = $simprobe(s, \"gain\", 1.0);", .E0823);
 }

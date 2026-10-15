@@ -678,3 +678,86 @@ fn assignValueOf(self: *const Lower, s: Ast.StmtId) ?Ast.ExprId {
     const st = self.file.stmt(s);
     return if (st == .assign) st.assign.value else null;
 }
+
+test isAnalysisOrConst {
+    // A.8.3 `analysis_or_constant_expression`, judged on the parsed default
+    // in an empty scope, so no identifier is a parameter: literals,
+    // `analysis()`, §9.18's six system parameters and §5.5.3's nature
+    // attributes, under any operator; nothing that moves between iterations.
+    const cases = [_]struct { expr: []const u8, want: bool }{
+        .{ .expr = "1", .want = true },
+        .{ .expr = "2.5", .want = true },
+        .{ .expr = "\"s\"", .want = true },
+        .{ .expr = "4'b1010", .want = true },
+        .{ .expr = "analysis(\"dc\")", .want = true },
+        .{ .expr = "(1 > 0) && analysis(\"tran\")", .want = true },
+        .{ .expr = "1 ? 2 : 3", .want = true },
+        .{ .expr = "abs(-2.0)", .want = true },
+        .{ .expr = "$mfactor", .want = true },
+        .{ .expr = "p.potential.abstol", .want = true },
+        .{ .expr = "$abstime", .want = false },
+        .{ .expr = "$temperature", .want = false },
+        .{ .expr = "ddt(1.0)", .want = false },
+        .{ .expr = "V(p)", .want = false },
+        .{ .expr = "f(1)", .want = false },
+        .{ .expr = "undeclared", .want = false },
+        .{ .expr = "u.x", .want = false },
+        .{ .expr = "undeclared ? 2 : 3", .want = false },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print("module m; parameter real a = {s}; endmodule", .{c.expr});
+        defer std.testing.allocator.free(src);
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        const m = &h.file.modules[h.file.builtin_modules];
+        std.testing.expectEqual(c.want, isAnalysisOrConst(&h.low, m.params[0].default)) catch |e| {
+            std.debug.print("{s}\n", .{c.expr});
+            return e;
+        };
+    }
+}
+
+test "lowerCase: §5.8.3 one default at most (E0427)" {
+    const decls = "  integer k;\n  real y;";
+    try Lower.expectBodyVerdict(decls, "    case (k) 1, 2: y = 1.0; default: y = 2.0; endcase", null);
+    try Lower.expectBodyVerdict(decls, "    case (k) 1: y = 1.0; default: y = 2.0; default: y = 3.0; endcase", .E0427);
+}
+
+test "tryUnrollFor: §6.6.1 a genvar loop's scheme folds, assigns one genvar, holds no x" {
+    const decls = "  genvar i;\n  integer m;\n  real y;";
+    const cases = [_]struct { body: []const u8, want: ?@import("diag").Code }{
+        .{ .body = "    for (i = 0; i < 3; i = i + 1) y = y + i;", .want = null },
+        .{ .body = "    m = 2;\n    for (i = m; i < 2; i = i + 1) y = y + 1.0;", .want = .E0417 },
+        .{ .body = "    m = 2;\n    for (i = 0; i < m; i = i + 1) y = y + 1.0;", .want = .E0418 },
+        // "Both the initialization and iteration assignments shall assign to
+        // the same genvar", and the iteration is constant too.
+        .{ .body = "    m = 2;\n    for (i = 0; i < 2; m = i + 1) y = y + 1.0;", .want = .E0419 },
+        .{ .body = "    m = 1;\n    for (i = 0; i < 2; i = i + m) y = y + 1.0;", .want = .E0419 },
+        // "It shall be an error if any bit of the genvar is set to x or z."
+        .{ .body = "    for (i = 1'bx; i < 2; i = i + 1) y = y + 1.0;", .want = .E0486 },
+        // §5.11 a jump never leaves an unrolled analog_for.
+        .{ .body = "    for (i = 0; i < 2; i = i + 1) begin if (i == 1) break; end", .want = .E0440 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(decls, c.body, c.want);
+}
+
+test "lowerIf: §5.8 a constant condition lowers only its arm; a parameter is no constant here" {
+    const decls = "  real y;\n  parameter integer on = 0;";
+    // The arm that is not taken is not lowered at all, so the undeclared
+    // name in it is never resolved.
+    try Lower.expectBodyVerdict(decls, "    if (0) zz = 1.0;", null);
+    try Lower.expectBodyVerdict(decls, "    if (1) y = 1.0; else zz = 1.0;", null);
+    // §3.4: a model card may override `on`, so both arms are lowered.
+    try Lower.expectBodyVerdict(decls, "    if (on) zz = 1.0;", .E0313);
+}
+
+test "loops: §5.9 the procedural loops and their jumps" {
+    const decls = "  integer k;\n  real y;";
+    try Lower.expectBodyVerdict(decls, "    k = 0;\n    while (k < 3) k = k + 1;", null);
+    try Lower.expectBodyVerdict(decls, "    repeat (3) y = y + 1.0;", null);
+    try Lower.expectBodyVerdict(decls, "    for (k = 0; k < 3; k = k + 1) begin\n      if (k == 1) break;\n      y = y + 1.0;\n    end", null);
+    try Lower.expectBodyVerdict(decls, "    for (k = 0; k < 3; k = k + 1) begin\n      if (k == 1) continue;\n      y = y + 1.0;\n    end", null);
+    // A jump outside every loop (E0404).
+    try Lower.expectBodyVerdict(decls, "    break;", .E0404);
+}

@@ -760,15 +760,21 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
             // §5.5.2 "The index must be a constant expression, though it may
             // include genvar variables"; `tryUnrollFor` binds the genvar in
             // `consts` for each unrolled copy.
-            const i = lower_constfold.constEval(self, ex.rhs(e)) orelse {
+            const c = lower_constfold.constEval(self, ex.rhs(e)) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0352, "index into `{s}` is not a constant expression", .{name});
                 return ground;
             };
-            if (!r.has(i.asInt())) {
-                try self.err(self.file.exprs.mainTok(e), .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i.asInt() });
+            // §4.2.1.1: a NaN, an infinity or a real past i64 rounds to no
+            // integer, so it names no element (a saturated one named one).
+            const i = c.asIntExact() orelse {
+                try self.err(self.file.exprs.mainTok(e), .E0352, "index {e} into `{s}` is no integer", .{ c.asReal(), name });
+                return ground;
+            };
+            if (!r.has(i)) {
+                try self.err(self.file.exprs.mainTok(e), .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i });
                 return ground;
             }
-            return internNodeElem(self, name, i.asInt());
+            return internNodeElem(self, name, i);
         },
         else => { // else: not a net reference: E0306
             try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
@@ -817,13 +823,24 @@ pub fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
         try self.err(tok, .E0352, "the lsb of the range is not a constant expression", .{});
         return null;
     };
-    const r: VecRange = .{ .msb = msb.asInt(), .lsb = lsb.asInt() };
+    // §4.2.1.1 rounds a real to no integer when it is a NaN, an infinity or
+    // past i64; saturating one would make a NaN bound a silent zero.
+    const r: VecRange = .{
+        .msb = msb.asIntExact() orelse return refuseBound(self, tok, "msb", msb),
+        .lsb = lsb.asIntExact() orelse return refuseBound(self, tok, "lsb", lsb),
+    };
     const n = @abs(@as(i128, r.msb) - r.lsb) + 1;
     if (n > max_nodes) {
         try self.err(tok, .E1015, "the range [{d}:{d}] has {d} elements", .{ r.msb, r.lsb, n });
         return null;
     }
     return r;
+}
+
+// E0352 for a range bound that folded to a real with no integer value.
+fn refuseBound(self: *Lower, tok: u32, which: []const u8, c: Lower.Const) Oom!?VecRange {
+    try self.err(tok, .E0352, "the {s} of the range is {e}, which is no integer", .{ which, c.asReal() });
+    return null;
 }
 
 /// Returns a port's range from whichever of its two declarations carries one. When
@@ -879,19 +896,21 @@ pub fn vecTerminal(self: *Lower, e: Ast.ExprId, tok: u32) Oom!?VecTerm {
         try self.err(tok, .E0351, "`{s}` was not declared with a range", .{name});
         return null;
     };
-    const a = lower_constfold.constEval(self, ex.lhs(sel));
-    const b = lower_constfold.constEval(self, ex.rhs(sel));
+    // §4.2.1.1: a bound that rounds to no integer (NaN, an infinity, past
+    // i64) is no bound, as one that does not fold is not.
+    const a: ?i64 = if (lower_constfold.constEval(self, ex.lhs(sel))) |c| c.asIntExact() else null;
+    const b: ?i64 = if (lower_constfold.constEval(self, ex.rhs(sel))) |c| c.asIntExact() else null;
     if (a == null or b == null) {
-        try self.err(tok, .E0352, "the part-select of `{s}` has a bound that is not a constant expression", .{name});
+        try self.err(tok, .E0352, "the part-select of `{s}` has a bound that is not a constant integer", .{name});
         return null;
     }
-    const r: VecRange = if (ex.tag(sel) == .range) .{ .msb = a.?.asInt(), .lsb = b.?.asInt() } else w: {
-        const width = b.?.asInt();
+    const r: VecRange = if (ex.tag(sel) == .range) .{ .msb = a.?, .lsb = b.? } else w: {
+        const width = b.?;
         if (width < 1) {
             try self.err(tok, .E0352, "the indexed part-select of `{s}` is {d} wide", .{ name, width });
             return null;
         }
-        break :w indexedRange(decl, a.?.asInt(), width, ex.extraOf(sel) != 0);
+        break :w indexedRange(decl, a.?, width, ex.extraOf(sel) != 0);
     };
     if (!partOf(decl, r)) {
         try self.err(tok, .E0352, "`{s}` is [{d}:{d}], so [{d}:{d}] is not a part of it", .{ name, decl.msb, decl.lsb, r.msb, r.lsb });
@@ -983,4 +1002,160 @@ pub fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
     const u = try appendNode(self, name, "", .{ .port_flow = p });
     try self.out.port_probes.append(self.arena, .{ .port = p, .u = u });
     return u;
+}
+
+test "lower: §6.5 the ports are the first rows, in declaration order, a vector msb first" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(a, b);
+        \\  inout a;
+        \\  inout [1:0] b;
+        \\  electrical a;
+        \\  electrical [1:0] b;
+        \\  electrical n;
+        \\  analog I(a) <+ V(a);
+        \\endmodule
+    );
+    defer h.deinit();
+    const out = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    const want = [_][]const u8{ "a", "b[1]", "b[0]", "n" };
+    try std.testing.expectEqual(want.len, out.nodes.len);
+    for (want, out.nodes.items(.name)) |w, got| try std.testing.expectEqualStrings(w, got);
+    try std.testing.expectEqual(3, out.num_ports);
+    for (out.nodes.items(.dir)[0..3]) |d| try std.testing.expectEqual(Ast.Direction.inout, d);
+    try std.testing.expectEqual(Ast.Direction.unspecified, out.nodes.items(.dir)[3]);
+}
+
+test "lower: §3.6.3.2 a net_decl_assignment folds to a nodeset, a bus element by element" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter real v0 = 0.5;
+        \\  electrical q = v0;
+        \\  electrical [1:0] bus = '{0.25, 0.75};
+        \\  analog I(p) <+ V(p);
+        \\endmodule
+    );
+    defer h.deinit();
+    const out = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    // The bus pattern is positional from the declared msb (`VecRange.at`).
+    const want = [_]struct { name: []const u8, value: f64 }{
+        .{ .name = "q", .value = 0.5 },
+        .{ .name = "bus[1]", .value = 0.25 },
+        .{ .name = "bus[0]", .value = 0.75 },
+    };
+    try std.testing.expectEqual(want.len, out.nodesets.items.len);
+    for (want, out.nodesets.items) |w, ns| {
+        try std.testing.expectEqualStrings(w.name, out.nodes.items(.name)[ns.node]);
+        try std.testing.expectEqual(w.value, ns.value);
+    }
+}
+
+test "lower: §5.5.2 an access function takes a scalar or one element of a vector" {
+    const decls = "  electrical [1:0] b;\n  real y;\n  integer j;";
+    const cases = [_]struct { body: []const u8, want: ?@import("diag").Code }{
+        .{ .body = "    y = V(b[1]) - V(b[0]);", .want = null },
+        // A bare vector names several nets (E0351).
+        .{ .body = "    y = V(b);", .want = .E0351 },
+        .{ .body = "    y = V(b[2]);", .want = .E0352 },
+        // "The index must be a constant expression".
+        .{ .body = "    j = 0;\n    y = V(b[j]);", .want = .E0352 },
+        // §4.2.1.1 gives NaN no integer, so it names no element.
+        .{ .body = "    y = V(b[0.0/0.0]);", .want = .E0352 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(decls, c.body, c.want);
+}
+
+test "lower: §3.6.3 net declarations: one discipline each, constant ranges and nodesets" {
+    const cases = [_]struct { decls: []const u8, want: ?@import("diag").Code }{
+        // §7.4.4: a second declaration, compatible or not (E0902).
+        .{ .decls = "  electrical q;\n  electrical q;", .want = .E0902 },
+        // §3.6.3.2 "The initializer shall be a constant_expression" (E0365).
+        .{ .decls = "  real v;\n  electrical q = v;", .want = .E0365 },
+        // One row per element: past the u16 row space is E1015.
+        .{ .decls = "  electrical [0:70000] w;", .want = .E1015 },
+        // §3.6.3 a range bound is a constant integer; NaN is none (E0352).
+        .{ .decls = "  electrical [0:0.0/0.0] w;", .want = .E0352 },
+        // §3.12.1 a port branch is over a port (E0372).
+        .{ .decls = "  electrical q;\n  branch (<q>) pb;", .want = .E0372 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(c.decls, "", c.want);
+}
+
+test "lower: §6.5.2.2 the two declarations of a port carry identical ranges once folded" {
+    // The clause's own pair of examples.
+    try Lower.expectVerdict(
+        \\module m(a);
+        \\  input [0:3] a;
+        \\  electrical [0:4-1] a;
+        \\  analog I(a[0]) <+ V(a[0]);
+        \\endmodule
+    , null);
+    try Lower.expectVerdict(
+        \\module m(a);
+        \\  input [3:0] a;
+        \\  electrical [0:3] a;
+        \\  analog I(a[0]) <+ V(a[0]);
+        \\endmodule
+    , .E0350);
+}
+
+test uniqueSpelling {
+    // One `U` member per row: a taken spelling gets the first free `#k`.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator, "module m; endmodule");
+    defer h.deinit();
+    const s = &h.low.node_state.spellings;
+    try std.testing.expectEqualStrings("x", try uniqueSpelling(&h.low, "x"));
+    try s.put(h.low.arena, "x", {});
+    try std.testing.expectEqualStrings("x#1", try uniqueSpelling(&h.low, "x"));
+    try s.put(h.low.arena, "x#1", {});
+    try std.testing.expectEqualStrings("x#2", try uniqueSpelling(&h.low, "x"));
+    // A name too long for the stack buffer spills and still gets its suffix.
+    const long: [spelling_buf_len]u8 = @splat('y');
+    try s.put(h.low.arena, &long, {});
+    const got = try uniqueSpelling(&h.low, &long);
+    try std.testing.expectEqual(long.len + 2, got.len);
+    try std.testing.expectEqualStrings("#1", got[long.len..]);
+}
+
+test indexedRange {
+    // IEEE 1364-2005 §5.2.1: `base +: w` counts up from base and `base -: w`
+    // down, and the part reads in the declaration's direction.
+    const desc: VecRange = .{ .msb = 7, .lsb = 0 };
+    const asc: VecRange = .{ .msb = 0, .lsb = 7 };
+    const cases = [_]struct { decl: VecRange, base: i64, width: i64, down: bool, want: VecRange }{
+        .{ .decl = desc, .base = 3, .width = 2, .down = false, .want = .{ .msb = 4, .lsb = 3 } },
+        .{ .decl = desc, .base = 3, .width = 2, .down = true, .want = .{ .msb = 3, .lsb = 2 } },
+        .{ .decl = asc, .base = 3, .width = 2, .down = false, .want = .{ .msb = 3, .lsb = 4 } },
+        .{ .decl = asc, .base = 3, .width = 2, .down = true, .want = .{ .msb = 2, .lsb = 3 } },
+        .{ .decl = desc, .base = 5, .width = 1, .down = false, .want = .{ .msb = 5, .lsb = 5 } },
+    };
+    for (cases) |c| {
+        const got = indexedRange(c.decl, c.base, c.width, c.down);
+        try std.testing.expectEqual(c.want.msb, got.msb);
+        try std.testing.expectEqual(c.want.lsb, got.lsb);
+    }
+    // Saturated rather than overflowed, and then no part of anything.
+    const far = indexedRange(desc, std.math.maxInt(i64), 2, false);
+    try std.testing.expectEqual(std.math.maxInt(i64), far.msb);
+    try std.testing.expect(!partOf(desc, far));
+}
+
+test partOf {
+    const desc: VecRange = .{ .msb = 7, .lsb = 0 };
+    try std.testing.expect(partOf(desc, .{ .msb = 4, .lsb = 3 }));
+    try std.testing.expect(partOf(desc, .{ .msb = 5, .lsb = 5 }));
+    try std.testing.expect(partOf(desc, .{ .msb = 7, .lsb = 0 }));
+    // The msb on the declared lsb's side.
+    try std.testing.expect(!partOf(desc, .{ .msb = 3, .lsb = 4 }));
+    try std.testing.expect(!partOf(desc, .{ .msb = 8, .lsb = 7 }));
+    try std.testing.expect(!partOf(desc, .{ .msb = 0, .lsb = -1 }));
 }

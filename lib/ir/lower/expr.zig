@@ -22,7 +22,7 @@ const lower_shape = @import("shape.zig");
 const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
-const Const = @import("frontend").constfold.Const;
+const Const = constfold.Const;
 const Mir = @import("../mir.zig");
 const Elaborate = @import("../elaborate.zig");
 const diag = @import("diag");
@@ -520,9 +520,13 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E1011, "the replication makes {d} copies of {d} bytes", .{ copies, out.items.len });
             return poison;
         }
-        const one = try self.arena.dupe(u8, out.items);
-        out.clearRetainingCapacity();
-        for (0..@intCast(copies)) |_| try out.appendSlice(self.arena, one);
+        // N copies of "" are "": the E1011 cap above bounds the bytes, not
+        // the count, so `{1e15{""}}` would spin here for the count alone.
+        if (out.items.len != 0) {
+            const one = try self.arena.dupe(u8, out.items);
+            out.clearRetainingCapacity();
+            for (0..@intCast(copies)) |_| try out.appendSlice(self.arena, one);
+        }
     }
     // The interner borrows: the bytes live in the arena, which outlives the Mir.
     return .{ .v = try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena)), .ty = .string };
@@ -689,7 +693,7 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool
             // (E0601). A negative literal is a constant however it is spelled.
             switch (self.mir.valueDef(self.mir.resolveAlias(a.v))) {
                 // §3.2 through the one constant kernel: -(-2^31) is -2^31.
-                .int_const => |x| return .{ .v = try self.mir.addIntConst(self.arena, @import("frontend").constfold.unary(.minus, .{ .int = x }).?.int), .ty = a.ty },
+                .int_const => |x| return .{ .v = try self.mir.addIntConst(self.arena, constfold.unary(.minus, .{ .int = x }).?.int), .ty = a.ty },
                 .float_const => |x| return .{ .v = try self.mir.addFloatConst(self.arena, -x), .ty = a.ty },
                 .undef, .str_const, .param_ref, .block_param, .inst_result => {},
             }
@@ -1562,4 +1566,136 @@ pub fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
 pub fn arityError(self: *Lower, e: Ast.ExprId, name: []const u8, want: usize) Oom!TypedValue {
     try self.err(self.file.exprs.mainTok(e), .E0506, "`{s}()` takes {d}", .{ name, want });
     return poison;
+}
+
+/// The declarations every expression case below reads.
+const test_decls =
+    \\  electrical q;
+    \\  real r, y, y0;
+    \\  integer k, j;
+    \\  string s;
+    \\  reg [7:0] rg;
+    \\  parameter integer cnt = 2;
+    \\  parameter integer neg = -1;
+    \\  parameter integer big = 5000;
+    \\  parameter real huge = 1e15;
+;
+
+test "lowerUnary/lowerBinary: §4.2 an operator takes only the operand types its table lists" {
+    const cases = [_]struct { body: []const u8, want: ?diag.Code }{
+        // §4.2.9 bitwise operators are integer operators.
+        .{ .body = "    k = ~k;", .want = null },
+        .{ .body = "    y = ~r;", .want = .E0318 },
+        .{ .body = "    k = k & 3;", .want = null },
+        .{ .body = "    y = r & 3;", .want = .E0322 },
+        // §4.2.10 the reductions are digital only: E0319 on a real operand,
+        // E0348 on an integer one, E0320 for the parity forms.
+        .{ .body = "    k = &r;", .want = .E0319 },
+        .{ .body = "    k = &k;", .want = .E0348 },
+        .{ .body = "    k = ^k;", .want = .E0320 },
+        // §4.2.11 the arithmetic shifts have no analog form.
+        .{ .body = "    k = k <<< 1;", .want = .E0324 },
+        // §4.2.1 Table 4-2 has no `===` on reals.
+        .{ .body = "    k = (k === 1);", .want = null },
+        .{ .body = "    k = (r === 1.0);", .want = .E0369 },
+        // §2.7 a string literal is a number; §3.3 a string value is not.
+        .{ .body = "    y = \"A\" + 1;", .want = null },
+        .{ .body = "    y = -\"A\";", .want = null },
+        .{ .body = "    y = s + 1;", .want = .E0321 },
+        .{ .body = "    y = -s;", .want = .E0321 },
+        .{ .body = "    k = (s == 1);", .want = .E0321 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(test_decls, c.body, c.want);
+}
+
+test "lowerBuiltin: §4.3 math functions take numeric operands, as many as their table says" {
+    const cases = [_]struct { body: []const u8, want: ?diag.Code }{
+        .{ .body = "    y = hypot(3.0, 4.0) + atan2(1.0, 1.0) + log(10.0);", .want = null },
+        .{ .body = "    k = abs(-3) + min(k, 2) + max(k, 4);", .want = null },
+        .{ .body = "    y = sqrt(\"A\");", .want = null },
+        .{ .body = "    y = sqrt(s);", .want = .E0321 },
+        .{ .body = "    y = sqrt(1.0, 2.0);", .want = .E0506 },
+        .{ .body = "    y = pow(1.0);", .want = .E0506 },
+        .{ .body = "    y = abs(1.0, 2.0);", .want = .E0506 },
+        .{ .body = "    y = min(1.0);", .want = .E0506 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(test_decls, c.body, c.want);
+}
+
+test "lookupName/lowerIndex: §2.8 names and §3.2.2/§7.3.1 selects" {
+    const cases = [_]struct { body: []const u8, want: ?diag.Code }{
+        .{ .body = "    y = nosuch;", .want = .E0314 },
+        // A net is no value; §4.4 reaches it through an access function.
+        .{ .body = "    y = p;", .want = .E0315 },
+        .{ .body = "    y = r[0];", .want = .E0309 },
+        // §7.3.1 a constant bit- or part-select of a `reg`, inside its range.
+        .{ .body = "    k = rg[3:0] + rg[7];", .want = null },
+        .{ .body = "    k = rg[8];", .want = .E0310 },
+        .{ .body = "    j = 1;\n    k = rg[j];", .want = .E0329 },
+        .{ .body = "    j = 1;\n    k = rg[j +: 2];", .want = .E0329 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(test_decls, c.body, c.want);
+}
+
+test "lowerConcat: §3.3 Table 3-3 string concatenation and replication" {
+    const cases = [_]struct { body: []const u8, want: ?diag.Code }{
+        .{ .body = "    s = {cnt{\"ab\"}};", .want = null },
+        .{ .body = "    s = {s, \"x\"};", .want = null },
+        // A multiplier known only while the device runs makes N copies then.
+        .{ .body = "    k = 1 + (V(p, n) > 0.0);\n    s = {k{\"ab\"}};", .want = null },
+        // "non-negative" (§4.2.13), and "of integral type" when nonconstant.
+        .{ .body = "    s = {neg{\"ab\"}};", .want = .E0327 },
+        .{ .body = "    r = V(p, n);\n    s = {r{\"ab\"}};", .want = .E0327 },
+        // The folded copies stop where the run-time ones would (E1011).
+        .{ .body = "    s = {big{\"a\"}};", .want = .E1011 },
+        // N copies of "" are "" for any N, at no cost proportional to N.
+        .{ .body = "    s = {huge{\"\"}};", .want = null },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(test_decls, c.body, c.want);
+}
+
+test "lowerPortAccess: §5.4.3 a port access reads the flow into a port of the module" {
+    const cases = [_]struct { body: []const u8, want: ?diag.Code }{
+        .{ .body = "    y = I(<p>);", .want = null },
+        // "The expression V(<a>) is invalid for ports and nets".
+        .{ .body = "    y = V(<p>);", .want = .E0507 },
+        // "it must be a declared port of the module".
+        .{ .body = "    y = I(<q>);", .want = .E0508 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(test_decls, c.body, c.want);
+    // §5.2.1: no probe in an analog initial block (E0421).
+    try Lower.expectBodyVerdict(test_decls ++ "\n  analog initial begin\n    y0 = V(p);\n  end", "", .E0421);
+}
+
+test "lowerShortCircuit: §4.2.7 skips the rhs, unless §4.5.15 must evaluate its operator" {
+    const Case = struct { expr: []const u8, imin: bool };
+    const cases = [_]Case{
+        .{ .expr = "(V(p, n) > 0) && (V(p, n) < 1)", .imin = false },
+        .{ .expr = "(V(p, n) > 0) && (ddt(V(p, n)) > 0)", .imin = true },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(
+            \\module m(p, n);
+            \\  inout p, n; electrical p, n;
+            \\  integer k;
+            \\  analog begin
+            \\    k = {s};
+            \\    I(p, n) <+ k * V(p, n);
+            \\  end
+            \\endmodule
+        , .{c.expr});
+        defer std.testing.allocator.free(src);
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        _ = try h.lower() orelse {
+            h.dump();
+            return error.TestUnexpectedResult;
+        };
+        const ops = h.mir.insts.items(.op);
+        // The skipping form is a branch around the rhs; the evaluating form
+        // is `imin` over both sides, normalized to 0/1.
+        try std.testing.expectEqual(c.imin, std.mem.countScalar(Mir.Opcode, ops, .imin) != 0);
+        if (!c.imin) try std.testing.expect(std.mem.countScalar(Mir.Opcode, ops, .branch) != 0);
+    }
 }
