@@ -47,6 +47,7 @@ const Source = struct { slot: u32, net: u32, reg: bool };
 
 /// The waiter slot of `driver_update` on the net whose slot is `net`: one no
 /// variable owns, like `registerMonitor`'s (which count down from the top).
+/// Distinct from every slot, and per net, only while slots stay below 2^31.
 pub fn key(net: u32) u32 {
     return (1 << 31) | net;
 }
@@ -354,7 +355,8 @@ fn typeBits(r: *const Run, dr: Driver) u32 {
     t |= switch (r.nets[dr.net].kind) {
         .wor, .trior => 512,
         .wand, .triand => 1024,
-        else => 0, // else: no other net type has a Table 7-4 wired-logic bit
+        // No other net type has a Table 7-4 wired-logic bit.
+        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => 0,
     };
     return t;
 }
@@ -372,5 +374,5 @@ test "§9.22.3 a driver's state is one bit: a vector signal_name is refused, not
     , .{ .mixed = .{ .top = "top", .timescale = null } }, &bag, &out.writer));
     var messages = std.Io.Writer.Allocating.init(arena.allocator());
     try diag.render(&bag, &messages.writer, .{});
-    try std.testing.expect(std.mem.indexOf(u8, messages.written(), "signal_name is a scalar net") != null);
+    try std.testing.expect(std.mem.find(u8, messages.written(), "signal_name is a scalar net") != null);
 }

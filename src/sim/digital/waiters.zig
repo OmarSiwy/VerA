@@ -28,6 +28,10 @@ pub const Edge = enum(u2) {
     any,
     posedge,
     negedge,
+
+    /// Whether a change of the watched bit from `before` to `after` is this
+    /// edge (§9.7.2 Table 9-1). `any` is true for every change, since the
+    /// caller has already proved the whole value changed.
     fn matches(self: Edge, before: Int.Bit, after: Int.Bit) bool {
         // A plain `@(v)` term watches the whole value, which the caller has
         // already proved changed; the other two read the LSB the table covers.
@@ -355,12 +359,17 @@ fn selectedEvent(self: *Run, t: Term, target: u32) Error!bool {
     return selected != null and selected.? == target;
 }
 
+/// The terms filed under `slot`, or null when nothing has ever waited on it.
+/// A slot below `Run.terms.len` keeps its list at a stable address; one
+/// above it (`driver.key`, a monitor's slot) is in `Run.far_terms`, whose
+/// rows a later `watch` of another far slot may move.
 pub fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
     return if (slot < self.terms.len) self.terms[slot] else self.far_terms.getPtr(slot);
 }
 
 /// Suspend the executing process at `pc` (§9.7). Its terms are filed with
-/// `watch` under the id returned.
+/// `watch` under the id returned. Invalidates pointers into `Run.susps`
+/// when no row is free for reuse.
 pub fn park(self: *Run, pc: u32) Error!u32 {
     const id = self.free_susps.pop() orelse blk: {
         try self.susps.append(self.arena, .{ .pc = 0, .ctx = 0, .gen = 0, .alive = false });
@@ -375,7 +384,9 @@ pub fn park(self: *Run, pc: u32) Error!u32 {
     return id;
 }
 
-/// File one term of suspension `id` under `slot`.
+/// File one term of suspension `id` under `slot`. A slot's first wait
+/// beyond `Run.terms` adds a `Run.far_terms` row, which invalidates
+/// pointers to the other far lists (`termsOf`).
 pub fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
     const list = termsOf(self, slot) orelse if (slot < self.terms.len) blk: {
         // Made on the slot's first wait, at an address that stays put.

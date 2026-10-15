@@ -369,7 +369,7 @@ fn g16(buf: *[64]u8, r: f64) []const u8 {
     if (std.math.isInf(r)) return if (r < 0) "-inf" else "inf";
     var sci_buf: [64]u8 = undefined;
     const sci = std.mem.print(&sci_buf, "{e:.15}", .{r}) catch unreachable;
-    const e_at = std.mem.indexOfScalar(u8, sci, 'e').?;
+    const e_at = std.mem.findScalar(u8, sci, 'e').?;
     const x = std.fmt.parseInt(i32, sci[e_at + 1 ..], 10) catch unreachable;
     if (x < -4 or x >= 16) {
         const mant = strip(sci[0..e_at]);
@@ -380,7 +380,7 @@ fn g16(buf: *[64]u8, r: f64) []const u8 {
 
 /// `%g`'s removal of trailing fraction zeros and a trailing point.
 fn strip(s: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    if (std.mem.findScalar(u8, s, '.') == null) return s;
     const t = std.mem.trimEnd(u8, s, "0");
     return if (t[t.len - 1] == '.') t[0 .. t.len - 1] else t;
 }
@@ -498,7 +498,7 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
         for (events) |event| names.appendAssumeCapacity(event.name);
         std.debug.assert(names.items.len == names.capacity);
         for (names.items, 0..) |name, i| {
-            if (std.mem.indexOfScalar(Ast.StrId, names.items[0..i], name) != null) continue;
+            if (std.mem.findScalar(Ast.StrId, names.items[0..i], name) != null) continue;
             const at = r.names.get(.{ .scope = @intCast(s), .str = name }) orelse continue;
             if (r.arrays.contains(at) or r.params.contains(at)) continue;
             try vars.append(a, try variable(r, a, decls.items, name, at, if (offs.len == 0) 0 else offs[at]));
