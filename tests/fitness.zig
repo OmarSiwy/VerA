@@ -432,7 +432,7 @@ const r7_rows = [_]Row{
     .{ .path = "lib/analog/lower/param.zig", .n = 10 },
     .{ .path = "lib/analog/lower/stmt.zig", .n = 3 },
     .{ .path = "lib/analog/lower/sysfunc.zig", .n = 38 },
-    .{ .path = "lib/analog/lower/systask.zig", .n = 10 },
+    .{ .path = "lib/analog/lower/systask.zig", .n = 8 },
     .{ .path = "lib/analog/lower/var.zig", .n = 5 },
     .{ .path = "lib/analog/lower/wide.zig", .n = 1 },
     .{ .path = "lib/base/interner.zig", .n = 2 },

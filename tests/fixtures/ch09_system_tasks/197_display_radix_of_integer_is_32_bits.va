@@ -17,10 +17,11 @@
 //   deviation and not the clause; audit_integer_default_fields.va pins the
 //   same rule on a 12-bit literal.)
 //
-// The unsized literal is a different operand: §2.6.1 says only that it is
-// "at least 32" bits, VerA carries it in 64, and 171_display_c_format_flags
-// pins that (`%h` of -42 is sixteen digits). This fixture asserts the
-// variable, which §3.2 does fix.
+// This fixture asserts the variable, which §3.2 fixes. An unsized literal is
+// the same width (IEEE 1364-2005 Table 5-22, "Same as integer"; §2.6.1 says
+// only "at least 32"): 171_display_c_format_flags pins `%h` of -42 as
+// ffffffd6, and analog_radix_of_integer_expression_is_32_bits.va the
+// operators over integers (#77).
 //
 //! print none
 //! lrm 9.4.3

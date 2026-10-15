@@ -1115,13 +1115,13 @@ fn appendConv(
     // flag with no width) "overrides" both.
     var spec = spec_arg;
     if (spec.width == 0 and !spec.zero and !spec.left and !spec.plus and !spec.space) switch (conv) {
-        'h', 'x' => if (bits < 64) {
+        'h', 'x' => if (rec != null) {
             spec = .{ .width = (@as(usize, bits) + 3) / 4, .zero = true };
         },
-        'o' => if (bits < 64) {
+        'o' => if (rec != null) {
             spec = .{ .width = (@as(usize, bits) + 2) / 3, .zero = true };
         },
-        'b' => if (bits < 64) {
+        'b' => if (rec != null) {
             spec = .{ .width = bits, .zero = true };
         },
         'd' => if (decimalField(g, v)) |cols| {
@@ -1142,8 +1142,9 @@ fn appendConv(
         },
         // §9.4.3 Table 9-22: a radix conversion shows the operand's
         // two's-complement bit pattern at its width (IEEE 1364 §17.1.1.2):
-        // 32 for an `integer` (§3.2, via `$display$width`), 64 for an unsized
-        // literal, so `%h` of integer -5 is fffffffb. `.bits` bitcasts to u64
+        // the width lowering recorded (`systask.intSize`, 32 for an `integer`
+        // or an unsized literal, §3.2), so `%h` of integer -5 is fffffffb, and
+        // an operand with no record its minimal digits. `.bits` bitcasts to u64
         // because Zig's `{x}` on an i64 writes `-2a`. A real rounds first
         // (§4.2.1.1). An unsigned field has no sign, so the spec passes through.
         'b', 'o', 'h', 'x' => {
@@ -1597,12 +1598,19 @@ test "§9.4.3 Table 9-22: %h shows the operand's two's-complement bit pattern" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
-    // An unsized literal keeps 64 bits (§2.6.1), so `%h` of -42 is
-    // ffffffffffffffd6; the u64 bitcast stops Zig's `{x}` writing `-2a`.
-    // Same for %o and %b.
+    // -42 is an `integer` (an unsized literal, IEEE 1364 Table 5-22), so `%h`
+    // is its 32-bit pattern with §17.1.1.3's leading zeros, ffffffd6 (#77):
+    // 8 hex, 11 octal, 32 binary digits; the u64 bitcast stops Zig's `{x}`
+    // writing `-2a`, the u32 truncate keeps the low 32 bits.
     const out = try emitBody(a, "$strobe(\"%h %o %b\", -42, -42, -42);");
-    try std.testing.expect(has(out, "\"{x} {o} {b}\\n\""));
-    try std.testing.expect(has(out, "@as(u64, @bitCast(@as(i64, "));
+    try std.testing.expect(has(out, "\"{x:0>8} {o:0>11} {b:0>32}\\n\""));
+    try std.testing.expect(has(out, "@as(u32, @truncate(@as(u64, @bitCast(@as(i64, "));
+    // A 64-bit operand keeps its leading zeros too: 16 hex digits.
+    const wide = try emitBody(a, "$strobe(\"%h\", 64'h1);");
+    try std.testing.expect(has(wide, "\"{x:0>16}\\n\""));
+    // `%0h` overrides the automatic size: the minimal digits.
+    const min = try emitBody(a, "$strobe(\"%0h\", -42);");
+    try std.testing.expect(has(min, "\"{x}\\n\""));
 }
 
 test "§9.4.5 numeric strings preserve source width through every output sink" {

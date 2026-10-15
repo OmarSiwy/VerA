@@ -735,57 +735,11 @@ fn consumes(letter: u8) bool {
 /// values. The synthetic identity is consumed by the display formatter only;
 /// other conversions still see the same numeric value.
 fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value {
-    const bits = formatBits(self, e) orelse {
+    const size = intSize(self, e) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0819, "numeric `%s` needs a preserved integral width; this expression's sizing is not implemented", .{});
         return tv.v;
     };
-    return self.call("$display$width", &.{ tv.v, try self.mir.addIntConst(self.arena, bits) });
-}
-
-/// Only return widths the current analog IR preserves. A guessed carrier width
-/// can silently truncate a wide conditional or sign-extend a small operand.
-fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
-    const ex = &self.file.exprs;
-    return switch (ex.tag(e)) {
-        .int_literal => @intCast(if (ex.intLiteral(e).width == 0) 64 else ex.intLiteral(e).width),
-        .unary => switch (ex.unOp(e)) {
-            .plus => formatBits(self, ex.lhs(e)),
-            .minus, .bit_not => if ((formatBits(self, ex.lhs(e)) orelse return null) <= 32) formatBits(self, ex.lhs(e)) else null,
-            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => 1,
-        },
-        .ternary => blk: {
-            const lhs = formatBits(self, ex.rhs(e)) orelse return null;
-            const rhs = formatBits(self, ex.ternaryElse(e)) orelse return null;
-            // Mixed-width branches also need signedness propagation before
-            // selection. The current IR carries neither fact across a phi.
-            break :blk if (lhs == rhs) lhs else null;
-        },
-        .ident => blk: {
-            const name = self.file.str(ex.strOf(e));
-            if (self.vars.contains(name)) break :blk 32; // §3.2 integer variable
-            const pi = self.param_index.get(name) orelse return null;
-            const module = self.module orelse return null;
-            for (module.params) |decl| {
-                if (!std.mem.eql(u8, self.file.str(decl.name), self.out.params.items[pi].name)) continue;
-                if (decl.ty == .integer) break :blk 32;
-                // §3.4.1: an untyped parameter derives its type from the FINAL
-                // override. The host's numeric parameter ABI has no width.
-                if (!decl.is_local) break :blk null;
-                // Host derivation preserves equal-width conditional arms;
-                // unsupported dependent expressions diagnose at code generation.
-                break :blk formatBits(self, decl.default);
-            }
-            break :blk null;
-        },
-        .sys_call => if (std.mem.eql(u8, self.file.str(ex.strOf(e)), "$realtobits")) 64 else 32,
-        .binary => switch (ex.binOp(e)) {
-            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => 1,
-            // General arithmetic needs expression-width propagation, not the
-            // analog arithmetic emitter's current unconditional wrap32.
-            .add, .sub, .mul, .div, .mod, .pow, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr => null,
-        },
-        else => null, // else: no preserved width, so E0819 refuses it rather than guess
-    };
+    return self.call("$display$width", &.{ tv.v, try self.mir.addIntConst(self.arena, size.bits) });
 }
 
 /// §9.4.3's other pairing rule: each conversion against its operand's type.
@@ -871,16 +825,15 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
                     }
                 } else if ((conv == 'h' or conv == 'x' or conv == 'o' or conv == 'b') and ty == .integer) {
                     // A radix conversion shows the operand's bit pattern at
-                    // its own width (1364-2005 §17.1.1.2), and §3.2 makes an
-                    // `integer` 32 bits: -5 is fffffffb. Only a width this
-                    // knows is recorded, and only a narrower one than the
-                    // 64-bit carrier — an unknown width keeps the carrier's
-                    // pattern instead of becoming `%s`'s E0819 refusal.
-                    if (formatBits(self, arg)) |bits| {
-                        if (bits < 64) vals[next - 1] = try self.call("$display$width", &.{
-                            vals[next - 1], try self.mir.addIntConst(self.arena, bits),
-                        });
-                    }
+                    // its own width (1364-2005 §17.1.1.2) with its leading
+                    // zeros (§17.1.1.3), and §3.2 makes an `integer` 32 bits:
+                    // -5 is fffffffb, 255 is 000000ff (#77). The width is
+                    // `intSize`'s, the one `%d` sizes by; an unknown one keeps
+                    // the carrier's minimal pattern instead of becoming `%s`'s
+                    // E0819 refusal.
+                    if (intSize(self, arg)) |size| vals[next - 1] = try self.call("$display$width", &.{
+                        vals[next - 1], try self.mir.addIntConst(self.arena, size.bits),
+                    });
                 } else if (conv == 'd' and ty == .integer and !cv.prefixed) {
                     // A flag or width replaces §17.1.1.3's automatic size.
                     try decimalWidth(self, arg, &vals[next - 1]);
@@ -920,8 +873,9 @@ fn messageStart(c: Mir.Callee, tys: []const Ty) usize {
 /// which needs its width and signedness (#61): recorded as
 /// `$display$width(value, bits, signed)` for `cg_display.decimalField`. A
 /// 1-bit result needs one column, which an operand with no record prints.
+/// An operand `intSize` cannot size takes an `integer`'s field.
 fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
-    const size = decimalSize(self, e);
+    const size = intSize(self, e) orelse integer;
     if (size.bits == 1 and !size.signed) return;
     v.* = try self.call("$display$width", &.{
         v.*,
@@ -930,51 +884,81 @@ fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
     });
 }
 
-const DecimalSize = struct { bits: u7, signed: bool };
-const one_bit: DecimalSize = .{ .bits = 1, .signed = false };
+/// An integer expression's width in bits (1..64, the carrier) and sign.
+const IntSize = struct { bits: u7, signed: bool };
+const one_bit: IntSize = .{ .bits = 1, .signed = false };
 /// §3.2's `integer`, the width the analog context computes every integer
-/// expression at (`render.intBin32`), and IEEE 1364 §3.5.1's unsized literal.
-const integer: DecimalSize = .{ .bits = 32, .signed = true };
+/// operation at (`render.intBin32`, VD-116), and IEEE 1364 Table 5-22's
+/// unsized constant ("Same as integer").
+const integer: IntSize = .{ .bits = 32, .signed = true };
 
-/// An integer operand's IEEE 1364 width and sign, a name typed as
-/// `lower_wide.identType` types it: a sized literal (§3.5.1), a 1-bit result
-/// (Table 5-22: a relational, equality, logical or reduction operator), a
-/// `reg` or a ranged parameter keep their own; everything else (an unsized
-/// literal, an `integer` variable, a call, arithmetic, a width past the
-/// 64-bit carrier) is an `integer`.
-fn decimalSize(self: *Lower, e: Ast.ExprId) DecimalSize {
+/// The width and sign of integer operand `e`, the one rule every display
+/// conversion sizes by: `%d`'s field (`decimalWidth`), the radix digits and
+/// `%s`'s bytes (#77). IEEE 1364 §5.4.1 Table 5-22 and §5.5.1, read in the
+/// analog context: a sized literal keeps its width (§3.5.1), an unsized one
+/// is an `integer` (Table 5-22), or 64 bits when its value needs more (§3.5.1
+/// "at least 32", VD-124); a relational, equality, logical or reduction
+/// result is 1 bit, unsigned; a `reg` or a ranged parameter keeps its own
+/// (`identSize`); every other operator over operands of at most 32 bits is
+/// an `integer`, because the analog context computes it as one (VD-116).
+/// Null when the carrier does not hold the expression's IEEE 1364 bits: an
+/// operator over a wider operand (the analog operation wraps it to 32 bits),
+/// a `?:` whose narrower arm is signed and the result unsigned (§5.5.2 would
+/// zero-extend what the carrier holds sign-extended), a parameter a model
+/// card can give another width (VD-089), or a constant past 64 bits.
+fn intSize(self: *Lower, e: Ast.ExprId) ?IntSize {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .int_literal => blk: {
             const lit = ex.intLiteral(e);
-            if (lit.width == 0 or lit.width > 64) break :blk integer;
-            break :blk .{ .bits = @intCast(lit.width), .signed = lit.signed };
+            if (lit.width > 64) break :blk null;
+            if (lit.width != 0) break :blk .{ .bits = @intCast(lit.width), .signed = lit.signed };
+            const fits = std.math.cast(i32, lit.value) != null or std.math.cast(u32, lit.value) != null;
+            break :blk .{ .bits = if (fits) 32 else 64, .signed = lit.signed };
         },
+        .logic_literal => null, // a constant past the carrier, or four-state (E0130)
         .unary => switch (ex.unOp(e)) {
-            .plus => decimalSize(self, ex.lhs(e)),
+            .plus => intSize(self, ex.lhs(e)),
             .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => one_bit,
-            .minus, .bit_not => integer,
+            .minus, .bit_not => narrowOperands(self, ex.lhs(e), null),
         },
         .binary => switch (ex.binOp(e)) {
             .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => one_bit,
-            .add, .sub, .mul, .div, .mod, .pow, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr => integer,
+            // Table 5-22: the right operand of a shift or `**` is
+            // self-determined, so only the left one sizes the result.
+            .shl, .shr, .ashl, .ashr, .pow => narrowOperands(self, ex.lhs(e), null),
+            .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => narrowOperands(self, ex.lhs(e), ex.rhs(e)),
         },
         .ternary => blk: {
-            const then = decimalSize(self, ex.rhs(e));
-            const els = decimalSize(self, ex.ternaryElse(e));
-            break :blk if (then.bits == els.bits and then.signed == els.signed) then else integer;
+            const then = intSize(self, ex.rhs(e)) orelse break :blk null;
+            const els = intSize(self, ex.ternaryElse(e)) orelse break :blk null;
+            // Table 5-22: max(L(j), L(k)); §5.5.1: signed only if both are.
+            const signed = then.signed and els.signed;
+            const narrow = if (then.bits < els.bits) then else els;
+            if (then.bits != els.bits and narrow.signed and !signed) break :blk null;
+            break :blk .{ .bits = @max(then.bits, els.bits), .signed = signed };
         },
         .ident => identSize(self, self.file.str(ex.strOf(e))),
         .sys_call => if (Mir.Callee.fromName(self.file.str(ex.strOf(e))) == .@"$realtobits") .{ .bits = 64, .signed = false } else integer,
-        else => integer, // else: any other integer-valued expression (a call, a select) is an `integer`
+        else => integer, // else: any other integer-valued expression (a call, a select) is §7.3.1's or §3.2's `integer`
     };
+}
+
+/// `integer` when each operand is sized and at most 32 bits wide, the
+/// operands the analog context's 32-bit operation keeps whole; else null.
+fn narrowOperands(self: *Lower, a: Ast.ExprId, b: ?Ast.ExprId) ?IntSize {
+    if ((intSize(self, a) orelse return null).bits > 32) return null;
+    if (b) |r| if ((intSize(self, r) orelse return null).bits > 32) return null;
+    return integer;
 }
 
 /// A name's width and sign, in `lower_wide.identType`'s order: a variable
 /// (only a `reg` has a width of its own), a discrete input with a range, a
 /// parameter. An `integer`, an unranged discrete input (Table 7-1 reads it
-/// as an integer) and a width past 64 are `integer`.
-fn identSize(self: *Lower, name: []const u8) DecimalSize {
+/// as an integer) and a width past 64 are `integer`. Null for a parameter
+/// with no type or range a model card can set, whose width is the card
+/// value's (`lower_constfold.hostSizedParam`, VD-089), known only at run time.
+fn identSize(self: *Lower, name: []const u8) ?IntSize {
     var w: u32 = 32;
     var signed = true;
     if (self.vars.get(name)) |slot| {
@@ -988,6 +972,7 @@ fn identSize(self: *Lower, name: []const u8) DecimalSize {
             signed = rr.signed;
         }
     } else if (!lower_expr.funcParamShadows(self, name)) if (self.param_index.get(name)) |pi| {
+        if (lower_constfold.hostSizedParam(self, name) != null) return null;
         const p = self.out.params.items[pi];
         w = p.source_width orelse 32;
         signed = p.source_signed orelse true;
@@ -1589,4 +1574,72 @@ test "§9.4.1/§5.3.2 a deferred display operand keeps its named block's names" 
     if (h.bag.err_count != 0) for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.bag.at(i).code), h.bag.at(i).message });
     try std.testing.expectEqual(@as(u32, 0), h.bag.err_count);
     try std.testing.expectEqual(@as(usize, 1), h.low.out.displays.items.len);
+}
+
+test "§9.4.3/IEEE 1364 §5.4.1 one width rule sizes %h and %d of an integer expression (#77)" {
+    // `intSize` is the one rule; this pins what lowering records for each
+    // operand, `$display$width(value, bits)` for a radix and
+    // `(value, bits, signed)` for `%d`, in conversion order.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module w(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter host = 3;
+        \\  integer i;
+        \\  analog begin
+        \\    i = 255;
+        \\    $display("%h %h %h %h %b %h %h %h %h %h %h", i - 300, i * 1, -i, (i > 3) ? i : 0, i & 3,
+        \\             -42, 255, 64'h1, 'h1_0000_0000, host, $realtobits(1.5) & 1);
+        \\    $display("%d %d %d", (i > 3) ? 8'd5 : 4'd3, host, 'hff);
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expect(h.bag.isEmpty());
+    const Rec = struct { bits: i64, signed: ?i64 = null };
+    const want = [_]Rec{
+        // Table 5-22 over 32-bit operands is §3.2's `integer` (VD-116),
+        // whatever the operator: i-300, i*1, -i, the `?:` of two integers,
+        // i&3, and an unsized literal, negated or not.
+        .{ .bits = 32 }, // i - 300
+        .{ .bits = 32 }, // i * 1
+        .{ .bits = 32 }, // -i
+        .{ .bits = 32 }, // (i > 3) ? i : 0
+        .{ .bits = 32 }, // i & 3
+        .{ .bits = 32 }, // -42
+        .{ .bits = 32 }, // 255
+        // A sized 64-bit literal, and an unsized one whose value needs more
+        // than 32 bits (§3.5.1 "at least 32", VD-124). `host` (a card value
+        // has its own width, VD-089) and `&` over $realtobits's 64 bits (the
+        // analog operation does not keep them) record nothing.
+        .{ .bits = 64 }, // 64'h1
+        .{ .bits = 64 }, // 'h1_0000_0000
+        // `%d`: max(8, 4) unsigned; `host` falls back to an `integer`'s
+        // field; an unsized based literal is unsigned (§3.5.1).
+        .{ .bits = 8, .signed = 0 }, // (i > 3) ? 8'd5 : 4'd3
+        .{ .bits = 32, .signed = 1 }, // host
+        .{ .bits = 32, .signed = 0 }, // 'hff
+    };
+    var got: std.ArrayList(Rec) = .empty;
+    defer got.deinit(std.testing.allocator);
+    for (0..h.mir.blockCount()) |bi| {
+        const b: Mir.Block = @fromBackingInt(@intCast(bi));
+        var it = h.mir.blockInsts(b);
+        while (it.next()) |inst| {
+            if (h.mir.instOp(inst) != .call) continue;
+            const c = h.mir.instData(inst).call;
+            if (c.callee != .@"$display$width") continue;
+            try got.append(std.testing.allocator, .{
+                .bits = h.mir.valueDef(c.args[1]).int_const,
+                .signed = if (c.args.len == 3) h.mir.valueDef(c.args[2]).int_const else null,
+            });
+        }
+    }
+    try std.testing.expectEqual(want.len, got.items.len);
+    for (want, got.items) |w, g| {
+        try std.testing.expectEqual(w.bits, g.bits);
+        try std.testing.expectEqual(w.signed, g.signed);
+    }
 }

@@ -164,6 +164,7 @@ summary and has a **Status** line naming what landed.
 | VD-121 | VAMS 4.5.13 | `limexp` limits nothing and is exp at every argument: a device sees one iterate, and the clause requires exp at convergence | DONE (#52) |
 | VD-122 | VAMS 4.3.2, 4.3.1 Table 4-14 | A run-time ln/log/ln1p/sqrt/pow argument outside its domain is the prover's code from the executable (exit 1), at every evaluation an analysis makes; not for a value setup speculates, nor at the testbench's perturbed self-check points | DONE (#59) |
 | VD-123 | VAMS 4.3.1 Table 4-14, 4.3.2 Table 4-15, 9.14 | asinh, acosh, atanh, log10, asin, acos and atan2 run the C algorithm (musl's) with the analytic derivative, one function shared by folder, prover and device; tan stays sin/cos, folded the same way | DONE (#60) |
+| VD-124 | VAMS 2.6.1, 3.2; IEEE 1364-2005 3.5.1, 5.4.1 Table 5-22, 17.1.1.3 | An unsized integer literal is 32 bits in the analog context, as an `integer`, and 64 when its value needs more; display conversions size it, and every integer expression, by one rule (`systask.intSize`) | DONE (#77) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1381,6 +1382,16 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **VerA today**: `lib/device/codegen/kernel_text.zig` `zGraft`, `zLog10`, `zAsin`, `zAcos`, `zAsinh`, `zAcosh`, `zAtanh`, `zAtan2`; their `opcode_zig` rows pin lanes (a device using one is not `batch_ok`, as `hypot`/`atan2` already were). Bounds in `tests/ulp.zig`; fixture `ch04_expressions/c_math_values_at_run_time.va`.
 - **Measure impact**: A: +1 fixture. C: none (4.3.1/4.3.2 already two-way).
 - **Status**: DONE (#60).
+
+### VD-124: How wide an unsized integer literal is
+- **Source**: va-to-zig translation hunt 2026-10-18 (#77): analog `%h` of `255` printed `ff` and of `-42` sixteen digits, while `%d` (#61) sized both as 32 bits.
+- **Rule**: VAMS 2.6.1 and IEEE 1364-2005 3.5.1: "The number of bits that make up an unsized number ... shall be at least 32." IEEE 1364-2005 5.4.1 Table 5-22: "Unsized constant number: Same as integer". VAMS 3.2: an `integer` holds "-2^31 to 2^31-1". 17.1.1.3: radices show leading zeros at the expression's size.
+- **Why vague**: 3.5.1 sets only a floor; Table 5-22 ties the size to `integer`, whose own size 1364 also leaves at "at least 32 bits" (4.8), and VAMS 3.2 fixes at 32.
+- **Options**: (a) the 64-bit carrier (VerA's radix conversions until #77; fixture 171 asserted `%h` of -42 as sixteen digits); (b) 32 bits, 64 when the value does not fit 32 bits of either sign; (c) 32 bits always, truncating a larger value.
+- **Decision**: `DECIDED:` (b). Table 5-22 with VAMS 3.2 gives 32, which is what the analog context computes every integer operation at (VD-116) and what `%d` already used (#61); (a) sized one operand two ways in one statement. A literal whose value needs more than 32 bits keeps 64 so no digit is lost, the reading VD-089 gives a card value.
+- **VerA today**: `lib/analog/lower/systask.zig` `intSize`, the one width rule for `%d`, `%h`/`%x`/`%o`/`%b` and numeric `%s`; `lib/device/cg_display.zig` pads any recorded width, 64 included. Fixtures `ch09_system_tasks/analog_radix_of_integer_expression_is_32_bits.va`, `171_display_c_format_flags.va` (now `ffffffd6`).
+- **Measure impact**: A: +1 fixture. C: 9.4.3 gains a positive case.
+- **Status**: DONE (#77).
 
 ## 6. Implementation-defined choices
 

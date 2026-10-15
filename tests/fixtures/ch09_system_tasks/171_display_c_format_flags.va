@@ -19,12 +19,20 @@
 //   %+d of 42       -> "+42"           the flag prints; it used to be dropped.
 //   % d of 42       -> " 42"           a space where the sign would be.
 //   %5d of -42      -> "  -42"         width alone: blanks, sign untouched.
-//   %h of -42       -> "ffffffffffffffd6"
+//   %h of -42       -> "ffffffd6"
 //                      Table 9-22 displays the operand in hexadecimal, and the
 //                      1364-2005 §17.1.1.2 heritage sizes the display to the
 //                      operand — the two's-complement bit pattern, not a
-//                      minus sign. VerA's integer model is 64-bit (§2.6.1),
-//                      so the pattern of -42 is sixteen hex digits.
+//                      minus sign. -42 is unary minus over the unsized 42,
+//                      and IEEE 1364-2005 §5.4.1 Table 5-22 sizes an
+//                      "Unsized constant number" the "Same as integer" and
+//                      unary `-` as its operand: §3.2's 32-bit integer, so
+//                      eight hex digits. (This line asserted sixteen until
+//                      #77, reading §2.6.1's "at least 32" bits as VerA's
+//                      64-bit carrier. The clause leaves the size open; Table
+//                      5-22 and §3.2 close it, and VerA's analog integer
+//                      arithmetic is 32-bit, so 64 was the carrier, not the
+//                      operand.)
 //
 //! print none
 //! lrm 9.4.3
@@ -51,7 +59,7 @@ module ch09_display_c_format_flags(p, n);
     $sformat(t, "%5d", -42);
     `CHECKI("%5d pads with blanks and leaves the sign alone", t == "  -42", 1);
     $sformat(t, "%h", -42);
-    `CHECKI("%h shows the 64-bit two's-complement pattern", t == "ffffffffffffffd6", 1);
+    `CHECKI("%h shows the 32-bit two's-complement pattern", t == "ffffffd6", 1);
     I(p,n) <+ V(p,n);
   end
 endmodule
