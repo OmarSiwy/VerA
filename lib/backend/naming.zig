@@ -57,11 +57,6 @@ pub const Role = enum {
     common,
 };
 
-/// Longest name a caller must provide room for. Overflow is `error.NoSpaceLeft`,
-/// never truncation. Sized so no legal model reaches it: two §2.7 identifiers
-/// of 1024 characters at 3x sanitization, plus separators and a role.
-pub const max_name_len = 8192;
-
 // Sanitization: Verilog-A identifier to Zig identifier, injectively.
 // §2.8.1 escaped identifiers carry arbitrary printable bytes, and `_` is the
 // separator alphabet. The escape marker is `Z`, so a sanitized leaf never
@@ -113,6 +108,12 @@ pub fn sanitize(buf: []u8, name: []const u8) error{NoSpaceLeft}![]const u8 {
     return w.buffered();
 }
 
+/// `sanitize` into a buffer from `a` sized for `name` (3n + 1 bytes), so a
+/// name of any length fits (VAMS 2.8, VD-054; #29).
+pub fn sanitizeAlloc(a: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![]const u8 {
+    return sanitize(try a.alloc(u8, 3 * name.len + 1), name) catch unreachable;
+}
+
 test "sanitize escapes Zig keywords and primitives" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("pubZ", try sanitize(&buf, "pub"));
@@ -131,7 +132,7 @@ test "sanitize escapes Zig keywords and primitives" {
 /// Writes `<module>__<role>__<target>[__<disambig>]` into `buf` and returns it.
 /// No part is a position, and the suffix appears only for `disambig > 0`, so
 /// a collision group's first member keeps its name when another is added.
-/// Fails with `error.NoSpaceLeft` past `buf.len` (`max_name_len` suffices).
+/// Fails with `error.NoSpaceLeft` past `buf.len`; `unitNameAlloc` sizes it.
 pub fn unitName(
     buf: []u8,
     module: []const u8,
@@ -146,6 +147,14 @@ pub fn unitName(
     return w.buffered();
 }
 
+/// `unitName` into a buffer from `a` sized for this name, so a module name
+/// of any length fits (VAMS 2.8, VD-054; #29).
+pub fn unitNameAlloc(a: std.mem.Allocator, module: []const u8, unit: Unit) std.mem.Allocator.Error![]const u8 {
+    // The module at 3x, the role and target between `__`s, and a u32's digits.
+    const n = 3 * module.len + 2 + @tagName(unit.role).len + 2 + unit.target.len + 2 + 10;
+    return unitName(try a.alloc(u8, n), module, unit) catch unreachable;
+}
+
 /// Writes §5.6 contribution `c`'s unit target, `V_<hi>_<lo>` or `I_<hi>_<lo>`.
 fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.Writer.Error!void {
     // §4.4: the two access roles are closed even when a user nature renames
@@ -154,7 +163,7 @@ fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.
         .potential => "V",
         .flow => "I",
     });
-    for ([2]u16{ c.hi, c.lo }) |n| {
+    for ([2]u32{ c.hi, c.lo }) |n| {
         try w.writeByte('_');
         // §1.3.1.1 ground is not a `nodes` row. "0" cannot collide: a real
         // net's leading digit is escaped.
@@ -178,13 +187,12 @@ fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.
 pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const Lowered) ![]Unit {
     var units: std.ArrayList(Unit) = .empty;
     errdefer units.deinit(gpa);
-    var scratch: [max_name_len]u8 = undefined;
 
     // (1) §5.6 contributions: node names, never `nodes` rows.
     for (lowered.contributions.items) |c| {
-        var w: std.Io.Writer = .fixed(&scratch);
-        contribTarget(&w, lowered, c) catch return error.NoSpaceLeft;
-        try units.append(gpa, .{ .role = .analog, .target = try gpa.dupe(u8, w.buffered()) });
+        var w: std.Io.Writer.Allocating = .init(gpa);
+        contribTarget(&w.writer, lowered, c) catch return error.OutOfMemory;
+        try units.append(gpa, .{ .role = .analog, .target = try w.toOwnedSlice() });
     }
 
     // (2) §4.5 stateful operators. `Instance` state fields are keyed on these
@@ -205,7 +213,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
             // A synthetic variant `op$variant` (`absdelay$quad`) shares `op`'s
             // state, so it takes `op`'s name: hosts find state by field name.
             const op_name = bare[0 .. std.mem.findScalar(u8, bare, '$') orelse bare.len];
-            const t = try gpa.dupe(u8, try sanitize(&scratch, op_name));
+            const t = try sanitizeAlloc(gpa, op_name);
             try units.append(gpa, .{ .role = .analog_op, .target = t, .inst = inst, .op = k });
         }
     }
@@ -252,8 +260,7 @@ fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {
     const a = f.alloc();
     const units = try enumerateUnits(a, &f.mir, &f.lowered);
     for (units) |u| {
-        var buf: [max_name_len]u8 = undefined;
-        try out.append(a, try a.dupe(u8, try unitName(&buf, f.mir.name, u)));
+        try out.append(a, try unitNameAlloc(a, f.mir.name, u));
     }
 }
 
@@ -307,8 +314,8 @@ test "same-target collisions take group-local ordinals, first stays bare" {
 }
 
 test "sanitize is injective on the names that would otherwise collide" {
-    var b0: [max_name_len]u8 = undefined;
-    var b1: [max_name_len]u8 = undefined;
+    var b0: [64]u8 = undefined;
+    var b1: [64]u8 = undefined;
 
     // readable common case survives untouched
     try std.testing.expectEqualStrings("v_ds", try sanitize(&b0, "v_ds"));

@@ -265,7 +265,7 @@ test "lower: contribution splits into resistive and reactive parts" {
     _ = try h.low.lowerFile();
 
     // §6.5 ports first, in header order — this is the host's terminal order.
-    try std.testing.expectEqual(@as(u16, 2), h.low.out.num_ports);
+    try std.testing.expectEqual(@as(u32, 2), h.low.out.num_ports);
     try std.testing.expectEqualStrings("p", h.low.out.nodes.items(.name)[0]);
     try std.testing.expectEqualStrings("n", h.low.out.nodes.items(.name)[1]);
 
@@ -279,8 +279,8 @@ test "lower: contribution splits into resistive and reactive parts" {
     try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);
     const c = h.low.out.contributions.items[0];
     try std.testing.expectEqual(Access.flow, c.access);
-    try std.testing.expectEqual(@as(u16, 0), c.hi);
-    try std.testing.expectEqual(@as(u16, 1), c.lo);
+    try std.testing.expectEqual(@as(u32, 0), c.hi);
+    try std.testing.expectEqual(@as(u32, 1), c.lo);
     // …and §5.6.1.2 splits them: the guarded g*V is resistive, ddt(c*V) is not.
     const resist = h.mir.resolveAlias(c.resist_val);
     const react = h.mir.resolveAlias(c.react_val);
@@ -315,7 +315,7 @@ test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement"
     for (h.low.out.contributions.items) |c| {
         try std.testing.expectEqual(Kind.indirect, c.kind);
         try std.testing.expectEqual(Access.potential, c.access);
-        try std.testing.expectEqual(@as(u16, 0), c.hi); // out
+        try std.testing.expectEqual(@as(u32, 0), c.hi); // out
         try std.testing.expectEqual(ground, c.lo);
         try std.testing.expectEqual(Mir.Value.f_zero, c.react_val);
     }
@@ -540,11 +540,11 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     defer h.deinit();
     _ = try h.low.lowerFile();
 
-    try std.testing.expectEqual(@as(u16, 2), h.low.out.num_ports);
+    try std.testing.expectEqual(@as(u32, 2), h.low.out.num_ports);
     try std.testing.expectEqual(@as(usize, 2), h.low.out.port_probes.items.len);
     // Deduped by port, in first-probe order, and never inside `num_ports`.
-    try std.testing.expectEqual(@as(u16, 0), h.low.out.port_probes.items[0].port);
-    try std.testing.expectEqual(@as(u16, 1), h.low.out.port_probes.items[1].port);
+    try std.testing.expectEqual(@as(u32, 0), h.low.out.port_probes.items[0].port);
+    try std.testing.expectEqual(@as(u32, 1), h.low.out.port_probes.items[1].port);
     for (h.low.out.port_probes.items) |pp| {
         try std.testing.expect(pp.u >= h.low.out.num_ports);
         // The kind tag, which codegen's `isFlowUnknown` reads. Not the
@@ -1483,8 +1483,8 @@ test "§1.3.1.2 a reversed spelling accumulates into one source" {
     _ = try h.low.lowerFile();
     // `I(q,p) <+ 2` is `I(p,q) <+ -2`: one row, in canonical (p, q) order.
     try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);
-    try std.testing.expectEqual(@as(u16, 0), h.low.out.contributions.items[0].hi);
-    try std.testing.expectEqual(@as(u16, 1), h.low.out.contributions.items[0].lo);
+    try std.testing.expectEqual(@as(u32, 0), h.low.out.contributions.items[0].hi);
+    try std.testing.expectEqual(@as(u32, 1), h.low.out.contributions.items[0].lo);
 }
 
 test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neighbours" {

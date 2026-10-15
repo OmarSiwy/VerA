@@ -1256,7 +1256,7 @@ fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
 
 /// §3.6.1.2 the flow tolerance of the discipline at node `n`, which is what
 /// codegen's `abstolOf` gives a branch current; annex D's 1e-12 without one.
-fn flowAbstol(self: *const Lower, n: u16) f64 {
+fn flowAbstol(self: *const Lower, n: u32) f64 {
     if (n == ground) return 1e-12;
     const info = self.out.disciplines.get(self.out.nodes.items(.disc)[n]) orelse return 1e-12;
     return info.flow_abstol;
@@ -1418,7 +1418,7 @@ fn addSigned(self: *Lower, acc: Mir.Value, v: Mir.Value, neg: bool) Oom!Mir.Valu
 /// be one unknown and one set of rules. `p` is the port's `nodes` row —
 /// resolved by the caller, because the two spellings name it differently (an
 /// argument expression here, a branch declaration there).
-fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
+fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u32) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const access = self.access_kind.get(name) orelse {

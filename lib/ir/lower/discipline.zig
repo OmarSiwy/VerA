@@ -356,7 +356,7 @@ pub fn nodeDisciplineConflict(self: *const Lower, an: []const u8, bn: []const u8
 /// Reports E0355 when nodes `hi` and `lo` have incompatible disciplines. Used for
 /// access-function arguments (LRM §3.11), branch terminals (§3.12) and port
 /// connections (§7.4.3).
-pub fn checkNetCompat(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
+pub fn checkNetCompat(self: *Lower, tok: u32, hi: u32, lo: u32) Oom!void {
     // §1.3.1.1: ground is the global reference, not a second net; `V(p)` spans one discipline.
     if (hi == ground or lo == ground) return;
     const an = self.out.nodes.items(.disc)[hi];

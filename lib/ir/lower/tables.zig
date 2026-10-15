@@ -6,8 +6,8 @@
 //! lowering state. Every buffer is arena-owned, like the MIR it indexes, and lives as
 //! long as the arena passed to `Lower.lower`.
 //!
-//! Cross-table references are indices: a `nodes` row is a `u16` (`ground` is the
-//! sentinel past the last row), every other row a `u32` (`none_u32` is "absent").
+//! Cross-table references are indices: every row is a `u32` (`none_u32` is
+//! "absent"; for a `nodes` row `ground` is the sentinel past the last row).
 //! The row types are also reachable as `Lower.<Name>`, the spelling most callers use.
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4,
@@ -78,8 +78,10 @@ pub const Alias = struct { name: []const u8, param: u32 };
 // ---- row types: the unknown table -------------------------------------------
 
 /// §1.3.1.1 the global reference node. Not a solver unknown, so it is a
-/// sentinel rather than a `nodes` row: probing it yields a literal 0.
-pub const ground: u16 = std.math.maxInt(u16);
+/// sentinel rather than a `nodes` row: probing it yields a literal 0. One
+/// below `maxInt(u32)` so it never equals `none_u32` ("absent"), and above
+/// every row, so sorting by row puts it last.
+pub const ground: u32 = std.math.maxInt(u32) - 1;
 
 /// One row of `nodes`.
 pub const Node = struct {
@@ -109,9 +111,9 @@ pub const NodeKind = union(enum) {
     /// §3.6 a net: a declared one, a §3.6.5 implicit one, or a §3.6.3 element.
     net,
     /// §5.4.2 the current of a branch, carrying the branch's high node.
-    branch_flow: u16,
+    branch_flow: u32,
     /// §5.4.3 the current through a port, carrying the port.
-    port_flow: u16,
+    port_flow: u32,
     /// §4.5.2 the unknown an analog operator site introduces ("new equations
     /// and new unknowns"), carrying its tolerance: the operator's abstol or
     /// nature argument, else the 1e-6 an undisciplined net gets. A potential.
@@ -120,17 +122,17 @@ pub const NodeKind = union(enum) {
 
 /// §5.4.2 the identity of an unnamed branch: its ordered node pair, the key of
 /// `flow_unknowns`.
-pub const FlowKey = struct { hi: u16, lo: u16 };
+pub const FlowKey = struct { hi: u32, lo: u32 };
 
 /// §5.4.3 one probed module port: the port's `nodes` row and the
 /// `nodes` row of the flow unknown that carries `I(<port>)`.
-pub const PortProbe = struct { port: u16, u: u16 };
+pub const PortProbe = struct { port: u32, u: u32 };
 
 /// §3.6.3.2 one net_decl_assignment: the net's `nodes` row and the folded
 /// initializer — "a nodeset value for the potential of the net by the analog
 /// solver". An initial guess, never a constraint, so it is metadata for a host
 /// and reaches nothing in the residual.
-pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
+pub const Nodeset = struct { node: u32, value: f64, tok: u32 };
 
 /// §2.9.2 one `decl_meta` row (`contract.DeclMeta`): a module-scope
 /// declaration of the device's own module and its last `desc` and `units`
@@ -149,7 +151,7 @@ pub const SystemCheck = struct { kind: @import("../hier_param.zig").Kind, name: 
 /// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
 /// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
 /// `[3:5]`), so nothing here assumes msb ≥ lsb. Every range lowering builds
-/// has passed `lower_node.foldDim`'s E1015 cap, so its size fits a `u16`.
+/// has passed `lower_node.foldDim`'s E1015 check, so its size fits a `u32`.
 pub const VecRange = struct {
     msb: i64,
     lsb: i64,
@@ -224,8 +226,8 @@ pub const Contribution = struct {
     /// Token of the `<+` this unit came from; W0650 reports per unit, so it
     /// needs the statement, not the instruction that broke the proof.
     tok: u32 = Mir.no_tok,
-    hi: u16, // `nodes` row (or `ground`)
-    lo: u16, // `nodes` row (or `ground`)
+    hi: u32, // `nodes` row (or `ground`)
+    lo: u32, // `nodes` row (or `ground`)
     resist_val: Mir.Value = .f_zero, // → eval()
     react_val: Mir.Value = .f_zero, // → q()   (§4.5.3 ddt)
     /// §5.6.1.3 "If a value is retained for the potential ... otherwise, if a
@@ -452,8 +454,8 @@ pub const LimitSlot = struct {
     /// `V(g,s)` as it reads in the source, for the `Instance` field comment.
     label: []const u8,
     access: Access,
-    hi: u16,
-    lo: u16,
+    hi: u32,
+    lo: u32,
     neg: bool,
     br: u32,
     /// The `$limit$old` call seeded into the entry block: the value this slot
@@ -589,7 +591,7 @@ pub const Inserted = Elaborate.Inserted;
 comptime {
     std.debug.assert(@sizeOf(ParamInfo) == 88); // ~850 rows on a compact model
     std.debug.assert(@sizeOf(Node) == 72); // SoA (`nodes` is a MultiArrayList)
-    std.debug.assert(@sizeOf(Contribution) == 48);
+    std.debug.assert(@sizeOf(Contribution) == 56); // u32 node rows (#29)
     std.debug.assert(@sizeOf(ChargeSite) == 24);
     std.debug.assert(@sizeOf(HeldVar) == 56);
     std.debug.assert(@sizeOf(NoiseSrc) == 56);
@@ -632,17 +634,16 @@ vectors: std.StringHashMapUnmanaged(VecRange) = .empty,
 /// then internal nodes (§3.6.3), then branch-flow unknowns (§5.4.2).
 /// Append-only, so row indices are stable. SoA because every consumer reads one column.
 ///
-/// A row index is a `u16` everywhere (`ground` is its max), not the device's `u8`:
-/// lowering holds more than 256 unknowns so codegen can refuse the module with a
-/// diagnostic instead of overflowing here.
+/// A row index is a `u32` everywhere (`ground` sits above every row); the
+/// emitted `U`'s tag is as wide as the row count needs (`emitTopology`).
 nodes: std.MultiArrayList(Node) = .{},
-/// §6.5 the port rows are `nodes[0..num_ports]`. A `u16` because it is a row
+/// §6.5 the port rows are `nodes[0..num_ports]`. A `u32` because it is a row
 /// index (see `nodes`).
-num_ports: u16 = 0,
+num_ports: u32 = 0,
 /// §5.4.2 branch-flow identity: the node pair → its unknown's `nodes` row.
 /// Keyed on the pair, so `I(a)` and `I(a,gnd)` stay distinct when a plain net is
 /// spelled `gnd` (see `flowUnknown`).
-flow_unknowns: std.AutoHashMapUnmanaged(FlowKey, u16) = .empty,
+flow_unknowns: std.AutoHashMapUnmanaged(FlowKey, u32) = .empty,
 /// §5.4.3 ports read with `I(<p>)`, in first-probe order, deduped. Each needs
 /// its own solver unknown (`u`) and a row pinning it to the module's KCL sum
 /// at `port`; codegen emits that row. Append-only, so the order is deterministic.
@@ -785,7 +786,7 @@ pub fn tokenSpan(self: *const Lowered, tok: u32) diag.Span {
 }
 
 /// Returns the name codegen prints for a `nodes` row, or "gnd" for `ground`.
-pub fn nodeName(self: *const Lowered, idx: u16) []const u8 {
+pub fn nodeName(self: *const Lowered, idx: u32) []const u8 {
     return if (idx == ground) "gnd" else self.nodes.items(.name)[idx];
 }
 

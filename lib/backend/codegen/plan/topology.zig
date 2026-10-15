@@ -26,7 +26,7 @@ pub const Topology = struct {
 
     /// The `FreeFlow` for the pair `(hi, lo)`, if that branch has one. The
     /// pair is ordered: `(lo, hi)` is another branch. O(free flows).
-    pub fn freeFlowOf(self: Topology, hi: u16, lo: u16) ?FreeFlow {
+    pub fn freeFlowOf(self: Topology, hi: u32, lo: u32) ?FreeFlow {
         for (self.free_flows) |f| if (f.hi == hi and f.lo == lo) return f;
         return null;
     }
@@ -109,9 +109,9 @@ pub fn flowIsMerged(self: Input, j: usize) bool {
 /// §1.3.4.1's potential-only net needs nothing special: the KCL row at the net
 /// is `ib = 0`, which leaves the branch row `V(out) - e = 0` to fix the
 /// potential.
-pub fn flowOnlySignalFlowNet(self: Input, c: Lower.Contribution) ?u16 {
+pub fn flowOnlySignalFlowNet(self: Input, c: Lower.Contribution) ?u32 {
     if (c.access != .flow or c.kind != .direct) return null;
-    for ([_]u16{ c.hi, c.lo }) |n| {
+    for ([_]u32{ c.hi, c.lo }) |n| {
         if (n >= self.lowered.nodes.len) continue; // ground
         switch (self.lowered.nodes.items(.dir)[n]) {
             .input, .output => {},
@@ -173,7 +173,7 @@ pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: M
 ///   The branch potential of a flow probe is zero (0)." Figure 5-1 draws the
 ///   ammeter: the probe is a short, so its row is `V(hi) - V(lo) = 0` and its
 ///   current enters KCL at both ends.
-pub const FreeFlow = struct { u: u32, hi: u16, lo: u16, sourced: bool };
+pub const FreeFlow = struct { u: u32, hi: u32, lo: u32, sourced: bool };
 
 /// `free_flows`, in unknown-slot order (`flow_unknowns` is a hash map, and
 /// its iteration order is not the emitted order).
@@ -414,8 +414,8 @@ test "free flows come out in unknown order, unsourced when only probed, and skip
         .{ .u = 3, .hi = 1, .lo = 0, .sourced = false },
         .{ .u = 4, .hi = 0, .lo = 1, .sourced = true },
     }, ff);
-    try std.testing.expectEqual(@as(?u16, 2), flowOnlySignalFlowNet(in, f.lowered.contributions.items[1]));
-    try std.testing.expectEqual(@as(?u16, null), flowOnlySignalFlowNet(in, f.lowered.contributions.items[0]));
+    try std.testing.expectEqual(@as(?u32, 2), flowOnlySignalFlowNet(in, f.lowered.contributions.items[1]));
+    try std.testing.expectEqual(@as(?u32, null), flowOnlySignalFlowNet(in, f.lowered.contributions.items[0]));
 }
 
 test "isFlowUnknown answers the quantity, not the spelling" {

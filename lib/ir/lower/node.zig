@@ -6,8 +6,8 @@
 //! Spine, in `lowerModule`'s order: `declarePorts`, `declareNets`,
 //! `bindPortConnections`, `resolveDisciplines`, `declareBranches`. After them,
 //! rows are only appended (implicit nets, §5.4.2 flow unknowns, §4.5.2 operator
-//! states), so a row index, once handed out, is stable. At most `max_nodes`
-//! rows; past that, E1015.
+//! states), so a row index, once handed out, is stable. A row is a `u32`;
+//! past its index space (`max_nodes`), E1015.
 //!
 //! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2, §6.5.5, §6.5.7.1, §7.2.4;
 //! IEEE 1364-2005 §5.2.1.
@@ -49,7 +49,9 @@ pub const State = struct {
     full: bool = false,
 };
 
-/// The most rows `nodes` holds: a row is a u16 and `ground` is the last value.
+/// The most rows `nodes` holds: a row is a u32 below `ground`. Not a design
+/// limit: a row costs tens of bytes of lowering state alone, so a module
+/// reaching it has run out of memory first (#29).
 const max_nodes = ground;
 
 // ---- the module's declarations, in `lowerModule`'s order ---------------------
@@ -201,7 +203,7 @@ pub fn bindPortConnections(self: *Lower) Oom!void {
     // §6.5.7.1 a vector port bound to a concatenated net expression or to
     // §6.5.5's sub-range of a net: element k of the port IS bit k of the
     // connection, so its key names that bit's node.
-    var bits: std.ArrayList(u16) = .empty;
+    var bits: std.ArrayList(u32) = .empty;
     for (self.port_concats) |pc| {
         bits.clearRetainingCapacity();
         var ok = for (pc.parts) |part| {
@@ -235,7 +237,7 @@ pub fn bindPortConnections(self: *Lower) Oom!void {
 /// or the elements a constant select names (§6.5.5), which must be a part of
 /// the net's declared range (E0351 on a net with none, E0352 outside it).
 /// Returns false after the diagnostic.
-fn partNodes(self: *Lower, part: Elaborate.NetPart, tok: u32, out: *std.ArrayList(u16)) Oom!bool {
+fn partNodes(self: *Lower, part: Elaborate.NetPart, tok: u32, out: *std.ArrayList(u32)) Oom!bool {
     const decl = self.out.vectors.get(part.net) orelse {
         if (part.sel == .whole) {
             try out.append(self.arena, try internNode(self, part.net, ""));
@@ -578,7 +580,7 @@ pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
 
 /// Returns the `nodes` row of net `name`, creating it on first use. Undeclared names
 /// are implicit nets (§3.6.5); rows are created in source order.
-pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
+pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u32 {
     const gop = try self.node_voltages.getOrPut(self.arena, name);
     if (gop.found_existing) {
         if (discipline.len != 0 and gop.value_ptr.* != ground)
@@ -623,7 +625,7 @@ fn collectNodeAbstol(self: *Lower, name: []const u8, abstol: f64) void {
 /// ponytail: the value is frozen at the parameter's declared default, so a card
 /// override leaves a stale initial guess (never a wrong answer). Upgrade: keep the
 /// `Ast.ExprId` and export `nodeset(model)` the way `derive()` is.
-pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
+pub fn recordNodeset(self: *Lower, node: u32, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
     const c = lower_constfold.constEval(self, e) orelse {
         var b = self.errWith(tok, .E0365);
         b.msg("the initializer of `{s}` is not a constant expression", .{name});
@@ -636,7 +638,7 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
 
 /// Mints the §4.5.2 unknown one analog operator site introduces, spelled
 /// `<op>$<k>`. Never deduped: each site owns its own unknown and row.
-pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u16 {
+pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u32 {
     const name = try self.arena.print("{s}${d}", .{ op, self.node_state.op_states });
     self.node_state.op_states += 1;
     return appendNode(self, name, "", .{ .op_state = abstol });
@@ -646,14 +648,14 @@ pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u16 {
 /// Does not dedupe: each caller owns identity (`node_voltages` for a net,
 /// `flow_unknowns` for a branch, `port_probes` for a port), and two distinct
 /// unknowns may ask for one name.
-fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
+fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u32 {
     if (self.out.nodes.len == max_nodes) {
         const m = self.out.module.?;
         if (!self.node_state.full) try self.err(m.main_tok, .E1015, "`{s}` needs more than {d} nets and unknowns", .{ self.file.str(m.name), max_nodes });
         self.node_state.full = true;
         return 0; // stands in for the row, so lowering reports the rest
     }
-    const idx: u16 = @intCast(self.out.nodes.len);
+    const idx: u32 = @intCast(self.out.nodes.len);
     const spelling = try uniqueSpelling(self, name);
     try self.node_state.spellings.put(self.arena, spelling, {});
     try self.out.nodes.append(self.arena, .{ .name = spelling, .kind = kind, .disc = discipline, .dir = .unspecified });
@@ -704,7 +706,7 @@ pub fn checkPortBranchDecls(self: *Lower) Oom!void {
 /// Resolves a net reference, `n` or `n[i]`, to a `nodes` row. An access function
 /// takes "scalars or individual elements of a vector" (§5.5.2), so a bare vector
 /// name reports E0351 and an undeclared element E0351/E0352.
-pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
+pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u32 {
     if (e == .none) return ground;
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
@@ -805,7 +807,7 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
 
 /// `internNode` for a vector element, spelled as the source does (`bus[3]`).
 /// Looks up on a stack buffer and allocates only for a new element.
-fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
+fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u32 {
     var buf: [lower_shape.elem_key_len]u8 = undefined;
     const key = try lower_shape.elemKey(self, &buf, base, &.{i});
     const name = self.node_voltages.getKey(key) orelse try self.arena.print("{s}[{d}]", .{ base, i });
@@ -956,7 +958,7 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl, hv: ?VecTerm,
 }
 
 /// Returns the name codegen prints for a `nodes` row, or "gnd" for `ground`.
-pub fn nodeName(self: *const Lower, idx: u16) []const u8 {
+pub fn nodeName(self: *const Lower, idx: u32) []const u8 {
     return self.out.nodeName(idx);
 }
 
@@ -969,7 +971,7 @@ pub fn newBranchId(self: *Lower) u32 {
 
 /// Returns the §4.4 potential probe of one node, deduped so a node is one
 /// `block_param` (codegen's `x[idx]`); ground is the literal 0 (§1.3.1.1).
-pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
+pub fn probe(self: *Lower, idx: u32) Oom!Mir.Value {
     if (idx == ground) return .f_zero;
     if (self.node_state.probe_cache.items[idx] != .undef) return self.node_state.probe_cache.items[idx];
     const v = try self.mir.addBlockParam(self.arena, idx);
@@ -980,7 +982,7 @@ pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
 /// Returns the `nodes` row of branch (hi, lo)'s current, the solver unknown a §5.4.2
 /// flow read creates. Deduped on the node pair (the §5.4.1 identity), not the
 /// printed name, since a net called `gnd` prints like the reference node.
-pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
+pub fn flowUnknown(self: *Lower, hi: u32, lo: u32) Oom!u32 {
     const gop = try self.out.flow_unknowns.getOrPut(self.arena, .{ .hi = hi, .lo = lo });
     if (gop.found_existing) return gop.value_ptr.*;
     const name = try self.arena.print("flow({s},{s})", .{ nodeName(self, hi), nodeName(self, lo) });
@@ -994,7 +996,7 @@ pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
 /// Returns the §5.4.3 unknown carrying `I(<p>)`, spelled `flow(<p>)`. `port_probes`
 /// is the identity (a linear scan over the module's ports), so a net spelled
 /// `flow(<p>)` cannot take over the port's current.
-pub fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
+pub fn portFlowUnknown(self: *Lower, p: u32) Oom!u32 {
     for (self.out.port_probes.items) |pp| {
         if (pp.port == p) return pp.u;
     }
@@ -1079,8 +1081,11 @@ test "lower: §3.6.3 net declarations: one discipline each, constant ranges and 
         .{ .decls = "  electrical q;\n  electrical q;", .want = .E0902 },
         // §3.6.3.2 "The initializer shall be a constant_expression" (E0365).
         .{ .decls = "  real v;\n  electrical q = v;", .want = .E0365 },
-        // One row per element: past the u16 row space is E1015.
-        .{ .decls = "  electrical [0:70000] w;", .want = .E1015 },
+        // One row per element, any count the u32 row space holds (#29):
+        // 70001 rows was past the old u16 space.
+        .{ .decls = "  electrical [0:70000] w;", .want = null },
+        // Past the u32 row space is E1015, before a row is allocated.
+        .{ .decls = "  electrical [0:5000000000] w;", .want = .E1015 },
         // §3.6.3 a range bound is a constant integer; NaN is none (E0352).
         .{ .decls = "  electrical [0:0.0/0.0] w;", .want = .E0352 },
         // §3.12.1 a port branch is over a port (E0372).

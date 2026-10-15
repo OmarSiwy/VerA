@@ -49,8 +49,8 @@ pub const Noise = struct {
 pub const NoiseRow = struct {
     /// The generator's `nodes` rows: `hi` and `lo`, or `row == col` for a
     /// generator to §1.3.1.1 ground.
-    row: u16,
-    col: u16,
+    row: u32,
+    col: u32,
     kind: Lower.NoiseKind,
     /// §4.6.4.6 dense generator id: rows sharing it are one generator. At
     /// most the row count, which a `u32` index everywhere else bounds.
@@ -355,13 +355,13 @@ test "rows: to-ground is row == col, ground-ground is E0520, a stimulus goes to 
     const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered });
     try std.testing.expectEqual(@as(usize, 2), n.rows.len);
     // I(b) to ground: row = col = b. I(<gnd>, a): row = col = a.
-    try std.testing.expectEqual(@as(u16, 1), n.rows[0].row);
-    try std.testing.expectEqual(@as(u16, 1), n.rows[0].col);
+    try std.testing.expectEqual(@as(u32, 1), n.rows[0].row);
+    try std.testing.expectEqual(@as(u32, 1), n.rows[0].col);
     try std.testing.expectEqual(@as(u32, 0), n.rows[0].source);
     // An unclaimed coefficient reads as 1; a claimed one is kept.
     try std.testing.expectEqual(Mir.Value.f_one, n.rows[0].coeff);
-    try std.testing.expectEqual(@as(u16, 0), n.rows[1].row);
-    try std.testing.expectEqual(@as(u16, 0), n.rows[1].col);
+    try std.testing.expectEqual(@as(u32, 0), n.rows[1].row);
+    try std.testing.expectEqual(@as(u32, 0), n.rows[1].col);
     try std.testing.expectEqual(@as(u32, 1), n.rows[1].source);
     try std.testing.expectEqual(Mir.Value.f_two, n.rows[1].coeff);
     // §4.6.3 a stimulus is not a generator.

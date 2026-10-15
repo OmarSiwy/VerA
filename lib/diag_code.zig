@@ -6922,41 +6922,26 @@ fn infoOf(c: Code) Info {
             \\module name, the role and the target, and a key can overflow the
             \\fixed name buffer (never truncated: truncation would break the
             \\injectivity two distinct units rely on) — but no diagnostic with
-            \\this code is ever built. The refusal is codegen's
-            \\error.NameTooLong, which the CLI prints as "codegen failed:
-            \\NameTooLong" with the input path; shortening the module or node
-            \\names involved is still the fix. A catalogue entry for a code
-            \\that never renders only misleads `--explain`.
+            \\this code is ever built. The refusal was codegen's
+            \\error.NameTooLong, past an 8192-byte name buffer. Since #29 every
+            \\name buffer is sized from the name itself (LRM 2.8 lets an
+            \\implementation set no limit, VD-054), so no length is refused. A
+            \\catalogue entry for a code that never renders only misleads
+            \\`--explain`.
             \\
             \\If codegen ever reports the overflow through the bag, with a
             \\source location, that report takes a NEW number. This one is not
             \\reused.
         ),
-        .E1003 => .{
-            .title = "more solver unknowns than the device contract can hold",
-            .lrm = "",
-            .explain =
-            \\An engine limit, not a language rule. The emitted device declares
-            \\its solver unknowns as `pub const U = enum(u8)`, and
-            \\`tools/contract.zig`'s `isDenseEnum` requires exactly that tag
-            \\type, so a device carries at most 256 of them — ports (LRM 6.5)
-            \\first, then LRM 3.6.3 internal nets, then LRM 5.4.2 branch-flow
-            \\unknowns.
-            \\
-            \\The refusal is here rather than in the host's build because the
-            \\alternative was silence: the 257th member is `enum tag value '256'
-            \\too large for type 'u8'`, an error against a line of GENERATED Zig
-            \\with nothing pointing back at the model that produced it.
-            \\
-            \\The bound is on the device VerA emits, not on the circuit a host
-            \\may solve — instantiate this module several times, or split it, and
-            \\each instance stamps its own rows into the host's matrix.
-            \\
-            \\Note the count is not the net count: LRM 6.5.2 expands a vector port
-            \\to one unknown per element, and every LRM 5.6 potential contribution
-            \\adds a branch-flow unknown for its own current.
-            ,
-        },
+        .E1003 => retiredInfo(
+            \\"more solver unknowns than the device contract can hold". Retired
+            \\(#29): the emitted `U` was an `enum(u8)`, so a device held at most
+            \\256 unknowns, below the 256 ports LRM 6.5.2.2 requires an
+            \\implementation to accept before its internal nodes. `U` is now an
+            \\`enum(u8)` up to 256 unknowns and as wide as the count needs past
+            \\them; `tools/contract.zig` takes any unsigned tag of 8 bits or more.
+            \\This code is not reused.
+        ),
         .E1100 => .{
             .title = "digital source execution failed",
             .lrm = "8.5",
@@ -7275,31 +7260,30 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E1015 => .{
-            .title = "more nets and unknowns than VerA's node table holds",
+            .title = "more nets and unknowns than a 32-bit row index holds",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. VerA numbers a module's
-            \\nets, ports, branch flows and analog operator states in one table
-            \\with 16-bit rows, so a module holds at most 65535 of them, and a
-            \\vector range (LRM 3.6.3) at most 65535 elements. The LRM bounds
-            \\neither.
-            \\
-            \\A device this size would also pass the 256-unknown bound on the
-            \\generated Jacobian (E1003). Split the module.
+            \\Not a language rule and not a design limit. VerA numbers a
+            \\module's nets, ports, branch flows and analog operator states in
+            \\one table with 32-bit rows, so a module holds up to 4294967294 of
+            \\them and a vector range (LRM 3.6.3) as many elements. Each row
+            \\costs lowering state of its own, so a module this size runs out
+            \\of memory first; the code fires only on a range whose folded
+            \\bounds alone pass the index space (`[0:5000000000]`). Until #29
+            \\the rows were 16-bit and the bound was 65535.
             ,
         },
         .E1016 => .{
-            .title = "an array or assignment pattern has more than 1048576 elements",
+            .title = "an array or assignment pattern has more elements than a 32-bit index holds",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. VerA turns each element of
-            \\an analog-context array (LRM 3.2, 3.4.4) and each element of an
-            \\assignment pattern (LRM 4.2.14) into its own scalar, and stops at
-            \\2^20 elements rather than unroll without bound. The LRM bounds
-            \\neither.
-            \\
-            \\An array this size belongs in a data file read by `$table_model`
-            \\(LRM 9.21) or `$fscanf` (LRM 9.5.4).
+            \\Not a language rule and not a design limit. VerA indexes the
+            \\elements of an analog-context array (LRM 3.2, 3.4.4) and of an
+            \\assignment pattern (LRM 4.2.14) with 32 bits, so one holds up to
+            \\4294967295 of them. Each element is at least a real of storage,
+            \\so an array this size runs out of memory first; the code fires
+            \\only on bounds whose product alone passes the index space
+            \\(`real a[0:65535][0:65536]`). Until #29 the bound was 2^20.
             ,
         },
         .E1017 => .{

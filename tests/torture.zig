@@ -538,6 +538,7 @@ fn runAndCheck(
     var dm = d;
     dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
     dm.op_states = try vera.tb.opStates(arena, result.lowered);
+    dm.mem_bytes = vera.tb.memBytes(result.lowered);
     dm.validate_contract = true;
     dm.certify = harness.certify and d.fd_exempt == null;
     // L4b: the prover's claim `finiteCheck` tests. Every contribution unit

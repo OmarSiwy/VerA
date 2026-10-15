@@ -36,13 +36,21 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
     return out.items;
 }
 
+/// Returns the bytes of `lowered`'s §3.2.2 memory-backed arrays
+/// (`Directives.mem_bytes`): eight per element, real or integer.
+pub fn memBytes(lowered: *const Lowered) u64 {
+    var n: u64 = 0;
+    for (lowered.mem_arrays.items) |m| n += 8 * @as(u64, m.len);
+    return n;
+}
+
 /// Returns the `U` indices of the §4.5.2 operator unknowns
 /// (`Directives.op_states`), ascending, allocated in `arena`.
-pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
+pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u32 {
     const kinds = lowered.nodes.items(.kind);
     var n: usize = 0;
     for (kinds) |k| n += @intFromBool(k == .op_state);
-    const out = try arena.alloc(u16, n);
+    const out = try arena.alloc(u32, n);
     n = 0;
     for (kinds, 0..) |k, i| switch (k) {
         .op_state => {
@@ -112,8 +120,13 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     try head(&out, arena, title, d);
 
     // --- main -------------------------------------------------------------
+    try out.appendSlice(arena, tb_runner_text.big_stack_text);
     try out.appendSlice(arena,
         \\pub fn main(init: std.process.Init.Minimal) void {
+        \\    if (comptime big_stack) return bigStack(init);
+        \\    @call(.never_inline, run, .{init});
+        \\}
+        \\fn run(init: std.process.Init.Minimal) void {
         \\    var model: D.Model = .{};
         \\
     );
@@ -498,15 +511,14 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\
     );
     // Each digital name beside its `Model` field.
-    var buf: [naming.max_name_len]u8 = undefined;
     try out.appendSlice(arena, "const input_ports = [_]Port{");
     for (mx.inputs) |name| {
-        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), try naming.sanitizeAlloc(arena, name) });
         const xz = for (mx.xz) |x| {
             if (std.mem.eql(u8, x, name)) break true;
         } else false;
         if (xz) {
-            const field = naming.sanitize(&buf, try arena.print("{s}__xz", .{name})) catch return error.OutOfMemory;
+            const field = try naming.sanitizeAlloc(arena, try arena.print("{s}__xz", .{name}));
             try out.print(arena, ", .xz = \"{s}\"", .{field});
         }
         // §7.3.1 a `reg` wider than 32 bits: word 0 exactly, then one port
@@ -517,17 +529,17 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         if (n_words != 0 and !xz) try out.appendSlice(arena, ", .word = 0");
         try out.appendSlice(arena, " },");
         for (1..@max(n_words, 1)) |k| {
-            const field = naming.sanitize(&buf, try arena.print("{s}__w{d}", .{ name, k })) catch return error.OutOfMemory;
+            const field = try naming.sanitizeAlloc(arena, try arena.print("{s}__w{d}", .{ name, k }));
             try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\", .word = {d} }},", .{ std.zig.fmtString(name), field, k });
         }
     }
     try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
     for (mx.snaps) |name| {
-        const field = naming.sanitize(&buf, try arena.print("{s}__1b", .{name})) catch return error.OutOfMemory;
+        const field = try naming.sanitizeAlloc(arena, try arena.print("{s}__1b", .{name}));
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), field });
     }
     try out.appendSlice(arena, " };\nconst event_ports = [_]EventPort{");
-    for (mx.events) |ev| try out.print(arena, " .{{ .name = \"{f}\", .edge = .{t}, .field = \"{s}\" }},", .{ std.zig.fmtString(ev.name), ev.edge, naming.sanitize(&buf, ev.param) catch return error.OutOfMemory });
+    for (mx.events) |ev| try out.print(arena, " .{{ .name = \"{f}\", .edge = .{t}, .field = \"{s}\" }},", .{ std.zig.fmtString(ev.name), ev.edge, try naming.sanitizeAlloc(arena, ev.param) });
     try out.appendSlice(arena, " };\n");
     // VAMS §7.8.4 the inserted connect modules, which the source the digital
     // half re-elaborates does not hold (`sim.digital.Insert`).
@@ -543,14 +555,13 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     // the §5.10 held `Instance` field its value is copied from. A variable
     // that is not held is left out, and the digital half refuses the read.
     try out.appendSlice(arena, "const a2d_ports = [_]Port{");
-    var mod_buf: [naming.max_name_len]u8 = undefined;
-    const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
+    const mod = try naming.sanitizeAlloc(arena, mx.top);
     for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
-        const leaf = naming.sanitize(&buf, name) catch return error.OutOfMemory;
+        const leaf = try naming.sanitizeAlloc(arena, name);
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\", .free = {}", .{ std.zig.fmtString(name), mod, leaf, h.why != .event });
         // §7.3.6.1 its assignment count, when it has one.
         for (mx.held) |c| if (std.mem.startsWith(u8, c.name, HeldVar.assign_count_prefix) and std.mem.eql(u8, c.name[HeldVar.assign_count_prefix.len..], name)) {
-            try out.print(arena, ", .count = \"{s}__held__{s}\"", .{ mod, naming.sanitize(&buf, c.name) catch return error.OutOfMemory });
+            try out.print(arena, ", .count = \"{s}__held__{s}\"", .{ mod, try naming.sanitizeAlloc(arena, c.name) });
         };
         try out.appendSlice(arena, " },");
         break;
@@ -560,7 +571,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     // §8.5.3.6 the held fields only explicit D2A event statements assign.
     try out.appendSlice(arena, " };\nconst d2a_held = [_][]const u8{");
     for (mx.held) |h| if (h.d2a) {
-        const leaf = naming.sanitize(&buf, h.name) catch return error.OutOfMemory;
+        const leaf = try naming.sanitizeAlloc(arena, h.name);
         try out.print(arena, " \"{s}__held__{s}\",", .{ mod, leaf });
     };
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
@@ -575,13 +586,18 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
             if (std.mem.eql(u8, p.name, name)) break true;
         } else false;
         if (!read) continue;
-        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(p.name), naming.sanitize(&buf, p.name) catch return error.OutOfMemory });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(p.name), try naming.sanitizeAlloc(arena, p.name) });
     }
     try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
 
     // --- main ---------------------------------------------------------------
+    try out.appendSlice(arena, tb_runner_text.big_stack_text);
     try out.appendSlice(arena,
         \\pub fn main(init: std.process.Init.Minimal) void {
+        \\    if (comptime big_stack) return bigStack(init);
+        \\    @call(.never_inline, run, .{init});
+        \\}
+        \\fn run(init: std.process.Init.Minimal) void {
         \\    var model: D.Model = .{};
         \\
     );
@@ -697,6 +713,7 @@ fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directi
     try out.print(arena, "/// The switch of `fdCheck`, `finiteCheck` and `stateCheck`: the suite's `--certify`.\nconst fd_certify = {};\n", .{d.certify});
     try out.print(arena, "/// `finiteCheck`'s claim: every contribution unit was proved finite.\nconst finite_proved = {};\n", .{d.finite_proved});
     try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.print(arena, "/// `bigStack`'s share for the device's memory-backed arrays.\nconst mem_bytes: usize = {d};\n\n", .{d.mem_bytes});
     // §9.15 `$simparam$str("analysis_name")`: this testbench's one analysis.
     const name = if (d.analysis_name.len != 0) d.analysis_name else @tagName(d.analysis);
     try out.print(arena, "const analysis_name = \"{f}\";\n\n", .{std.zig.fmtString(name)});

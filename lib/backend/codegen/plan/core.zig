@@ -14,8 +14,8 @@ const plan_setup = @import("setup.zig");
 const callee = Mir.callee;
 const assert = std.debug.assert;
 
-/// Allocation, or a core name longer than `naming.max_name_len`.
-pub const Error = std.mem.Allocator.Error || error{NameTooLong};
+/// Allocation only: a name has no length bound (VAMS 2.8, VD-054).
+pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
 /// The shared core's plan.
@@ -79,8 +79,7 @@ pub const Core = struct {
 /// Job order (contributions in source order, then §4.5 operator inputs, then
 /// §9.4 display) makes `f<k>` insert-tolerant the way `naming.zig` makes
 /// declaration names: adding a contribution at the end of a module appends
-/// fields and renumbers none. Fails on allocation or a core name over
-/// `naming.max_name_len`.
+/// fields and renumbers none. Fails only on allocation.
 pub fn plan(in: Input, jobs: []const Job) Error!Core {
     const a = in.arena;
     var self: Core = .{};
@@ -142,15 +141,13 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
     if (self.lo_vals.len == 0) return self;
     try heldOnly(in, jobs, &self);
 
-    var buf: [naming.max_name_len]u8 = undefined;
-    const n = naming.unitName(&buf, in.mir.name, .{
+    self.name = try naming.unitNameAlloc(a, in.mir.name, .{
         .role = .common,
         // A single declaration, so the target is a fixed word rather than a
         // key: naming.zig's insert-tolerance is about the NAME not moving,
         // and this one cannot.
         .target = "core",
-    }) catch return error.NameTooLong;
-    self.name = try a.dupe(u8, n);
+    });
     return self;
 }
 
