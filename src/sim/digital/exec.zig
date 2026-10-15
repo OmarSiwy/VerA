@@ -14,7 +14,7 @@ const Front = @import("frontend");
 const Ast = Front.Ast;
 const Int = Front.Integer;
 const compile = @import("compile.zig");
-const deep = @import("../deep.zig");
+const deep = @import("frontend").deep_stack;
 const display = @import("display.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
@@ -294,7 +294,7 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
 /// reads the calling activation), copied into the formals, the body runs on a
 /// scratch arena of its own, and the outputs are copied back. An automatic
 /// subroutine's frame is saved, set to x, and restored after (§10.2.3, §10.4.2).
-/// Nests as deep as the stack `deep.run` reserved (`deep.exhausted`). After
+/// Nests as deep as the stack `deep.runGuarded` reserved (`deep.exhausted`). After
 /// a §10.3 `disable` of the subroutine, outputs are not copied back.
 pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
     // ponytail: `repeat` counters are per site, so a recursive body that loops

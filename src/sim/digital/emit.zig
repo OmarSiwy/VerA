@@ -76,7 +76,7 @@ pub const Error = error{ Unsupported, OutOfMemory };
 /// A refused design's root embeds `embed` and runs the interpreter. Every
 /// returned slice is in `arena`.
 pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
-    return @import("../deep.zig").run(0, programDeep, .{ arena, r, embed, schedule, logic });
+    return @import("frontend").deep_stack.runGuarded(0, programDeep, .{ arena, r, embed, schedule, logic });
 }
 
 fn programDeep(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
