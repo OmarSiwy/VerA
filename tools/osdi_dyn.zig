@@ -590,6 +590,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 if (set) self.mfactor_given = true;
                 return &self.mfactor;
             }
+            // §3.4 parameters are optional (#79): with none, no model-side
+            // id exists, and `given`/`vals` are zero-length arrays that a
+            // runtime index may not be analysed against.
+            if (np == 0) return null;
             // A model-side id, or an instance parameter asked of the model
             // (OpenVAF's semantics: the card's value of it).
             const j = if (id < np) id else if (id >= num_inst_params and id < num_params) id - num_inst_params else return null;
@@ -600,7 +604,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
 
         fn givenModel(mp: *anyopaque, id: u32) callconv(.c) u32 {
             const m: *Model = @ptrCast(@alignCast(mp));
-            if (id < num_inst_params or id >= num_params) return 0;
+            // No parameter, no model-side flag (`access`, #79).
+            if (np == 0 or id < num_inst_params or id >= num_params) return 0;
             return @intFromBool(m.given[id - num_inst_params]);
         }
 
@@ -1329,6 +1334,47 @@ test "setup, eval and every load: the stamps of a linear RC, and $mfactor over i
     // Past the table: no slot, and no given flag.
     try testing.expect(d.access(&inst, &model, 5, 0) == null);
     try testing.expectEqual(@as(u32, 0), d.given_flag_model(&model, 5));
+}
+
+/// `Rc` with no §3.4 parameter: what VerA emits for a module that declares
+/// none (§3.4 makes them optional), `$mfactor` its only OSDI parameter.
+const NoParam = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { temperature__: f64 = 300.15 };
+    pub const Instance = struct { mfactor: f64 = 1 };
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const i = p[0].sub(p[1]).scale(1e-3);
+        return contract.rows(@This(), S, .{ i, i.neg() });
+    }
+};
+
+test "a module with no parameters builds: $mfactor is the only slot, the model side has none (#79)" {
+    const H = Osdi(NoParam, "noparam");
+    const d = &H.descriptors[0];
+    try testing.expectEqual(@as(u32, 1), d.num_params);
+    try testing.expectEqual(@as(u32, 1), d.num_instance_params);
+    try testing.expectEqualStrings("$mfactor", std.mem.span(d.param_opvar[0].name[0].?));
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    d.setup_model(null, &model, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    // Id 0 is $mfactor on the instance; asked of the model, nothing.
+    real(d, &inst, &model, 0, access_flag_set | access_flag_instance).* = 2;
+    try testing.expect(d.access(null, &model, 0, 0) == null);
+    try testing.expect(d.access(null, &model, 1, 0) == null);
+    try testing.expectEqual(@as(u32, 0), d.given_flag_model(&model, 0));
+    try testing.expectEqual(@as(u32, 1), d.given_flag_instance(&inst, 0));
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    // 1 mS between the ports, twice under $mfactor = 2 (§6.3.6).
+    _ = evalAt(d, &inst, &model, &.{ 1, 0 });
+    try testing.expectEqual(@as(f64, 2e-3), inst.res[0]);
 }
 
 test "noise: one source per generator row, its PSD coeff²·white at the last evaluated point" {

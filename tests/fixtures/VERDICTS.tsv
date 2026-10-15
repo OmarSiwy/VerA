@@ -755,6 +755,7 @@ pass	ch03_data_types/lrm_3_6_2_7.va
 pass	ch03_data_types/lrm_3_6_3_1.va
 pass	ch03_data_types/lrm_3_6_5.va
 pass	ch03_data_types/lrm_3_9.va
+pass	ch03_data_types/module_without_parameters.va
 pass	ch03_data_types/nature_parent_access_must_be_potential_or_flow_rejected.va
 pass	ch03_data_types/net_declared_with_nature_name_rejected.va
 pass	ch03_data_types/net_desc_attribute_numeric_rejected.va

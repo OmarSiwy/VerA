@@ -610,6 +610,8 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/fixtures/ch05_analog_behavior/vera_reject_step_retry.va", .exit = 1, .says = "error[E1099]" },
         .{ .file = "tests/fixtures/ch04_expressions/a06_noise_anticorrelated_coefficient.va", .exit = 0, .says = "warning[W1098]" },
         .{ .file = "tests/fixtures/ch07_mixed_signal/v_seconds.v", .exit = 0, .says = "warning[W1155]" },
+        // §3.4 a module with no parameters (#79): `$mfactor` is its only slot.
+        .{ .file = "tests/fixtures/ch03_data_types/module_without_parameters.va", .exit = 0, .says = "" },
     }) |r| {
         const run = b.addRunArtifact(exe);
         run.addArgs(&.{ "--emit-osdi", "-I" });
