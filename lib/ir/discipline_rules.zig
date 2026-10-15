@@ -10,7 +10,9 @@ const Ast = @import("frontend").Ast;
 
 /// §3.11.1 Derived Nature Rule — the base a (possibly derived) nature bottoms
 /// out at. Two natures are RELATED when this answers the same name for both.
-/// `.none` when the name resolves to no nature at all.
+/// `.none` when the name resolves to no nature at all; an undeclared parent
+/// is answered as the base. Climbs at most 16 parents, so a cyclic
+/// derivation terminates on whichever name it holds at the cap.
 pub fn baseNatureOf(file: *const Ast.SourceFile, name: Ast.StrId) Ast.StrId {
     var want = name;
     var hops: u32 = 0;

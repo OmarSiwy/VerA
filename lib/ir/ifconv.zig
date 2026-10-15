@@ -11,7 +11,8 @@ const proof = @import("proof.zig");
 
 /// Converts every pure diamond, to a fixpoint, and returns how many converted.
 /// Blocks are visited in index order, so equal MIR converts identically.
-/// `gpa` backs one temporary per-block pred count.
+/// `gpa` backs one temporary per-block pred count and the emitted rows.
+/// Invalidates every `Mir.InstIterator` and any `Analysis` built over `mir`.
 pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
     const nb = mir.blockCount();
     if (nb == 0) return 0;

@@ -277,7 +277,8 @@ pub const PhiPair = struct { block: Block, value: Value };
 
 // Row budgets, in bytes per row of each SoA table (psp103: 27,760
 // instructions, 23,859 values, 4,234 blocks). A new column has to move one of
-// these on purpose; docs/seams/s1-ircore.md has the narrower shapes proposed.
+// these on purpose; docs/seams/s1-ircore.md at 2c3f565d has the narrower
+// shapes proposed.
 comptime {
     assert(std.MultiArrayList(InstRow).capacityInBytes(1) == 29);
     assert(std.MultiArrayList(ValueRow).capacityInBytes(1) == 9);
@@ -301,7 +302,7 @@ cur_tok: u32 = no_tok,
 insts: std.MultiArrayList(InstRow) = .empty,
 /// Block rows, indexed by `Block`.
 blocks: std.MultiArrayList(BlockRow) = .empty,
-/// Definition of every dynamic Value; index = @intFromEnum(v) - first_dynamic.
+/// Definition of every dynamic Value; index = @backingInt(v) - first_dynamic.
 defs: std.MultiArrayList(ValueRow) = .empty,
 /// Shared variable-length payload pool (call args, phi operands).
 extra: std.ArrayList(u32) = .empty,
@@ -418,7 +419,8 @@ pub fn internString(self: *Mir, gpa: std.mem.Allocator, bytes: []const u8) !StrI
 }
 
 /// Returns the decoded definition of `value`. A `.str_const` slice borrows
-/// the string table.
+/// the string table. `value` must be a sentinel or name a `defs` row; any
+/// other index is a safety-checked out-of-bounds read.
 pub fn valueDef(self: *const Mir, value: Value) Def {
     switch (value) {
         .undef => return .undef,
@@ -446,7 +448,7 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
 }
 
 /// Returns the kind of `value`, read from the `kind` column without decoding
-/// the payload.
+/// the payload. `value` must be a sentinel or name a `defs` row.
 pub fn valueKind(self: *const Mir, value: Value) DefKind {
     return switch (value) {
         .undef => .undef,
@@ -468,6 +470,7 @@ pub fn setAlias(self: *Mir, from: Value, to: Value) void {
 }
 
 /// Returns whether `value` was collapsed onto another (codegen skips its decl).
+/// `value` must be a sentinel or name a `defs` row.
 pub fn hasAlias(self: *const Mir, value: Value) bool {
     const i = @backingInt(value);
     if (i < Value.first_dynamic) return false;
@@ -504,7 +507,8 @@ pub fn resolveAlias(self: *const Mir, value: Value) Value {
 
 // ---------------------------------------------------------------- blocks ----
 
-/// Appends an empty block.
+/// Appends an empty block and returns its handle; the first call returns
+/// `.entry`. Asserts that the block count stays below `maxInt(u32)`.
 pub fn addBlock(self: *Mir, gpa: std.mem.Allocator) !Block {
     const i = self.blocks.len;
     assert(i < std.math.maxInt(u32));
@@ -533,7 +537,9 @@ pub const InstIterator = struct {
     }
 };
 
-/// Instructions of `block`, in emission order (intrusive `next` chain).
+/// Returns an iterator over `block`'s instructions, in emission order (the
+/// intrusive `next` chain). The iterator borrows the `next` column: any
+/// append to `insts` (every `emit*`) invalidates it.
 pub fn blockInsts(self: *const Mir, block: Block) InstIterator {
     return .{
         .next_col = self.insts.items(.next),
@@ -578,7 +584,8 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
 }
 
 /// Removes `inst` from `block`'s chain; the rows after it stay linked. The row
-/// is orphaned, not reused.
+/// is orphaned, not reused, and keeps its `block` column. `inst` must be
+/// linked into `block`. This operation is O(n) in the block's length.
 pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
     const next = self.insts.items(.next);
     const first = self.blocks.items(.first);
@@ -594,7 +601,7 @@ pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
 }
 
 /// Relinks every row of `from`, in order, at the end of `to`; `from` is left
-/// empty.
+/// empty. Asserts that `to != from`.
 pub fn splice(self: *Mir, to: Block, from: Block) void {
     assert(to != from);
     const next = self.insts.items(.next);
@@ -646,6 +653,7 @@ fn addResultInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow)
 }
 
 /// Appends a value-producing instruction to `block` and returns its result.
+/// Invalidates every `InstIterator` (each `emit*` appends to `insts`).
 /// Asserts that `ops` matches `op`'s class (see `InstRow`'s encoding table);
 /// phi, branch, jump, call and anew have their own builders.
 pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: []const Value) !Value {
@@ -693,7 +701,8 @@ pub fn emitJump(self: *Mir, gpa: std.mem.Allocator, block: Block, target: Block)
 
 /// Appends a call by name (§4.3 math, §4.5 analog operator, §4.7 function,
 /// ch9 system function) and returns its result. The one place a name becomes
-/// a `Callee`; the raw name is kept for `.systf`.
+/// a `Callee`; the raw name is kept for `.systf`. Invalidates every
+/// `InstIterator` and the `args` of every earlier `instData` call view.
 pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, name: StrId, args: []const Value) !Value {
     const start = try self.addExtra(gpa, &.{@backingInt(name)});
     _ = try self.addExtra(gpa, @ptrCast(args));
@@ -707,6 +716,7 @@ pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, name: StrId, a
 
 /// Appends a phi and returns its result. `pairs` may be empty for an
 /// incomplete phi (Braun et al.); fill it later with `setPhiPairs`.
+/// Invalidates every `InstIterator` and earlier `instData` call `args`.
 pub fn emitPhi(self: *Mir, gpa: std.mem.Allocator, block: Block, pairs: []const PhiPair) !Value {
     const start = try self.addExtraPairs(gpa, pairs);
     return self.addResultInst(gpa, block, .{ .op = .phi, .b = start, .c = @intCast(pairs.len) });
@@ -800,6 +810,7 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
 }
 
 /// Returns operand `i` of a phi (0..count-1 from `instData(...).phi`).
+/// Asserts that `inst` is a phi and `i` is below its pair count.
 pub fn phiPair(self: *const Mir, inst: Inst, i: u32) PhiPair {
     const n = @backingInt(inst);
     assert(self.insts.items(.op)[n] == .phi and i < self.insts.items(.c)[n]);

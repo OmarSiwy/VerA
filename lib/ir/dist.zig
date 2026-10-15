@@ -54,7 +54,7 @@ const dists = [_]Dist{
     .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11, .count = true },
 };
 
-/// The Table 9-10 row `name` spells, or null.
+/// The Table 9-10 row `name` spells, or null. A linear scan of 17 rows.
 pub fn of(name: []const u8) ?*const Dist {
     for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
     return null;

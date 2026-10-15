@@ -75,10 +75,13 @@ pub const Kind = enum {
         };
     }
 
+    /// Returns the expression for an instance's value given its parent's
+    /// (Table 9-29's composition: a sum, a product, or a sum modulo 360).
     /// `parent` and `value` already refer to the flat namespace. `.none`
     /// means the table's top-level identity. Force real arithmetic: even an
     /// integer spelling of a coordinate or angle is a real-valued system
     /// parameter, so a fractional angle never passes through integer `%`.
+    /// The new nodes are appended to `file.exprs` from `arena`.
     pub fn compose(self: Kind, file: *Ast.SourceFile, arena: std.mem.Allocator, parent: Ast.ExprId, value: Ast.ExprId, tok: u32) std.mem.Allocator.Error!Ast.ExprId {
         const x = &file.exprs;
         const real_value = if (constfold.fold(file, value, constfold.literal_env)) |v|

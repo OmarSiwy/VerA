@@ -223,10 +223,12 @@ pub const Callee = enum(u8) {
         return by_name.get(name) orelse .systf;
     }
 
-    /// A spelling lowering mints for its own rewrites (`$held_int` to the end
-    /// of the `$rng$` family), never a §2.8.3 source name: a source call
-    /// that spells one is refused (E1014), since its facts assume lowering's
-    /// arguments.
+    /// A spelling lowering mints for its own rewrites (`$held_int` through
+    /// `$systf$out`, in declaration order), never a §2.8.3 source name: a
+    /// source call that spells one is refused (E1014), since its facts assume
+    /// lowering's arguments. The synthetic spellings before `$held_int`
+    /// (`idt$hold`, `op$static`, `absdelay$quad`) are not `$` names, so no
+    /// system call can spell them.
     pub fn synthetic(c: Callee) bool {
         return @backingInt(c) >= @backingInt(Callee.@"$held_int") and c != .systf;
     }
