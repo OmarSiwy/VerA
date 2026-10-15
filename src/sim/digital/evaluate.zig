@@ -823,6 +823,105 @@ test "digital assignment context extends before operations and preserves X Z" {
     , "wide 11111111\nsigned 11111000\nunsigned 00001000\nlogic 000010xz\ninteger 11111111111111111111111111111111\n");
 }
 
+test "§5.1.9/§5.1.11/§5.1.8 logical, reduction and equality operators over x" {
+    // && with a 0 side is 0, || with a 1 side is 1, otherwise x decides x.
+    // &1x11 has no 0 (x); &0x11 has one (0); |0x00 has no 1 (x); |1x00 has
+    // one (1); ^ over any x is x. == over an x bit in both is x, === compares
+    // it (1), and a known differing bit makes == 0.
+    try expectRun(
+        \\module m;
+        \\initial begin
+        \\  $display("%b%b%b", 1'bx && 1'b0, 1'bx || 1'b1, 1'bx && 1'b1);
+        \\  $display("%b%b%b%b%b", &4'b1x11, &4'b0x11, |4'b0x00, |4'b1x00, ^4'b1x00);
+        \\  $display("%b%b%b", 4'b1x00 == 4'b1x00, 4'b1x00 === 4'b1x00, 4'b1x00 == 4'b0x00);
+        \\end
+        \\endmodule
+    , "01x\nx0x1x\nx10\n");
+}
+
+test "§5.2.1 a select partly outside its vector reads x there and writes only the bits inside" {
+    // a[9:6] of a [7:0] vector: bits 9 and 8 do not exist (x), 7 and 6 are 1.
+    // v is [7:4] = 1010, so v[7]=1 v[6]=0 v[5]=1 v[4]=0. v[2 +: 4] ascends
+    // from 2 to 5: {v[5], v[4], v[3], v[2]} = 1 0 x x. Writing 0110 there
+    // lands bit 2 (1) in v[4] and bit 3 (0) in v[5]: v = 1001.
+    try expectRun(
+        \\module m; reg [7:0] a; reg [7:4] v;
+        \\initial begin
+        \\  a = 8'hff; v = 4'b1010;
+        \\  $display("%b %b", a[9:6], v[2 +: 4]);
+        \\  v[2 +: 4] = 4'b0110;
+        \\  $display("%b", v);
+        \\end
+        \\endmodule
+    , "xx11 10xx\n1001\n");
+}
+
+test "§4.2.1.4 $signed/$unsigned retype their operand before it is extended; >>> is arithmetic on a signed operand only" {
+    // $signed(4'b1111) is -1, extended to 8 bits by sign; $unsigned(4'sb1111)
+    // is 15, extended by zero. 8'sb1000_0000 >>> 2 fills with its sign bit;
+    // the unsigned operand fills with 0.
+    try expectRun(
+        \\module m; reg [7:0] r;
+        \\initial begin
+        \\  r = $signed(4'b1111) + 8'sd0; $display("%b", r);
+        \\  r = $unsigned(4'sb1111) + 8'sd0; $display("%b", r);
+        \\  r = 8'sb1000_0000 >>> 2; $display("%b", r);
+        \\  r = 8'b1000_0000 >>> 2; $display("%b", r);
+        \\end
+        \\endmodule
+    , "11111111\n00001111\n11100000\n00100000\n");
+}
+
+test "§4.8.2 an integer becomes a real with x and z bits as 0; a non-finite real becomes x" {
+    // 4'b1x01 reads as 1001 = 9; 4'sb1111 as -1. 1.0/0.0 is infinite, which
+    // no integer holds: every bit of i is x (VerA's choice, §4.8.2 is silent).
+    try expectRun(
+        \\module m; real r; integer i;
+        \\initial begin
+        \\  r = 4'b1x01; $display("%g", r);
+        \\  r = 4'sb1111; $display("%g", r);
+        \\  r = 1.0 / 0.0; i = r; $display("%b", i);
+        \\end
+        \\endmodule
+    , "9\n-1\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+}
+
+test "§5.1.13 a real result under an x condition is 0, even when the arms agree" {
+    try expectRun("module m; real r; reg c; initial begin c = 1'bx; r = c ? 1.5 : 1.5; $display(\"%g\", r); end endmodule", "0\n");
+}
+
+test "§5.1.14 a zero replication inside a concatenation contributes no bits" {
+    try expectRun("module m; initial $display(\"%b\", {{0{1'b1}}, 2'b10}); endmodule", "10\n");
+}
+
+test "§3.9 an index past i64 names no element, signed or not" {
+    try expectRun(
+        \\module m; reg [3:0] mem [0:1];
+        \\initial begin mem[0] = 4'h5; $display("%b %b %h", mem[65'h1_0000_0000_0000_0000], mem[64'hffff_ffff_ffff_ffff], mem[0]); end
+        \\endmodule
+    , "xxxx xxxx 5\n");
+}
+
+test "§4.8.2/§5.5.1 a case label meets a real scrutinee as a real" {
+    // The label 'bx is integral; against the real r it converts to a real,
+    // and §4.8.2 reads each x bit as 0, so it is 0.0 and matches r = 0.0.
+    try expectRun(
+        \\module m; real r;
+        \\initial begin r = 0.0; case (r) 'bx: $display("x"); default: $display("other"); endcase end
+        \\endmodule
+    , "x\n");
+}
+
+test "§17.2.4.3 a %f conversion into a concatenation rounds to an integer and splits it" {
+    // One item matched. 2.5 rounds away from zero to 3 (§4.8.2): {hi, lo}
+    // is the 8-bit 3, hi 0 and lo 3.
+    try expectRun(
+        \\module m; reg [3:0] hi, lo; integer n;
+        \\initial begin n = $sscanf("2.5", "%f", {hi, lo}); $display("%0d %0d %0d", n, hi, lo); end
+        \\endmodule
+    , "1 0 3\n");
+}
+
 test "unpacked array elements are addressed, and an out-of-range index reads X" {
     try expectRun(
         \\`timescale 1ns/1ns

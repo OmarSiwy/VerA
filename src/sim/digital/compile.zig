@@ -2037,3 +2037,162 @@ test "concat unsized boundary and cast arity are explicit" {
     try expectRejected("module m; initial $display(\"%b\",$unsigned(1,2)); endmodule", "exactly one integral argument");
     try expectRejected("module m; initial $display(\"%b\",$signed(1.0)); endmodule", "exactly one integral argument");
 }
+
+test "§17.10.2 a $value$plusargs format names only the listed conversions, and no query matches" {
+    // `vera --run` takes no plusargs, so both queries are §17.10's "no
+    // match": an integer 0, and the variable keeps its 5.
+    try expectRun(
+        \\module m; integer v;
+        \\initial begin v = 5; $display("%0d %0d %0d", $test$plusargs("X"), $value$plusargs("N=%0d", v), v); end
+        \\endmodule
+    , "0 0 5\n");
+    try expectRejected("module m; integer v; initial if ($value$plusargs(\"N=%u\", v)) v = 1; endmodule", "a $value$plusargs format is one of");
+}
+
+test "§17.3.2 $timeformat takes no arguments or four, units 0 to -15 and a literal suffix" {
+    try expectRun("module m; initial begin $timeformat(-15, 0, \"\", 0); $timeformat; $display(\"ok\"); end endmodule", "ok\n");
+    try expectRejected("module m; initial $timeformat(-9, 2); endmodule", "no arguments or exactly four");
+    try expectRejected("module m; initial $timeformat(1, 0, \"\", 0); endmodule", "range from 0 to -15");
+    try expectRejected("module m; initial $timeformat(-16, 0, \"\", 0); endmodule", "range from 0 to -15");
+    try expectRejected("module m; initial $timeformat(-9, 0, 5, 0); endmodule", "suffix must be a string literal");
+}
+
+test "§17.2.1 an $fopen type is one of Table 17-7's" {
+    try expectRejected("module m; integer f; initial f = $fopen(\"x.txt\", \"q\"); endmodule", "Table 17-7");
+}
+
+test "§17.9 a distribution takes its own argument count and a variable seed" {
+    try expectRun("module m; integer s, i; initial begin s = 7; i = $random(s); i = $random; $display(\"ok\"); end endmodule", "ok\n");
+    try expectRejected("module m; integer s, i; initial i = $dist_uniform(s, 1); endmodule", "wrong number of arguments to a §17.9");
+    try expectRejected("module m; integer i; initial i = $random(5); endmodule", "§17.9.1: the seed argument");
+    try expectRejected("module m; integer s, i; initial i = $dist_normal(s, 1.5, 2); endmodule", "§17.9.2");
+}
+
+test "§17.8 and §17.11.2 conversions and math functions take their own argument types and counts" {
+    // $rtoi truncates -2.7 toward zero; $itor(3) is 3.0, which %g prints as 3.
+    try expectRun("module m; initial $display(\"%0d %g %g\", $rtoi(-2.7), $itor(3), $pow(2.0, 10.0)); endmodule", "-2 3 1024\n");
+    try expectRejected("module m; integer i; initial i = $rtoi(1); endmodule", "$rtoi and $realtobits convert a real");
+    try expectRejected("module m; real r; initial r = $itor(1.5); endmodule", "$rtoi and $realtobits convert a real");
+    try expectRejected("module m; real r; initial r = $pow(2.0); endmodule", "wrong number of arguments to a §17.11.2");
+    try expectRejected("module m; integer i; initial i = $time(1); endmodule", "$time and $stime take no arguments");
+    try expectRejected("module m; real r; initial r = $realtime(1); endmodule", "$realtime takes no arguments");
+    try expectRejected("module m; integer i; initial i = $clog2(); endmodule", "$clog2 takes exactly one argument");
+    try expectRejected("module m; integer i; initial i = $clog2(2.0); endmodule", "§17.11.1");
+}
+
+test "§5.2.1 a part-select names its more significant bit first; bounds and widths are constant integers" {
+    // a = 1010_0110: a[3:0] is its low nibble; c[0:3] the four bits from
+    // c's left index; a[2:2] the one bit 2.
+    try expectRun(
+        \\module m; reg [7:0] a; reg [0:7] c;
+        \\initial begin a = 8'b1010_0110; c = 8'b1010_0110; $display("%b %b %b", a[3:0], c[0:3], a[2:2]); end
+        \\endmodule
+    , "0110 1010 1\n");
+    try expectRejected("module m; reg [7:0] a; reg [3:0] b; initial b = a[0:3]; endmodule", "names its more significant bit first");
+    try expectRejected("module m; reg [0:7] a; reg [3:0] b; initial b = a[3:0]; endmodule", "names its more significant bit first");
+    try expectRejected("module m; reg [7:0] a; reg b; initial b = a[1 +: 0]; endmodule", "width is a positive constant");
+    try expectRejected("module m; reg [7:0] a; reg b; initial b = a[1.0:0]; endmodule", "a real is not a part-select bound");
+    try expectRejected("module m; reg [7:0] a; real r; reg [1:0] b; initial b = a[r +: 2]; endmodule", "a real is not a part-select index");
+    try expectRejected("module m; reg [7:0] a; real r; reg b; initial b = a[r]; endmodule", "a real is not a bit-select index");
+}
+
+test "§5.1.1 a real takes no bitwise operator and is no concatenation operand" {
+    // !0.0 is 1: the logical operators take a real.
+    try expectRun("module m; real r; initial begin r = 0.0; $display(\"%b\", !r); end endmodule", "1\n");
+    try expectRejected("module m; real r; initial $display(\"%b\", ~r); endmodule", "does not take a real operand");
+    try expectRejected("module m; real r; initial $display(\"%b\", {r, 1'b0}); endmodule", "a real cannot be a concatenation operand");
+}
+
+test "§10.2/§10.4 a task is enabled and a function called, each with one argument per formal" {
+    // f(2) is 3; t doubles it into x.
+    try expectRun(
+        \\module m; integer x;
+        \\function integer f(input integer a); f = a + 1; endfunction
+        \\task t(input integer a, output integer b); b = a * 2; endtask
+        \\initial begin t(f(2), x); $display("%0d", x); end
+        \\endmodule
+    , "6\n");
+    try expectRejected("module m; function integer f(input integer a); f = a; endfunction initial f(1); endmodule", "a function is called in an expression, not enabled");
+    try expectRejected("module m; integer x; task t(input integer a); x = a; endtask initial x = t(1); endmodule", "a task is enabled as a statement");
+    try expectRejected("module m; integer x; task t(input integer a); x = a; endtask initial t(1, 2); endmodule", "`t` takes 1 arguments, not 2");
+    try expectRejected("module m; integer x; task t(output integer a); a = 1; endtask initial t(x + 1); endmodule", "a task output actual must be a procedural lvalue");
+}
+
+test "§10.4.4 a function body has no timing, nonblocking or procedural continuous assignment, trigger or enable" {
+    const tail = " initial y = f(1); endmodule";
+    try expectRejected("module m; integer y; function integer f(input integer a); f <= a; endfunction" ++ tail, "cannot contain a nonblocking assignment");
+    try expectRejected("module m; integer y; function integer f(input integer a); #1 f = a; endfunction" ++ tail, "cannot contain a time control");
+    try expectRejected("module m; integer y; event e; function integer f(input integer a); begin -> e; f = a; end endfunction" ++ tail, "cannot contain an event trigger");
+    try expectRejected("module m; integer y; task t; y = 0; endtask function integer f(input integer a); begin t; f = a; end endfunction" ++ tail, "a function cannot enable a task");
+    try expectRejected("module m; integer y; reg q; function integer f(input integer a); begin assign q = 1'b1; f = a; end endfunction" ++ tail, "cannot contain a procedural continuous assignment");
+}
+
+test "§10.2.3 an automatic variable is neither a nonblocking target nor monitored" {
+    try expectRejected("module m; task automatic t; integer k; k <= 1; endtask initial t; endmodule", "a nonblocking assignment cannot name a variable of an automatic task");
+    try expectRejected("module m; task automatic t; integer k; $monitor(\"%0d\", k); endtask initial t; endmodule", "$monitor cannot name a variable of an automatic task");
+}
+
+test "§9.3 assign takes a variable, force a variable or net; a select is of a net, by constant" {
+    try expectRun("module m; wire w; initial begin force w = 1'b1; #1 $display(\"%b\", w); end endmodule", "1\n");
+    try expectRejected("module m; wire w; initial assign w = 1'b1; endmodule", "assign/deassign take a variable; a net is forced");
+    const refused = "a procedural continuous assignment names one whole variable or net";
+    try expectRejected("module m; reg [3:0] r; initial force r[1:0] = 2'b11; endmodule", refused);
+    try expectRejected("module m; wire [3:0] w; integer i; initial force w[i] = 1'b1; endmodule", refused);
+}
+
+test "§12.2 a parameter is not an assignment target" {
+    try expectRejected("module m; parameter P = 1; initial P = 2; endmodule", "a parameter is a constant; it cannot be assigned");
+}
+
+test "A.6.9 a hierarchical task name walks instances before the task" {
+    try expectRun("module c; task t; $display(\"in\"); endtask endmodule module m; c u(); initial u.t; endmodule", "in\n");
+    try expectRejected("module c; task t; $display(\"in\"); endtask endmodule module m; c u(); initial nope.t; endmodule", "undeclared instance `nope` in a hierarchical task name");
+}
+
+test "§17 system task argument forms are checked before any process runs" {
+    try expectRejected("module m; initial $stop(0, 1); endmodule", "$stop accepts zero or one argument");
+    try expectRejected("module m; reg [7:0] mem [0:3]; reg [8*4:1] f; initial $readmemh(f, mem); endmodule", "the memory file name is a string literal");
+    try expectRejected("module m; reg [7:0] mem [0:1][0:1]; initial $readmemh(\"x.hex\", mem); endmodule", "load a one-dimensional unpacked array");
+    try expectRejected("module m; initial $readmemh(\"x.hex\"); endmodule", "take (file, memory [, start [, finish]])");
+    try expectRejected("module m; initial $q_initialize(1, 1, 5); endmodule", "the §17.6 queue tasks take four arguments");
+    try expectRejected("module m; integer v, st; initial $q_exam(1, 7, v, st); endmodule", "Table 17-15's codes 1 to 6");
+    try expectRejected("module m; initial $fflush(1, 2); endmodule", "$fflush takes at most one descriptor");
+    try expectRejected("module m; initial $printtimescale(m, m); endmodule", "$printtimescale takes at most one module instance");
+    try expectRejected("module m; initial $fclose(); endmodule", "$fclose takes one descriptor");
+    try expectRejected("module m; initial $sdf_annotate(\"x.sdf\"); endmodule", "E1102");
+}
+
+test "§9.7.3 a named event is waited on whole, declared first, and has no edge; a real has no edge" {
+    try expectRejected("module m; event e; initial @(posedge e) ; endmodule", "a named event has no value for a posedge or negedge");
+    try expectRejected("module m; real r; initial @(posedge r) ; endmodule", "posedge and negedge do not apply to a real variable");
+    try expectRejected("module m; initial @(e) ; event e; endmodule", "a named event is declared before it is used");
+    try expectRejected("module m; initial -> nope; endmodule", "undeclared named event");
+}
+
+test "a delay or repeat count wider than 64 bits is refused before any process runs" {
+    try expectRejected("module m; initial #(65'd1) ; endmodule", "delay values wider than 64 bits");
+    try expectRejected("module m; reg a; event e; initial a = repeat (65'd2) @(e) 1'b1; endmodule", "repeat counts wider than 64 bits");
+}
+
+test "§9.8.2 a fork in a task with no timing control joins before the enable returns" {
+    // The arm sets x = 1 and the join completes before `x = x + 1`; the
+    // enable completes after the task body does, so $display reads 2. A fork
+    // that only queued its arms would let $display read 0.
+    try expectRun(
+        \\module m; integer x;
+        \\task t; begin fork x = 1; join x = x + 1; end endtask
+        \\initial begin x = 0; t; $display("%0d", x); end
+        \\endmodule
+    , "2\n");
+}
+
+test "§9.8.2 a fork in a function completes inside the call" {
+    // §10.4.4 forbids timing in a function, so each arm runs to its end and
+    // the join is complete before the next statement: f(4) is 4 + 1.
+    try expectRun(
+        \\module m; integer y;
+        \\function integer f(input integer a); begin fork f = a; join f = f + 1; end endfunction
+        \\initial begin y = f(4); $display("%0d", y); end
+        \\endmodule
+    , "5\n");
+}
