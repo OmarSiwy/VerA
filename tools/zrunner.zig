@@ -155,7 +155,9 @@ fn writeTestResults(
     report: Report,
 ) !void {
     const alloc = arena.allocator();
-    var grouped_tests: std.StringHashMapUnmanaged(std.ArrayList(TestResult)) = .empty;
+    // Insertion-ordered, so namespaces print in the order their first test
+    // ran and two runs of one artifact print the same report.
+    var grouped_tests: std.array_hash_map.String(std.ArrayList(TestResult)) = .empty;
     for (report.test_results) |test_result| {
         const gop = try grouped_tests.getOrPut(alloc, test_result.@"test"().namespace);
         if (gop.found_existing) {
@@ -194,10 +196,13 @@ const Test = struct {
         // Possible templates of full test name are expected:
         //  - "<namespace>.test.<test name>"
         //  - "<namespace>.decltest.<test name>"
-        const names = if (std.mem.find(u8, test_fn.name, ".test.")) |idx|
-            .{ test_fn.name[0..idx], test_fn.name[idx + 6 ..] }
-        else if (std.mem.find(u8, test_fn.name, ".decltest.")) |idx|
+        //
+        // The LAST marker splits: a file named test.zig is a namespace
+        // ending in `.test` (`ns.test.test.<name>`, `ns.test.decltest.<decl>`).
+        const names: [2][]const u8 = if (std.mem.findLast(u8, test_fn.name, ".decltest.")) |idx|
             .{ test_fn.name[0..idx], test_fn.name[idx + 10 ..] }
+        else if (std.mem.findLast(u8, test_fn.name, ".test.")) |idx|
+            .{ test_fn.name[0..idx], test_fn.name[idx + 6 ..] }
         else
             .{ "", test_fn.name };
         instance.namespace = names[0];
@@ -219,6 +224,10 @@ const Test = struct {
             .check_write_after_free = true,
         });
         std.testing.io_instance = .init(std.testing.allocator, .{ .environ = environ });
+        // Undefined until set: a test reading `std.testing.environ` read
+        // garbage. The level is reset because a test may change it.
+        std.testing.environ = environ;
+        std.testing.log_level = .warn;
 
         const start = std.Io.Clock.Timestamp.now(io, .awake);
         // Try to run the test:
@@ -305,11 +314,12 @@ pub const TestResult = union(enum) {
 const Report = struct {
     process_name: []const u8,
     test_results: []TestResult,
-    // `u16`: counts per artifact; one module already has more than 255 tests.
-    passed_count: u16 = 0,
-    failed_count: u16 = 0,
-    skipped_count: u16 = 0,
-    xfail_count: u16 = 0,
+    // `u32`: counts per artifact, and `writeSummary` adds all four, so no
+    // module's test count may overflow the sum (one already has > 255).
+    passed_count: u32 = 0,
+    failed_count: u32 = 0,
+    skipped_count: u32 = 0,
+    xfail_count: u32 = 0,
     total_duration: Duration = .zero,
     is_mem_leak: bool = false,
 };
@@ -364,7 +374,9 @@ const FileReporter = struct {
 
         if (tests_count == 0) {
             try self.colorizeLine(colors.no_tests, "No one test was found in {s}", .{process_name});
-            return;
+            // `writeSummary` prints nothing for no tests, so it never
+            // flushes this line.
+            return self.file_writer.interface.flush();
         }
         try self.colorize(colors.title, "Run ", .{});
         try self.colorizeLine(colors.process_name, "{s}", .{process_name});
@@ -419,10 +431,10 @@ const FileReporter = struct {
     /// The totals line, then a flush. Prints nothing for an artifact with no tests.
     pub fn writeSummary(
         self: *FileReporter,
-        passed: u16,
-        failed: u16,
-        skipped: u16,
-        xfail: u16,
+        passed: u32,
+        failed: u32,
+        skipped: u32,
+        xfail: u32,
         total_duration: Duration,
         is_mem_leak: bool,
     ) anyerror!void {

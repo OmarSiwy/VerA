@@ -285,10 +285,11 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
         } else if (std.mem.eql(u8, arg, "--param")) {
             const kv = args.next() orelse return try missing(err, "--param", "NAME=VALUE");
             const eq = std.mem.findScalar(u8, kv, '=') orelse return try missing(err, "--param", "NAME=VALUE");
-            const value = std.fmt.parseFloat(f64, kv[eq + 1 ..]) catch {
+            const value = std.fmt.parseFloat(f64, kv[eq + 1 ..]) catch std.math.nan(f64);
+            if (std.math.isNan(value)) {
                 try err.print("error: --param {s}: `{s}` is not a number\n", .{ kv, kv[eq + 1 ..] });
                 return 2;
-            };
+            }
             try cli.overrides.append(gpa, .{ .name = kv[0..eq], .value = value });
         } else if (std.mem.eql(u8, arg, "--dyn")) {
             cli.dyn_path = args.next() orelse return try missing(err, "--dyn", "a path");
@@ -367,10 +368,12 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
                 return 2;
             };
         } else if (std.mem.startsWith(u8, arg, "--unknown-bound=")) {
-            cli.unknown_bound = std.fmt.parseFloat(f64, arg["--unknown-bound=".len..]) catch {
+            const b = std.fmt.parseFloat(f64, arg["--unknown-bound=".len..]) catch std.math.nan(f64);
+            if (std.math.isNan(b)) {
                 try err.print("error: `{s}` is not a number\n", .{arg});
                 return 2;
-            };
+            }
+            cli.unknown_bound = b;
         } else if (std.mem.startsWith(u8, arg, "--")) {
             // --allow=X / --warn=X / --deny=X / --forbid=X
             const applied = cli.levels.parseFlag(gpa, arg[2..]) catch |e| switch (e) {
@@ -441,6 +444,14 @@ pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
         }
         cli.emit_zig = false; // `-o` names the .osdi
     }
+
+    // A testbench is its own artifact: beside it a library or a device text
+    // was silently not built. `-o` names the executable, so only a typed
+    // `--emit-zig` conflicts.
+    if (cli.exe_flag) |f| if (cli.emit_so or cli.emit_zig_typed) {
+        try err.print("error: `{s}` and `{s}` conflict: one run builds one artifact\n", .{ f, if (cli.emit_so) "--emit-so" else "--emit-zig" });
+        return 2;
+    };
 
     if (cli.paths.items.len == 0) {
         try err.writeAll(usage_text);

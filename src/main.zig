@@ -61,13 +61,20 @@ pub fn main(init: std.process.Init) !u8 {
     if (try args.resolve(&cli, err)) |code| return code;
     const in_path = cli.paths.items[0];
 
+    // Decided once: `isTty` can fail, and an error path should not re-ask.
+    const use_color = switch (cli.color) {
+        .always => true,
+        .never => false,
+        .auto => (stderr.file.isTty(io) catch false),
+    };
+
     // Digital Verilog uses the shared frontend below. Other language families
     // need their own standard-conforming frontend and remain explicit refusals.
     if (std.mem.eql(u8, std.fs.path.extension(in_path), ".sv")) {
         var sv: diag.Bag = .init(gpa);
         defer sv.deinit(gpa);
         try sv.add(.parse, .E1104, .none, "`{s}` is an IEEE 1800 source", .{in_path});
-        try report(&sv, err, cli.json, false);
+        try report(&sv, err, cli.json, use_color);
         return 2;
     }
     for ([_][]const u8{ ".vhd", ".vhdl" }) |ext| {
@@ -87,13 +94,6 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     defer gpa.free(source);
-
-    // Decided once: `isTty` can fail, and an error path should not re-ask.
-    const use_color = switch (cli.color) {
-        .always => true,
-        .never => false,
-        .auto => (stderr.file.isTty(io) catch false),
-    };
 
     const digital_source = std.mem.eql(u8, std.fs.path.extension(in_path), ".v");
     // No --contract: this binary's own tools/contract.zig, written out with the
@@ -438,7 +438,8 @@ fn emitVerilog(io: Io, cli: *const args.Cli, result: *const vera.CompileResult, 
     // `--digital-pins` names a file of pins when one exists, else is the list.
     var digital: std.ArrayList([]const u8) = .empty;
     if (cli.digital_pins) |spec| {
-        const text = Io.Dir.cwd().readFileAlloc(io, spec, arena, .limited(1 << 20)) catch |e| switch (e) {
+        // `readFailed`'s E1013 names `max_source_bytes`, so that is the limit.
+        const text = Io.Dir.cwd().readFileAlloc(io, spec, arena, .limited(max_source_bytes)) catch |e| switch (e) {
             error.FileNotFound => spec,
             else => {
                 try readFailed(err, spec, e);
@@ -518,11 +519,11 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
 }
 
 /// The largest source file or `--spice` netlist read (E1013).
-const max_source_bytes = 64 * 1024 * 1024;
+pub const max_source_bytes = 64 * 1024 * 1024;
 
 /// Reports that `path` could not be read: E1013 for a file past
 /// `max_source_bytes`, else the error's name.
-fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
+pub fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
     if (e == error.StreamTooLong)
         try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, max_source_bytes })
     else

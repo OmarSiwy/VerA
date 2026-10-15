@@ -216,7 +216,10 @@ var osdi_log: ?*const fn (?*anyopaque, [*:0]const u8, u32) callconv(.c) void = n
 fn log(handle: ?*anyopaque, lvl: u32, msg: []const u8) void {
     const f = osdi_log orelse return;
     var buf: [1024]u8 = undefined;
-    const z = std.mem.printSentinel(&buf, "{s}\n", .{msg}, 0) catch return;
+    // Cut to what fits with the newline and the NUL rather than dropped: a
+    // fatal status names its file and line first.
+    const cut = msg[0..@min(msg.len, buf.len - 2)];
+    const z = std.mem.printSentinel(&buf, "{s}\n", .{cut}, 0) catch unreachable;
     f(handle, z.ptr, lvl);
 }
 
@@ -236,6 +239,16 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 
 /// `name` as a C string, VerA's identifier escape undone (`naming.sanitize`:
 /// `Z<hex><hex>` is one byte, a trailing lone `Z` marks a Zig keyword).
+// A source name as written, NUL-terminated: the module name a `.model` card
+// names and a noise generator's label are not sanitized identifiers, so
+// `cName` would misread a `Z` in them as an escape.
+fn zStr(comptime s: []const u8) [:0]const u8 {
+    comptime {
+        const z = s ++ [_]u8{0};
+        return z[0..s.len :0];
+    }
+}
+
 fn cName(comptime s: []const u8) [:0]const u8 {
     comptime {
         @setEvalBranchQuota(100_000);
@@ -855,7 +868,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             @setEvalBranchQuota(10_000_000);
             var a: [gens.len]NoiseSource = undefined;
             for (&a, gens, 0..) |*s, g, k| s.* = .{
-                .name = if (g.name.len != 0) cName(g.name) else std.fmt.comptimePrint("noise{d}", .{k}),
+                .name = if (g.name.len != 0) zStr(g.name) else std.fmt.comptimePrint("noise{d}", .{k}),
                 .nodes = .{ .node_1 = g.row, .node_2 = if (g.row == g.col) no_off else g.col },
             };
             break :blk a;
@@ -895,7 +908,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         };
 
         pub const descriptors = [1]Descriptor{.{
-            .name = cName(name),
+            .name = zStr(name),
             .num_nodes = n,
             .num_terminals = D.num_ports,
             .nodes = &nodes,
