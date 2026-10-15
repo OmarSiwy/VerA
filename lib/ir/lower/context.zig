@@ -1106,3 +1106,97 @@ fn digitalCallsIn(self: *Lower, e: Ast.ExprId) Oom!void {
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| try digitalCallsIn(self, c);
 }
+
+test isMixed {
+    // §8.5: the discrete half needs the event queue exactly when it has a
+    // process, a value only the four-state kernel holds, or a file task.
+    const cases = [_]struct { src: []const u8, want: bool }{
+        // A constant `initial` is `collectInitialState`'s fast path.
+        .{ .src = "module m; real x; initial x = 1.0; endmodule", .want = false },
+        .{ .src = "module m; integer x; initial begin x = 1; x = 2; end endmodule", .want = false },
+        // A continuous assignment is a process (§8.5.3.2).
+        .{ .src = "module m; wire w; assign w = 1; endmodule", .want = true },
+        // §3.7 only the digital kernel holds a wreal's value.
+        .{ .src = "module m; wreal w; endmodule", .want = true },
+        // C.3/§7.3.2 an x has nowhere to live in an analog variable.
+        .{ .src = "module m; integer x; initial x = 1'bx; endmodule", .want = true },
+        // A nonblocking write suspends (§8.5.3.4).
+        .{ .src = "module m; real x; initial x <= 1.0; endmodule", .want = true },
+        // §9.5.1.2 one descriptor table for both contexts.
+        .{ .src = "module m; integer fd; initial fd = $fopen(\"f\"); endmodule", .want = true },
+    };
+    for (cases) |c| {
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, c.src);
+        defer h.deinit();
+        std.testing.expectEqual(c.want, isMixed(&h.file, &h.file.modules[h.file.builtin_modules])) catch |e| {
+            std.debug.print("{s}\n", .{c.src});
+            return e;
+        };
+    }
+}
+
+test markDiscreteExprs {
+    // §7.3.2: in an analog block an x or z literal is a value only as a
+    // `case` label or an operand of `===`/`!==`; anywhere else it stays
+    // E0130's. Only literals with an unknown bit are counted, so the
+    // prelude's two-state literals do not enter.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer k;
+        \\  analog begin
+        \\    case (k) 1'bx: k = 1; endcase
+        \\    k = (k === 1'bz) + 2'bx1;
+        \\    I(p) <+ V(p);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    const ex = &h.file.exprs;
+    const marks = try std.testing.allocator.alloc(bool, ex.nodes.len);
+    defer std.testing.allocator.free(marks);
+    @memset(marks, false);
+    markDiscreteExprs(&h.file, marks);
+    var marked: usize = 0;
+    var unmarked: usize = 0;
+    for (ex.nodes.items(.tag), marks, 0..) |tag, m, i| {
+        if (tag != .logic_literal) continue;
+        if (!ex.logicValue(@fromBackingInt(@intCast(i))).hasUnknown()) continue;
+        if (m) marked += 1 else unmarked += 1;
+    }
+    try std.testing.expectEqual(2, marked);
+    try std.testing.expectEqual(1, unmarked);
+}
+
+test "collectInitialState: A.6.2 only constant assignments to module variables (E0433)" {
+    const cases = [_]struct { decls: []const u8, want: ?@import("diag").Code }{
+        .{ .decls = "  real x;\n  initial x = 2.0;", .want = null },
+        // "runs once, before the analysis": nothing the analysis computes.
+        .{ .decls = "  real x;\n  integer k;\n  initial x = k + 1.0;", .want = .E0433 },
+        // Which element is a question about a value.
+        .{ .decls = "  real a[0:1];\n  initial a[0] = 1.0;", .want = .E0433 },
+        // A block-local name is not the variable the analog block reads.
+        .{ .decls = "  real x;\n  initial begin : b\n    integer t;\n    t = 1;\n    x = 2.0;\n  end", .want = .E0433 },
+        // §6.8: a name the module never declared.
+        .{ .decls = "  initial zz = 1.0;", .want = .E0313 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(c.decls, "", c.want);
+}
+
+test "checkDiscreteContext: §5.2.1 and §7.2.2 judge the analog side against the digital writes" {
+    // §5.2.1: "digital values cannot be accessed from the analog initial
+    // block" (E0431); the ordinary analog block reads one through §7.3.1.
+    try Lower.expectBodyVerdict(
+        "  real d, y;\n  initial d = 1.0;\n  analog initial begin\n    y = d;\n  end",
+        "",
+        .E0431,
+    );
+    try Lower.expectBodyVerdict("  real d, y;\n  initial d = 1.0;", "    y = d;", null);
+    // §7.2.2: "It shall be an error to assign to a given variable in both
+    // contexts" (E0432).
+    try Lower.expectBodyVerdict("  real x;\n  initial x = 1.0;", "    x = 2.0;", .E0432);
+    // §5.10: initial_step "not allowed in the digital context" (E0708).
+    try Lower.expectBodyVerdict("  real x;\n  initial @(initial_step) x = 1.0;", "", .E0708);
+}

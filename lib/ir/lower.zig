@@ -1110,6 +1110,250 @@ pub fn astTy(t: Ast.Type) Ty {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Test support: source in, verdict out
+// ---------------------------------------------------------------------------
+
+/// Test support for the `lower/*.zig` tests: one source file preprocessed
+/// (the annex E prelude included), parsed and ready to lower, with the arena
+/// and the diagnostic bag a test reads afterwards. Analysed only by a test.
+///
+/// Pinned in place by `init`: `low` points at `file`, `mir` and `bag`, so the
+/// value must not move until `deinit`.
+pub const Harness = struct {
+    arena_state: std.heap.ArenaAllocator,
+    file: Ast.SourceFile,
+    mir: Mir,
+    bag: diag.Bag,
+    low: Lower,
+
+    /// Prepares `h` to lower `src`. Every buffer lives in an arena over
+    /// `gpa`, which `deinit` frees whatever lowering returned.
+    pub fn init(h: *Harness, gpa: std.mem.Allocator, src: []const u8) !void {
+        h.* = .{
+            .arena_state = std.heap.ArenaAllocator.init(gpa),
+            .file = .empty,
+            .mir = .{},
+            .bag = undefined,
+            .low = undefined,
+        };
+        errdefer h.arena_state.deinit();
+        const arena = h.arena_state.allocator();
+        h.bag = diag.Bag.init(arena);
+        const text = (try Preprocessor.process(arena, src, .{ .bag = &h.bag })).text;
+        const toks = try Lexer.Lexer.tokenize(arena, text);
+        var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &h.bag);
+        h.file = try p.parseSourceFile();
+        // The annex E prelude's modules lead `file.modules`.
+        h.file.builtin_modules = Preprocessor.spice_module_count;
+        h.low = Lower.init(arena, &h.mir, &h.file, text, toks.items(.start), &h.bag);
+    }
+
+    /// Lowers the file: the tables, or null when an error was reported.
+    /// Any other error (`NoModule`, OOM) is returned.
+    pub fn lower(h: *Harness) Error!?Lowered {
+        const out = h.low.lowerFile() catch |e| switch (e) {
+            error.DiagnosticsReported => return null,
+            else => |other| return other, // else: anything but a verdict fails the test
+        };
+        return out;
+    }
+
+    /// Returns how many diagnostics of `code` were recorded.
+    pub fn count(h: *const Harness, code: diag.Code) usize {
+        var n: usize = 0;
+        for (0..h.bag.count()) |i| n += @intFromBool(h.bag.at(i).code == code);
+        return n;
+    }
+
+    /// Prints every recorded diagnostic, for a failing test's report.
+    pub fn dump(h: *const Harness) void {
+        for (0..h.bag.count()) |i| {
+            const d = h.bag.at(i);
+            std.debug.print("  {t}: {s}\n", .{ d.code, d.message });
+        }
+    }
+
+    /// Frees everything `init` made.
+    pub fn deinit(h: *Harness) void {
+        h.low.deinit();
+        h.arena_state.deinit();
+    }
+};
+
+/// Test support, the one check every `lower/*.zig` table of cases goes
+/// through: lowers `src` and compares the verdict with `want`. Null means it
+/// lowers with no error at all; a code means at least one diagnostic of that
+/// code was reported. On a mismatch, prints the source and every diagnostic.
+pub fn expectVerdict(src: []const u8, want: ?diag.Code) !void {
+    var h: Harness = undefined;
+    try h.init(std.testing.allocator, src);
+    defer h.deinit();
+    const out = try h.lower();
+    const ok = if (want) |code| h.count(code) != 0 else out != null and h.bag.err_count == 0;
+    if (ok) return;
+    std.debug.print("want {s}, got:\n", .{if (want) |code| @tagName(code) else "no error"});
+    h.dump();
+    std.debug.print("source:\n{s}\n", .{src});
+    return error.TestUnexpectedResult;
+}
+
+/// Test support: `expectVerdict` over a two-terminal module `m(p, n)` whose
+/// module-scope declarations are `decls` and whose analog block is `body`,
+/// followed by one `I(p, n) <+ V(p, n)` so the module has an equation.
+pub fn expectBodyVerdict(decls: []const u8, body: []const u8, want: ?diag.Code) !void {
+    const src = try std.testing.allocator.print(
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\{s}
+        \\  analog begin
+        \\{s}
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+    , .{ decls, body });
+    defer std.testing.allocator.free(src);
+    return expectVerdict(src, want);
+}
+
+/// The frontend parser, which only `Harness` drives.
+const Parser = @import("frontend").Parser;
+
+test unify {
+    // §4.2.1: one real operand makes the operation real, and §3.3 Table 3-3
+    // makes an operation with a string operand a string one.
+    const cases = [_]struct { a: Ty, b: Ty, want: Ty }{
+        .{ .a = .integer, .b = .integer, .want = .integer },
+        .{ .a = .integer, .b = .real, .want = .real },
+        .{ .a = .real, .b = .integer, .want = .real },
+        .{ .a = .real, .b = .real, .want = .real },
+        .{ .a = .string, .b = .integer, .want = .string },
+        .{ .a = .integer, .b = .string, .want = .string },
+        .{ .a = .string, .b = .real, .want = .string },
+        .{ .a = .real, .b = .string, .want = .string },
+        .{ .a = .string, .b = .string, .want = .string },
+    };
+    for (cases) |c| try std.testing.expectEqual(c.want, unify(c.a, c.b));
+}
+
+test astTy {
+    // §3.4.1: a declaration with no type is real until a value says otherwise.
+    try std.testing.expectEqual(Ty.real, astTy(.real));
+    try std.testing.expectEqual(Ty.real, astTy(.unspecified));
+    try std.testing.expectEqual(Ty.integer, astTy(.integer));
+    try std.testing.expectEqual(Ty.string, astTy(.string));
+}
+
+test strToInt {
+    // §3.3's right justification at widths other than the ordinary 32 and
+    // 64: whole bytes only, the leftmost characters dropped first.
+    try std.testing.expectEqual(0, strToInt("", 64));
+    try std.testing.expectEqual(0, strToInt("AB", 0));
+    try std.testing.expectEqual('B', strToInt("AB", 8));
+    try std.testing.expectEqual('B', strToInt("AB", 12));
+    // Nine characters at 64 bits keep the last eight, 'B' (0x42) to 'I' (0x49).
+    try std.testing.expectEqual(0x4243444546474849, strToInt("ABCDEFGHI", 64));
+    // §2.7's "unsigned integer constants": unsigned at 32 bits, and the whole
+    // 64-bit pattern reinterpreted at the slot's own width.
+    try std.testing.expectEqual(4294967295, strToInt("\xff\xff\xff\xff", 32));
+    try std.testing.expectEqual(-1, strToInt("\xff\xff\xff\xff\xff\xff\xff\xff", 64));
+}
+
+test "lowerFile: a source with no module_declaration (A.1.2) is NoModule" {
+    var h: Harness = undefined;
+    try h.init(std.testing.allocator, "");
+    defer h.deinit();
+    try std.testing.expectError(error.NoModule, h.lower());
+}
+
+test "lowerFile: §2.6.1 a four-state literal is E0130 as a value, and a value under §7.3.2's ===" {
+    try expectBodyVerdict("  integer k;", "    k = 4'b1x01;", .E0130);
+    // A two-state literal is the integer it spells, however it is written.
+    try expectBodyVerdict("  integer k;", "    k = 4'b0101;", null);
+    try expectBodyVerdict("  integer k;", "    k = (2 === 4'b1x01);", null);
+}
+
+test "coerceTo: §3.3 a string reaches an integral slot only as a literal (E0354)" {
+    const decls = "  integer k;\n  string s;\n  parameter integer c = 2;";
+    // "A string cannot be assigned to an integral type."
+    try expectBodyVerdict(decls, "    s = \"AB\";\n    k = s;", .E0354);
+    // "A string literal can be assigned to a string or an integral type."
+    try expectBodyVerdict(decls, "    k = \"AB\";", null);
+    try expectBodyVerdict(decls, "    k = {\"A\", \"B\"};", null);
+    // §3.3's own `r = {i{"Hi"}}`: a multiplier the parser could not unroll
+    // leaves the literal no width at elaboration.
+    try expectBodyVerdict(decls, "    k = {c{\"A\"}};", .E0354);
+}
+
+/// One generated module for the fuzz test below: up to eight statements
+/// drawn from `pool`, legal ones and refused ones, in any order.
+fn smithModule(_: void, s: *std.testing.Smith) anyerror!void {
+    const pool = [_][]const u8{
+        "x = x + 1.0;",
+        "if (V(p) > 0.5) x = 2.0; else x = -1.0;",
+        "k = (k * 3) % 7;",
+        "for (j = 0; j < 3; j = j + 1) x = x + j;",
+        "case (k) 0: x = 1.0; 1, 2: x = 2.0; default: x = 0.0; endcase",
+        "begin : blk real t; t = x; x = t * 0.5; end",
+        "a[k % 3] = x;",
+        "x = a[1] + a[k % 3];",
+        "while (k > 10) k = k - 1;",
+        "repeat (2) x = x * 2.0;",
+        "x = ((k != 0) && (1.0 / k > 0.5)) ? 1.0 : 0.0;",
+        "I(p) <+ 0.1 * x;",
+        "s = {\"a\", \"b\"};",
+        "x = sqrt(abs(x)) + min(k, 2) + max(x, 1.0);",
+        "@(initial_step) k = 0;",
+        "x = ddt(x);",
+        // Refused, each by its own rule: E0313, E0318, E0310, E0514.
+        "zz = 1.0;",
+        "x = ~x;",
+        "a[7] = 1.0;",
+        "if (k > 2) x = ddt(V(p));",
+    };
+    const gpa = std.testing.allocator;
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(gpa);
+    const n = s.valueRangeAtMost(u8, 0, 8);
+    for (0..n) |_| {
+        try body.appendSlice(gpa, "    ");
+        try body.appendSlice(gpa, pool[s.index(pool.len)]);
+        try body.append(gpa, '\n');
+    }
+    const src = try gpa.print(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  real x;
+        \\  real a[0:2];
+        \\  integer k, j;
+        \\  string s;
+        \\  analog begin
+        \\{s}
+        \\    I(p) <+ x * V(p);
+        \\  end
+        \\endmodule
+    , .{body.items});
+    defer gpa.free(src);
+    var h: Harness = undefined;
+    try h.init(gpa, src);
+    defer h.deinit();
+    // Every refusal names its reason: `DiagnosticsReported` with an empty bag
+    // would be a silent failure.
+    const out = try h.lower() orelse return std.testing.expect(h.bag.err_count != 0);
+    // What a later stage indexes with is in range.
+    try std.testing.expect(out.num_ports <= out.nodes.len);
+    for (out.contributions.items) |c| {
+        try std.testing.expect(c.hi == ground or c.hi < out.nodes.len);
+        try std.testing.expect(c.lo == ground or c.lo < out.nodes.len);
+    }
+    try std.testing.expectEqual(out.held_vars.items.len, h.low.held_places.items.len);
+}
+
+test "lowering a generated module never crashes, and every refusal reports" {
+    try std.testing.fuzz({}, smithModule, .{});
+}
+
 // §7.2.2 the discrete context: which statements and nets are digital, lower/context.zig
 const lower_context = @import("lower/context.zig");
 
