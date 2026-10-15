@@ -381,14 +381,25 @@ fn toReal(b: Bits) f64 {
         const x = b.low64();
         return if (b.signed) @floatFromInt(@as(i64, @bitCast(x))) else @floatFromInt(x);
     }
-    // Wider than 64: sum the words, x/z read as 0.
+    // Wider than 64: sum the words MSB first, x/z read as 0 and bits past
+    // the width cleared. A signed value whose top bit is set is negative:
+    // sum its magnitude ~u + 1 instead and negate. The +1 carries through
+    // exactly the zero words below the lowest nonzero one (`lo`), so each
+    // magnitude word is known without a buffer.
+    const n: usize = (b.width + 63) / 64;
+    const neg = b.signed and b.bit(b.width - 1) == .one;
+    var lo: usize = 0;
+    while (lo < n and (b.val[lo] & ~b.unk[lo]) == 0) lo += 1;
     var r: f64 = 0;
-    var k = b.val.len;
+    var k = n;
     while (k > 0) {
         k -= 1;
-        r = r * 18446744073709551616.0 + @as(f64, @floatFromInt(b.val[k] & ~b.unk[k]));
+        const u = b.val[k] & ~b.unk[k];
+        var w: u64 = if (!neg) u else if (k < lo) 0 else if (k == lo) 0 -% u else ~u;
+        if (k == n - 1 and b.width % 64 != 0) w &= (@as(u64, 1) << @intCast(b.width % 64)) - 1;
+        r = r * 18446744073709551616.0 + @as(f64, @floatFromInt(w));
     }
-    return r;
+    return if (neg) -r else r;
 }
 
 /// Table 12-4's string formats. Octal and hex group from the LSB; a group

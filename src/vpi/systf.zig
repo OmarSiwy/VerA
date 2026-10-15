@@ -88,9 +88,10 @@ pub fn find(name: []const u8, domain: Domain) ?*Systf {
 /// until `reset`.
 pub fn intAnalogNames(a: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(a);
     for (regs.items) |s| if (s.domain == .analog and s.analog.type == vpiAnalogSysFunc and s.analog.sysfunctype == vpiIntFunc)
         try out.append(a, s.name);
-    return out.items;
+    return out.toOwnedSlice(a);
 }
 
 /// One registration, owned by this file until `reset`.

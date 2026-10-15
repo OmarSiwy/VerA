@@ -1146,3 +1146,26 @@ test "§12.29: vpi_put_delays reaches the engine driver of a gate in a generated
     }
     try std.testing.expectEqual(@as(usize, 1), hits);
 }
+
+test "§12.30/IEEE 1364 §19.8: a scaled time is in the unit of the object's own module, past a generate" {
+    // `leaf` is in microseconds, `top` in nanoseconds, and the tick is the
+    // finest precision, 1 ns. `u`'s model scope (1) is the engine's loop
+    // iteration `b[0]`, a scope of `top`'s, so only the engine scope finds
+    // `leaf`'s unit: 2 us is 2000 ticks, where `top`'s unit would make it 2.
+    var h: run.Harness = undefined;
+    try h.init(
+        \\`timescale 1us/1ns
+        \\module leaf; reg a; endmodule
+        \\`timescale 1ns/1ns
+        \\module top;
+        \\  genvar i;
+        \\  generate for (i = 0; i < 1; i = i + 1) begin : b
+        \\    leaf u();
+        \\  end endgenerate
+        \\endmodule
+    );
+    defer h.deinit();
+    const a = vpi_handle_by_name("top.b[0].u.a", null) orelse return error.TestUnexpectedResult;
+    const two: callback.Time = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 2 };
+    try std.testing.expectEqual(@as(?u64, 2000), run.ticksOf(two, a));
+}
