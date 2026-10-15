@@ -779,3 +779,56 @@ test "§12.24–§12.26: channel numbering, reopen, and the three predefined cha
     const text = try tmp.dir.readFile(io(), "a.log", &got);
     try std.testing.expectEqualStrings("alpha\n", text);
 }
+
+test "C conversions: flags, lengths, and the conversions C leaves undefined" {
+    var b: [512]u8 = undefined;
+    // C11 7.21.6.1: '+' and ' ' on a signed conversion; '0' is ignored when a
+    // precision is given.
+    try expectFormat("+0| 42|  007|7    ", formatted(&b, "%+d|% d|%05.3d|%-5d", @as(c_int, 0), @as(c_int, 42), @as(c_int, 7), @as(c_int, 7)), &b);
+    // A zero at precision 0 is no digits, but keeps its sign; '#' with 'o'
+    // still prints the one 0.
+    try expectFormat("[][+][0]", formatted(&b, "[%.0d][%+.0d][%#.0o]", @as(c_int, 0), @as(c_int, 0), @as(c_uint, 0)), &b);
+    // hh and h convert to char and short first: 300 is 44, 70000 is 4464,
+    // 255 as a signed char is -1.
+    try expectFormat("44 4464 -1", formatted(&b, "%hhd %hd %hhd", @as(c_int, 300), @as(c_int, 70000), @as(c_int, 255)), &b);
+    // A negative '*' width is the '-' flag; a negative '*' precision is none.
+    try expectFormat("[ab   ][abc]", formatted(&b, "[%*s][%.*s]", @as(c_int, -5), @as([*:0]const u8, "ab"), @as(c_int, -1), @as([*:0]const u8, "abc")), &b);
+    // An unknown conversion goes out as written and takes no argument; so
+    // does a spec the format ends inside.
+    try expectFormat("%q 5 %", formatted(&b, "%q %d %", @as(c_int, 5)), &b);
+    try expectFormat("[  x][y  ]", formatted(&b, "[%3c][%-3c]", @as(c_int, 'x'), @as(c_int, 'y')), &b);
+    try expectFormat("-9223372036854775808 8000000000000000", formatted(&b, "%lld %llx", @as(c_longlong, std.math.minInt(i64)), @as(c_ulonglong, 1 << 63)), &b);
+}
+
+test "C conversions: reals at the edges" {
+    var b: [512]u8 = undefined;
+    // Zero in each style; %g strips "0.00000" to "0".
+    try expectFormat("0.000000 0.000000e+00 0", formatted(&b, "%f %e %g", @as(f64, 0), @as(f64, 0), @as(f64, 0)), &b);
+    // A negative zero keeps its sign; '+' and ' ' on a positive value.
+    try expectFormat("-0.0 +1.5 [ 1.5]", formatted(&b, "%.1f %+.1f [% .1f]", @as(f64, -0.0), @as(f64, 1.5), @as(f64, 1.5)), &b);
+    // %E and %G upper-case the exponent; '#' keeps %g's trailing zeros.
+    try expectFormat("1.000000E-10 1E-10 1.00000", formatted(&b, "%E %G %#g", @as(f64, 1e-10), @as(f64, 1e-10), @as(f64, 1.0)), &b);
+    // Precision 0: no point unless '#'.
+    try expectFormat("3 3. 1e+04 1.e+04", formatted(&b, "%.0f %#.0f %.0e %#.0e", @as(f64, 2.6), @as(f64, 2.6), @as(f64, 12345), @as(f64, 12345)), &b);
+    // '0' pads between the sign and the digits; '-' pads on the right.
+    try expectFormat("-00003.142|1.23e+03  |", formatted(&b, "%010.3f|%-10.2e|", @as(f64, -3.14159), @as(f64, 1234.5)), &b);
+    // Infinities and NaN: no zero padding, case from the conversion.
+    try expectFormat("nan|  INF|-inf  |  inf", formatted(&b, "%f|%5F|%-6f|%05f", std.math.nan(f64), std.math.inf(f64), -std.math.inf(f64), std.math.inf(f64)), &b);
+}
+
+test "§12.25/IEEE 1364-2005 §27.23: names and flushes of descriptors that are not open" {
+    try std.testing.expect(vpi_mcd_name(0) == null);
+    try std.testing.expectEqualStrings("stderr", std.mem.span(vpi_mcd_name(2)));
+    // Channel 21 is not open; fd 63 is no file $fopen opened.
+    try std.testing.expect(vpi_mcd_name(1 << 20) == null);
+    try std.testing.expect(vpi_mcd_name(fd_bit | 63) == null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // The predefined channels are always open, and unbuffered.
+    try std.testing.expectEqual(@as(c_int, 0), vpi_mcd_flush(0x7));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_mcd_flush(1 << 20));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_mcd_flush(fd_bit));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_flush());
+    // vpi_mcd_printf writes to no fd, and needs a format.
+    try std.testing.expectEqual(EOF, vpi_mcd_printf(fd_bit, "x"));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}

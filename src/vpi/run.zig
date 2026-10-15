@@ -694,3 +694,65 @@ test "§12.36/IEEE 1364-2005 C.7: a reset with stop_value 0 ends a batch run at 
     try std.testing.expectEqualStrings("start s=x\n", h.out.written());
     try std.testing.expectEqual(@as(u64, 0), now());
 }
+
+// ---- the pieces that need no run -------------------------------------------
+
+test "earliest: the sooner of two optional times" {
+    try std.testing.expectEqual(@as(?u64, null), earliest(null, null));
+    try std.testing.expectEqual(@as(?u64, 3), earliest(3, null));
+    try std.testing.expectEqual(@as(?u64, 4), earliest(null, 4));
+    try std.testing.expectEqual(@as(?u64, 2), earliest(5, 2));
+}
+
+test "§12.15 fillTime: both forms of one tick count, the real in ticks with no object" {
+    var t: Time = std.mem.zeroes(Time);
+    fillTime((5 << 32) | 7, null, &t);
+    try std.testing.expectEqual(@as(c_uint, 5), t.high);
+    try std.testing.expectEqual(@as(c_uint, 7), t.low);
+    try std.testing.expectEqual(@as(f64, 5 * 4294967296.0 + 7), t.real);
+}
+
+test "§12.15 ticksOf: vpiSimTime is ticks, a scaled time rounds, and what is no tick count is refused" {
+    root.close();
+    try std.testing.expectEqual(@as(?u64, (1 << 32) | 2), ticksOf(.{ .type = callback.vpiSimTime, .high = 1, .low = 2, .real = 0 }, null));
+    // With no object a scaled time is in ticks (§12.15 "the simulation time
+    // unit"), rounded half away from zero. A tick count is a u64: the
+    // largest double below 2^64 is one, 2^64 itself is not.
+    for ([_]struct { f64, ?u64 }{
+        .{ 2.4, 2 },
+        .{ 2.5, 3 },
+        .{ 0, 0 },
+        .{ 18446744073709549568.0, 18446744073709549568 },
+        .{ 18446744073709551616.0, null },
+        .{ 1e30, null },
+        .{ -1, null },
+        .{ std.math.nan(f64), null },
+        .{ std.math.inf(f64), null },
+    }) |case| try std.testing.expectEqual(case[1], ticksOf(.{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = case[0] }, null));
+}
+
+test "§12.36 with no run: every operation fails and says why" {
+    root.close();
+    analog.detach();
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiFinish, @as(c_int, 0)));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiStop, @as(c_int, 0)));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiReset, @as(c_int, 1), @as(c_int, 0), @as(c_int, 0)));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiSetInteractiveScope, @as(?*anyopaque, null)));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiRejectTransientStep, @as(f64, 1e-9)));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiTransientFailConverge));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // §12.15: a NULL time_p is an error; vpiAnalogTime is answered with no
+    // run at all.
+    vpi_get_time(null, null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    var t: Time = .{ .type = callback.vpiAnalogTime, .high = 0, .low = 0, .real = 5 };
+    vpi_get_time(null, &t);
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    try std.testing.expectEqual(@as(f64, 0), t.real);
+    // With no run the clock is 0, and no queue is pending.
+    try std.testing.expectEqual(@as(u64, 0), now());
+    const queues_now = try timeQueues(std.testing.allocator);
+    defer std.testing.allocator.free(queues_now);
+    try std.testing.expectEqual(@as(usize, 0), queues_now.len);
+}

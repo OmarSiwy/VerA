@@ -1757,3 +1757,113 @@ const tchk_kinds = std.StaticStringMap(TchkKind).initComptime(.{
     .{ "$removal", TchkKind{ .type = 11, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
     .{ "$timeskew", TchkKind{ .type = 12, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
 });
+
+// ---------------------------------------------------------------------------
+// Tests: the tables. The rows themselves are test.zig's, over designs.
+// ---------------------------------------------------------------------------
+
+test "typeName spells every behavioural type the builders make, as its constant is named" {
+    // Every vtype a `code`/`add` call above (and model.zig's addRange,
+    // attributes.zig's attach, model/digital.zig's gen scopes) writes.
+    inline for (.{
+        "vpiAlways",
+        "vpiAssignStmt",
+        "vpiAssignment",
+        "vpiBegin",
+        "vpiCase",
+        "vpiCaseItem",
+        "vpiContAssign",
+        "vpiDeassign",
+        "vpiDelayControl",
+        "vpiDisable",
+        "vpiEventControl",
+        "vpiEventStmt",
+        "vpiFor",
+        "vpiForce",
+        "vpiForever",
+        "vpiFork",
+        "vpiFuncCall",
+        "vpiFunction",
+        "vpiIf",
+        "vpiIfElse",
+        "vpiInitial",
+        "vpiAttribute",
+        "vpiIODecl",
+        "vpiNamedBegin",
+        "vpiNamedEvent",
+        "vpiNamedEventArray",
+        "vpiNamedFork",
+        "vpiNetBit",
+        "vpiNullStmt",
+        "vpiOperation",
+        "vpiPartSelect",
+        "vpiIndexedPartSelect",
+        "vpiRegBit",
+        "vpiRelease",
+        "vpiRepeat",
+        "vpiRepeatControl",
+        "vpiSysFuncCall",
+        "vpiSysTaskCall",
+        "vpiTask",
+        "vpiTaskCall",
+        "vpiWait",
+        "vpiWhile",
+        "vpiParamAssign",
+        "vpiGate",
+        "vpiSwitch",
+        "vpiPrimTerm",
+        "vpiTableEntry",
+        "vpiUdp",
+        "vpiUdpDefn",
+        "vpiModPath",
+        "vpiPathTerm",
+        "vpiTchk",
+        "vpiTchkTerm",
+        "vpiRange",
+        "vpiGenScopeArray",
+        "vpiGenScope",
+        "vpiAnalog",
+        "vpiContrib",
+        "vpiAccessFunc",
+    }) |decl| try std.testing.expectEqualStrings(decl, typeName(@field(@This(), decl)) orelse "(none)");
+}
+
+test "A.7.5.1: each timing check's limits precede its notifier; only $setup writes data first" {
+    var types: u32 = 0;
+    for (tchk_kinds.keys(), tchk_kinds.values()) |name, k| {
+        try std.testing.expect(k.n_limits >= 1 and k.n_limits <= k.limits.len);
+        for (k.limits[0..k.n_limits]) |l| try std.testing.expect(l < k.notifier);
+        try std.testing.expectEqual(std.mem.eql(u8, name, "$setup"), k.data_first);
+        // $period and $width are the single-event checks.
+        const single = std.mem.eql(u8, name, "$period") or std.mem.eql(u8, name, "$width");
+        try std.testing.expectEqual(!single, k.data);
+        types |= @as(u32, 1) << @intCast(k.type);
+    }
+    // vpiTchkType 1..12, each once.
+    try std.testing.expectEqual(@as(u32, 0x1FFE), types);
+}
+
+test "Annex G vpiPrimType: gates 1-12, switches 13-24, each once; a gate's vpiDefName is its keyword" {
+    var gates: u32 = 0;
+    for (std.enums.values(Ast.GateKind)) |k| {
+        gates |= @as(u32, 1) << @intCast(gateType(k));
+        // The tags are the keywords behind a `g_` prefix.
+        try std.testing.expectEqualStrings(@tagName(k)[2..], gateName(k));
+    }
+    try std.testing.expectEqual(@as(u32, 0x1FFE), gates);
+    var switches: u32 = 0;
+    for (std.enums.values(Ast.SwitchKind)) |k| switches |= @as(u32, 1) << @intCast(switchType(k));
+    try std.testing.expectEqual(@as(u32, 0x1FFE000), switches);
+}
+
+test "§7.9: a strength is one Annex G bit, highz 0x01 up to supply 0x80" {
+    var all: c_int = 0;
+    for (std.enums.values(Ast.Strength)) |s| {
+        const bit = drive(s);
+        try std.testing.expectEqual(@as(u32, 1), @popCount(bit));
+        all |= bit;
+    }
+    try std.testing.expectEqual(@as(c_int, 0xFF), all);
+    try std.testing.expectEqual(@as(c_int, 0x40), drive(.strong));
+    try std.testing.expectEqual(@as(c_int, 0x01), drive(.highz));
+}
