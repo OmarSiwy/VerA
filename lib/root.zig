@@ -559,7 +559,7 @@ test "diagnostics outlive the compilation arena" {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     try diag.render(&bag, &aw.writer, .{});
-    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "-->") != null);
+    try std.testing.expect(std.mem.find(u8, aw.writer.buffered(), "-->") != null);
 }
 
 fn compileBadWithDiags(gpa: Allocator) !void {
@@ -793,7 +793,7 @@ fn countW0850(src: []const u8, display: codegen.Display, needle: []const u8) !us
     var n: usize = 0;
     for (0..bag.count()) |i| {
         const e = bag.at(i);
-        if (e.code == .W0850 and std.mem.indexOf(u8, e.message, needle) != null) n += 1;
+        if (e.code == .W0850 and std.mem.find(u8, e.message, needle) != null) n += 1;
     }
     return n;
 }
