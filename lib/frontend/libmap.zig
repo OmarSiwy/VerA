@@ -141,7 +141,8 @@ const Loader = struct {
                 var prev = name;
                 while (true) {
                     const spec = t.next() orelse return l.fail(.{ .file = file, .tok = prev }, "a library declaration ends with `;`", .{});
-                    if (isPunct(spec.text)) return l.fail(.{ .file = file, .tok = spec }, "`library {s}` needs a file_path_spec here (Syntax 13-2), found `{s}`", .{ name.text, spec.text });
+                    // A.1.1: the `-incdir` list follows at least one file_path_spec.
+                    if (isPunct(spec.text) or std.mem.eql(u8, spec.text, "-incdir")) return l.fail(.{ .file = file, .tok = spec }, "`library {s}` needs a file_path_spec here (Syntax 13-2), found `{s}`", .{ name.text, spec.text });
                     try lib.specs.append(l.arena, try resolveSpec(l.arena, dir, unquote(spec.text)));
                     const sep = t.next() orelse return l.fail(.{ .file = file, .tok = spec }, "a library declaration ends with `;`", .{});
                     if (std.mem.eql(u8, sep.text, ";")) break;
@@ -288,14 +289,30 @@ fn segments(p: []const u8, f: []const u8) bool {
 }
 
 fn glob(p: []const u8, s: []const u8) bool {
-    if (p.len == 0) return s.len == 0;
-    if (p[0] == '*') {
-        var i: usize = 0;
-        while (i <= s.len) : (i += 1) if (glob(p[1..], s[i..])) return true;
-        return false;
+    // Greedy, with one way back: the last `*` and how much of `s` it has
+    // taken. A later `*` makes every earlier one's choice final, so a
+    // failure only ever grows the last star's run: O(len(p) * len(s)),
+    // where trying every split among the stars was exponential in them.
+    var pi: usize = 0;
+    var si: usize = 0;
+    var star: ?usize = null;
+    var taken: usize = 0;
+    while (si < s.len) {
+        if (pi < p.len and p[pi] != '*' and (p[pi] == '?' or p[pi] == s[si])) {
+            pi += 1;
+            si += 1;
+        } else if (pi < p.len and p[pi] == '*') {
+            star = pi;
+            pi += 1;
+            taken = si;
+        } else if (star) |at| {
+            pi = at + 1;
+            taken += 1;
+            si = taken;
+        } else return false;
     }
-    if (s.len == 0) return false;
-    return (p[0] == '?' or p[0] == s[0]) and glob(p[1..], s[1..]);
+    while (pi < p.len and p[pi] == '*') pi += 1;
+    return pi == p.len;
 }
 
 const testing = std.testing;

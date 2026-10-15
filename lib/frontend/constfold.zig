@@ -577,9 +577,7 @@ pub fn clog2Width(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?u32
 fn expressionWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, comptime self_determined: bool) ?u32 {
     const ex = &file.exprs;
     return switch (ex.tag(e)) {
-        // §2.6.1: an unsized number is "at least 32" bits; one no 32 bits
-        // hold keeps the carrier's.
-        .int_literal => if (ex.intLiteral(e).width != 0) ex.intLiteral(e).width else if (std.math.cast(u32, ex.intValue(e)) != null or std.math.cast(i32, ex.intValue(e)) != null) 32 else 64,
+        .int_literal => literalWidth(ex, e),
         .logic_literal => ex.logicValue(e).width,
         .ident => env.width(e),
         // `unary`'s `wrapFrom`: a sign or complement keeps a wide literal's width.
@@ -598,6 +596,16 @@ fn expressionWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, com
         .sys_call => if (std.mem.eql(u8, file.str(ex.strOf(e)), "$realtobits")) 64 else 32,
         else => 32, // else: every other integer-valued form is §3.2's 32-bit integer
     };
+}
+
+// A §2.6.1 integer literal's width: its size, or, unsized, "at least 32"
+// bits: §3.2's 32 when they hold the value, the carrier's 64 when they do
+// not. `expressionWidth` and `reduction` must agree on it.
+fn literalWidth(ex: *const Ast.ExprStore, e: Ast.ExprId) u32 {
+    const w = ex.intLiteral(e).width;
+    if (w != 0) return w;
+    const v = ex.intValue(e);
+    return if (std.math.cast(u32, v) != null or std.math.cast(i32, v) != null) 32 else 64;
 }
 
 fn widthFloor(w: u32, comptime self_determined: bool) u32 {
@@ -768,8 +776,9 @@ pub const LiteralEnv = struct {
 fn reduction(ex: *const Ast.ExprStore, op: Ast.UnaryOp, operand: Ast.ExprId, a: Const) ?Const {
     if (a != .int) return null;
     if (ex.tag(operand) != .int_literal) return null;
-    const w = ex.intLiteral(operand).width;
-    const width: u7 = if (w == 0) 32 else if (w <= 64) @intCast(w) else return null;
+    const w = literalWidth(ex, operand);
+    if (w > 64) return null;
+    const width: u7 = @intCast(w);
     const mask: u64 = if (width == 64) std.math.maxInt(u64) else (@as(u64, 1) << @as(u6, @intCast(width))) - 1;
     const bits: u64 = @as(u64, @bitCast(a.int)) & mask;
     const r: bool = switch (op) {

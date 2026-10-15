@@ -772,6 +772,24 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
         8 => 3,
         else => 4,
     };
+    if (!sized) {
+        // E1019 bounds the width an unsized literal's digits need, checked
+        // before the planes exist: x/z digits fill `count * shift` bits, and
+        // known ones at least the first significant digit's bit plus `shift`
+        // per digit after it (decimal: log2(10) > 3.3219). This lower bound
+        // never refuses a literal that fits; the trimmed width is checked
+        // again below.
+        const least: u64 = if (any_unknown) @as(u64, count) * shift else blk: {
+            var significant: u64 = 0;
+            for (digits) |c| {
+                if (c == '_' or (c == '0' and significant == 0)) continue;
+                significant += 1;
+            }
+            if (significant == 0) break :blk 0;
+            break :blk if (radix == 10) (significant - 1) * 33219 / 10000 + 1 else (significant - 1) * shift + 1;
+        };
+        if (least > max_width) return error.Overflow;
+    }
     // Decimal gets an upper bound while accumulating, then loses unused limbs.
     if (!sized) width = @max(64, std.math.mul(u32, count, shift) catch return error.Overflow);
     const words = (@as(usize, width) + 63) / 64;
@@ -824,6 +842,7 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
             if (word != 0) actual = @intCast(i * 64 + 64 - @clz(word));
         }
         literal.width = @max(64, actual);
+        if (literal.width > max_width) return error.Overflow;
     }
     return literal;
 }
