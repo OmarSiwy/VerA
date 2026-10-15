@@ -97,7 +97,7 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     var cands: std.ArrayList(Ast.StrId) = .empty;
     for (below.items) |s| {
         if (s.domain != domain or s.disc == .none) continue;
-        if (std.mem.indexOfScalar(Ast.StrId, cands.items, s.disc) == null)
+        if (std.mem.findScalar(Ast.StrId, cands.items, s.disc) == null)
             try cands.append(self.ctx.arena, s.disc);
     }
     return .{ .disc = try elab_resolve.levelCandidates(self, cands.items), .domain = domain, .behavioral = behavioral };
@@ -124,6 +124,7 @@ fn digitalUse(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, net: A
         file: *const Ast.SourceFile,
         net: Ast.StrId,
         hit: *bool,
+        /// Sets `hit` when `e` or an operand below it is the identifier `net`.
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
             if (e == .none) return;
             const ex = &w.file.exprs;
@@ -131,6 +132,7 @@ fn digitalUse(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, net: A
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| try w.expr(c, .read);
         }
+        /// Visits every expression and child statement of `s`.
         pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
             if (s != .none) try w.file.stmtEdges(s, w);
         }

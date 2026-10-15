@@ -79,7 +79,7 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
 pub fn mayBindEarly(file: *const Ast.SourceFile) bool {
     for (file.userModules()) |*m| for (m.defparams) |dp| {
         const text = file.str(dp.path);
-        const dot = std.mem.indexOfScalar(u8, text, elaborate.sep) orelse return true;
+        const dot = std.mem.findScalar(u8, text, elaborate.sep) orelse return true;
         for (m.instances) |inst| {
             if (std.mem.eql(u8, file.str(inst.name), text[0..dot])) break;
         } else return true;
@@ -214,7 +214,7 @@ fn seedValueOf(self: *Flatten, name: Ast.StrId) ?Ast.ExprId {
 fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, dp: []const u8) Error![]const u8 {
     if (rootedPath(self, dp)) |r| return r;
     const downward = try self.ctx.arena.print("{s}{s}", .{ path, dp });
-    const dot = std.mem.indexOfScalar(u8, dp, elaborate.sep) orelse return downward;
+    const dot = std.mem.findScalar(u8, dp, elaborate.sep) orelse return downward;
     const first = dp[0..dot];
     for (module.instances) |inst| if (std.mem.eql(u8, self.ctx.file.str(inst.name), first)) return downward;
     var gen: std.ArrayList(Ast.Instance) = .empty;
@@ -230,14 +230,14 @@ fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, 
         } else null;
         if (unit) |u| {
             const own = if (end == 0) u.module else blk: {
-                const parent_end = if (std.mem.lastIndexOfScalar(u8, prefix[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
+                const parent_end = if (std.mem.findScalarLast(u8, prefix[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
                 break :blk prefix[parent_end .. end - 1];
             };
             if (std.mem.eql(u8, own, first) or std.mem.eql(u8, u.module, first))
                 return self.ctx.arena.print("{s}{s}", .{ prefix, dp[dot + 1 ..] });
         }
         if (end == 0) return downward;
-        end = if (std.mem.lastIndexOfScalar(u8, path[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
+        end = if (std.mem.findScalarLast(u8, path[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
     }
 }
 
@@ -268,7 +268,7 @@ pub fn reportUnusedDefparams(self: *Flatten) Error!void {
 /// `seedDefparams`' second walk applies every defparam the first collected,
 /// so this is reached only by one that `mayBindEarly` did not foresee.
 fn boundEarlier(self: *Flatten, key: []const u8) bool {
-    const k = (std.mem.lastIndexOfScalar(u8, key, elaborate.sep) orelse return false) + 1;
+    const k = (std.mem.findScalarLast(u8, key, elaborate.sep) orelse return false) + 1;
     for (self.unit_paths.items) |u| if (std.mem.eql(u8, u.path, key[0..k])) {
         for (u.decl.params) |p| if (!p.is_local and std.mem.eql(u8, self.ctx.file.str(p.name), key[k..])) return true;
     };

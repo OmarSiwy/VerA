@@ -854,10 +854,8 @@ fn appendAnalog(self: *Flatten, unit: *const Unit, unit_id: u32, is_initial: boo
 /// null when the list does not mention it (§6.2.2). The first entry decides
 /// between named and ordered binding; a named list takes the first match.
 pub fn connectionFor(inst: *const Ast.Instance, port: Ast.Port, i: usize) ?Ast.PortConn {
-    const named = inst.ports.len != 0 and inst.ports[0].name != .none;
-    if (!named) return if (i < inst.ports.len) inst.ports[i] else null;
-    for (inst.ports) |c| if (c.name == port.connName()) return c;
-    return null;
+    // One binding rule for the walk and for `insert.plan`, which needs the index.
+    return inst.ports[elab_insert.connIndex(inst, port, i) orelse return null];
 }
 
 // ponytail: a linear scan per connection, quadratic in one module's

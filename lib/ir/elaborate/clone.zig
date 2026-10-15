@@ -824,6 +824,6 @@ fn joinLocal(self: *Flatten, name: Ast.StrId) Error!Ast.StrId {
     var it = self.unit.rename.iterator();
     const sample = it.next() orelse return name;
     const s = self.ctx.file.str(sample.value_ptr.*);
-    const cut = std.mem.lastIndexOfScalar(u8, s, sep) orelse return name;
+    const cut = std.mem.findScalarLast(u8, s, sep) orelse return name;
     return elab_names.join(self, s[0 .. cut + 1], name);
 }
