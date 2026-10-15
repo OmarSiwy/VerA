@@ -226,3 +226,77 @@ test "a potential source gets a branch current; two on one branch get two" {
     try std.testing.expectEqual(@as(usize, 4), n.unit_names.len);
     try std.testing.expectEqualStrings("mymod__analog__I_a_b", n.unit_names[0]);
 }
+
+test "a probed branch's flow slot is reused; an indirect source gets one too; a spelling clash takes #k" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    // Net 2 is a plain net whose name is the spelling `flow(a,b)` (§2.8.1
+    // escaped identifiers make that legal); net 3 is the §5.4.2 slot lowering
+    // minted for a probe of I(b,a).
+    try f.init(&.{ "a", "b", "flow(a,b)", "flow(b,a)" });
+    defer f.deinit();
+    const a = f.alloc();
+    f.lowered.nodes.items(.kind)[3] = .{ .branch_flow = 1 };
+    try f.lowered.flow_unknowns.put(a, .{ .hi = 1, .lo = 0 }, 3);
+    // V(b,a) <+ …: lowering's slot 3 is its current; no new unknown.
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = 0 });
+    // §5.6.7 V(a,b) : … == …: an indirect source on (a,b) has no slot, and
+    // the spelling `flow(a,b)` is taken by net 2, so it becomes `flow(a,b)#1`.
+    try f.lowered.contributions.append(a, .{ .access = .potential, .kind = .indirect, .hi = 0, .lo = 1 });
+    const an = try f.analysis();
+
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 2);
+    try std.testing.expectEqualSlices(u32, &.{ 3, 4 }, n.branch_u);
+    try std.testing.expectEqual(@as(u32, 5), n.n_u);
+    // `sanitize` is injective, so distinct raw spellings stay distinct.
+    for (n.u_names, 0..) |x, i| for (n.u_names[i + 1 ..]) |y| {
+        try std.testing.expect(!std.mem.eql(u8, x, y));
+    };
+}
+
+test "held names, given flags: §9.19 queries and derive() targets" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    // p0 folds; p1's default reads p0 (a derive() target); p2 is local; p3 a
+    // string; p4 folds but the model asks $param_given(p4).
+    const p0 = try f.mir.addParamRef(a, 0);
+    try f.lowered.params.append(a, .{ .name = "p0", .ty = .real, .default = .f_one });
+    try f.lowered.params.append(a, .{ .name = "p1", .ty = .real, .default = p0 });
+    try f.lowered.params.append(a, .{ .name = "p2", .ty = .real, .default = p0, .is_local = true });
+    try f.lowered.params.append(a, .{ .name = "p3", .ty = .string, .default = p0 });
+    try f.lowered.params.append(a, .{ .name = "p4", .ty = .real, .default = .f_two });
+    _ = try f.call("$param_given", &.{try f.mir.addParamRef(a, 4)});
+    // A held variable spelled like a Zig keyword gets the `Z` marker.
+    try f.lowered.held_vars.append(a, .{ .name = "pub", .ty = .real, .init = .f_zero, .seed = .f_zero });
+    const an = try f.analysis();
+
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0);
+    try std.testing.expectEqualSlices(bool, &.{ false, true, false, false, true }, n.p_given);
+    try std.testing.expectEqual(@as(usize, 1), n.held_names.len);
+    try std.testing.expectEqualStrings("mymod__held__pubZ", n.held_names[0]);
+    // `$param_given` owns no state, so it is no unit.
+    try std.testing.expectEqual(@as(usize, 0), n.units.len);
+}
+
+test "a source name too long to sanitize is NameTooLong, not OutOfMemory" {
+    // `naming.sanitize` needs up to 3n+1 bytes of an 8192-byte buffer, so a
+    // 9000-character net (or parameter) overflows it. The CLI prints the
+    // error's name, and `NameTooLong` is the one diag_code documents.
+    const long: [9000]u8 = @splat('q');
+    {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{&long});
+        defer f.deinit();
+        const an = try f.analysis();
+        try std.testing.expectError(error.NameTooLong, plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0));
+    }
+    {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{"a"});
+        defer f.deinit();
+        try f.lowered.params.append(f.alloc(), .{ .name = &long, .ty = .real, .default = .f_one });
+        const an = try f.analysis();
+        try std.testing.expectError(error.NameTooLong, plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0));
+    }
+}

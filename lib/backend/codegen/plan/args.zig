@@ -267,3 +267,68 @@ test "callArgIsValue: the display-gated prongs are the printing and §9.5 famili
     for ([_]Mir.Callee{ .@"$monitor", .@"$fatal", .@"$error", .@"$fdisplay" }) |c|
         try std.testing.expect(!callArgIsValue(c, 0, .record));
 }
+
+test enableArgIdx {
+    // The positions are the clauses' own argument lists, counted from 0:
+    // §5.10.3.1 `cross(expr, dir, time_tol, expr_tol, enable)`,
+    // §5.10.3.2 `above(expr, time_tol, expr_tol, enable)`,
+    // §5.10.3.3 `timer(start_time, period, time_tol, enable)`.
+    try std.testing.expectEqual(@as(?usize, 4), enableArgIdx(.cross));
+    try std.testing.expectEqual(@as(?usize, 3), enableArgIdx(.above));
+    try std.testing.expectEqual(@as(?usize, 3), enableArgIdx(.timer));
+    // No clause-4 operator and no §9.17 request has an `enable`.
+    for ([_]OpKind{ .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .bound_step, .discontinuity }) |k|
+        try std.testing.expectEqual(@as(?usize, null), enableArgIdx(k));
+}
+
+test "callArgIsValue: an event operator keeps only its enable (and a timer its period) live" {
+    const t = std.testing;
+    // For every position up to one past the longest list, exactly the
+    // positions the clause makes a runtime expression answer true.
+    for (0..6) |i| {
+        try t.expectEqual(i == 4, callArgIsValue(.cross, i, .drop));
+        try t.expectEqual(i == 3, callArgIsValue(.above, i, .drop));
+        // §5.10.3.3 "the next event will be scheduled based on the LATEST
+        // value of the start_time and period": the period is live too.
+        try t.expectEqual(i == 1 or i == 3, callArgIsValue(.timer, i, .drop));
+        // §4.5.8 has no enable, and its input is its own unit's.
+        try t.expect(!callArgIsValue(.transition, i, .emit));
+        // §4.5.14 `ddx(expr, probe)`: the probe names a lane, it is not a value.
+        try t.expectEqual(i == 0, callArgIsValue(.ddx, i, .drop));
+        // IEEE 1364 §17.11 math reads every operand.
+        try t.expect(callArgIsValue(.@"$hypot", i, .drop));
+    }
+    // A checked draw's argument 1 is consumed by the emitter, the rest are live.
+    try t.expect(callArgIsValue(.@"$rng$check", 0, .drop));
+    try t.expect(!callArgIsValue(.@"$rng$check", 1, .drop));
+    try t.expect(callArgIsValue(.@"$rng$check", 2, .drop));
+    // A user `$limit` function reads its two leading operands.
+    try t.expect(callArgIsValue(.@"$limit$uf", 1, .drop));
+    try t.expect(!callArgIsValue(.@"$limit$uf", 2, .drop));
+}
+
+test strArg {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const s = try f.mir.addStrConst(a, "pnjlim");
+    const x = try f.mir.addFloatConst(a, 0.5);
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    const args = [_]Mir.Value{ x, s };
+    try std.testing.expectEqualStrings("pnjlim", strArg(in, &args, 1).?);
+    // A number is not a string, and a position past the end is not either.
+    try std.testing.expectEqual(@as(?[]const u8, null), strArg(in, &args, 0));
+    try std.testing.expectEqual(@as(?[]const u8, null), strArg(in, &args, 2));
+}
+
+test opNeedsInput {
+    // §4.5.10 `last_crossing` answers from the crossing it latched; §5.10.3.1
+    // `cross` compares the current input against the previous one.
+    try std.testing.expect(!opNeedsInput(.last_crossing));
+    try std.testing.expect(opNeedsInput(.cross));
+    try std.testing.expect(opNeedsInput(.absdelay));
+}
+
+const Fixture = @import("fixture.zig").Fixture;

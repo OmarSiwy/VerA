@@ -828,3 +828,149 @@ test "a unit's slice stops at a value the core carries" {
     try std.testing.expect(p.cached(sq) and p.uses_cache);
     try std.testing.expect(p.needed[@backingInt(sq)] and !p.needed[@backingInt(va)]);
 }
+
+/// A plan over `f` whose core carries nothing (`lo_idx` all none).
+fn emptyCorePlan(f: *Fixture, an: *const Analysis, display: Display) !UnitPlan {
+    const a = f.alloc();
+    const lo_idx = try a.alloc(u32, an.nv);
+    @memset(lo_idx, none_u32);
+    var p = try UnitPlan.init(a, &f.mir, an, display);
+    p.lo_idx = lo_idx;
+    return p;
+}
+
+test "§4.2.12 a value read only in one select arm is inlined there; its condition fuses into the select" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const c = try f.mir.emit(a, .entry, .fgt, &.{ va, .f_zero });
+    const x = try f.mir.emit(a, .entry, .fmul, &.{ va, va });
+    const s = try f.mir.emit(a, .entry, .select, &.{ c, x, .f_one });
+    const an = try f.analysis();
+    var p = try emptyCorePlan(&f, &an, .drop);
+    try p.analyze(s, false);
+    try std.testing.expect(p.straight);
+    try std.testing.expect(p.inlined[@backingInt(x)] and p.slot[@backingInt(x)] == none_u32);
+    try std.testing.expect(p.inlined[@backingInt(c)]);
+    // Only the target is a statement.
+    try std.testing.expectEqual(@as(u32, 1), p.n_slots);
+    try std.testing.expectEqual(@as(u32, 0), p.slot[@backingInt(s)]);
+}
+
+test "the core keeps every live-out as a field: none is inlined, each gets a slot" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const x = try f.mir.emit(a, .entry, .fmul, &.{ va, va });
+    const y = try f.mir.emit(a, .entry, .fadd, &.{ x, .f_one }); // x's one reader
+    const an = try f.analysis();
+    var p = try emptyCorePlan(&f, &an, .drop);
+    const lo_idx = try a.alloc(u32, an.nv);
+    @memset(lo_idx, none_u32);
+    lo_idx[@backingInt(x)] = 0;
+    lo_idx[@backingInt(y)] = 1;
+    p.lo_idx = lo_idx;
+    p.lo_vals = &.{ x, y };
+    try p.analyze(.undef, true);
+    // Outside the core x would fuse into y; inside it is a returned field.
+    try std.testing.expect(!p.inlined[@backingInt(x)]);
+    try std.testing.expect(p.slot[@backingInt(x)] != none_u32 and p.slot[@backingInt(y)] != none_u32);
+    // The core computes its values; it reads no cache.
+    try std.testing.expect(!p.uses_cache and !p.cached(x));
+}
+
+test "§9.4 a display task's operand is live only in the display unit of a printing artifact" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const x = try f.mir.emit(a, .entry, .fmul, &.{ va, va });
+    const task = try f.call("$strobe", &.{x});
+    const an = try f.analysis();
+    for ([_]struct { display: Display, unit: bool, live: bool }{
+        .{ .display = .emit, .unit = true, .live = true },
+        .{ .display = .emit, .unit = false, .live = false },
+        .{ .display = .drop, .unit = true, .live = false },
+    }) |cs| {
+        var p = try emptyCorePlan(&f, &an, cs.display);
+        p.display_unit = cs.unit;
+        try p.analyze(task, false);
+        try std.testing.expectEqual(cs.live, p.needed[@backingInt(x)]);
+    }
+}
+
+test "a setup root is a leaf: needed, but its operands are not, and it takes no slot" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    try f.lowered.params.append(a, .{ .name = "k", .ty = .real, .default = .f_one });
+    const k = try f.mir.addParamRef(a, 0);
+    const r = try f.call("$sqrt", &.{k});
+    const t = try f.mir.emit(a, .entry, .fmul, &.{ r, try f.probe(0) });
+    const an = try f.analysis();
+    var p = try emptyCorePlan(&f, &an, .drop);
+    const su_idx = try a.alloc(u32, an.nv);
+    @memset(su_idx, none_u32);
+    su_idx[@backingInt(r)] = 0;
+    p.su_idx = su_idx;
+    p.su_on = true;
+    try p.analyze(t, false);
+    try std.testing.expect(p.isRoot(r) and p.needed[@backingInt(r)]);
+    try std.testing.expect(!p.needed[@backingInt(k)]);
+    try std.testing.expectEqual(none_u32, p.slot[@backingInt(r)]);
+}
+
+test "§5.8 a branch whose arms this unit cannot tell apart is dead: no `if`, its condition never live" {
+    for ([_]bool{ false, true }) |via_phi| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{"a"});
+        defer f.deinit();
+        const a = f.alloc();
+        const va = try f.probe(0);
+        const then_b = try f.mir.addBlock(a);
+        const else_b = try f.mir.addBlock(a);
+        const join = try f.mir.addBlock(a);
+        const c = try f.mir.emit(a, .entry, .fgt, &.{ va, .f_zero });
+        _ = try f.mir.emitBranch(a, .entry, c, then_b, else_b);
+        _ = try f.mir.emitJump(a, then_b, join);
+        _ = try f.mir.emitJump(a, else_b, join);
+        // Either a value the join computes whichever arm ran, or a phi that
+        // tells the arms apart.
+        const t = if (via_phi)
+            try f.mir.emitPhi(a, join, &.{ .{ .block = then_b, .value = va }, .{ .block = else_b, .value = .f_zero } })
+        else
+            try f.mir.emit(a, join, .fadd, &.{ va, .f_one });
+        const an = try f.analysis();
+        var p = try emptyCorePlan(&f, &an, .drop);
+        try p.analyze(t, false);
+        try std.testing.expect(!p.straight);
+        try std.testing.expectEqual(!via_phi, p.dead_branch[0]);
+        try std.testing.expectEqual(via_phi, p.needed[@backingInt(c)]);
+    }
+}
+
+test "a select-arm chain longer than a u16 plans without overflowing its inline depth" {
+    // s_k = select(c, s_{k-1}, 1): each s is read once, in an arm, so each is
+    // inlined (lazy on purpose, §4.2.12) and its depth is one more than the
+    // last. 70000 links pass 65535, the largest depth a u16 holds.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const c = try f.mir.emit(a, .entry, .fgt, &.{ va, .f_zero });
+    var s = va;
+    for (0..70000) |_| s = try f.mir.emit(a, .entry, .select, &.{ c, s, .f_one });
+    const an = try f.analysis();
+    var p = try emptyCorePlan(&f, &an, .drop);
+    try p.analyze(s, false);
+    // Two statements: the condition every select reads, and the target.
+    try std.testing.expect(!p.inlined[@backingInt(s)] and !p.inlined[@backingInt(c)]);
+    try std.testing.expectEqual(@as(u32, 2), p.n_slots);
+}

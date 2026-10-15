@@ -117,3 +117,45 @@ test "a guarded stamp is listed with its guard; one that clashes puts its column
     try std.testing.expectEqual(@as(u64, 0b111), c.mask);
     try std.testing.expectEqual(@as(usize, 0), c.entries.len);
 }
+
+test "64 unknowns is the last size with a table; lane 63 and cell (63, 63) are reachable" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const z: [64 * 64]f64 = @splat(0);
+    var g: [64 * 64]f64 = @splat(0);
+    g[63 * 64 + 63] = 2;
+    g[63 * 64 + 0] = 3; // column 0 is read, so this cell is not listed
+    const j = (try plan(arena.allocator(), 64, 1, 0, 0, .{ &g, &z }, &.{})).?;
+    try std.testing.expectEqual(@as(u64, 1), j.mask);
+    try std.testing.expectEqualSlices(Entry, &.{.{ .row = 63, .col = 63, .g = 2, .c = 0 }}, j.entries);
+    // A ddx of unknown 63 sets the top bit, and the column leaves the table.
+    const top = (try plan(arena.allocator(), 64, 1, @as(u64, 1) << 63, 0, .{ &g, &z }, &.{})).?;
+    try std.testing.expectEqual((@as(u64, 1) << 63) | 1, top.mask);
+    try std.testing.expectEqual(@as(usize, 0), top.entries.len);
+}
+
+test "limiter writes join the mask; a guarded zero is no entry; two guards on one cell keep its lane" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const z: [9]f64 = @splat(0);
+    var g: [9]f64 = @splat(0);
+    g[2 * 3 + 2] = 4; // (2, 2): a constant the table states
+    // `limit` writes unknown 2: its column is read back, so (2, 2) leaves.
+    const lw = (try plan(arena.allocator(), 3, 0, 0, 0b100, .{ &g, &z }, &.{})).?;
+    try std.testing.expectEqual(@as(u64, 0b100), lw.mask);
+    try std.testing.expectEqual(@as(usize, 0), lw.entries.len);
+    // A guarded stamp whose coefficients are both zero states nothing.
+    const zero_gd = [_]Entry{.{ .row = 1, .col = 2, .g = 0, .c = 0, .when = 0 }};
+    const zg = (try plan(arena.allocator(), 3, 0b011, 0, 0, .{ &z, &z }, &zero_gd)).?;
+    try std.testing.expectEqual(@as(u64, 0b011), zg.mask);
+    try std.testing.expectEqual(@as(usize, 0), zg.entries.len);
+    // The same cell under two guards: `contract` wants (row, col) unique, so
+    // the column keeps its lane and neither guarded entry is listed.
+    const two = [_]Entry{
+        .{ .row = 0, .col = 2, .g = 1, .c = 0, .when = 0 },
+        .{ .row = 0, .col = 2, .g = 1, .c = 0, .when = 1 },
+    };
+    const tg = (try plan(arena.allocator(), 3, 0b011, 0, 0, .{ &z, &z }, &two)).?;
+    try std.testing.expectEqual(@as(u64, 0b111), tg.mask);
+    try std.testing.expectEqual(@as(usize, 0), tg.entries.len);
+}
