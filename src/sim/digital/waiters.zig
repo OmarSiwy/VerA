@@ -592,7 +592,7 @@ test termBits {
 // is a layer of its own, so `release w` releases only the whole-net force,
 // of which there is none here: bit 0 stays 1 while bit 1 follows its
 // driver. The native runtime keeps a select's layer the same way
-// (`rt.State.release` leaves `Layers.parts` alone), which makes this the
+// (`rt.State.release` leaves `State.parts` alone), which makes this the
 // interpreter-against-executable oracle.
 test "§9.3.2 releasing a net whole keeps the forced select it did not force" {
     try expectRun(
