@@ -4,6 +4,10 @@
 //! Domain checks are three-way: provably outside is an error, provably inside keeps `.optimized`,
 //! unprovable is accepted and costs `.strict`. `exp` and `/` by zero are never errors.
 //! The pass reads no target, inserts no clamp or `limexp`, and emits no runtime check.
+//!
+//! Layout: this file is the API and the spine (`proveOpts`). `proof/lattice.zig` holds the
+//! interval values, `proof/transfer.zig` the per-opcode transfer functions, `proof/prover.zig`
+//! the walk and the diagnostics, `proof/test.zig` the source-level self-checks.
 
 const std = @import("std");
 const Mir = @import("mir.zig");
@@ -11,8 +15,8 @@ const Lower = @import("lower.zig");
 const Lowered = Lower.Lowered;
 const Analysis = @import("analysis.zig");
 const diag = @import("diag");
-/// `std.math`, shared with the `proof/` sub-files.
-pub const math = std.math;
+const proof_lattice = @import("proof/lattice.zig");
+const proof_prover = @import("proof/prover.zig");
 
 /// The float mode a unit's code may compile in (LRM §4.3).
 /// `.optimized` asserts nnan and ninf, so a wrong `.optimized` is silent undefined behavior in
@@ -47,9 +51,9 @@ pub const Verdict = struct {
     /// add no unit. Any new unit kind must be appended after the contribution units.
     /// Allocated with the `gpa` passed to `prove`; free with `deinit`.
     unit_modes: []const FloatMode,
-    /// §4.3.2 domain violations reported into the `diag.Bag`. Zero means the model is accepted.
-    /// On errors `unit_modes` is still filled, all `.strict`, so a lint front end reports
-    /// everything in one pass.
+    /// §4.3.2 domain violations reported into the `diag.Bag`, at most `max_errors`. Zero means
+    /// the model is accepted. On errors `unit_modes` is still filled, all `.strict`, so a lint
+    /// front end reports everything in one pass.
     error_count: u32,
 
     /// Returns true when no domain error was reported.
@@ -71,7 +75,9 @@ pub const Options = struct {
     unknown_bound: ?f64 = null,
 };
 
-/// Maximum domain errors reported; one bad expression otherwise reports a cascade.
+/// Maximum domain errors counted and reported; one bad expression otherwise reports a cascade.
+/// Violations past the cap are neither counted nor reported, so `Verdict.error_count` saturates
+/// here.
 pub const max_errors = 64;
 
 /// Returns the number of units, the length of `Verdict.unit_modes`.
@@ -80,13 +86,13 @@ pub fn unitCount(lowered: *const Lowered) usize {
     return lowered.contributions.items.len;
 }
 
-const proof_lattice = @import("proof/lattice.zig");
 /// Returns whether a value is a 0/1 predicate (§4.2.5/§4.2.8).
 pub const isPredicateValue = proof_lattice.isPredicateValue;
 /// Returns the LRM domain an opcode's argument must satisfy.
 pub const domainOf = proof_lattice.domainOf;
 
 /// Proves domains and rates each unit with default `Options`; see `proveOpts`.
+/// Caller owns the returned `Verdict` and must free it with `deinit(gpa)`.
 pub fn prove(
     gpa: std.mem.Allocator,
     mir: *const Mir,
@@ -96,8 +102,11 @@ pub fn prove(
     return proveOpts(gpa, mir, lowered, .{}, bag);
 }
 
-/// Proves every §4.3.2 domain, reports violations into `bag`, and rates each unit.
+/// Proves every §4.3.2 domain, reports violations (E0601-E0607, E0609) and finiteness lints
+/// (W0650, W0651, W0653) into `bag`, and rates each unit.
 /// Caller owns the returned `Verdict` and must free it with `deinit(gpa)`.
+/// Fails only on allocation; scratch state lives in an arena on `gpa` that dies before return.
+/// Reads `mir` and `lowered` only, so proving the same input twice gives the same verdict.
 pub fn proveOpts(
     gpa: std.mem.Allocator,
     mir: *const Mir,
@@ -127,12 +136,17 @@ pub fn proveOpts(
     return p.verdict(); // per-unit join over the backward slices
 }
 
-const proof_prover = @import("proof/prover.zig");
-const proof_test = @import("proof/test.zig");
+test FloatMode {
+    // `.strict` absorbs, in either position.
+    try std.testing.expectEqual(FloatMode.optimized, FloatMode.strictest(.optimized, .optimized));
+    try std.testing.expectEqual(FloatMode.strict, FloatMode.strictest(.optimized, .strict));
+    try std.testing.expectEqual(FloatMode.strict, FloatMode.strictest(.strict, .optimized));
+    try std.testing.expectEqual(FloatMode.strict, FloatMode.strictest(.strict, .strict));
+}
 
 test {
     _ = proof_lattice;
     _ = proof_prover;
     _ = @import("proof/transfer.zig");
-    _ = proof_test;
+    _ = @import("proof/test.zig");
 }
