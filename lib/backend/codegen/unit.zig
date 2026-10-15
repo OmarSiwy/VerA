@@ -343,7 +343,7 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
 /// host discards must leave no capture behind for the next one.
 fn tableReset(self: *Gen, body_start: usize) Error!void {
     if (self.lowered.table_samples.items.len == 0) return;
-    if (std.mem.indexOfPos(u8, self.out.items, body_start, "inst.table_ready[") == null) return;
+    if (std.mem.findPos(u8, self.out.items, body_start, "inst.table_ready[") == null) return;
     try self.out.insertSlice(self.gpa, body_start, "    inst.table_ready = inst.table_kept;\n");
 }
 
@@ -408,8 +408,8 @@ pub fn patchParam(self: *Gen, at: usize, comptime width: usize) void {
 /// names `ident` as a whole identifier. Only valid for a body with no string
 /// literal in it.
 pub fn patchUnless(self: *Gen, at: usize, from: usize, comptime ident: []const u8) void {
-    var it = std.mem.indexOfPos(u8, self.out.items, from, ident);
-    while (it) |i| : (it = std.mem.indexOfPos(u8, self.out.items, i + 1, ident)) {
+    var it = std.mem.findPos(u8, self.out.items, from, ident);
+    while (it) |i| : (it = std.mem.findPos(u8, self.out.items, i + 1, ident)) {
         const t = self.out.items;
         // Not a field (`m.sim`), not part of a longer name.
         const before = i == 0 or !(isIdent(t[i - 1]) or t[i - 1] == '.');
@@ -515,7 +515,7 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
     self.hoist.glen.clearRetainingCapacity();
     for (self.hoist.mask.items) |m| {
         // ponytail: linear scan; a body has 1-30 distinct masks.
-        const g = std.mem.indexOfScalar(u64, self.hoist.gmask.items, m) orelse blk: {
+        const g = std.mem.findScalar(u64, self.hoist.gmask.items, m) orelse blk: {
             try self.hoist.gmask.append(self.arena, m);
             try self.hoist.glen.append(self.arena, 0);
             break :blk self.hoist.gmask.items.len - 1;
@@ -782,4 +782,17 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try self.b(";\n", .{});
     }
     try gen_setup.emitRoot(self, target);
+}
+
+test zigTy {
+    try std.testing.expectEqualStrings("S", zigTy(.real));
+    try std.testing.expectEqualStrings("i64", zigTy(.int));
+    try std.testing.expectEqualStrings("[]const u8", zigTy(.str));
+}
+
+test zeroOf {
+    // The hoisted seed and `renderVal`'s `.undef` operand: one spelling per type.
+    try std.testing.expectEqualStrings("S.con(0.0)", zeroOf(.real));
+    try std.testing.expectEqualStrings("0", zeroOf(.int));
+    try std.testing.expectEqualStrings("\"\"", zeroOf(.str));
 }

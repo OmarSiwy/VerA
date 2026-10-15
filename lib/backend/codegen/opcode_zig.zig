@@ -1,6 +1,8 @@
 //! Backend facts per `Mir.Opcode`: how each is spelled in Zig, one comptime
 //! row per opcode. `lib/ir/opcode.zig` holds the IR half. `EnumArray.init`
 //! has no defaults, so a new opcode does not compile until its row is filled.
+//! LRM clauses cited: §3.2.2, §4.3, §4.3.1 (Table 4-14), §4.3.2 (Table 4-15),
+//! §6.3.4.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;

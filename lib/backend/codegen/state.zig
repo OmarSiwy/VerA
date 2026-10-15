@@ -136,14 +136,14 @@ pub fn inPlaceArrays(self: *Gen) Error![]const bool {
         const d = self.mir.instData(inst).anew;
         if (d.tp != null) flags[d.array] = false;
     }
-    if (std.mem.indexOfScalar(bool, flags, true) == null) return &.{};
+    if (std.mem.findScalar(bool, flags, true) == null) return &.{};
     return flags;
 }
 
 /// Returns whether `text` reads a field of the core result `m` (`m.f<k>`).
 fn readsM(text: []const u8) bool {
     var at: usize = 0;
-    while (std.mem.indexOfPos(u8, text, at, "m.f")) |i| : (at = i + 1) {
+    while (std.mem.findPos(u8, text, at, "m.f")) |i| : (at = i + 1) {
         if (i == 0 or !(std.ascii.isAlphanumeric(text[i - 1]) or text[i - 1] == '_')) return true;
     }
     return false;
@@ -806,7 +806,11 @@ pub fn emitDelays(self: *Gen) Error!void {
         const args = self.mir.instData(inst).call.args;
         if (args.len < 2) continue;
         const td = try gen_host.f64Const(self, args[1], 0, false) orelse continue;
-        try tds.append(self.arena, td);
+        // §4.5.7 "If td becomes greater than maxdelay, maxdelay will be used
+        // as a substitute for td", as `call.absdelayTd` runs it in the
+        // residual. A solve-time maxdelay is no `Model` expression: td stays.
+        const maxd = if (args.len > 2) try gen_host.f64Const(self, args[2], 0, false) else null;
+        try tds.append(self.arena, if (maxd) |m| try self.arena.print("@min({s}, {s})", .{ td, m }) else td);
     }
     if (tds.items.len == 0) return;
     try self.w(
@@ -904,4 +908,15 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\
         \\
     , .{});
+}
+
+test readsM {
+    try std.testing.expect(readsM("const in = m.f0.val();"));
+    try std.testing.expect(readsM("m.f12"));
+    try std.testing.expect(readsM("(m.f2.val())"));
+    // `m.f` inside a longer name is not the core result.
+    try std.testing.expect(!readsM("const m = zm.f0;"));
+    try std.testing.expect(!readsM("_m.f1"));
+    try std.testing.expect(!readsM("m.x"));
+    try std.testing.expect(!readsM(""));
 }

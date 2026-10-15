@@ -750,7 +750,7 @@ fn emitCardCheck(self: *Gen) Error!void {
         \\/// (after `derive`) puts outside its allowed values, or null.
         \\pub fn checkCard({s}: *const Model) ?[]const u8 {{
         \\
-    , .{if (std.mem.indexOf(u8, body.items, "model.") != null) "model" else "_"});
+    , .{if (std.mem.find(u8, body.items, "model.") != null) "model" else "_"});
     try self.w("{s}    return null;\n}}\n\n", .{body.items});
 }
 
@@ -867,7 +867,7 @@ pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
     var buf: [512]u8 = undefined;
     const s = std.mem.print(&buf, "{d}", .{x}) catch unreachable;
     // ponytail: use the stdlib byte-set search; formatting stays unchanged.
-    const has_point = std.mem.indexOfAny(u8, s, ".eE") != null;
+    const has_point = std.mem.findAny(u8, s, ".eE") != null;
     gop.value_ptr.* = if (has_point)
         try self.arena.dupe(u8, s)
     else
@@ -889,3 +889,22 @@ const plusarg_txt =
     \\}
     \\
 ;
+
+test depublish {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    // Only a leading `pub ` goes: a nested one is the kernel's own business.
+    try depublish(gpa, &out, "pub fn a() void {}\npub const b = 1;\n    pub const c = 2;\nconst d = 3;");
+    try std.testing.expectEqualStrings("fn a() void {}\nconst b = 1;\n    pub const c = 2;\nconst d = 3;", out.items);
+}
+
+test publish {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    // Every top-level `fn`/`const` gains `pub`; a `var`, an indented line and
+    // an already public one are left as they are.
+    try publish(gpa, &out, "fn a() void {}\nconst b = 1;\nvar c = 2;\n    const d = 3;\npub fn e() void {}");
+    try std.testing.expectEqualStrings("pub fn a() void {}\npub const b = 1;\nvar c = 2;\n    const d = 3;\npub fn e() void {}", out.items);
+}

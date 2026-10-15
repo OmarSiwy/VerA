@@ -35,7 +35,9 @@ pub const ipow_fn = "(struct { fn zp_f(zp_b: i64, zp_n: i64) i64 { " ++
 
 /// Integer `/` with a zero divisor defined as 0 (see `renderOp`'s `.idiv`).
 const idiv_fn = "(struct { fn zd_f(zd_a: i64, zd_b: i64) i64 { " ++
-    "return if (zd_b == 0) 0 else @divTrunc(zd_a, zd_b); } }.zd_f)";
+    // In i65, so minInt(i64) / -1 wraps as `i64Const`'s host spelling does
+    // instead of trapping; the caller truncates to §3.2's 32 bits.
+    "return if (zd_b == 0) 0 else @truncate(@divTrunc(@as(i65, zd_a), zd_b)); } }.zd_f)";
 
 /// §4.2.4 permits a varying divisor but requires an error when it is zero.
 /// Executables report E0601; solver devices trap without importing host I/O
@@ -658,10 +660,11 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         .idiv => {
             // §4.2.4 has no zero rule for `/`, so a divisor the prover
             // cannot show non-zero is accepted (with W0653) and goes through
-            // `idiv_fn`, where x / 0 is 0. A non-zero literal keeps the bare
-            // `@divTrunc`.
+            // `idiv_fn`, where x / 0 is 0. A literal other than 0 and -1 keeps
+            // the bare `@divTrunc`: -1 overflows at minInt(i64), which a
+            // saturated real -> int conversion can hold.
             const lit = self.mir.valueDef(self.an.rv(b2));
-            const bare = lit == .int_const and lit.int_const != 0;
+            const bare = lit == .int_const and lit.int_const != 0 and lit.int_const != -1;
             try self.b("@as(i64, @as(i32, @truncate(", .{});
             try intCall2(self, if (bare) "@divTrunc" else idiv_fn, a, b2);
             try self.b(")))", .{});
@@ -921,7 +924,7 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
     const cap = comptime blk: {
         @setEvalBranchQuota(100_000);
         var m: usize = 0;
-        for (std.meta.fieldNames(Mir.Callee)) |n| m = @max(m, n.len);
+        for (@typeInfo(Mir.Callee).@"enum".field_names) |n| m = @max(m, n.len);
         break :blk "zRng".len + m;
     };
     var buf: [cap]u8 = undefined;
@@ -1007,13 +1010,14 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
 /// An out-of-range read yields the element type's zero; an integer array
 /// cannot yield x. Pins lanes when the index depends on x.
 pub fn emitIdx(self: *Gen, args: []const Mir.Value, want: VTy) Error!void {
+    // Checked before any operand is read: a short list has no `args[1]`.
+    if (args.len < 3) return gen_call.abort(self, .E1020, "malformed `$idx` call reached codegen", .{});
     // The choice is one integer, so it is lane-uniform.
     float_lanes.pinLanes(self, args[1]);
     const lo: i64 = blk: {
         const def = self.mir.valueDef(self.an.rv(args[0]));
         break :blk if (def == .int_const) def.int_const else 0;
     };
-    if (args.len < 3) return gen_call.abort(self, .E1020, "malformed `$idx` call reached codegen", .{});
     // Every real arm widens to the union of the elements'.
     var m: u64 = 0;
     for (args[2..]) |v| m |= family.mask(self, v);

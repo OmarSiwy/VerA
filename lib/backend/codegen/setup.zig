@@ -392,13 +392,9 @@ pub fn emitSetup(self: *Gen) Error!void {
 
 /// Returns whether emitted text uses the identifier `S`.
 fn namesS(text: []const u8) bool {
-    for (text, 0..) |c, i| {
-        if (c != 'S') continue;
-        const before = i > 0 and (std.ascii.isAlphanumeric(text[i - 1]) or text[i - 1] == '_');
-        const after = i + 1 < text.len and (std.ascii.isAlphanumeric(text[i + 1]) or text[i + 1] == '_');
-        if (!before and !after) return true;
-    }
-    return false;
+    // Outside string literals and comments: a §3.4.6 string comparison puts
+    // the literal "S" in a body that may never name the scalar.
+    return setup_chunk.hasWord(text, "S");
 }
 
 /// Emits `emitReturn` inside `setup`: stores every root from wherever the
@@ -464,4 +460,15 @@ pub fn emitRoot(self: *Gen, target: Mir.Value) Error!void {
     self.su.merge = false;
     defer self.su.merge = true;
     try emitStores(self, 1, "");
+}
+
+test namesS {
+    try std.testing.expect(namesS("    const S = V;\n"));
+    try std.testing.expect(namesS("zOf(S, 0x0)"));
+    try std.testing.expect(!namesS("model.su.b[0] = (x) != 0;"));
+    try std.testing.expect(!namesS("SS_S S2"));
+    // A literal or a comment is text, not a use: `const S = V;` beside a
+    // body that only spells "S" would be an unused local.
+    try std.testing.expect(!namesS("zStrCmp(model.mode, \"S\")"));
+    try std.testing.expect(!namesS("// S\n"));
 }

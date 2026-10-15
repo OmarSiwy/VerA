@@ -38,7 +38,9 @@ const none_u32 = std.math.maxInt(u32);
 const Live = struct { reads: u64 = 0, writes: u64 = 0 };
 
 fn ubit(u: u32) u64 {
-    return if (u == none_u32) 0 else @as(u64, 1) << @intCast(u);
+    if (u == none_u32) return 0;
+    // Past bit 63 the mask has no bit for `u`; every bit keeps it a superset.
+    return if (u >= 64) std.math.maxInt(u64) else @as(u64, 1) << @intCast(u);
 }
 
 fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
@@ -676,4 +678,14 @@ fn emitSeedTree(g: *Gen) Error!void {
 /// A tree edge's value: its seed argument, else its junction's vcrit.
 fn seedValue(lc: LimitCall) Mir.Value {
     return if (lc.seed != .undef) lc.seed else lc.argv[1];
+}
+
+test ubit {
+    // No node, no bit.
+    try std.testing.expectEqual(@as(u64, 0), ubit(none_u32));
+    try std.testing.expectEqual(@as(u64, 1), ubit(0));
+    try std.testing.expectEqual(@as(u64, 1) << 63, ubit(63));
+    // Past the mask, every bit: `Live`'s masks must stay supersets.
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), ubit(64));
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), ubit(255));
 }

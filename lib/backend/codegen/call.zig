@@ -1149,7 +1149,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     float_lanes.instPin(self); // the operator's history is the instance's
     // Every sim-state read below is spelled `sim.<field>`.
     const at = self.out.items.len;
-    defer if (std.mem.indexOf(u8, self.out.items[at..], "sim.") != null) {
+    defer if (std.mem.find(u8, self.out.items[at..], "sim.") != null) {
         self.uses.sim = true;
     };
     // A kernel runs at the result's mask `fm`, as `gen_render.kernelOpen`
@@ -1313,7 +1313,10 @@ fn opClose(self: *Gen) Error!void {
 pub fn transitionTimes(self: *Gen, args: []const Mir.Value) Error![2][]const u8 {
     const dflt = try defaultTransition(self);
     const rise = try transitionTime(self, args, 2, dflt orelse "0.0");
-    const fall = try transitionTime(self, args, 3, dflt orelse rise);
+    // An absent or zero fall time is the rise time: "If only a positive
+    // rise_time value is specified, the simulator uses it for both". With no
+    // rise time either, `rise` already is the directive's default.
+    const fall = try transitionTime(self, args, 3, rise);
     return .{ rise, fall };
 }
 
