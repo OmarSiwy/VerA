@@ -169,7 +169,9 @@ pub const Bag = struct {
         const i = @backingInt(id);
         if (i >= self.files.items.len) return;
         const f = &self.files.items[i];
-        f.raw = f.text;
+        // Only the first strip sees the original; a later one must not
+        // replace it with an already-stripped text.
+        if (f.raw.len == 0) f.raw = f.text;
         f.text = stripped;
         f.to_src = marks;
     }
