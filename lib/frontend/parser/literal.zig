@@ -91,7 +91,7 @@ fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
 pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
     const raw = self.tokenText(tok);
     const body = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
-    if (std.mem.indexOfScalar(u8, body, '\\') == null) {
+    if (std.mem.findScalar(u8, body, '\\') == null) {
         return self.file.intern(self.arena, body);
     }
     const decoded = try lexer.stringContents(self.arena, raw);

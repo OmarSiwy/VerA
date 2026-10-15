@@ -809,7 +809,7 @@ test "A.3.4: a switch instance closed early is refused by its class" {
     const arena = arena_state.allocator();
     const r = try parseForTest(arena, "module m; wire a, b, c; cmos g (a, b, c); endmodule");
     try std.testing.expectEqual(diag.Code.E0209, r.code(0));
-    try std.testing.expect(std.mem.indexOf(u8, r.msg(0), "cmos_switchtype") != null);
+    try std.testing.expect(std.mem.find(u8, r.msg(0), "cmos_switchtype") != null);
 }
 
 test "errors are collected with locations and parsing continues" {
