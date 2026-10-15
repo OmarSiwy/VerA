@@ -77,7 +77,11 @@ pub const Server = struct {
                     digest = body[@sizeOf(ServerMsg.EmitDigest)..][0..Cache.bin_digest_len].*;
                 },
                 .error_bundle => {
-                    var bundle = try std.zig.Server.allocErrorBundle(gpa, body);
+                    var bundle = std.zig.Server.allocErrorBundle(gpa, body) catch |err| switch (err) {
+                        error.OutOfMemory => |e| return e,
+                        // A body shorter than the lengths it declares.
+                        error.EndOfStream => return error.ProtocolMismatch,
+                    };
                     if (bundle.errorMessageCount() > 0) return .{ .failed = bundle };
                     bundle.deinit(gpa);
                     break;
