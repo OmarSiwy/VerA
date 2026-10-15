@@ -877,9 +877,11 @@ test build {
     const comb = "module m; reg a, b; wire w; assign w = a & b; initial begin a = 0; b = 1; #1 a = 1; end endmodule";
     try std.testing.expect(std.mem.find(u8, try emitted(a, comb, .static), "fn settle(") != null);
     try std.testing.expect(std.mem.find(u8, try emitted(a, comb, .fifo), "fn settle(") == null);
-    // One whose output an event control waits on stays queued: a settle
-    // event would change it before a process started in between ran.
-    const waited = "module m; reg a; wire w; assign w = a; initial begin a = 0; #1 a = 1; end always @(w) $display(\"%b\", w); endmodule";
+    // One whose output a general process's event control waits on stays
+    // queued: a settle event would change it before a process started in
+    // between ran. (`initial @(w)` stops after one pass, so it is general,
+    // not a triggered process the watcher table wakes.)
+    const waited = "module m; reg a; wire w; assign w = a; initial begin a = 0; #1 a = 1; end initial @(w) $display(\"%b\", w); endmodule";
     try std.testing.expect(std.mem.find(u8, try emitted(a, waited, .static), "fn settle(") == null);
 }
 

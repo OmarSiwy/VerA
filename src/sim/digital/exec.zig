@@ -217,6 +217,16 @@ fn disableRange(self: *Run, start: u32, end: u32) Error!void {
     if (try stopRange(self, start, end)) _ = try enqueue(self, .{ .run_process = end }, null, false);
 }
 
+/// `disableRange` by a process running inside [start, end) itself, which
+/// continues at `end` on its own unless another process inside was ended:
+/// then one resumption at `end` is queued and true says the caller stops,
+/// so the statement after the block runs once, not once per process.
+fn disableInside(self: *Run, start: u32, end: u32) Error!bool {
+    if (!try stopRange(self, start, end)) return false;
+    _ = try enqueue(self, .{ .run_process = end }, null, false);
+    return true;
+}
+
 /// Drop every resumption point in [start, end): the waiters parked there and
 /// the queued `.run_process` rows. Whether anything was.
 pub fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
@@ -396,9 +406,10 @@ fn callTimed(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprI
         try evict(self, idx);
         for (f.first..f.first + f.count) |s| {
             const v = self.values[s];
-            const fill: u64 = if (self.reals.contains(@intCast(s))) 0 else std.math.maxInt(u64);
-            @memset(v.values(), fill);
-            @memset(v.unknowns(), fill);
+            // `filled` keeps the bits past the width 0, as every slot's are;
+            // a whole-word memset left them set.
+            const fill: Int.Bit = if (self.reals.contains(@intCast(s))) .zero else .x;
+            @memcpy(v.planes, (try filled(a, v.width, v.signed, fill)).planes);
         }
         sub.resident = id;
     }
@@ -718,7 +729,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                         if (x.slice) |sl| {
                             const whole = try evaluate.eval(self, scratch, x.e, sl.total);
                             const part = try filled(scratch, d.current.width, false, .z);
-                            for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
+                            evaluate.copyBits(part, 0, whole, sl.lo, d.current.width);
                             break :blk part;
                         }
                         break :blk try evaluate.evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
@@ -880,23 +891,32 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             .disable_task => |idx| {
                 const sub = &self.subs.items[idx];
                 var next = pc + 1;
+                var resumed = false;
                 for (sub.ranges.items) |rg| {
-                    try disableRange(self, rg.start, rg.end);
-                    if (pc >= rg.start and pc < rg.end) next = rg.end;
+                    if (pc >= rg.start and pc < rg.end) {
+                        next = rg.end;
+                        if (try disableInside(self, rg.start, rg.end)) resumed = true;
+                    } else try disableRange(self, rg.start, rg.end);
                 }
                 if (sub.active != 0) {
                     self.unwind = idx;
                     return;
                 }
+                if (resumed) return;
                 pc = next;
                 continue;
             },
             .disable_block => |b| {
-                try disableRange(self, b.start, b.end);
+                const inside = pc >= b.start and pc < b.end;
+                const resumed = if (inside) try disableInside(self, b.start, b.end) else blk: {
+                    try disableRange(self, b.start, b.end);
+                    break :blk false;
+                };
                 if (self.done_hook) |h| if (self.done_sites.contains(pc)) try h(self, pc);
+                if (resumed) return;
                 // IEEE1364 §10.3: self/ancestor disable resumes AFTER the
                 // target block, while a sibling disable continues here.
-                pc = if (pc >= b.start and pc < b.end) b.end else pc + 1;
+                pc = if (inside) b.end else pc + 1;
                 continue;
             },
             .restart => |s| {

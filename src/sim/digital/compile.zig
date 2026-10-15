@@ -971,7 +971,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 self.scope = try elab.blockScope(self, outer, id);
             }
             const start = position(self);
-            if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
+            // §9.8.2 in a function: §10.4.4 leaves no arm a timing control,
+            // so each runs to its end, and running them one after another,
+            // in order, is one execution of the parallel block, joined
+            // before the call returns. A queued arm would outlive the call.
+            if (b.parallel and !self.in_function) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
             self.scope = outer;
             if (b.name != .none) {
                 const entry = try self.blocks.getOrPut(self.arena, .{ .scope = self.scope, .str = b.name });
@@ -1508,7 +1512,10 @@ fn stmtTimed(self: *Run, inst: u32, id: Ast.StmtId) Error!bool {
     return switch (self.file.stmt(id)) {
         .event_control => true,
         .assign => |s| intraTimed(s),
-        .block => |b| for (b.body) |s| {
+        // §9.8.2: the parent waits at the join for arms that run as
+        // processes of their own, which only a process can do; a task with a
+        // fork is inlined into its caller like one with a timing control.
+        .block => |b| if (b.parallel) true else for (b.body) |s| {
             if (try stmtTimed(self, inst, s)) break true;
         } else false,
         .if_stmt => |s| try stmtTimed(self, inst, s.then_s) or try stmtTimed(self, inst, s.else_s),
@@ -1633,7 +1640,15 @@ pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), pr
             // names is known only when it is read; a vector select its vector.
             if (try self.indexedArray(e)) |arr| {
                 const base = try self.slot(self.chainBase(e).base);
-                for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
+                // The elements enter `out` together and in order, so the last
+                // one there means all are; before them only the first can be,
+                // as a bare name (`$fread`'s memory). `watch` element by
+                // element was quadratic in the array's size.
+                if (std.mem.findScalar(u32, out.items, base + arr.count - 1) == null) {
+                    const has_base = std.mem.findScalar(u32, out.items, base) != null;
+                    try out.ensureUnusedCapacity(self.arena, arr.count);
+                    for (@intFromBool(has_base)..arr.count) |i| out.appendAssumeCapacity(base + @as(u32, @intCast(i)));
+                }
                 var x = e;
                 while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivityProbes(self, ex.rhs(x), out, probes);
             } else {

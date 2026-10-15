@@ -133,11 +133,34 @@ fn readSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal
     const at = (try selectSlot(self, a, e)) orelse return out;
     const sel = (try selection(self, a, e)) orelse return out;
     const v = self.values[at];
-    for (0..sel.count) |i| {
-        const pos = sel.first + @as(i64, @intCast(i));
-        if (pos >= 0 and pos < v.width) setBit(out, @intCast(i), v.bit(@intCast(pos)));
-    }
+    // The selected positions the vector has; the rest stay x.
+    const lo = @max(sel.first, 0);
+    const hi = @min(sel.first + @as(i64, sel.count), @as(i64, v.width));
+    if (lo < hi) copyBits(out, @intCast(lo - sel.first), v, @intCast(lo), @intCast(hi - lo));
     return out;
+}
+
+/// Copies bits [src_lo, src_lo + count) of `src` into bits [dst_lo, dst_lo +
+/// count) of `dst`, value and unknown planes alike, leaving `dst`'s other
+/// bits alone. Asserts both ranges lie inside their widths. A word at a
+/// time: a chunk ends where either side's word does.
+pub fn copyBits(dst: Int.Literal, dst_lo: u32, src: Int.Literal, src_lo: u32, count: u32) void {
+    std.debug.assert(@as(u64, src_lo) + count <= src.width);
+    std.debug.assert(@as(u64, dst_lo) + count <= dst.width);
+    const planes = [2][2][]u64{ .{ dst.values(), src.values() }, .{ dst.unknowns(), src.unknowns() } };
+    var done: u32 = 0;
+    while (done < count) {
+        const s = src_lo + done;
+        const d = dst_lo + done;
+        const n = @min(count - done, 64 - d % 64, 64 - s % 64);
+        const mask: u64 = if (n == 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(n)) - 1;
+        const ds: u6 = @intCast(d % 64);
+        for (planes) |p| {
+            const bits = (p[1][s / 64] >> @intCast(s % 64)) & mask;
+            p[0][d / 64] = (p[0][d / 64] & ~(mask << ds)) | (bits << ds);
+        }
+        done += n;
+    }
 }
 
 /// Where `e` lands if written now, or null when it names no storage (an
@@ -159,9 +182,10 @@ pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.L
 
 /// `assign` of a real, which an integral target takes rounded (§4.8.2).
 pub fn assignReal(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, r: f64) Error!void {
-    const p = (try place(self, a, target)) orelse return;
+    // `put`, as `assign` does: a concatenation target splits the rounded
+    // value among its operands (§9.2); `place` alone names one slot.
     const tt = try targetType(self, target);
-    try write(self, a, p, try convertValue(a, try realLiteral(a, r), true, tt));
+    try put(self, a, target, try convertValue(a, try realLiteral(a, r), true, tt), false, null);
 }
 
 /// `assign` of an integer.
@@ -198,7 +222,7 @@ pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Lite
 /// Bits [lo, lo + w) of `v`, unsigned.
 pub fn bitsOf(a: std.mem.Allocator, v: Int.Literal, lo: u32, w: u32) Error!Int.Literal {
     const out = try filled(a, w, false, .zero);
-    for (0..w) |i| setBit(out, @intCast(i), v.bit(lo + @as(u32, @intCast(i))));
+    copyBits(out, 0, v, lo, w);
     return out;
 }
 
@@ -211,10 +235,11 @@ pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Err
     const cur = self.values[p.slot];
     const merged = try filled(a, cur.width, cur.signed, .zero);
     @memcpy(merged.planes, cur.planes);
-    for (0..sel.count) |i| {
-        const pos = sel.first + @as(i64, @intCast(i));
-        if (pos >= 0 and pos < cur.width) setBit(merged, @intCast(pos), value.bit(@intCast(i)));
-    }
+    // The selected positions the slot has; the value's bits for the others
+    // are dropped.
+    const lo = @max(sel.first, 0);
+    const hi = @min(sel.first + @as(i64, sel.count), @as(i64, cur.width));
+    if (lo < hi) copyBits(merged, @intCast(lo), value, @intCast(lo - sel.first), @intCast(hi - lo));
     return waiters.store(self, p.slot, merged.planes);
 }
 
@@ -475,10 +500,12 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
 /// operands get Table 5-22's self-determined or common comparison context.
 pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
     // §4.8: a real context is a double; a real operand in an integral
-    // context is its §4.8.2 rounded integer.
+    // context is its §4.8.2 rounded integer. A real context comes first: an
+    // unsized x or z constant there is §4.8.2's conversion too (its unknown
+    // bits are 0), not a fill of the real's 64 bits.
     if (ty.real) return realLiteral(a, try evalReal(self, a, e));
+    if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
     if (compile.typeOf(self, e).real) return normalize(a, try intOfReal(a, try evalReal(self, a, e)), ty);
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
@@ -704,6 +731,35 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test copyBits {
+    // Oracle: the bit-at-a-time copy it replaced, over random 4-state data at
+    // every alignment of both sides up to a few words.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var prng = std.Random.DefaultPrng.init(0xc0b1e5);
+    const rand = prng.random();
+    for (0..3000) |_| {
+        const sw = rand.intRangeAtMost(u32, 1, 200);
+        const dw = rand.intRangeAtMost(u32, 1, 200);
+        const count = rand.intRangeAtMost(u32, 1, @min(sw, dw));
+        const src_lo = rand.intRangeAtMost(u32, 0, sw - count);
+        const dst_lo = rand.intRangeAtMost(u32, 0, dw - count);
+        const src = try filled(a, sw, false, .zero);
+        const got = try filled(a, dw, false, .zero);
+        const want = try filled(a, dw, false, .zero);
+        for (0..sw) |i| setBit(src, @intCast(i), rand.enumValue(Int.Bit));
+        for (0..dw) |i| {
+            const b = rand.enumValue(Int.Bit);
+            setBit(got, @intCast(i), b);
+            setBit(want, @intCast(i), b);
+        }
+        copyBits(got, dst_lo, src, src_lo, count);
+        for (0..count) |i| setBit(want, dst_lo + @as(u32, @intCast(i)), src.bit(src_lo + @as(u32, @intCast(i))));
+        try std.testing.expectEqualSlices(u64, want.planes, got.planes);
+    }
+}
 
 test "§4.8 real variables, conversions, and a VAMS §3.7 wreal" {
     try expectRun(
