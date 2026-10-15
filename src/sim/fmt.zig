@@ -35,7 +35,7 @@ pub const TimeFormat = struct {
     units: i32 = 0,
     precision: u32 = 0,
     suffix: []const u8 = "",
-    width: u32 = 20,
+    width: u64 = 20,
 };
 
 /// A `%d` of a known operand wider than 64 bits takes scratch from the
@@ -60,7 +60,7 @@ pub fn byteAt(v: Int.Literal, n: u32) u8 {
 /// "each 8 bits representing a single character ... right-justified so that
 /// the rightmost bit of the value is the least significant bit of the last
 /// character", and "leading zeros are never printed".
-pub fn text(out: *std.Io.Writer, v: Int.Literal, char: bool, width: ?u32) std.Io.Writer.Error!void {
+pub fn text(out: *std.Io.Writer, v: Int.Literal, char: bool, width: ?u64) std.Io.Writer.Error!void {
     var n: u32 = if (char) 1 else (v.width + 7) / 8;
     if (!char) while (n != 0 and byteAt(v, n - 1) == 0) {
         n -= 1;
@@ -116,7 +116,7 @@ pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
 /// prints as unknown while its neighbours print normally. A decimal
 /// rendering has no such locality (one unknown bit makes the whole number
 /// unknown), which is why §17.1.1.4 gives it its own rule.
-pub fn value(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
+pub fn value(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, radix: Radix, width: ?u64) Error!void {
     const field = width orelse autoWidth(v, radix);
     if (radix == .decimal) {
         if (v.width > 64 and !v.hasUnknown()) return wideDecimal(out, gpa, v, field);
@@ -231,7 +231,7 @@ pub fn decimalText(buf: []u8, v: Int.Literal) []const u8 {
 /// and its top bit is set) is divided by 10^19 until it is zero, each
 /// remainder one 19-digit group, and the groups print most significant
 /// first. The scratch comes from `gpa` and is freed before returning.
-fn wideDecimal(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, field: u32) Error!void {
+fn wideDecimal(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, field: u64) Error!void {
     // ponytail: schoolbook division, quadratic in the word count; a
     // divide-and-conquer radix conversion if multi-megabit %d ever matters.
     const words = (v.width + 63) / 64;
@@ -375,7 +375,7 @@ test "%t scales a unit count to $timeformat's units and pads to its width (§17.
 test "a group radix prints x and z per digit, lowercase when the whole group is unknown (§17.1.1.4)" {
     var out_buf: [64]u8 = undefined;
     var w: std.Io.Writer = .fixed(&out_buf);
-    const Case = struct { v: u64, x: u64, width: u32, radix: Radix, field: ?u32, want: []const u8 };
+    const Case = struct { v: u64, x: u64, width: u32, radix: Radix, field: ?u64, want: []const u8 };
     for ([_]Case{
         // 8'bx...: the octal top group has two bits, both x: still "x".
         .{ .v = 0xff, .x = 0xff, .width = 8, .radix = .octal, .field = null, .want = "xxx" },
@@ -405,7 +405,7 @@ test "a group radix prints x and z per digit, lowercase when the whole group is 
 test "%d: one unknown bit poisons the number, and the field fits the largest value (§17.1.1.3)" {
     var out_buf: [64]u8 = undefined;
     var w: std.Io.Writer = .fixed(&out_buf);
-    const Case = struct { v: u64, x: u64, width: u32, signed: bool = false, field: ?u32 = null, want: []const u8 };
+    const Case = struct { v: u64, x: u64, width: u32, signed: bool = false, field: ?u64 = null, want: []const u8 };
     for ([_]Case{
         // 8'd7 in the 3 columns of 255; `%0d` drops the padding.
         .{ .v = 7, .x = 0, .width = 8, .want = "  7" },
@@ -442,7 +442,7 @@ test "%d of a known operand past 64 bits is its whole decimal value (§17.1.1.3)
     var out_buf: [128]u8 = undefined;
     var w: std.Io.Writer = .fixed(&out_buf);
     const max = std.math.maxInt(u64);
-    const Case = struct { lo: u64, hi: u64, width: u32, signed: bool = false, field: ?u32 = null, want: []const u8 };
+    const Case = struct { lo: u64, hi: u64, width: u32, signed: bool = false, field: ?u64 = null, want: []const u8 };
     for ([_]Case{
         // 2^64, the first value past the old boundary, in the 20 columns of 2^65 - 1.
         .{ .lo = 0, .hi = 1, .width = 65, .want = "18446744073709551616" },

@@ -2244,7 +2244,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                 try text.append(self.arena, '%');
                 continue;
             }
-            var width: ?u32 = null;
+            var width: ?u64 = null;
             while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
                 width = (width orelse 0) *| 10 +| (format[i] - '0');
             var precision: i64 = -1;
@@ -2452,7 +2452,7 @@ fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {
 }
 
 /// One `%b %o %h %d` operand, or an argument with no format (`emitValue`).
-fn operand(self: *Emitter, e: Ast.ExprId, radix: fmt.Radix, width: ?u32) Error!void {
+fn operand(self: *Emitter, e: Ast.ExprId, radix: fmt.Radix, width: ?u64) Error!void {
     try self.print("            try s.value(", .{});
     const t = try expr.selfDetermined(self, e);
     try self.print(", {d}, {}, .{t}, {?d});\n", .{ t.width, t.signed, radix, width });

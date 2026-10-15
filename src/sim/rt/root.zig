@@ -24,7 +24,6 @@ const snapshot = @import("snapshot.zig");
 /// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
-const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
 const display = @import("../digital/display.zig");
 const W = logic.W;
@@ -1923,13 +1922,13 @@ pub const State = struct {
     }
 
     /// One `%b`/`%o`/`%h`/`%d` operand (§17.1.1.3).
-    pub fn value(self: *State, a: anytype, w: u32, signed: bool, radix: fmt.Radix, width: ?u32) Error!void {
+    pub fn value(self: *State, a: anytype, w: u32, signed: bool, radix: fmt.Radix, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
         return fmt.value(self.out, self.gpa, literal(&buf, w, signed), radix, width);
     }
 
     /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).
-    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u32) Error!void {
+    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
         var f = self.time_format;
         if (width) |fw| f.width = fw;
@@ -1938,11 +1937,8 @@ pub const State = struct {
 
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
     /// padded on the left to `width`.
-    pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u32) Error!void {
-        var buf: [display.real_buf]u8 = undefined;
-        const out = zCReal(&buf, r, conv, 0, 0, precision);
-        if (width) |w| if (out.len < w) try self.out.splatByteAll(' ', w - out.len);
-        try self.out.writeAll(out);
+    pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u64) Error!void {
+        return display.real(self.out, self.gpa, r, conv, precision, width);
     }
 
     /// §17.1.1.5 `%v` of the native net `k` (`Nets.sig0`, kept by the fold
@@ -1963,7 +1959,7 @@ pub const State = struct {
     pub const Format = struct { text: []const u8, i: usize = 0, bad: bool = false };
 
     /// One argument-taking conversion of a `Format`.
-    pub const Spec = struct { conv: u8, width: ?u32, precision: i64 };
+    pub const Spec = struct { conv: u8, width: ?u64, precision: i64 };
 
     /// The characters of the `w`-bit format `a` (`system.text`) in `buf`,
     /// `w / 8` bytes rounded up, most significant first and its leading zero
@@ -2014,7 +2010,7 @@ pub const State = struct {
                 try self.out.writeByte('%');
                 continue;
             }
-            var width: ?u32 = null;
+            var width: ?u64 = null;
             while (f.i < t.len and t[f.i] >= '0' and t[f.i] <= '9') : (f.i += 1)
                 width = (width orelse 0) *| 10 +| (t[f.i] - '0');
             var precision: i64 = -1;
@@ -2028,8 +2024,6 @@ pub const State = struct {
                 f.bad = true;
                 return null;
             }
-            if ((width orelse 0) > display.max_field or precision > display.max_field)
-                return self.fail("a field width or precision here exceeds {d}", .{display.max_field});
             const conv = t[f.i];
             f.i += 1;
             switch (conv) {
@@ -2043,7 +2037,7 @@ pub const State = struct {
     }
 
     /// One `%s` or `%c` operand (§17.1.1.7).
-    pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u32) Error!void {
+    pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
         try fmt.text(self.out, literal(&buf, w, false), char, width);
     }
@@ -2267,7 +2261,7 @@ test "§17.2.3 a held format: text, %% and %m print, a conversion is returned, a
     var f: State.Format = .{ .text = "a%%b%5.2fc%m%" };
     const sp = (try s.nextSpec(&f, "top.u", "work")).?;
     try testing.expectEqual(@as(u8, 'f'), sp.conv);
-    try testing.expectEqual(@as(?u32, 5), sp.width);
+    try testing.expectEqual(@as(?u64, 5), sp.width);
     try testing.expectEqual(@as(i64, 2), sp.precision);
     try testing.expectEqualStrings("a%b", s.sink.buffered());
     // The rest prints; the format ends inside a conversion (W1153).
@@ -2279,8 +2273,9 @@ test "§17.2.3 a held format: text, %% and %m print, a conversion is returned, a
     try testing.expect(try s.nextSpec(&plain, "", "") == null);
     var unknown: State.Format = .{ .text = "%q" };
     try testing.expectError(error.Failed, s.nextSpec(&unknown, "", ""));
+    // No width is too large: past the old 4096 and past a u32.
     var huge: State.Format = .{ .text = "%99999999999d" };
-    try testing.expectError(error.Failed, s.nextSpec(&huge, "", ""));
+    try testing.expectEqual(@as(?u64, 99999999999), (try s.nextSpec(&huge, "", "")).?.width);
 }
 
 test "§9.7.1 delays: an x is no delay, a negative integer an unsigned time; §9.6 repeat counts" {
