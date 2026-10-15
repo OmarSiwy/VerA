@@ -164,7 +164,13 @@ pub fn binaryTransfer(op: Mir.Opcode, x: proof_lattice.Interval, y: proof_lattic
             // corners 1/±10 give its complement [-0.1,0.1]. The nonzero fact
             // still stands for finiteness (±inf only via overflow, rule 3);
             // only the interval claim is void.
-            const iv = if (y.gt(0) or y.lt(0)) combine(x, y, divOp) else proof_lattice.Interval.top;
+            // An open end at 0 is approached from the divisor's own side, so
+            // its corner divides by that signed zero: 1/(-inf, 0) is
+            // (0, +inf], and a +0 end would give the corner -inf instead.
+            var yd = y;
+            if (y.lt(0) and y.hi == 0) yd.hi = -0.0;
+            if (y.gt(0) and y.lo == 0) yd.lo = 0.0;
+            const iv = if (y.gt(0) or y.lt(0)) combine(x, yd, divOp) else proof_lattice.Interval.top;
             return .{ .iv = iv, .finite = f };
         },
         // §4.2.4 modulus: |result| < |divisor|, sign of the dividend.
