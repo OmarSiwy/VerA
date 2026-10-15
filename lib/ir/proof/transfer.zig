@@ -4,11 +4,10 @@
 //! LRM §3.2, §4.2.4, §4.2.5, §4.2.8, §4.3.1 (Table 4-14), §4.3.2 (Table 4-15),
 //! §4.5.13, §9.5, §9.10, §9.13, §9.15, §9.18.
 
-const proof = @import("../proof.zig");
+const std = @import("std");
 const proof_lattice = @import("lattice.zig");
 const Mir = @import("../mir.zig");
-const math = proof.math;
-const std = @import("std");
+const math = std.math;
 
 /// A value's abstract state: its interval for the domain proof, and the
 /// separate finiteness fact (the rules on `proof.FloatMode`) that sets the
