@@ -600,3 +600,187 @@ pub fn tick(r: *Run, a: std.mem.Allocator) Error!void {
 pub fn finish(r: *Run, a: std.mem.Allocator) Error!void {
     if (r.vcd.pending) try tick(r, a);
 }
+
+test "§18.2.1 %.16g at the edges of its two styles" {
+    var buf: [64]u8 = undefined;
+    // Each expected text is C's printf("%.16g") of the value: the style is
+    // chosen by the exponent after rounding to 16 digits, so 9.999...e15
+    // rounds up into style e.
+    const cases = [_]struct { f64, []const u8 }{
+        .{ -@as(f64, 0.0), "-0" },
+        .{ @as(f64, 0.1) + 0.2, "0.3" },
+        .{ 1e-4, "0.0001" },
+        .{ 3.0000000000000004e-05, "3e-05" },
+        .{ 1e15, "1000000000000000" },
+        .{ 9007199254740992.0, "9007199254740992" },
+        .{ 9.999999999999999e15, "1e+16" },
+        .{ 1.5e-300, "1.5e-300" },
+        .{ 123.456, "123.456" },
+        .{ std.math.inf(f64), "inf" },
+        .{ -std.math.inf(f64), "-inf" },
+        .{ std.math.nan(f64), "nan" },
+    };
+    for (cases) |c| try std.testing.expectEqualStrings(c[1], g16(&buf, c[0]));
+}
+
+/// Reads back an identifier code `codeText` wrote (least significant
+/// character first): the inverse the codes' uniqueness is checked with.
+fn codeValue(text: []const u8) u32 {
+    var i = text.len - 1;
+    var n: u32 = text[i] - '!';
+    while (i != 0) {
+        i -= 1;
+        n = (text[i] - '!') + 94 * (n + 1);
+    }
+    return n;
+}
+
+test codeText {
+    var buf: [16]u8 = undefined;
+    // §18.2.1: the 94 printable characters from ! to ~, then two of them.
+    const cases = [_]struct { u32, []const u8 }{
+        .{ 0, "!" },
+        .{ 1, "\"" },
+        .{ 93, "~" },
+        .{ 94, "!!" },
+        .{ 95, "\"!" },
+        .{ 187, "~!" },
+        .{ 188, "!\"" },
+        .{ 94 * 94 + 93, "~~" },
+    };
+    for (cases) |c| {
+        var w: std.Io.Writer = .fixed(&buf);
+        try codeText(&w, c[0]);
+        try std.testing.expectEqualStrings(c[1], w.buffered());
+    }
+    // Every code reads back as itself, so no two variables share one.
+    for (0..20_000) |code| {
+        var w: std.Io.Writer = .fixed(&buf);
+        try codeText(&w, @intCast(code));
+        try std.testing.expectEqual(@as(u32, @intCast(code)), codeValue(w.buffered()));
+        for (w.buffered()) |ch| try std.testing.expect(ch >= '!' and ch <= '~');
+    }
+}
+
+fn testLiteral(a: std.mem.Allocator, bits: []const u8) !Front.Integer.Literal {
+    const v = try @import("net.zig").filled(a, @intCast(bits.len), false, .zero);
+    for (bits, 0..) |c, i| @import("net.zig").setBit(v, @intCast(bits.len - 1 - i), switch (c) {
+        '0' => .zero,
+        '1' => .one,
+        'x' => .x,
+        else => .z,
+    });
+    return v;
+}
+
+test value {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §18.2.1 Table 18-1: a vector drops a leading digit the next one left-
+    // extends to anyway: 0 before 0 or 1, x before x, z before z. Never a
+    // 1, and never a 0 before an x or z.
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "0000", "b0 !\n" },
+        .{ "0010", "b10 !\n" },
+        .{ "1010", "b1010 !\n" },
+        .{ "xx01", "bx01 !\n" },
+        .{ "zzzz", "bz !\n" },
+        .{ "0x10", "b0x10 !\n" },
+        .{ "z", "z!\n" },
+        .{ "1", "1!\n" },
+    };
+    for (cases) |c| {
+        const v = try testLiteral(a, c[0]);
+        var out: std.Io.Writer.Allocating = .init(a);
+        try value(&out.writer, .{ .slot = 0, .width = v.width, .real = false, .head = "", .tail = "" }, v.planes, 0, false);
+        try std.testing.expectEqualStrings(c[1], out.written());
+    }
+    // §18.2.3.11 `$dumpoff`'s x: a vector as one extended digit.
+    {
+        const v = try testLiteral(a, "1010");
+        var out: std.Io.Writer.Allocating = .init(a);
+        try value(&out.writer, .{ .slot = 0, .width = 4, .real = false, .head = "", .tail = "" }, v.planes, 95, true);
+        try std.testing.expectEqualStrings("bx \"!\n", out.written());
+    }
+    // A real: `r`, its %.16g, a space.
+    {
+        const p = [2]u64{ @bitCast(@as(f64, 1.5)), 0 };
+        var out: std.Io.Writer.Allocating = .init(a);
+        try value(&out.writer, .{ .slot = 0, .width = 64, .real = true, .head = "", .tail = "" }, &p, 0, false);
+        try std.testing.expectEqualStrings("r1.5 !\n", out.written());
+    }
+}
+
+test callText {
+    // The call through its closing parenthesis: parentheses inside a string
+    // (escaped quote included) or nested in the argument do not end it.
+    const text = "x = 1; $dumpfile(\"a(\\\")b.vcd\"); $dumpfile((n)); $dumpfile";
+    const s1 = std.mem.find(u8, text, "$dumpfile(\"").?;
+    try std.testing.expectEqualStrings("$dumpfile(\"a(\\\")b.vcd\")", callText(text, @intCast(s1)));
+    const s2 = std.mem.find(u8, text, "$dumpfile((").?;
+    try std.testing.expectEqualStrings("$dumpfile((n))", callText(text, @intCast(s2)));
+    // An unterminated call is the rest of the text.
+    const s3 = std.mem.findLast(u8, text, "$dumpfile").?;
+    try std.testing.expectEqualStrings("$dumpfile", callText(text, @intCast(s3)));
+}
+
+test preamble {
+    var buf: [64]u8 = undefined;
+    // §18.2.3.6: `time_number` is 1, 10 or 100 of an SI unit, here the tick
+    // 10^finest s.
+    const cases = [_]struct { i32, []const u8 }{
+        .{ -15, "1fs" },
+        .{ -14, "10fs" },
+        .{ -13, "100fs" },
+        .{ -12, "1ps" },
+        .{ -9, "1ns" },
+        .{ -1, "100ms" },
+        .{ 0, "1s" },
+        .{ 1, "10s" },
+        .{ 2, "100s" },
+    };
+    for (cases) |c| {
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        try preamble(&out.writer, std.testing.io, "$dumpfile(\"d.vcd\")", c[0]);
+        const text = out.written();
+        try std.testing.expectEqualStrings(try std.mem.print(&buf, "$timescale {s} $end\n", .{c[1]}), text[std.mem.find(u8, text, "$timescale ").?..]);
+        // §18.2.3.8: `$version` names the call that made the file.
+        try std.testing.expect(std.mem.find(u8, text, "$version\n\tVerA\n\t$dumpfile(\"d.vcd\")\n$end\n") != null);
+        try std.testing.expect(std.mem.startsWith(u8, text, "$date\n\t"));
+    }
+}
+
+test "§18.1.2 every $dumpvars runs at one time, before the dump starts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var v: Vcd = .{};
+    try v.select(a, 5, 0, 0, &.{.{ .scope = 0 }});
+    // "levels applies ... and not to individual variables": a second call
+    // at the same time adds a variable and leaves the scope's count.
+    try v.select(a, 5, 0, 2, &.{.{ .slot = 7 }});
+    try std.testing.expectEqual(@as(?u32, 0), v.scopes.get(0));
+    try std.testing.expect(v.slots.contains(7));
+    try std.testing.expectError(error.DumpvarsTime, v.select(a, 6, 0, 0, &.{}));
+    v.started = true;
+    try std.testing.expectError(error.DumpvarsTime, v.select(a, 5, 0, 0, &.{}));
+}
+
+test "§18.1.1 $dumpfile names the file until dumping begins" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var v: Vcd = .{};
+    try std.testing.expectEqualStrings("dump.vcd", v.name);
+    // A name with an x or z bit is no name.
+    try v.setFile(a, null, "$dumpfile(n)");
+    try std.testing.expectEqualStrings("dump.vcd", v.name);
+    try std.testing.expect(v.call == null);
+    try v.setFile(a, "a.vcd", "$dumpfile(\"a.vcd\")");
+    try std.testing.expectEqualStrings("a.vcd", v.name);
+    v.started = true;
+    try v.setFile(a, "b.vcd", "$dumpfile(\"b.vcd\")");
+    try std.testing.expectEqualStrings("a.vcd", v.name);
+}

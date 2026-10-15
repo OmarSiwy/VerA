@@ -376,3 +376,56 @@ test "§9.22.3 a driver's state is one bit: a vector signal_name is refused, not
     try diag.render(&bag, &messages.writer, .{});
     try std.testing.expect(std.mem.find(u8, messages.written(), "signal_name is a scalar net") != null);
 }
+
+test strengthBits {
+    // VAMS §9.22.4: bits 5-3 strength0, bits 2-0 strength1. A 0 or 1 puts
+    // the high end of its range in strength0's field and the low end in
+    // strength1's; a 0 or 1 at one strength has that level in both.
+    try std.testing.expectEqual(@as(u32, 6 << 3 | 6), strengthBits(.of(.one, .strong, .strong)));
+    try std.testing.expectEqual(@as(u32, 6 << 3 | 5), strengthBits(.{ .lo = 5, .hi = 6 }));
+    try std.testing.expectEqual(@as(u32, 7 << 3 | 3), strengthBits(.{ .lo = -7, .hi = -3 }));
+    // An x spans both sides: each field its own side's level (Figure 9-3).
+    try std.testing.expectEqual(@as(u32, 3 << 3 | 5), strengthBits(.{ .lo = -3, .hi = 5 }));
+    // A z drives nothing: HiZ in both.
+    try std.testing.expectEqual(@as(u32, 0), strengthBits(.{}));
+}
+
+test level {
+    // §9.23.3 "an integer between 0 and 7": the strength of the one state.
+    try std.testing.expectEqual(@as(u32, 7), level(.of(.one, .supply, .supply)));
+    try std.testing.expectEqual(@as(u32, 5), level(.of(.zero, .pull, .pull)));
+    try std.testing.expectEqual(@as(u32, 0), level(.{}));
+}
+
+test of {
+    // One `compile.SysFn` row per §9.22/§9.23 function, and none for the rest.
+    try std.testing.expectEqual(@as(?Fn, .count), of(.driver_count));
+    try std.testing.expectEqual(@as(?Fn, .receiver_count), of(.receiver_count));
+    try std.testing.expectEqual(@as(?Fn, .state), of(.driver_state));
+    try std.testing.expectEqual(@as(?Fn, .strength), of(.driver_strength));
+    try std.testing.expectEqual(@as(?Fn, .delay), of(.driver_delay));
+    try std.testing.expectEqual(@as(?Fn, .next_state), of(.driver_next_state));
+    try std.testing.expectEqual(@as(?Fn, .next_strength), of(.driver_next_strength));
+    try std.testing.expectEqual(@as(?Fn, .type), of(.driver_type));
+    try std.testing.expectEqual(@as(?Fn, null), of(.time));
+}
+
+test key {
+    // A waiter slot no variable owns: bit 31 set, the net's slot below it.
+    try std.testing.expectEqual(@as(u32, 0x8000_0000), key(0));
+    try std.testing.expectEqual(@as(u32, 0x8000_0005), key(5));
+    try std.testing.expect(key(5) != key(6));
+}
+
+test "§9.22 a driver access function outside a connect module is E0818" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const diag = @import("diag");
+    var bag = diag.Bag.init(arena.allocator());
+    var out = std.Io.Writer.Allocating.init(arena.allocator());
+    try std.testing.expectError(error.DigitalFailed, root.elaborate(arena.allocator(),
+        \\module top; wire w; assign w = 1'b1; initial $display("%0d", $driver_count(w)); endmodule
+        \\
+    , .{ .mixed = .{ .top = "top", .timescale = null } }, &bag, &out.writer));
+    try std.testing.expectEqual(diag.Code.E0818, bag.records.items[0].code);
+}

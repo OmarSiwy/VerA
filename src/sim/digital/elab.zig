@@ -2265,3 +2265,36 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; reg [3:0] a; wire [a:0] w; initial $display(\"x\"); endmodule", "constant expression is required");
     try expectRejected("module m; parameter P = 1; initial P = 2; endmodule", "parameter is a constant");
 }
+
+test "§12.3.10 Table 12-1: a warn cell warns either way round, and no type warns against itself" {
+    const kinds = [_]Ast.NetKind{ .wire, .tri, .tri0, .tri1, .triand, .trior, .trireg, .wand, .wor, .uwire, .supply0, .supply1, .wreal };
+    for (kinds) |i| {
+        try std.testing.expect(!warnCell(i, i));
+        // A type never dominates itself, and of two types at most one
+        // dominates the other ("int" and "ext" are a cell's two answers).
+        try std.testing.expect(!internalDominates(i, i));
+        for (kinds) |x| {
+            try std.testing.expectEqual(warnCell(i, x), warnCell(x, i));
+            try std.testing.expect(!(internalDominates(i, x) and internalDominates(x, i)));
+        }
+    }
+}
+
+test "§6.1.1/A.3.3 a driver of a variable's select names the construct that drives it" {
+    // Each construct says what it is: the refusal is not an output port's
+    // when no port is involved.
+    try expectRejected("module m; reg [1:0] a; assign a[0] = 1'b1; endmodule", "a continuous assignment can only drive a net");
+    try expectRejected("module m; reg [1:0] a; reg b; and g(a[0], b, b); endmodule", "a gate's output terminal must be a net");
+}
+
+test "§4.9 a net array element driven by a constant index" {
+    // §4.9.1 one net per element; `assign w[1] = ...` drives element 1 only.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\wire w [0:2];
+        \\assign w[1] = 1'b1;
+        \\initial #1 $display("%b%b%b", w[0], w[1], w[2]);
+        \\endmodule
+    , "z1z\n");
+}

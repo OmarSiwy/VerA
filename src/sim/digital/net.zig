@@ -1009,3 +1009,337 @@ test "§8 a sequential UDP with edge letters, an initial state and an instance d
         \\endmodule
     , "1101\n");
 }
+
+// ---- unit tests: the tables against the clause's own rows -------------------
+
+test Delay {
+    // §7.14: a transition to 1 takes the rise delay, to 0 the fall delay, to
+    // z the turn-off delay, and to x the smallest of the three.
+    const d: Delay = .{ .rise = 3, .fall = 5, .off = 4, .present = true };
+    try std.testing.expectEqual(@as(u64, 3), d.to(.one));
+    try std.testing.expectEqual(@as(u64, 5), d.to(.zero));
+    try std.testing.expectEqual(@as(u64, 4), d.to(.z));
+    try std.testing.expectEqual(@as(u64, 3), d.to(.x));
+    const e: Delay = .{ .rise = 9, .fall = 2, .off = 7, .present = true };
+    try std.testing.expectEqual(@as(u64, 2), e.to(.x));
+}
+
+test reduce {
+    // IEEE 1364-2005 §7.12 Table 7-8, row by row: what a resistive switch
+    // makes of each input strength.
+    const S = Ast.Strength;
+    const table = [_][2]S{
+        .{ .supply, .pull },
+        .{ .strong, .pull },
+        .{ .pull, .weak },
+        .{ .large, .medium },
+        .{ .weak, .medium },
+        .{ .medium, .small },
+        .{ .small, .small },
+        .{ .highz, .highz },
+    };
+    for (table) |row| {
+        try std.testing.expectEqual(row[1], reduce(row[0], true));
+        // §7.11: a non-resistive switch only turns supply into strong.
+        try std.testing.expectEqual(if (row[0] == .supply) S.strong else row[0], reduce(row[0], false));
+    }
+}
+
+test reduceSignal {
+    const su1: Signal = .of(.one, .supply, .supply);
+    // No switch crossed: the signal as driven.
+    try std.testing.expectEqual(su1, reduceSignal(su1, 0, 0));
+    // §7.11: supply arrives as strong across a tran.
+    try std.testing.expectEqual(Signal{ .lo = 6, .hi = 6 }, reduceSignal(su1, 1, 0));
+    // Table 7-8: strong (from supply) to pull across one rtran, to weak
+    // across a second.
+    try std.testing.expectEqual(Signal{ .lo = 5, .hi = 5 }, reduceSignal(su1, 1, 1));
+    try std.testing.expectEqual(Signal{ .lo = 3, .hi = 3 }, reduceSignal(su1, 2, 2));
+    // Both sides of an x reduce: StX across an rtran is PuX.
+    try std.testing.expectEqual(Signal{ .lo = -5, .hi = 5 }, reduceSignal(.of(.x, .strong, .strong), 1, 1));
+    // HiZ stays HiZ however many switches it crosses.
+    try std.testing.expectEqual(Signal{}, reduceSignal(.{}, 3, 3));
+}
+
+/// The §7.8.5 truth tables read as "an x input is a 0 or a 1" (and a z
+/// input as an x, §7.8.5: "a gate transmits a logic value"): the output
+/// every resolution of the unknown inputs agrees on, else x. An enable gate
+/// whose resolutions give one value or z is that value's L/H (Figure 7-6).
+/// The oracle `gateBit`'s controlling-value rules are checked against: it
+/// enumerates worlds instead of reading a controlling value.
+fn gateWorlds(kind: Ast.GateKind, ins: []const Int.Bit) GateOut {
+    std.debug.assert(ins.len <= 3);
+    var seen = [3]bool{ false, false, false }; // the output was 0, 1, z
+    for (0..@as(usize, 1) << @intCast(ins.len)) |world| {
+        var v: [3]bool = undefined;
+        const fits = for (ins, 0..) |b, i| {
+            v[i] = (world >> @intCast(i)) & 1 != 0;
+            if ((b == .zero and v[i]) or (b == .one and !v[i])) break false;
+        } else true;
+        if (!fits) continue;
+        const in = v[0..ins.len];
+        var all = true;
+        var any = false;
+        var odd = false;
+        for (in) |p| {
+            all = all and p;
+            any = any or p;
+            odd = odd != p;
+        }
+        const z: usize = 2;
+        const out: usize = switch (kind) {
+            .g_and => @intFromBool(all),
+            .g_nand => @intFromBool(!all),
+            .g_or => @intFromBool(any),
+            .g_nor => @intFromBool(!any),
+            .g_xor => @intFromBool(odd),
+            .g_xnor => @intFromBool(!odd),
+            .g_buf => @intFromBool(in[0]),
+            .g_not => @intFromBool(!in[0]),
+            // A.3.1 `(out, data, enable)`: an off enable gives z.
+            .g_bufif0 => if (in[1]) z else @intFromBool(in[0]),
+            .g_bufif1 => if (in[1]) @intFromBool(in[0]) else z,
+            .g_notif0 => if (in[1]) z else @intFromBool(!in[0]),
+            .g_notif1 => if (in[1]) @intFromBool(!in[0]) else z,
+        };
+        seen[out] = true;
+    }
+    if (seen[0] and seen[1]) return .{ .bit = .x };
+    if (seen[0]) return .{ .bit = .zero, .or_z = seen[2] };
+    if (seen[1]) return .{ .bit = .one, .or_z = seen[2] };
+    return .{ .bit = .z };
+}
+
+test "§7.8.5 every gate table agrees with every resolution of its unknown inputs" {
+    const bits = [_]Int.Bit{ .zero, .one, .x, .z };
+    const Case = struct { Ast.GateKind, usize };
+    const cases = [_]Case{
+        .{ .g_and, 2 },
+        .{ .g_and, 3 },
+        .{ .g_nand, 2 },
+        .{ .g_nand, 3 },
+        .{ .g_or, 2 },
+        .{ .g_or, 3 },
+        .{ .g_nor, 2 },
+        .{ .g_nor, 3 },
+        .{ .g_xor, 2 },
+        .{ .g_xor, 3 },
+        .{ .g_xnor, 2 },
+        .{ .g_xnor, 3 },
+        .{ .g_buf, 1 },
+        .{ .g_not, 1 },
+        .{ .g_bufif0, 2 },
+        .{ .g_bufif1, 2 },
+        .{ .g_notif0, 2 },
+        .{ .g_notif1, 2 },
+    };
+    for (cases) |c| {
+        const kind, const n = c;
+        var ins: [3]Int.Bit = undefined;
+        // Every combination of 0, 1, x and z on `n` inputs: 4^n of them.
+        for (0..std.math.pow(usize, 4, n)) |code| {
+            var rest = code;
+            for (ins[0..n]) |*b| {
+                b.* = bits[rest % 4];
+                rest /= 4;
+            }
+            try std.testing.expectEqual(gateWorlds(kind, ins[0..n]), gateBit(kind, ins[0..n]));
+        }
+    }
+}
+
+test "§7.10 Signal: what a driver asserts, and its four-state value" {
+    try std.testing.expectEqual(Signal{ .lo = 6, .hi = 6 }, Signal.of(.one, .weak, .strong));
+    try std.testing.expectEqual(Signal{ .lo = -3, .hi = -3 }, Signal.of(.zero, .weak, .strong));
+    try std.testing.expectEqual(Signal{ .lo = -3, .hi = 6 }, Signal.of(.x, .weak, .strong));
+    try std.testing.expectEqual(Signal{}, Signal.of(.z, .supply, .supply));
+    // Figure 7-6's H and L: one side's level and HiZ.
+    try std.testing.expectEqual(Signal{ .lo = 0, .hi = 6 }, Signal.orZ(.one, .strong, .strong));
+    try std.testing.expectEqual(Signal{ .lo = -6, .hi = 0 }, Signal.orZ(.zero, .strong, .strong));
+    try std.testing.expectEqual(Int.Bit.x, Signal.orZ(.one, .strong, .strong).collapse());
+    try std.testing.expect((Signal{}).none());
+    try std.testing.expect(!Signal.orZ(.one, .strong, .strong).none());
+    try std.testing.expectEqual(Int.Bit.one, (Signal{ .lo = 1, .hi = 7 }).collapse());
+    try std.testing.expectEqual(Int.Bit.zero, (Signal{ .lo = -7, .hi = -1 }).collapse());
+}
+
+test "§7.9 the two-signal folds are symmetric and HiZ is their identity" {
+    // Every range on Figure 7-2's folded scale, lo <= hi in [-7, 7].
+    // Symmetry only: a fold of three or more signals with two ambiguous
+    // ones depends on their order (`(StL, StL, Pu0)` is 0 one way and x
+    // another), which the clause's pairwise rules leave open.
+    var la: i8 = -7;
+    while (la <= 7) : (la += 1) {
+        var ha = la;
+        while (ha <= 7) : (ha += 1) {
+            const a: Signal = .{ .lo = la, .hi = ha };
+            try std.testing.expectEqual(a, a.combine(.{}));
+            try std.testing.expectEqual(a, (Signal{}).combine(a));
+            try std.testing.expectEqual(a, a.combineWired(.{}, .@"and"));
+            try std.testing.expectEqual(a, (Signal{}).combineWired(a, .@"or"));
+            var lb: i8 = -7;
+            while (lb <= 7) : (lb += 1) {
+                var hb = lb;
+                while (hb <= 7) : (hb += 1) {
+                    const b: Signal = .{ .lo = lb, .hi = hb };
+                    try std.testing.expectEqual(a.combine(b), b.combine(a));
+                    try std.testing.expectEqual(a.combineWired(b, .@"and"), b.combineWired(a, .@"and"));
+                    try std.testing.expectEqual(a.combineWired(b, .@"or"), b.combineWired(a, .@"or"));
+                }
+            }
+        }
+    }
+}
+
+test "§3.7/§7.9 what each net type supplies undriven, and which table it folds through" {
+    const Row = struct { Ast.NetKind, Int.Bit, ?Wired };
+    const rows = [_]Row{
+        .{ .wire, .z, null },
+        .{ .tri, .z, null },
+        .{ .tri0, .zero, null },
+        .{ .tri1, .one, null },
+        .{ .triand, .z, .@"and" },
+        .{ .trior, .z, .@"or" },
+        .{ .trireg, .x, null },
+        .{ .wand, .z, .@"and" },
+        .{ .wor, .z, .@"or" },
+        .{ .uwire, .z, null },
+        .{ .supply0, .zero, null },
+        .{ .supply1, .one, null },
+        .{ .wreal, .z, null },
+    };
+    for (rows) |row| {
+        const kind, const bit, const table = row;
+        try std.testing.expectEqual(bit, undriven(kind));
+        try std.testing.expectEqual(table, wiredLogic(kind));
+        // A net type's own pull collapses to its undriven value. A trireg's
+        // x is charge it holds (§3.8), not a pull: it asserts nothing.
+        try std.testing.expectEqual(if (kind == .trireg) Int.Bit.z else bit, netPull(kind).collapse());
+    }
+    // §7.9: tri0 pulls at pull(5), a supply net supplies at supply(7).
+    try std.testing.expectEqual(Signal{ .lo = -5, .hi = -5 }, netPull(.tri0));
+    try std.testing.expectEqual(Signal{ .lo = 7, .hi = 7 }, netPull(.supply1));
+}
+
+test udpRows {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const decl: Ast.UdpDecl = .{
+        .ports = &.{ .none, .none, .none },
+        .is_sequential = true,
+        .rows = &.{
+            .{ .inputs = "(01)0", .state = '?', .output = '1' },
+            .{ .inputs = "R?", .state = 'X', .output = '-' },
+            .{ .inputs = "1b", .state = 'b', .output = 'x' },
+        },
+    };
+    const rows = (try udpRows(a, &decl)).?;
+    try std.testing.expectEqual(@as(usize, 3), rows.len);
+    try std.testing.expectEqual(@as(?u32, 0), rows[0].edge_at);
+    try std.testing.expectEqualSlices(u8, "01", &rows[0].ins[0].pair);
+    try std.testing.expectEqual(@as(u8, '0'), rows[0].ins[1].level);
+    // Table 8-1's letters and the state column are read case-blind.
+    try std.testing.expectEqual(@as(u8, 'r'), rows[1].ins[0].letter);
+    try std.testing.expectEqual(@as(?u32, 0), rows[1].edge_at);
+    try std.testing.expectEqual(@as(u8, 'x'), rows[1].state);
+    try std.testing.expectEqual(@as(?u32, null), rows[2].edge_at);
+    try std.testing.expectEqual(@as(u8, 'x'), rows[2].out);
+    // A.5.3 gives each input exactly one field: one too few, one too many,
+    // and an edge whose parenthesis does not close are malformed.
+    for ([_][]const u8{ "0", "000", "(01", "(0)1" }) |bad| {
+        const one: Ast.UdpDecl = .{ .ports = &.{ .none, .none, .none }, .rows = &.{.{ .inputs = bad, .output = '0' }} };
+        try std.testing.expect((try udpRows(a, &one)) == null);
+    }
+}
+
+test udpEval {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A combinational AND table.
+    const comb: Ast.UdpDecl = .{
+        .ports = &.{ .none, .none, .none },
+        .rows = &.{
+            .{ .inputs = "11", .output = '1' },
+            .{ .inputs = "0?", .output = '0' },
+            .{ .inputs = "?0", .output = '0' },
+        },
+    };
+    const and_rows = (try udpRows(a, &comb)).?;
+    try std.testing.expectEqual(Int.Bit.one, udpEval(and_rows, false, &.{ .one, .one }, .x, null, .x));
+    try std.testing.expectEqual(Int.Bit.zero, udpEval(and_rows, false, &.{ .zero, .x }, .x, null, .x));
+    try std.testing.expectEqual(Int.Bit.zero, udpEval(and_rows, false, &.{ .x, .zero }, .x, null, .x));
+    // §8.1.6: a combination no entry names is x.
+    try std.testing.expectEqual(Int.Bit.x, udpEval(and_rows, false, &.{ .one, .x }, .x, null, .x));
+    // A sequential table over (clk, d): d = 1 sets, a rising clk clears, a
+    // falling clk with d = 0 holds, and clk at x with d = 0 sets only from
+    // state 1.
+    const seq: Ast.UdpDecl = .{
+        .ports = &.{ .none, .none, .none },
+        .is_sequential = true,
+        .rows = &.{
+            .{ .inputs = "?1", .state = '?', .output = '1' },
+            .{ .inputs = "r?", .state = '?', .output = '0' },
+            .{ .inputs = "f0", .state = '?', .output = '-' },
+            .{ .inputs = "x0", .state = '1', .output = '1' },
+        },
+    };
+    const ff = (try udpRows(a, &seq)).?;
+    // clk 0 -> 1 with d = 0: the edge entry.
+    try std.testing.expectEqual(Int.Bit.zero, udpEval(ff, true, &.{ .one, .zero }, .x, 0, .zero));
+    // clk 0 -> 1 with d = 1: the edge entry says 0, but §8.8 makes the
+    // level entry dominate.
+    try std.testing.expectEqual(Int.Bit.one, udpEval(ff, true, &.{ .one, .one }, .zero, 0, .zero));
+    // clk 1 -> 0 with d = 0: `-` keeps the state.
+    try std.testing.expectEqual(Int.Bit.one, udpEval(ff, true, &.{ .zero, .zero }, .one, 0, .one));
+    // clk 0 -> x: no entry names that edge, so x.
+    try std.testing.expectEqual(Int.Bit.x, udpEval(ff, true, &.{ .x, .zero }, .zero, 0, .zero));
+    // With no event only level entries match, and the state column counts.
+    try std.testing.expectEqual(Int.Bit.one, udpEval(ff, true, &.{ .x, .zero }, .one, null, .x));
+    try std.testing.expectEqual(Int.Bit.x, udpEval(ff, true, &.{ .x, .zero }, .zero, null, .x));
+}
+
+test filled {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]u32{ 1, 63, 64, 65, 128, 129 }) |w| for ([_]Int.Bit{ .zero, .one, .z, .x }) |fill| {
+        const v = try filled(a, w, true, fill);
+        try std.testing.expectEqual(w, v.width);
+        try std.testing.expect(v.signed and v.sized);
+        try std.testing.expectEqual(@as(usize, ((w - 1) / 64 + 1) * 2), v.planes.len);
+        for (0..w) |i| try std.testing.expectEqual(fill, v.bit(@intCast(i)));
+        // The bits above the width are zero in both planes, so two values
+        // compare with `std.mem.eql` (`waiters.store`).
+        const last = v.values().len - 1;
+        try std.testing.expectEqual(@as(u64, 0), v.values()[last] & ~wordMask(w, last));
+        try std.testing.expectEqual(@as(u64, 0), v.unknowns()[last] & ~wordMask(w, last));
+    };
+}
+
+test setBit {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const v = try filled(arena.allocator(), 130, false, .zero);
+    setBit(v, 129, .x);
+    setBit(v, 64, .one);
+    setBit(v, 63, .z);
+    try std.testing.expectEqual(Int.Bit.x, v.bit(129));
+    try std.testing.expectEqual(Int.Bit.one, v.bit(64));
+    try std.testing.expectEqual(Int.Bit.z, v.bit(63));
+    // A write leaves its neighbours alone, and a later one replaces it.
+    try std.testing.expectEqual(Int.Bit.zero, v.bit(128));
+    try std.testing.expectEqual(Int.Bit.zero, v.bit(65));
+    try std.testing.expectEqual(Int.Bit.zero, v.bit(62));
+    setBit(v, 129, .zero);
+    try std.testing.expectEqual(Int.Bit.zero, v.bit(129));
+}
+
+test wordMask {
+    try std.testing.expectEqual(~@as(u64, 0), wordMask(64, 0));
+    try std.testing.expectEqual(~@as(u64, 0), wordMask(128, 1));
+    try std.testing.expectEqual(@as(u64, 1), wordMask(1, 0));
+    try std.testing.expectEqual(@as(u64, 1), wordMask(65, 1));
+    try std.testing.expectEqual((@as(u64, 1) << 36) - 1, wordMask(100, 1));
+}
