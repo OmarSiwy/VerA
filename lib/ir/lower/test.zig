@@ -30,54 +30,12 @@ const strToInt = Lower.strToInt;
 /// The frontend parser namespace the harness drives.
 pub const Parser = @import("frontend").Parser;
 
-/// One source file preprocessed, parsed and ready to lower, with the arena and
-/// diagnostic bag the test inspects afterwards.
-pub const Harness = struct {
-    arena_state: std.heap.ArenaAllocator,
-    file: Ast.SourceFile,
-    mir: Mir,
-    bag: diag.Bag,
-    low: Lower,
-
-    fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
-        out.* = .{
-            .arena_state = std.heap.ArenaAllocator.init(gpa),
-            .file = .empty,
-            .mir = .{},
-            .bag = undefined,
-            .low = undefined,
-        };
-        const arena = out.arena_state.allocator();
-        out.bag = diag.Bag.init(arena);
-        const text = (try Preprocessor.process(arena, src, .{ .bag = &out.bag })).text;
-        const toks = try Lexer.Lexer.tokenize(arena, text);
-        var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
-        out.file = try p.parseSourceFile();
-        // The annex E prelude came with `Preprocessor.process` (std_defs is on by
-        // default), so its modules are the leading entries of `file.modules`.
-        out.file.builtin_modules = Preprocessor.spice_module_count;
-        out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
-    }
-
-    /// The code of the i'th diagnostic. Assertions key on the code, never on
-    /// prose: the LRM citation lives in `Info.lrm`, not in the message.
-    fn code(self: *const Harness, i: usize) diag.Code {
-        return self.bag.at(i).code;
-    }
-
-    fn msg(self: *const Harness, i: usize) []const u8 {
-        return self.bag.at(i).message;
-    }
-
-    fn deinit(self: *Harness) void {
-        self.low.deinit();
-        self.arena_state.deinit();
-    }
-};
+/// The one lowering harness (`Lower.Harness`), shared with every `lower/*.zig` test.
+const Harness = Lower.Harness;
 
 test "§6.3.4 monitored-event parameters retain their dependencies, not unrelated reals" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p);
         \\  inout p; electrical p;
         \\  parameter real base = 0.1, unused = 7.0;
@@ -88,7 +46,7 @@ test "§6.3.4 monitored-event parameters retain their dependencies, not unrelate
         \\  always @(absdelta(V(p), delta, 1p, tol)) n = n + 1;
         \\  analog I(p) <+ 0.0;
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 3), h.low.out.discrete_params.count());
@@ -126,7 +84,7 @@ test "§6.3.1 paramset defparams follow final parameter values and freeze the se
     ;
     for ([_]?f64{ null, 0, 1 }) |override| {
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, source, &h);
+        try h.init(std.testing.allocator, source);
         defer h.deinit();
         var overrides: [1]Lower.ParamOverride = undefined;
         if (override) |value| {
@@ -141,8 +99,8 @@ test "§6.3.1 paramset defparams follow final parameter values and freeze the se
         } else {
             try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
             var found = false;
-            for (0..h.bag.records.items.len) |i| if (h.code(i) == .E0926) {
-                try std.testing.expect(std.mem.find(u8, h.msg(i), "`u`") != null);
+            for (0..h.bag.records.items.len) |i| if (h.bag.at(i).code == .E0926) {
+                try std.testing.expect(std.mem.find(u8, h.bag.at(i).message, "`u`") != null);
                 found = true;
             };
             try std.testing.expect(found);
@@ -178,7 +136,7 @@ test "lower: system math aliases preserve operand-sensitive result types" {
         , .{c.expr});
         defer std.testing.allocator.free(src);
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         _ = try h.low.lowerFile();
         const ops = h.mir.insts.items(.op);
@@ -195,7 +153,7 @@ test "lower: system math aliases reject wrong arity" {
         );
         defer std.testing.allocator.free(src);
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
@@ -203,7 +161,7 @@ test "lower: system math aliases reject wrong arity" {
         }
         var found = false;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == .E0506) found = true;
+            if (h.bag.at(i).code == .E0506) found = true;
         }
         try std.testing.expect(found);
     }
@@ -269,7 +227,7 @@ test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
         defer std.testing.allocator.free(src);
 
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
@@ -277,7 +235,7 @@ test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
         }
         var seen: ?diag.Code = null;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == .E0357 or h.code(i) == .E0358) seen = h.code(i);
+            if (h.bag.at(i).code == .E0357 or h.bag.at(i).code == .E0358) seen = h.bag.at(i).code;
         }
         std.testing.expectEqual(c.code, seen) catch |e| {
             std.debug.print("attribute: (* {s} *)\n", .{c.attr});
@@ -288,7 +246,7 @@ test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
 
 test "lower: contribution splits into resistive and reactive parts" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module rc(p, n);
         \\  inout p, n;
         \\  electrical p, n;
@@ -302,7 +260,7 @@ test "lower: contribution splits into resistive and reactive parts" {
         \\    I(p,n) <+ ddt(c * V(p,n));
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
 
@@ -338,7 +296,7 @@ test "lower: contribution splits into resistive and reactive parts" {
 
 test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module amp(out, pin, nin);
         \\  inout out, pin, nin;
         \\  electrical out, pin, nin;
@@ -347,7 +305,7 @@ test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement"
         \\    V(out) : V(pin) == 0.0;
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
 
@@ -402,52 +360,52 @@ test "lower: §5.6.7.2 an indirectly assigned branch refuses <+, in either order
     };
     for (cases) |c| {
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, c.src, &h);
+        try h.init(std.testing.allocator, c.src);
         defer h.deinit();
         try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
-        try std.testing.expectEqual(c.want, h.code(0));
+        try std.testing.expectEqual(c.want, h.bag.at(0).code);
     }
 }
 
 test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under a constant one" {
     var bad: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try bad.init(std.testing.allocator,
         \\module a(o, i);
         \\  inout o, i;
         \\  electrical o, i;
         \\  analog if (V(i) > 0.0) V(o) : V(i) == 0.0;
         \\endmodule
-    , &bad);
+    );
     defer bad.deinit();
     try std.testing.expectError(error.DiagnosticsReported, bad.low.lowerFile());
-    try std.testing.expectEqual(diag.Code.E0412, bad.code(0));
+    try std.testing.expectEqual(diag.Code.E0412, bad.bag.at(0).code);
 
     // "…unless the conditional expression is a constant expression": a folded
     // condition lowers its arm straight into the current block, so it never
     // raises `cond_depth`. A parameter condition folds too, as a shape
     // parameter (`lowerIf`); the second harness below.
     var ok: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try ok.init(std.testing.allocator,
         \\module a(o, i);
         \\  inout o, i;
         \\  electrical o, i;
         \\  analog if (1) V(o) : V(i) == 0.0;
         \\endmodule
-    , &ok);
+    );
     defer ok.deinit();
     _ = try ok.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 1), ok.low.out.contributions.items.len);
     try std.testing.expectEqual(Kind.indirect, ok.low.out.contributions.items[0].kind);
 
     var par: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try par.init(std.testing.allocator,
         \\module a(o, i);
         \\  inout o, i;
         \\  electrical o, i;
         \\  parameter integer sel = 1;
         \\  analog if (sel) V(o) : V(i) == 0.0;
         \\endmodule
-    , &par);
+    );
     defer par.deinit();
     _ = try par.low.lowerFile();
     try std.testing.expectEqual(Kind.indirect, par.low.out.contributions.items[0].kind);
@@ -456,13 +414,13 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
 
 test "lower: a ddt that is not a linear factor is its own unknown, row and charge site (§4.5.2)" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module nonlinear(p, n);
         \\  inout p, n;
         \\  electrical p, n;
         \\  analog I(p,n) <+ sin(ddt(V(p,n)));
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 3), h.low.out.nodes.len);
@@ -473,7 +431,7 @@ test "lower: a ddt that is not a linear factor is its own unknown, row and charg
 
 test "lower: genvar loops unroll, procedural loops do not" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module chain(a, b);
         \\  inout a, b;
         \\  electrical a, b;
@@ -483,7 +441,7 @@ test "lower: genvar loops unroll, procedural loops do not" {
         \\      I(a,b) <+ i * V(a,b);
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     // §6.6.1: three unrolled bodies accumulate into one target, and the loop
@@ -494,7 +452,7 @@ test "lower: genvar loops unroll, procedural loops do not" {
 
 test "lower: §3.2.2 a runtime-indexed array is one storage, a constant-indexed one is scalars" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(a, b);
         \\  inout a, b;
         \\  electrical a, b;
@@ -509,7 +467,7 @@ test "lower: §3.2.2 a runtime-indexed array is one storage, a constant-indexed 
         \\    I(a,b) <+ h[3] + c[0][1];
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(!h.bag.failed());
@@ -562,23 +520,23 @@ test "lower: §5.4.3 port access — what is rejected, and what the unknown is" 
     };
     for (cases) |c| {
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, c.src, &h);
+        try h.init(std.testing.allocator, c.src);
         defer h.deinit();
         try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
-        try std.testing.expectEqual(c.want, h.code(0));
+        try std.testing.expectEqual(c.want, h.bag.at(0).code);
         if (c.msg.len != 0)
-            try std.testing.expect(std.mem.find(u8, h.msg(0), c.msg) != null);
+            try std.testing.expect(std.mem.find(u8, h.bag.at(0).message, c.msg) != null);
     }
 }
 
 test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(a, c);
         \\  inout a, c; electrical a, c;
         \\  analog I(a, c) <+ I(<a>) + I(<c>) + I(<a>);
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
 
@@ -603,7 +561,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     // §5.6.1.3's own worked example, whose stated answer is 7.0 and whose whole
     // point is that 8.0 (every potential contribution accumulated, both
     // conversions ignored) is wrong.
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module vr(p, n);
         \\  inout p, n; electrical p, n;
         \\  analog begin
@@ -613,7 +571,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         \\    V(p,n) <+ 4.0;
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
 
@@ -652,7 +610,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
             \\endmodule
         , .{c.src});
         defer std.testing.allocator.free(src);
-        try Harness.run(std.testing.allocator, src, &g);
+        try g.init(std.testing.allocator, src);
         defer g.deinit();
         _ = try g.low.lowerFile();
         // `p` and `n` are `nodes` rows 0 and 1, so the branch is that pair.
@@ -662,7 +620,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
 
 test "lower: scan destinations are guarded by the single assignment count" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module scan(p, n);
         \\  inout p, n; electrical p, n;
         \\  integer fd, count, iv; real rv; string sv;
@@ -673,7 +631,7 @@ test "lower: scan destinations are guarded by the single assignment count" {
         \\    I(p,n) <+ iv + rv + count;
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
@@ -709,7 +667,7 @@ test "lower: scan destinations are guarded by the single assignment count" {
 
 test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditionally" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module bs(p, n);
         \\  inout p, n; electrical p, n;
         \\  analog begin
@@ -718,7 +676,7 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
         \\    I(p,n) <+ V(p,n);
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
@@ -744,7 +702,7 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
 
 test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module d(p, n);
         \\  inout p, n; electrical p, n;
         \\  analog begin
@@ -752,7 +710,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
         \\    I(p,n) <+ V(p,n);
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
@@ -762,7 +720,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
     try std.testing.expect(h.low.systask_state.bound_step_place == null);
 
     var h2: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h2.init(std.testing.allocator,
         \\module d2(p, n);
         \\  inout p, n; electrical p, n;
         \\  analog begin
@@ -771,7 +729,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
         \\    I(p,n) <+ V(p,n);
         \\  end
         \\endmodule
-    , &h2);
+    );
     defer h2.deinit();
     _ = try h2.low.lowerFile();
     try std.testing.expect(h2.bag.isEmpty());
@@ -782,22 +740,22 @@ test "lower: A.6.4 the analog_statement / analog_event_statement split" {
     // §5.10 "Contribution statements cannot be used inside an event control
     // block"; A.6.4 `analog_event_statement` has no contribution alternative.
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module e(p, c);
         \\  inout p, c; electrical p, c;
         \\  analog @(cross(V(c), +1)) I(p) <+ V(p);
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
     try std.testing.expectEqual(@as(usize, 1), h.bag.count());
-    try std.testing.expectEqual(diag.Code.E0406, h.code(0));
+    try std.testing.expectEqual(diag.Code.E0406, h.bag.at(0).code);
 
     // `disable` is the mirror image: absent from `analog_statement`, present in
     // `analog_event_statement`. There is no §5.11 entry for it (5.11 is
     // jump_statement), so the diagnostic must not claim one.
     var h2: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h2.init(std.testing.allocator,
         \\module d(p);
         \\  inout p; electrical p;
         \\  analog begin : work
@@ -805,11 +763,11 @@ test "lower: A.6.4 the analog_statement / analog_event_statement split" {
         \\    I(p) <+ V(p);
         \\  end
         \\endmodule
-    , &h2);
+    );
     defer h2.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h2.low.lowerFile());
     try std.testing.expectEqual(@as(usize, 1), h2.bag.count());
-    try std.testing.expectEqual(diag.Code.E0401, h2.code(0));
+    try std.testing.expectEqual(diag.Code.E0401, h2.bag.at(0).code);
     // A.6.4, never §5.11 (which is jump_statement) — the citation is the code's.
     try std.testing.expectEqualStrings("A.6.4", diag.info(.E0401).lrm);
 }
@@ -821,7 +779,7 @@ test "lower: §5.10.4 a named event resolves; anything else at `@`/`->` is E0705
     // §2.8 gives an event a name and no value, so a real variable is not an
     // event even though `@(v)` would type-check as an integer guard.
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module ev(p);
         \\  inout p; electrical p; real v; event tick;
         \\  analog begin
@@ -831,17 +789,17 @@ test "lower: §5.10.4 a named event resolves; anything else at `@`/`->` is E0705
         \\    I(p) <+ v;
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
     try std.testing.expectEqual(@as(usize, 1), h.bag.count());
-    try std.testing.expectEqual(diag.Code.E0705, h.code(0));
-    try std.testing.expectEqualStrings("`v`", h.msg(0));
+    try std.testing.expectEqual(diag.Code.E0705, h.bag.at(0).code);
+    try std.testing.expectEqualStrings("`v`", h.bag.at(0).message);
 
     // The trigger goes through the same table, so a misspelling there lands on
     // the same code rather than silently triggering nothing.
     var h2: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h2.init(std.testing.allocator,
         \\module ev2(p);
         \\  inout p; electrical p; event tick;
         \\  analog begin
@@ -849,11 +807,11 @@ test "lower: §5.10.4 a named event resolves; anything else at `@`/`->` is E0705
         \\    I(p) <+ V(p);
         \\  end
         \\endmodule
-    , &h2);
+    );
     defer h2.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h2.low.lowerFile());
-    try std.testing.expectEqual(diag.Code.E0705, h2.code(0));
-    try std.testing.expectEqualStrings("`tock`", h2.msg(0));
+    try std.testing.expectEqual(diag.Code.E0705, h2.bag.at(0).code);
+    try std.testing.expectEqualStrings("`tock`", h2.bag.at(0).message);
 }
 
 test "lower: §5.10.3.4 absdelta bounds do not freeze card defaults" {
@@ -863,7 +821,7 @@ test "lower: §5.10.3.4 absdelta bounds do not freeze card defaults" {
     // event_bounds_mixed_legal.va runs legal runtime operands through the
     // emitted mixed-signal host.
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module ad(p);
         \\  inout p; electrical p;
         \\  parameter real delta = -1.0, ttol = -1.0, etol = -1.0, en = 0.5;
@@ -871,7 +829,7 @@ test "lower: §5.10.3.4 absdelta bounds do not freeze card defaults" {
         \\  always @(absdelta(V(p), delta, ttol, etol, en)) sampled = V(p);
         \\  analog I(p) <+ 0.0;
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(!h.bag.failed());
@@ -879,17 +837,17 @@ test "lower: §5.10.3.4 absdelta bounds do not freeze card defaults" {
 
 test "lower: an unknown name carries a `did you mean` help" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p);
         \\  inout p; electrical p;
         \\  real vds;
         \\  analog I(p) <+ vdss * V(p);
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
-    try std.testing.expectEqual(diag.Code.E0314, h.code(0));
-    try std.testing.expectEqualStrings("`vdss`", h.msg(0));
+    try std.testing.expectEqual(diag.Code.E0314, h.bag.at(0).code);
+    try std.testing.expectEqualStrings("`vdss`", h.bag.at(0).message);
     var nbuf: [diag.max_children]diag.Note = undefined;
     const notes = h.bag.notes(h.bag.at(0), &nbuf);
     try std.testing.expectEqual(@as(usize, 1), notes.len);
@@ -898,7 +856,7 @@ test "lower: an unknown name carries a `did you mean` help" {
 
 test "lower: §3.3 Table 3-3 string concatenation folds; the integer form never reaches here" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p);
         \\  inout p;
         \\  electrical p;
@@ -908,7 +866,7 @@ test "lower: §3.3 Table 3-3 string concatenation folds; the integer form never 
         \\    I(p) <+ 0.0 * V(p);
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
@@ -923,13 +881,13 @@ test "lower: §3.3 Table 3-3 string concatenation folds; the integer form never 
     // A non-string operand has no width here (the parser folds the sized-
     // constant form), so it is rejected rather than silently coerced.
     var h2: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h2.init(std.testing.allocator,
         \\module m; integer a, b; analog a = {b, b}; endmodule
-    , &h2);
+    );
     defer h2.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h2.low.lowerFile());
-    try std.testing.expectEqual(diag.Code.E0327, h2.code(0));
-    try std.testing.expect(std.mem.find(u8, h2.msg(0), "only sized constants") != null);
+    try std.testing.expectEqual(diag.Code.E0327, h2.bag.at(0).code);
+    try std.testing.expect(std.mem.find(u8, h2.bag.at(0).message, "only sized constants") != null);
 }
 
 test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
@@ -968,7 +926,7 @@ test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
         defer std.testing.allocator.free(src);
 
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
@@ -977,7 +935,7 @@ test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
 
         var seen = false;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == .E0514) seen = true;
+            if (h.bag.at(i).code == .E0514) seen = true;
         }
         std.testing.expectEqual(c.warns, seen) catch |e| {
             std.debug.print("condition: if ({s})\n", .{c.cond});
@@ -991,7 +949,7 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
     // unconditional — there is no analysis_or_constant escape hatch — so a
     // constant loop bound does NOT license the operator.
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p, n);
         \\  inout p, n;
         \\  electrical p, n;
@@ -1002,15 +960,15 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
         \\    I(p, n) <+ q;
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
-    try std.testing.expectEqual(diag.Code.E0514, h.code(0));
+    try std.testing.expectEqual(diag.Code.E0514, h.bag.at(0).code);
 
     // ...but a genvar `for` (§5.9.3 analog_for) is unrolled onto the spine, so
     // every operator instance is stepped every time: no warning.
     var h2: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h2.init(std.testing.allocator,
         \\module m(p, n);
         \\  inout p, n;
         \\  electrical p, n;
@@ -1021,7 +979,7 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
         \\    I(p, n) <+ q;
         \\  end
         \\endmodule
-    , &h2);
+    );
     defer h2.deinit();
     _ = try h2.low.lowerFile();
     try std.testing.expect(h2.bag.isEmpty());
@@ -1031,7 +989,7 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
     // `limexp` three times; warning there would be noise, and noise is what
     // teaches a modeller to silence the code.
     var h3: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h3.init(std.testing.allocator,
         \\module m(p, n, c);
         \\  inout p, n, c;
         \\  electrical p, n, c;
@@ -1042,7 +1000,7 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
         \\    I(p, n) <+ q;
         \\  end
         \\endmodule
-    , &h3);
+    );
     defer h3.deinit();
     _ = try h3.low.lowerFile();
     try std.testing.expect(h3.bag.isEmpty());
@@ -1080,7 +1038,7 @@ test "lower: §3.2 a variable some path reads before writing is held, and only t
         , .{c.body});
         defer std.testing.allocator.free(src);
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         const out = try h.low.lowerFile();
         errdefer std.debug.print("body: {s}\n", .{c.body});
@@ -1114,7 +1072,7 @@ test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514"
         defer std.testing.allocator.free(src);
 
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
@@ -1123,7 +1081,7 @@ test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514"
 
         var seen = false;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == .E0707) seen = true;
+            if (h.bag.at(i).code == .E0707) seen = true;
         }
         std.testing.expectEqual(c.warns, seen) catch |e| {
             std.debug.print("condition: if ({s})\n", .{c.cond});
@@ -1158,7 +1116,7 @@ test "lower: A.6.1 an assign target is judged by declaration kind, then by domai
         defer std.testing.allocator.free(src);
 
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
@@ -1166,7 +1124,7 @@ test "lower: A.6.1 an assign target is judged by declaration kind, then by domai
         }
         var first: ?diag.Code = null;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == .E0438 or h.code(i) == .E0435) first = first orelse h.code(i);
+            if (h.bag.at(i).code == .E0438 or h.bag.at(i).code == .E0435) first = first orelse h.bag.at(i).code;
         }
         std.testing.expectEqual(c.code, first) catch |e| {
             std.debug.print("declaration: {s}\n", .{c.decl});
@@ -1213,12 +1171,12 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
         defer std.testing.allocator.free(src);
 
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, src, &h);
+        try h.init(std.testing.allocator, src);
         defer h.deinit();
         try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
         var seen = false;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == c.code) seen = true;
+            if (h.bag.at(i).code == c.code) seen = true;
         }
         std.testing.expect(seen) catch |e| {
             std.debug.print("initial statement: {s}\n", .{c.stmt});
@@ -1230,7 +1188,7 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
     // variable's INITIAL VALUE, which is where an A.2.2.1 declaration assignment
     // lands, and a parameter counts as a constant (§3.4).
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p);
         \\  inout p; electrical p;
         \\  parameter real k = 2.5;
@@ -1238,7 +1196,7 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
         \\  initial begin q = 3; r = k; q = 4; end
         \\  analog I(p) <+ V(p) + q + r;
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 0), h.bag.count());
@@ -1256,7 +1214,7 @@ test "lower: a 60000-statement dependency chain lowers without exhausting the st
     for (0..60000) |_| try src.appendSlice(gpa, "x = x + 1.0;\n");
     try src.appendSlice(gpa, "I(p) <+ x;\nend\nendmodule\n");
     var h: Harness = undefined;
-    try Harness.run(gpa, src.items, &h);
+    try h.init(gpa, src.items);
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 0), h.bag.count());
@@ -1281,7 +1239,7 @@ test "§6.6.1 a genvar loop of exactly the unroll limit is legal; a longer one i
         , .{ c.cond, c.step });
         defer gpa.free(src);
         var h: Harness = undefined;
-        try Harness.run(gpa, src, &h);
+        try h.init(gpa, src);
         defer h.deinit();
         _ = h.low.lowerFile() catch |err| switch (err) {
             error.DiagnosticsReported => {},
@@ -1289,7 +1247,7 @@ test "§6.6.1 a genvar loop of exactly the unroll limit is legal; a longer one i
         };
         if (c.code) |want| {
             try std.testing.expect(h.bag.count() >= 1);
-            try std.testing.expectEqual(want, h.code(0));
+            try std.testing.expectEqual(want, h.bag.at(0).code);
         } else try std.testing.expectEqual(@as(usize, 0), h.bag.count());
     }
 }
@@ -1311,7 +1269,7 @@ test "A.8.2 an omitted system-function argument with no meaning is a named error
         , .{c.call});
         defer gpa.free(src);
         var h: Harness = undefined;
-        try Harness.run(gpa, src, &h);
+        try h.init(gpa, src);
         defer h.deinit();
         _ = h.low.lowerFile() catch |err| switch (err) {
             error.DiagnosticsReported => {},
@@ -1321,10 +1279,10 @@ test "A.8.2 an omitted system-function argument with no meaning is a named error
         var e0894 = false;
         for (0..h.bag.count()) |i| if (h.bag.at(i).severity == .err) {
             errors += 1;
-            e0894 = e0894 or h.code(i) == .E0894;
+            e0894 = e0894 or h.bag.at(i).code == .E0894;
         };
         if (errors != @intFromBool(c.bad) or e0894 != c.bad) {
-            for (0..h.bag.count()) |i| std.debug.print("{s}: {s} {s}\n", .{ c.call, @tagName(h.code(i)), h.msg(i) });
+            for (0..h.bag.count()) |i| std.debug.print("{s}: {s} {s}\n", .{ c.call, @tagName(h.bag.at(i).code), h.bag.at(i).message });
             return error.TestUnexpectedResult;
         }
     }
@@ -1348,7 +1306,7 @@ test "A.8.1 an empty pattern element is E0894 except in §3.6.3.2's bus nodeset;
         , .{c.src});
         defer gpa.free(src);
         var h: Harness = undefined;
-        try Harness.run(gpa, src, &h);
+        try h.init(gpa, src);
         defer h.deinit();
         _ = h.low.lowerFile() catch |err| switch (err) {
             error.DiagnosticsReported => {},
@@ -1356,7 +1314,7 @@ test "A.8.1 an empty pattern element is E0894 except in §3.6.3.2's bus nodeset;
         };
         var first: ?diag.Code = null;
         for (0..h.bag.count()) |i| if (h.bag.at(i).severity == .err) {
-            first = h.code(i);
+            first = h.bag.at(i).code;
             break;
         };
         try std.testing.expectEqual(c.code, first);
@@ -1381,7 +1339,7 @@ const Case = struct { src: []const u8, code: ?diag.Code };
 /// source and every diagnostic, so the failing case names itself.
 fn expectRule(src: []const u8, want: ?diag.Code) !void {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator, src, &h);
+    try h.init(std.testing.allocator, src);
     defer h.deinit();
     _ = h.low.lowerFile() catch |err| switch (err) {
         error.DiagnosticsReported => {},
@@ -1391,12 +1349,12 @@ fn expectRule(src: []const u8, want: ?diag.Code) !void {
     if (want) |w| {
         ok = false;
         for (0..h.bag.count()) |i| {
-            if (h.code(i) == w) ok = true;
+            if (h.bag.at(i).code == w) ok = true;
         }
     }
     if (ok) return;
     std.debug.print("source:\n{s}\nwanted {s}, got:\n", .{ src, if (want) |w| @tagName(w) else "no error" });
-    for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.code(i)), h.msg(i) });
+    for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.bag.at(i).code), h.bag.at(i).message });
     return error.TestUnexpectedResult;
 }
 
@@ -1512,7 +1470,7 @@ test "§5.6 contributions: the rules a `<+` is judged by" {
 
 test "§1.3.1.2 a reversed spelling accumulates into one source" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p, q);
         \\  inout p, q; electrical p, q;
         \\  analog begin
@@ -1520,7 +1478,7 @@ test "§1.3.1.2 a reversed spelling accumulates into one source" {
         \\    I(q, p) <+ 2.0;
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     // `I(q,p) <+ 2` is `I(p,q) <+ -2`: one row, in canonical (p, q) order.
@@ -1597,7 +1555,7 @@ test "§9.13 distributions: the seed and the parameter rules" {
 
 test "§9.13.1 omitted seeds number their sites in source order" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p);
         \\  inout p; electrical p;
         \\  integer a, b;
@@ -1607,7 +1565,7 @@ test "§9.13.1 omitted seeds number their sites in source order" {
         \\    I(p) <+ (a + b) * V(p);
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     // "the simulator picks a seed": VerA's pick is 1 + 7919·ordinal, so the
@@ -1730,12 +1688,12 @@ test "§3.6 natures and disciplines: the declaration rules" {
 
 test "§3.6.2.5 a discipline's abstol override is the value its net reads" {
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\nature lb_i; units = "A"; access = LbI; abstol = 1u; endnature
         \\nature lb_v; units = "V"; access = LbV; abstol = 100u; endnature
         \\discipline lb_ttl; potential lb_v; flow lb_i; flow.abstol = 10u; enddiscipline
         \\module m; endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = try h.low.lowerFile();
     const info = h.low.out.disciplines.get("lb_ttl").?;
@@ -1769,7 +1727,7 @@ test "§9.17.3 one $limit state slot per access function, whatever the site coun
         , .{c.second});
         defer gpa.free(src);
         var h: Harness = undefined;
-        try Harness.run(gpa, src, &h);
+        try h.init(gpa, src);
         defer h.deinit();
         _ = try h.low.lowerFile();
         try std.testing.expectEqual(c.slots, h.low.out.limit_slots.items.len);
@@ -1857,7 +1815,7 @@ test "§9.4.1/§5.3.2 a deferred display operand keeps its named block's names" 
     // the block, where §5.4.2.2's flow is converged. `x` is the named block's
     // own variable, and the operand was written in its scope.
     var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
+    try h.init(std.testing.allocator,
         \\module m(p, q);
         \\  inout p, q; electrical p, q;
         \\  analog begin : blk
@@ -1867,13 +1825,13 @@ test "§9.4.1/§5.3.2 a deferred display operand keeps its named block's names" 
         \\    I(p, q) <+ V(p, q);
         \\  end
         \\endmodule
-    , &h);
+    );
     defer h.deinit();
     _ = h.low.lowerFile() catch |err| switch (err) {
         error.DiagnosticsReported => {},
         else => |e| return e,
     };
-    if (h.bag.err_count != 0) for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.code(i)), h.msg(i) });
+    if (h.bag.err_count != 0) for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.bag.at(i).code), h.bag.at(i).message });
     try std.testing.expectEqual(@as(u32, 0), h.bag.err_count);
     try std.testing.expectEqual(@as(usize, 1), h.low.out.displays.items.len);
 }
