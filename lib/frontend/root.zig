@@ -3,11 +3,19 @@
 //! Depends only on `diag`; `ir/` and `backend/` import this layer, never the
 //! reverse.
 
+/// §2.6.1 integer literals and the IEEE 1364-2005 §5 four-state operations
+/// on them.
 pub const Integer = @import("integer.zig");
+/// Token tags, the annex B keyword table and the §10.6 keyword sets.
 pub const token = @import("token.zig");
+/// Clause 10 directives and comment stripping: source files in, one text out.
 pub const Preprocessor = @import("preprocessor.zig");
+/// The lexer file; its cursor type is `Lexer.Lexer`, its token list
+/// `Lexer.TokenList`.
 pub const Lexer = @import("lexer.zig");
+/// The AST; `Ast.SourceFile` is the root every later stage reads.
 pub const Ast = @import("ast.zig");
+/// The parser file; its state type is `Parser.Parser`.
 pub const Parser = @import("parser.zig");
 
 /// The §4.2 constant_expression folder every stage shares.
