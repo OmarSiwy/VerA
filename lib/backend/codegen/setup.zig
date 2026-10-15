@@ -392,13 +392,9 @@ pub fn emitSetup(self: *Gen) Error!void {
 
 /// Returns whether emitted text uses the identifier `S`.
 fn namesS(text: []const u8) bool {
-    for (text, 0..) |c, i| {
-        if (c != 'S') continue;
-        const before = i > 0 and (std.ascii.isAlphanumeric(text[i - 1]) or text[i - 1] == '_');
-        const after = i + 1 < text.len and (std.ascii.isAlphanumeric(text[i + 1]) or text[i + 1] == '_');
-        if (!before and !after) return true;
-    }
-    return false;
+    // Outside string literals and comments: a §3.4.6 string comparison puts
+    // the literal "S" in a body that may never name the scalar.
+    return setup_chunk.hasWord(text, "S");
 }
 
 /// Emits `emitReturn` inside `setup`: stores every root from wherever the

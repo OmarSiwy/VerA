@@ -1313,7 +1313,10 @@ fn opClose(self: *Gen) Error!void {
 pub fn transitionTimes(self: *Gen, args: []const Mir.Value) Error![2][]const u8 {
     const dflt = try defaultTransition(self);
     const rise = try transitionTime(self, args, 2, dflt orelse "0.0");
-    const fall = try transitionTime(self, args, 3, dflt orelse rise);
+    // An absent or zero fall time is the rise time: "If only a positive
+    // rise_time value is specified, the simulator uses it for both". With no
+    // rise time either, `rise` already is the directive's default.
+    const fall = try transitionTime(self, args, 3, rise);
     return .{ rise, fall };
 }
 

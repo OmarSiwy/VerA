@@ -4455,7 +4455,8 @@ test "codegen: §4.2.4 an integer `/` by -1 cannot trap; any other literal stays
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
         const out = try h.gen(std.testing.allocator);
-        try std.testing.expectEqual(c.bare, std.mem.find(u8, out, "@truncate(@divTrunc(") != null);
+        // The bare form truncates the quotient straight to §3.2's 32 bits.
+        try std.testing.expectEqual(c.bare, std.mem.find(u8, out, "@as(i32, @truncate(@divTrunc(") != null);
         if (!c.bare) try std.testing.expect(std.mem.find(u8, out, "@divTrunc(@as(i65, zd_a), zd_b)") != null);
     }
 }
