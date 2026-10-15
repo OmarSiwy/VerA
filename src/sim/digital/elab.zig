@@ -121,7 +121,7 @@ pub fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
         for (modules) |other| for (other.instances) |inst| {
             if (inst.module == candidate.name) continue :outer;
         };
-        if (std.mem.indexOfScalar(Ast.StrId, generated.items, candidate.name) != null) continue;
+        if (std.mem.findScalar(Ast.StrId, generated.items, candidate.name) != null) continue;
         // §13.2.1.1: a later same-named cell of its library replaces it.
         const d = defOf(r, candidate);
         if (for (modules[d + 1 ..], r.def_lib[d + 1 ..]) |later, l| {
@@ -145,7 +145,7 @@ pub fn bindDefparam(r: *Run, decl: u32, d: Ast.Defparam, children: []const Ast.I
         var out: std.ArrayList(u8) = .empty;
         var rest = path;
         for (d.indices) |x| {
-            const at = std.mem.indexOf(u8, rest, "[]").?; // the parser spelled one per index
+            const at = std.mem.find(u8, rest, "[]").?; // the parser spelled one per index
             const k = (try r.constant(x, d.main_tok)).asInt() orelse return r.exprFail(x, "§12.2.1: a defparam's instance select is x or z");
             try out.print(r.arena, "{s}[{d}]", .{ rest[0..at], k });
             rest = rest[at + 2 ..];
@@ -162,9 +162,9 @@ pub fn bindDefparam(r: *Run, decl: u32, d: Ast.Defparam, children: []const Ast.I
 /// first segment is resolved, and the rest of it. `children` is pass one's
 /// static view of `decl`'s children; null reads the complete hierarchy.
 fn defparamBase(r: *Run, decl: u32, path: []const u8, children: ?[]const Ast.Instance, tok: u32) Error!struct { at: u32, rest: []const u8 } {
-    const dot = std.mem.indexOfScalar(u8, path, '.') orelse return .{ .at = decl, .rest = path };
+    const dot = std.mem.findScalar(u8, path, '.') orelse return .{ .at = decl, .rest = path };
     const seg = path[0..dot];
-    const bracket = std.mem.indexOfScalar(u8, seg, '[');
+    const bracket = std.mem.findScalar(u8, seg, '[');
     const name = seg[0 .. bracket orelse seg.len];
     const index: ?i64 = if (bracket) |at| std.fmt.parseInt(i64, seg[at + 1 .. seg.len - 1], 10) catch null else null;
     const same = struct {
@@ -547,7 +547,7 @@ fn warnCell(internal: Ast.NetKind, external: Ast.NetKind) bool {
         .supply0 => &.{.supply1},
         .supply1 => &.{.supply0},
     };
-    return std.mem.indexOfScalar(Col, warns, col(external)) != null;
+    return std.mem.findScalar(Col, warns, col(external)) != null;
 }
 
 /// IEEE 1364-2005 §4.5: an undeclared identifier in the terminal list of a
@@ -891,7 +891,7 @@ fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?
     };
     if (file.exprs.tag(init.target) != .ident) return null;
     const name = file.exprs.strOf(init.target);
-    return if (std.mem.indexOfScalar(Ast.StrId, m.genvars, name) != null) name else null;
+    return if (std.mem.findScalar(Ast.StrId, m.genvars, name) != null) name else null;
 }
 
 /// §12.4: the scheme's constant expressions select at most one arm of an
@@ -963,7 +963,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             while ((try r.constant(f.cond, tok)).truth() == .one) {
                 if (seen.items.len == 65536) return r.fail(tok, "§12.4.1: this loop generate does not terminate within 65536 iterations", .{});
                 const value = e.values.items[at].asInt() orelse return r.fail(tok, "§12.4.1: a genvar shall not be x or z", .{});
-                if (std.mem.indexOfScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
+                if (std.mem.findScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
                 try seen.append(r.arena, value);
                 const iter = try newScope(r, tok);
                 try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value, .implicit = implicit });
@@ -1634,10 +1634,6 @@ pub fn checkUdp(r: *Run, u: *const Ast.UdpDecl) Error!void {
     if (width > 1) return r.exprFail(u.init, "§8.1.3: a UDP initial value is a single-bit literal");
 }
 
-/// A port by the name a named connection may use: its own, when the header
-/// gave it no external name.
-/// A concatenation with no external name has none (§12.3.6: it connects by
-/// position only).
 /// IEEE 1364-2005 §12.3.2: does `m` use A.1.3's port expressions beyond one
 /// whole net per port (a concatenation, a bit- or part-select, a name more
 /// than one port reference names)? Its ports are then connected one external
@@ -1800,6 +1796,9 @@ fn connectGroup(r: *Run, e: *Elab, refs: []const Ast.Port, conn: Ast.PortConn, p
     };
 }
 
+/// A port by the name a named connection may use: its own, when the header
+/// gave it no external name. A concatenation with no external name has none
+/// (§12.3.6: it connects by position only).
 fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
     for (m.ports, 0..) |p, k| {
         if (p.concat_rest or (k + 1 < m.ports.len and m.ports[k + 1].concat_rest)) continue;
@@ -1889,7 +1888,7 @@ fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: SinkOf) Erro
     };
     try compile.checkExpr(r, arg);
     if (index != .none and !compile.constantExpression(r, index)) return r.exprFail(arg, refused);
-    const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, "an output port can only drive a net");
+    const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, not_net);
     const sel = (try evaluate.selection(r, r.arena, arg)) orelse return r.exprFail(arg, "§12.3.9.2: the select's index is x or z");
     if (sel.first < 0 or sel.first + sel.count > e.nets.items[net].resolved.width) return r.exprFail(arg, "§12.3.9.2: the select is outside its net");
     return .{ .net = net, .lo = @intCast(sel.first), .width = sel.count };
@@ -2226,8 +2225,8 @@ test "a legal wreal runs, and hears none of the structural wreal codes" {
         try root.run(arena.allocator(), source, .{}, &bag, &output.writer);
         var messages = std.Io.Writer.Allocating.init(arena.allocator());
         try diag.render(&bag, &messages.writer, .{});
-        try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E0918") == null);
-        try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E0919") == null);
+        try std.testing.expect(std.mem.find(u8, messages.written(), "E0918") == null);
+        try std.testing.expect(std.mem.find(u8, messages.written(), "E0919") == null);
     }
 }
 
@@ -2265,4 +2264,37 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; wire [p:0] w; initial $display(\"x\"); endmodule", "undeclared digital variable");
     try expectRejected("module m; reg [3:0] a; wire [a:0] w; initial $display(\"x\"); endmodule", "constant expression is required");
     try expectRejected("module m; parameter P = 1; initial P = 2; endmodule", "parameter is a constant");
+}
+
+test "§12.3.10 Table 12-1: a warn cell warns either way round, and no type warns against itself" {
+    const kinds = [_]Ast.NetKind{ .wire, .tri, .tri0, .tri1, .triand, .trior, .trireg, .wand, .wor, .uwire, .supply0, .supply1, .wreal };
+    for (kinds) |i| {
+        try std.testing.expect(!warnCell(i, i));
+        // A type never dominates itself, and of two types at most one
+        // dominates the other ("int" and "ext" are a cell's two answers).
+        try std.testing.expect(!internalDominates(i, i));
+        for (kinds) |x| {
+            try std.testing.expectEqual(warnCell(i, x), warnCell(x, i));
+            try std.testing.expect(!(internalDominates(i, x) and internalDominates(x, i)));
+        }
+    }
+}
+
+test "§6.1.1/A.3.3 a driver of a variable's select names the construct that drives it" {
+    // Each construct says what it is: the refusal is not an output port's
+    // when no port is involved.
+    try expectRejected("module m; reg [1:0] a; assign a[0] = 1'b1; endmodule", "a continuous assignment can only drive a net");
+    try expectRejected("module m; reg [1:0] a; reg b; and g(a[0], b, b); endmodule", "a gate's output terminal must be a net");
+}
+
+test "§4.9 a net array element driven by a constant index" {
+    // §4.9.1 one net per element; `assign w[1] = ...` drives element 1 only.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\wire w [0:2];
+        \\assign w[1] = 1'b1;
+        \\initial #1 $display("%b%b%b", w[0], w[1], w[2]);
+        \\endmodule
+    , "z1z\n");
 }

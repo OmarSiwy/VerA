@@ -55,7 +55,7 @@ pub fn check(r: *Run, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
             const last = i + 1 == given.len;
             if (last and ex.tag(a) == .str_literal) {
                 const f = ex.strOf(a);
-                if (std.mem.indexOfScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
+                if (std.mem.findScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
                     return r.exprFail(a, "§18.3.1: the same file_pathname shall not be given to two $dumpports calls");
                 try r.ports_dump.files.append(r.arena, f);
                 continue;
@@ -68,7 +68,7 @@ pub fn check(r: *Run, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
                 .scope => |sc| sc,
                 .slot => if (last) continue else return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance: only modules are allowed, not variables"),
             };
-            if (std.mem.indexOfScalar(u32, r.ports_dump.scopes.items, sc) != null)
+            if (std.mem.findScalar(u32, r.ports_dump.scopes.items, sc) != null)
                 return r.exprFail(a, "§18.3.1: each $dumpports scope shall be unique");
             try r.ports_dump.scopes.append(r.arena, sc);
         },
@@ -407,10 +407,10 @@ pub fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
     const c: u8 = switch (vi) {
         .zero => if (vo == .one) 'A' else 'a',
         .one => if (vo == .zero) 'B' else 'b',
-        else => switch (vo) {
+        .x, .z => switch (vo) {
             .zero => 'C',
             .one => 'c',
-            else => '?',
+            .x, .z => '?',
         },
     };
     return .{ .c = c, .s0 = both[0], .s1 = both[1] };
@@ -436,4 +436,39 @@ test "§18.4.3.2 port states from the two sides' drivers" {
     try std.testing.expectEqual(State{ .c = 'f', .s0 = 0, .s1 = 0 }, portState(.inout, .{}, .{}));
     try std.testing.expectEqual(State{ .c = 'N', .s0 = 6, .s1 = 6 }, portState(.input, .of(.x, .strong, .strong), .{}));
     try std.testing.expectEqual(State{ .c = 'A', .s0 = 6, .s1 = 6 }, portState(.inout, strong0, strong1));
+}
+
+test "§18.4.3.1 Table 18-7: a port driven from one side, or from neither" {
+    const st1: Signal = .of(.one, .strong, .strong);
+    const pu0: Signal = .of(.zero, .pull, .pull);
+    const stx: Signal = .of(.x, .strong, .strong);
+    // The input side alone (the test fixture): D, U, N.
+    try std.testing.expectEqual(State{ .c = 'U', .s0 = 0, .s1 = 6 }, portState(.input, st1, .{}));
+    try std.testing.expectEqual(State{ .c = 'D', .s0 = 5, .s1 = 0 }, portState(.inout, pu0, .{}));
+    // The output side alone (the device): L, H, X.
+    try std.testing.expectEqual(State{ .c = 'L', .s0 = 5, .s1 = 0 }, portState(.output, .{}, pu0));
+    try std.testing.expectEqual(State{ .c = 'H', .s0 = 0, .s1 = 6 }, portState(.inout, .{}, st1));
+    try std.testing.expectEqual(State{ .c = 'X', .s0 = 6, .s1 = 6 }, portState(.output, .{}, stx));
+    // Nothing driven: Z for an input, T for an output, f for an inout.
+    try std.testing.expectEqual(State{ .c = 'Z', .s0 = 0, .s1 = 0 }, portState(.input, .{}, .{}));
+    try std.testing.expectEqual(State{ .c = 'T', .s0 = 0, .s1 = 0 }, portState(.output, .{}, .{}));
+}
+
+test "§18.4.3.2 Table 18-7: two sides that disagree" {
+    const st0: Signal = .of(.zero, .strong, .strong);
+    const st1: Signal = .of(.one, .strong, .strong);
+    const stx: Signal = .of(.x, .strong, .strong);
+    // A: input 0, output 1; a: input 0, output X; B: input 1, output 0;
+    // b: input 1, output X; C: input X, output 0; c: input X, output 1;
+    // ?: both X. Each spans both sides at strong.
+    const cases = [_]struct { Signal, Signal, u8 }{
+        .{ st0, st1, 'A' },
+        .{ st0, stx, 'a' },
+        .{ st1, st0, 'B' },
+        .{ st1, stx, 'b' },
+        .{ stx, st0, 'C' },
+        .{ stx, st1, 'c' },
+        .{ stx, stx, '?' },
+    };
+    for (cases) |c| try std.testing.expectEqual(State{ .c = c[2], .s0 = 6, .s1 = 6 }, portState(.inout, c[0], c[1]));
 }

@@ -144,7 +144,7 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
             const n = self.nets[y.net];
             self.signals[n.signal + y.bit] = acc;
             setBit(n.resolved, y.bit, acc.collapse());
-            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
+            if (std.mem.findScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
         }
     }
     for (touched.items) |t| try waiters.store(self, self.nets[t].slot, self.nets[t].resolved.planes);
@@ -499,4 +499,38 @@ test "a trireg holds its charge for the decay time and then gives up" {
         \\late x 0
         \\
     );
+}
+
+test "A.2.1.3 a net's own delay applies to its resolved value, rise and fall apart" {
+    // `wire #(2,5) w = a`: the delay is the net's. a rises at 10, so w at 12;
+    // a falls at 20, so w at 25. Sampled at 11, 13, 24 and 26.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg a; wire #(2,5) w = a;
+        \\initial begin
+        \\  a = 0; #10 a = 1;
+        \\  #1 $write("%b", w); #2 $write("%b", w);
+        \\  #7 a = 0; #4 $write("%b", w); #2 $display("%b", w);
+        \\end
+        \\endmodule
+    , "0110\n");
+}
+
+test "§7.6 a controlled pass switch with a delay turns on and off after it" {
+    // tranif1 #(2,3): on 2 units after its control rises (at 12), off 3
+    // after it falls (at 23). Sampled at 11, 13, 22 and 24.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg c; wire a, b;
+        \\assign a = 1'b1;
+        \\tranif1 #(2,3) t(a, b, c);
+        \\initial begin
+        \\  c = 0; #10 c = 1;
+        \\  #1 $write("%b", b); #2 $write("%b", b);
+        \\  #7 c = 0; #2 $write("%b", b); #2 $display("%b", b);
+        \\end
+        \\endmodule
+    , "z11z\n");
 }

@@ -320,8 +320,8 @@ pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, na
     if (!fileType(ty)) return 0;
     // A file read is looked for beside the source first, as `$readmemh`
     // looks (`display.readSideFile`).
-    if (ty[0] == 'r') if (std.fs.path.dirname(file_name)) |dir| {
-        const d = t.open(try std.fs.path.join(a, &.{ dir, path }), ty, mcd);
+    if (ty[0] == 'r') if (std.Io.Dir.path.dirname(file_name)) |dir| {
+        const d = t.open(try std.Io.Dir.path.join(a, &.{ dir, path }), ty, mcd);
         if (d != 0) return d;
     };
     return t.open(path, ty, mcd);
@@ -637,7 +637,7 @@ pub const Scan = struct {
             const n, const value: @FieldType(Assign, "value") = switch (conv) {
                 'c' => .{ 1, .{ .bits = .{ field[0], 0 } } },
                 's' => blk: {
-                    const len = std.mem.indexOfAny(u8, field, &std.ascii.whitespace) orelse field.len;
+                    const len = std.mem.findAny(u8, field, &std.ascii.whitespace) orelse field.len;
                     break :blk .{ len, .{ .chars = field[0..len] } };
                 },
                 'd', 'h', 'x', 'o', 'b' => number(field, conv) orelse return self.stop(false),
@@ -674,7 +674,7 @@ pub const Scan = struct {
             while (n < field.len and (std.ascii.isDigit(field[n]) or field[n] == '_')) : (n += 1) {
                 if (field[n] != '_') acc = acc *% 10 +% (field[n] - '0');
             }
-            if (std.mem.indexOfNone(u8, field[sign..n], "_") == null) return null;
+            if (std.mem.findNone(u8, field[sign..n], "_") == null) return null;
             return .{ n, .{ .bits = .{ if (neg) 0 -% acc else acc, 0 } } };
         }
         const per: u6 = switch (conv) {
@@ -896,4 +896,386 @@ test "§17.9.1 a seedless $random is the listing's stream from seed 0" {
         \\initial begin a = $random; b = $random; $display("%0d %0d", a, b); end
         \\endmodule
     , "303379748 -1064739199\n");
+}
+
+test queueStep {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var qs: Queues = .empty;
+    // Table 17-16: 4 an unsupported type, 5 a length that is not positive,
+    // 2 an undefined q_id, 6 a q_id already in use, 0 OK.
+    try std.testing.expectEqual(@as(i64, bad_type), (try queueStep(&qs, a, .initialize, 1, 3, 2, 0)).status);
+    try std.testing.expectEqual(@as(i64, bad_type), (try queueStep(&qs, a, .initialize, 1, null, 2, 0)).status);
+    try std.testing.expectEqual(@as(i64, bad_length), (try queueStep(&qs, a, .initialize, 1, 1, 0, 0)).status);
+    try std.testing.expectEqual(@as(i64, undefined_id), (try queueStep(&qs, a, .initialize, null, 1, 2, 0)).status);
+    try std.testing.expectEqual(@as(i64, ok), (try queueStep(&qs, a, .initialize, 1, 1, 2, 0)).status);
+    try std.testing.expectEqual(@as(i64, duplicate_id), (try queueStep(&qs, a, .initialize, 1, 2, 5, 0)).status);
+    // Two jobs arrive at 10 and 14; a third finds the FIFO full (status 1).
+    try std.testing.expectEqual(@as(i64, ok), (try queueStep(&qs, a, .add, 1, 7, 70, 10)).status);
+    try std.testing.expectEqual(@as(i64, ok), (try queueStep(&qs, a, .add, 1, 8, 80, 14)).status);
+    try std.testing.expectEqual(@as(i64, full), (try queueStep(&qs, a, .add, 1, 9, 90, 15)).status);
+    try std.testing.expectEqual(@as(i64, 1), queueIsFull(&qs, 1).full);
+    // §17.6.5 Table 17-15 at t = 20: length 2, mean interarrival 4, peak 2,
+    // no wait yet (0 shortest, 0 mean), longest wait 20 - 10.
+    const Exam = struct { i64, i64 };
+    for ([_]Exam{ .{ 1, 2 }, .{ 2, 4 }, .{ 3, 2 }, .{ 4, 0 }, .{ 5, 10 }, .{ 6, 0 } }) |e| {
+        const r = try queueStep(&qs, a, .exam, 1, e[0], null, 20);
+        try std.testing.expectEqual(@as(i64, ok), r.status);
+        try std.testing.expectEqual(@as(?i64, e[1]), r.out[1]);
+    }
+    // FIFO: the first job out, having waited 20 - 10; then the second, 26 - 14.
+    const first = try queueStep(&qs, a, .remove, 1, null, null, 20);
+    try std.testing.expectEqual(@as(?i64, 7), first.out[0]);
+    try std.testing.expectEqual(@as(?i64, 70), first.out[1]);
+    const second = try queueStep(&qs, a, .remove, 1, null, null, 26);
+    try std.testing.expectEqual(@as(?i64, 8), second.out[0]);
+    // Shortest wait 10, mean wait (10 + 12) / 2 = 11.
+    try std.testing.expectEqual(@as(?i64, 10), (try queueStep(&qs, a, .exam, 1, 4, null, 26)).out[1]);
+    try std.testing.expectEqual(@as(?i64, 11), (try queueStep(&qs, a, .exam, 1, 6, null, 26)).out[1]);
+    // An empty queue (3), an unknown statistic code (VD-050: 2) and an
+    // unknown queue (2).
+    try std.testing.expectEqual(@as(i64, empty), (try queueStep(&qs, a, .remove, 1, null, null, 30)).status);
+    try std.testing.expectEqual(@as(i64, undefined_id), (try queueStep(&qs, a, .exam, 1, 9, null, 30)).status);
+    try std.testing.expectEqual(@as(i64, undefined_id), (try queueStep(&qs, a, .remove, 5, null, null, 30)).status);
+    try std.testing.expectEqual(@as(i64, undefined_id), queueIsFull(&qs, 5).status);
+    // LIFO (type 2): the last job in is the first out.
+    try std.testing.expectEqual(@as(i64, ok), (try queueStep(&qs, a, .initialize, 2, 2, 3, 0)).status);
+    _ = try queueStep(&qs, a, .add, 2, 1, 0, 0);
+    _ = try queueStep(&qs, a, .add, 2, 2, 0, 1);
+    try std.testing.expectEqual(@as(?i64, 2), (try queueStep(&qs, a, .remove, 2, null, null, 2)).out[0]);
+}
+
+test mean {
+    // §3.5.3: to the nearest integer, ties away from zero (VD-052).
+    try std.testing.expectEqual(@as(u64, 0), mean(0, 0));
+    try std.testing.expectEqual(@as(u64, 3), mean(5, 2));
+    try std.testing.expectEqual(@as(u64, 2), mean(3, 2));
+    try std.testing.expectEqual(@as(u64, 0), mean(1, 3));
+    try std.testing.expectEqual(@as(u64, 1), mean(2, 3));
+}
+
+test dist {
+    // §17.9.2: a mean, degree of freedom or k_stage that is not positive
+    // draws nothing.
+    try std.testing.expect(dist(.exponential, 1, 0, 0) == null);
+    try std.testing.expect(dist(.poisson, 1, -3, 0) == null);
+    try std.testing.expect(dist(.chi_square, 1, 0, 0) == null);
+    try std.testing.expect(dist(.t, 1, 0, 0) == null);
+    try std.testing.expect(dist(.erlang, 1, 2, 0) == null);
+    try std.testing.expect(dist(.erlang, 1, 0, 2) == null);
+    // A draw is a pure function of its seed: the same seed, the same draw.
+    const d1 = dist(.uniform, 42, 0, 100).?;
+    const d2 = dist(.uniform, 42, 0, 100).?;
+    try std.testing.expectEqual(d1, d2);
+    try std.testing.expect(d1.value >= 0 and d1.value <= 100);
+    try std.testing.expect(dist(.random, 0, 0, 0) != null);
+}
+
+test text {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §17.1.1.7: 8 bits a character, leading NULs dropped, others kept.
+    const v = try filled(a, 32, false, .zero);
+    v.values()[0] = 0x0061_0062;
+    try std.testing.expectEqualStrings("a\x00b", (try text(a, v)).?);
+    // A partial top byte is a character of the bits it has.
+    const w = try filled(a, 12, false, .zero);
+    w.values()[0] = 0x141;
+    try std.testing.expectEqualStrings("\x01A", (try text(a, w)).?);
+    // All zero is no character; an x or z bit is no text at all.
+    try std.testing.expectEqualStrings("", (try text(a, try filled(a, 16, false, .zero))).?);
+    setBit(w, 3, .z);
+    try std.testing.expect((try text(a, w)) == null);
+}
+
+test fileType {
+    // §17.2.1 Table 17-7, every row.
+    for ([_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" }) |ty|
+        try std.testing.expect(fileType(ty));
+    for ([_][]const u8{ "", "R", "rw", "rb+b", "x", "r +" }) |ty| try std.testing.expect(!fileType(ty));
+}
+
+test stringValue {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §4.2.3: the last character in the low byte.
+    const ab = try stringValue(a, "AB");
+    try std.testing.expectEqual(@as(u32, 16), ab.width);
+    try std.testing.expectEqual(@as(?i64, 0x4142), ab.asInt());
+    // An empty string is one NUL character.
+    const none = try stringValue(a, "");
+    try std.testing.expectEqual(@as(u32, 8), none.width);
+    try std.testing.expectEqual(@as(?i64, 0), none.asInt());
+}
+
+test "§17.2.4.3 Scan: C's conversions over a string" {
+    // One call: the assignments `next` gives, then its `result`.
+    const S = struct {
+        fn bits(input: []const u8, format: []const u8) ![2]u64 {
+            var sc: Scan = .init(input, format, 1);
+            const x = sc.next() orelse return error.NoAssignment;
+            return x.value.bits;
+        }
+        fn result(input: ?[]const u8, format: ?[]const u8, outs: usize) i64 {
+            var sc: Scan = .init(input, format, outs);
+            while (sc.next()) |_| {}
+            return sc.result;
+        }
+    };
+    try std.testing.expectEqual([2]u64{ @bitCast(@as(i64, -12)), 0 }, try S.bits("  -12", "%d"));
+    try std.testing.expectEqual([2]u64{ 255, 0 }, try S.bits("fF", "%x"));
+    try std.testing.expectEqual([2]u64{ 5, 0 }, try S.bits("1_01", "%b"));
+    try std.testing.expectEqual([2]u64{ 0o17, 0 }, try S.bits("17", "%o"));
+    // A maximum field width stops the number.
+    try std.testing.expectEqual([2]u64{ 123, 0 }, try S.bits("12345", "%3d"));
+    // §3.5.1: an x leftmost pads the value with x; a known digit does not.
+    try std.testing.expectEqual([2]u64{ ~@as(u64, 0), ~@as(u64, 0) << 1 }, try S.bits("x1", "%b"));
+    try std.testing.expectEqual([2]u64{ 0b11, 0b01 }, try S.bits("1x", "%b"));
+    // %d reads one x or z as the whole value.
+    try std.testing.expectEqual([2]u64{ 0, ~@as(u64, 0) }, try S.bits("z", "%d"));
+    // %c takes the next character, white space included.
+    try std.testing.expectEqual([2]u64{ ' ', 0 }, try S.bits(" a", "%c"));
+    // The count of assignments; `*` matches without assigning.
+    try std.testing.expectEqual(@as(i64, 1), S.result("1 2", "%*d %d", 1));
+    try std.testing.expectEqual(@as(i64, 2), S.result("7+8", "%d+%d", 2));
+    // A literal that does not match stops the scan with what it assigned.
+    try std.testing.expectEqual(@as(i64, 1), S.result("7-8", "%d+%d", 2));
+    try std.testing.expectEqual(@as(i64, 0), S.result("b1", "a%d", 1));
+    // Input that ends before the first conversion is EOF (-1), and so is
+    // an x or z in the string or the format.
+    try std.testing.expectEqual(@as(i64, -1), S.result("", "%d", 1));
+    try std.testing.expectEqual(@as(i64, -1), S.result("   ", "%d", 1));
+    try std.testing.expectEqual(@as(i64, -1), S.result(null, "%d", 1));
+    try std.testing.expectEqual(@as(i64, -1), S.result("1", null, 1));
+    // More conversions than outputs stop at the outputs.
+    try std.testing.expectEqual(@as(i64, 1), S.result("1 2", "%d %d", 1));
+    // A literal `%` and the strings.
+    try std.testing.expectEqual(@as(i64, 1), S.result("%5", "%%%d", 1));
+    {
+        var sc: Scan = .init("  ab cd", "%s", 1);
+        try std.testing.expectEqualStrings("ab", sc.next().?.value.chars);
+        try std.testing.expectEqual(@as(usize, 4), sc.at);
+    }
+    {
+        var sc: Scan = .init("1.5e3x -.25 e5", "%f %g %e", 3);
+        try std.testing.expectEqual(@as(f64, 1500), sc.next().?.value.real);
+        // The `x` after the number is no part of it, and no format character
+        // matches it either.
+        try std.testing.expect(sc.next() == null);
+        try std.testing.expectEqual(@as(i64, 1), sc.result);
+    }
+    {
+        var sc: Scan = .init("-0.25", "%g", 1);
+        try std.testing.expectEqual(@as(f64, -0.25), sc.next().?.value.real);
+    }
+}
+
+/// A one-file `contract.FileIo` over `data`, for the descriptor-level
+/// helpers. Its state is global: one test at a time uses it.
+const FakeFile = struct {
+    var data: []const u8 = "";
+    var pos: usize = 0;
+    var put_bytes: usize = 0;
+
+    fn reset(bytes: []const u8) void {
+        data = bytes;
+        pos = 0;
+        put_bytes = 0;
+    }
+    /// A read opens beside the source when it can (`dir/f.txt`, 7), and
+    /// anything else as itself (3).
+    fn open(path: []const u8, _: []const u8, _: bool) i64 {
+        return if (path.len > "f.txt".len and std.mem.endsWith(u8, path, "f.txt")) 7 else 3;
+    }
+    fn close(_: i64) i64 {
+        return 0;
+    }
+    /// Takes none of the bytes, as a file not open for writing.
+    fn put(_: i64, bytes: []const u8) i64 {
+        put_bytes += bytes.len;
+        return 0;
+    }
+    fn getc(_: i64) i64 {
+        if (pos == data.len) return -1;
+        pos += 1;
+        return data[pos - 1];
+    }
+    fn ungetc(c: i64, _: i64) i64 {
+        pos -= 1;
+        return c;
+    }
+    fn tell(_: i64) i64 {
+        return @intCast(pos);
+    }
+    fn seek(_: i64, off: i64, _: i64) i64 {
+        pos = @intCast(off);
+        return 0;
+    }
+    fn eof(_: i64) i64 {
+        return @intFromBool(pos == data.len);
+    }
+    const io: contract.FileIo = .{ .open = open, .close = close, .put = put, .getc = getc, .ungetc = ungetc, .tell = tell, .seek = seek, .eof = eof };
+};
+
+test readLine {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    FakeFile.reset("ab\ncd");
+    // §17.2.4.2: through the newline, then to EOF, then nothing.
+    try std.testing.expectEqualStrings("ab\n", try readLine(a, FakeFile.io, 1, 8));
+    try std.testing.expectEqualStrings("cd", try readLine(a, FakeFile.io, 1, 8));
+    try std.testing.expectEqualStrings("", try readLine(a, FakeFile.io, 1, 8));
+    // "until str is filled".
+    FakeFile.reset("abc");
+    try std.testing.expectEqualStrings("a", try readLine(a, FakeFile.io, 1, 1));
+}
+
+test readWord {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §17.2.4.4: ceil(12 / 8) = 2 bytes, the first the most significant,
+    // and only the low 12 bits of them kept: 0x1234 -> 0x234.
+    FakeFile.reset("\x12\x34\x56");
+    const w = try readWord(a, FakeFile.io, 1, 12);
+    try std.testing.expectEqual(@as(i64, 2), w.n);
+    try std.testing.expectEqual(@as(?i64, 0x234), w.value.?.asInt());
+    // The file ends inside the next word: one byte read, no value.
+    const short = try readWord(a, FakeFile.io, 1, 12);
+    try std.testing.expectEqual(@as(i64, 1), short.n);
+    try std.testing.expect(short.value == null);
+}
+
+test fileOp {
+    FakeFile.reset("xy");
+    // An x or z descriptor or argument is EOF, as is a whence outside 0..2.
+    try std.testing.expectEqual(@as(i64, -1), fileOp(FakeFile.io, .fgetc, null, null, null));
+    try std.testing.expectEqual(@as(i64, -1), fileOp(FakeFile.io, .fseek, 1, 0, 3));
+    try std.testing.expectEqual(@as(i64, -1), fileOp(FakeFile.io, .fseek, 1, null, 0));
+    try std.testing.expectEqual(@as(i64, -1), fileOp(FakeFile.io, .ungetc, null, 1, null));
+    try std.testing.expectEqual(@as(i64, 'x'), fileOp(FakeFile.io, .fgetc, 1, null, null));
+    try std.testing.expectEqual(@as(i64, 1), fileOp(FakeFile.io, .ftell, 1, null, null));
+    try std.testing.expectEqual(@as(i64, 0), fileOp(FakeFile.io, .rewind, 1, null, null));
+    try std.testing.expectEqual(@as(i64, 0), fileOp(FakeFile.io, .feof, 1, null, null));
+    try std.testing.expectEqual(@as(i64, 0), fileOp(FakeFile.io, .fseek, 1, 2, 0));
+    try std.testing.expectEqual(@as(i64, 1), fileOp(FakeFile.io, .feof, 1, null, null));
+    // §17.2.1: a descriptor is its low 32 bits, however it is signed, so
+    // -1 is a descriptor like any other and not EOF.
+    try std.testing.expectEqual(@as(i64, 2), fileOp(FakeFile.io, .ftell, -1, null, null));
+}
+
+test fopen {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A file read is looked for beside the source first; a write is not.
+    try std.testing.expectEqual(@as(i64, 7), try fopen(FakeFile.io, a, "dir/src.v", "f.txt", "r", false));
+    try std.testing.expectEqual(@as(i64, 3), try fopen(FakeFile.io, a, "dir/src.v", "f.txt", "w", false));
+    // An mcd open is a write.
+    try std.testing.expectEqual(@as(i64, 3), try fopen(FakeFile.io, a, "dir/src.v", "f.txt", null, true));
+    // No name, no type, or a type outside Table 17-7: 0.
+    try std.testing.expectEqual(@as(i64, 0), try fopen(FakeFile.io, a, "src.v", null, "r", false));
+    try std.testing.expectEqual(@as(i64, 0), try fopen(FakeFile.io, a, "src.v", "f.txt", null, false));
+    try std.testing.expectEqual(@as(i64, 0), try fopen(FakeFile.io, a, "src.v", "f.txt", "rw", false));
+}
+
+test "§17.2.4.3 a file scan leaves the descriptor just past what it used" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    FakeFile.reset("12 ab");
+    var file = try fileScan(arena.allocator(), FakeFile.io, 1, "%d", 1);
+    const x = file.scan.next().?;
+    try std.testing.expectEqual(@as(u64, 12), x.value.bits[0]);
+    try std.testing.expect(file.scan.next() == null);
+    try std.testing.expectEqual(@as(i64, 1), finishFileScan(FakeFile.io, file, file.scan));
+    // "12" consumed: the next read is the space after it.
+    try std.testing.expectEqual(@as(usize, 2), FakeFile.pos);
+    // A descriptor with an x bit scans no input: EOF.
+    const none = try fileScan(arena.allocator(), FakeFile.io, null, "%d", 1);
+    try std.testing.expectEqual(@as(i64, -1), finishFileScan(FakeFile.io, none, none.scan));
+}
+
+test channels {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena.allocator());
+    const fd: i64 = @as(i64, 1) << 31;
+    // §17.2.1: an mcd's bit 0 and fd 1 are standard output, the transcript.
+    try std.testing.expect(!try channels(null, null, &out.writer, 1, "a"));
+    try std.testing.expect(!try channels(null, null, &out.writer, fd | 1, "b"));
+    // Without a table the other channels have no one to refuse them.
+    try std.testing.expect(!try channels(null, null, &out.writer, 3, "c"));
+    try std.testing.expect(!try channels(null, null, &out.writer, fd | 3, "-"));
+    try std.testing.expectEqualStrings("abc", out.written());
+    // A table that takes none of the bytes: W1154's case. Empty text
+    // reports nothing.
+    FakeFile.reset("");
+    try std.testing.expect(try channels(FakeFile.io, null, &out.writer, fd | 3, "d"));
+    try std.testing.expect(try channels(FakeFile.io, null, &out.writer, 2, "e"));
+    try std.testing.expect(!try channels(FakeFile.io, null, &out.writer, 2, ""));
+    try std.testing.expectEqual(@as(usize, 2), FakeFile.put_bytes);
+    try std.testing.expectEqualStrings("abc", out.written());
+}
+
+/// A literal from its bits written most significant first: 0, 1, x or z.
+fn testLiteral(a: std.mem.Allocator, bits: []const u8) !Int.Literal {
+    const v = try filled(a, @intCast(bits.len), false, .zero);
+    for (bits, 0..) |c, i| setBit(v, @intCast(bits.len - 1 - i), switch (c) {
+        '0' => .zero,
+        '1' => .one,
+        'x' => .x,
+        else => .z,
+    });
+    return v;
+}
+
+test plaEval {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const P = struct {
+        fn run(alloc: std.mem.Allocator, p: Pla, rows: []const []const u8, in: []const u8, width: u32) ![]const u8 {
+            const lits = try alloc.alloc(Int.Literal, rows.len);
+            for (rows, lits) |r, *l| l.* = try testLiteral(alloc, r);
+            const out = try filled(alloc, width, false, .x);
+            plaEval(p, lits, try testLiteral(alloc, in), out);
+            const text_out = try alloc.alloc(u8, width);
+            for (text_out, 0..) |*c, i| c.* = switch (out.bit(@intCast(width - 1 - i))) {
+                .zero => '0',
+                .one => '1',
+                .x => 'x',
+                .z => 'z',
+            };
+            return text_out;
+        }
+    };
+    // §17.5: row k is output bit k from the left; within a row, personality
+    // bit j governs input j, both from the left. An array's 1 selects.
+    const and_array: Pla = .{ .logic = .@"and", .plane = false, .async_ = true };
+    try std.testing.expectEqualStrings("10", try P.run(a, and_array, &.{ "110", "011" }, "110", 2));
+    // A plane's 0 selects the complement and its z ("do not care") nothing;
+    // an x personality bit is an unknown term.
+    const or_plane: Pla = .{ .logic = .@"or", .plane = true, .async_ = true };
+    try std.testing.expectEqualStrings("10x", try P.run(a, or_plane, &.{ "0zz", "z0z", "1zx" }, "010", 3));
+    // An unknown input the row's controlling value does not decide is x,
+    // inverted or not; one it does decide is not.
+    const nand_array: Pla = .{ .logic = .nand, .plane = false, .async_ = false };
+    try std.testing.expectEqualStrings("x0", try P.run(a, nand_array, &.{ "11", "10" }, "1x", 2));
+    try std.testing.expectEqualStrings("1", try P.run(a, nand_array, &.{"11"}, "0x", 1));
+    // More rows than output bits: the extra rows drive nothing.
+    try std.testing.expectEqualStrings("1", try P.run(a, and_array, &.{ "1", "0" }, "1", 1));
+}
+
+test pla_tasks {
+    // §17.5: sixteen names, `$` timing `$` logic `$` form.
+    try std.testing.expectEqual(@as(usize, 16), pla_tasks.len);
+    for (pla_tasks) |t| {
+        const name, const p = t;
+        try std.testing.expect(std.mem.startsWith(u8, name, if (p.async_) "$async$" else "$sync$"));
+        try std.testing.expect(std.mem.endsWith(u8, name, if (p.plane) "$plane" else "$array"));
+    }
 }
