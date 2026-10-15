@@ -216,8 +216,8 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
     const inputs = cols[0].text[0..cols[0].len];
     var edge_count: usize = 0;
     for (inputs) |c| {
-        if (std.mem.indexOfScalar(u8, "01xX?bB", c) != null) continue;
-        if (std.mem.indexOfScalar(u8, "rRfFpPnN*()", c) != null) {
+        if (std.mem.findScalar(u8, "01xX?bB", c) != null) continue;
+        if (std.mem.findScalar(u8, "rRfFpPnN*()", c) != null) {
             if (is_seq) {
                 // IEEE 1364-2005 8.1.4/8.4: at most one input
                 // transition per row. A parenthesized pair counts once,
@@ -231,26 +231,38 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
         }
         return self.failAt(cols[0].tok, .E0233, "`{c}` is not a UDP input symbol", .{c});
     }
+    // `edge_indicator ::= ( level_symbol level_symbol ) | edge_symbol`: the
+    // alphabet above admits `(` and `)` anywhere, so their shape is checked
+    // here, before `udpFields` reads a field off each `(`. Only a sequential
+    // entry gets this far with one.
+    var at: usize = 0;
+    while (at < inputs.len) : (at += 1) {
+        if (inputs[at] != '(' and inputs[at] != ')') continue;
+        const pair = inputs[at] == '(' and at + 3 < inputs.len and inputs[at + 3] == ')' and
+            isLevelSymbol(inputs[at + 1]) and isLevelSymbol(inputs[at + 2]);
+        if (!pair) return self.failAt(cols[0].tok, .E0233, "an edge_indicator is `(` and two level symbols and `)` (A.5.3)", .{});
+        at += 3;
+    }
     // `output_symbol ::= 0 | 1 | x | X` closes a combinational entry;
     // `current_state ::= level_symbol` and `next_state ::= output_symbol
     // | -` close a sequential one.
     if (is_seq) for (cols[1].text[0..cols[1].len]) |c| {
-        if (std.mem.indexOfScalar(u8, "01xX?bB", c) == null)
+        if (!isLevelSymbol(c))
             return self.failAt(cols[1].tok, .E0233, "`{c}` is not a UDP current_state symbol", .{c});
     };
+    if (is_seq and cols[1].len != 1)
+        return self.failAt(cols[1].tok, .E0233, "a UDP current_state is one level symbol, not {d}", .{cols[1].len});
     const last = cols[n].text[0..cols[n].len];
     if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
-    const ok = std.mem.indexOfScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
+    const ok = std.mem.findScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
     if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
 
     // The columns live in a stack buffer, so `inputs` is copied out. Only
     // the input list needs it: the other two columns are one character.
     try rows.append(self.arena, .{
         .inputs = try self.arena.dupe(u8, inputs),
-        // A.5.3 `current_state ::= level_symbol` is one symbol, which
-        // nothing above enforces; a longer column stores its first
-        // character.
-        .state = if (is_seq and cols[1].len != 0) cols[1].text[0] else 0,
+        // A.5.3 `current_state ::= level_symbol`: exactly one, checked above.
+        .state = if (is_seq) cols[1].text[0] else 0,
         .output = last[0],
     });
 }
@@ -350,6 +362,11 @@ fn checkUdpConflicts(self: *Parser, name: Ast.StrId, rows: []const Ast.UdpRow, i
             }
         }
     }
+}
+
+// A.5.3 `level_symbol ::= 0 | 1 | x | X | ? | b | B`.
+fn isLevelSymbol(c: u8) bool {
+    return std.mem.findScalar(u8, "01xX?bB", c) != null;
 }
 
 fn udpBodyName(sequential: bool) []const u8 {

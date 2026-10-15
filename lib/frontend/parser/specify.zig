@@ -333,7 +333,9 @@ fn terminalWidth(self: *const Parser, b: *const parse_module.Body, t: Ast.ExprId
         const rg = ex.rhs(t);
         return switch (ex.tag(rg)) {
             .range => parse_decl.literalWidth(self, .{ .msb = ex.lhs(rg), .lsb = ex.rhs(rg) }),
-            .indexed_range => if (ex.tag(ex.rhs(rg)) == .int_literal) @intCast(ex.intValue(ex.rhs(rg))) else null,
+            // A negative width (`+: 4'shf` is -1) has no width to compare;
+            // the part-select's legality is elaboration's question.
+            .indexed_range => if (ex.tag(ex.rhs(rg)) == .int_literal) std.math.cast(u64, ex.intValue(ex.rhs(rg))) else null,
             else => 1, // else: a bit-select
         };
     }
@@ -358,7 +360,7 @@ fn readsSignal(self: *const Parser, b: *const parse_module.Body, e: Ast.ExprId) 
 
 /// IEEE 1364-2005 §14.2-§14.3's rules on the module's paths that need its
 /// ports and drivers, so run once the whole module is parsed. Each broken
-/// rule is reported (E0243) and the parse goes on.
+/// rule is reported (E0245) and the parse goes on; only OOM propagates.
 pub fn checkPaths(self: *Parser, b: *const parse_module.Body) Error!void {
     const ex = &self.file.exprs;
     for (b.paths.items, 0..) |p, i| {

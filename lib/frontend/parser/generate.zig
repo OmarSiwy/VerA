@@ -1,6 +1,6 @@
 //! Annex A.4.2 generate constructs (LRM §6.6): generate regions, loop and
-//! conditional generates -> an `Ast.AnalogBlock` whose body is the `for`/`if`,
-//! which lowering unrolls (§6.6.1).
+//! conditional generates -> an `Ast.AnalogBlock` whose body is the `for`,
+//! `if` or `case`, which lowering unrolls or folds (§6.6.1).
 //!
 //! LRM clauses cited: §2.8, §3.4.6, §3.5, §5.2.1, §5.9.2, §5.10.4, §6.5, §6.6,
 //! §6.6.1, §6.6.2, §6.6.3, §6.8, §6.9.1, §12.4.2.
@@ -301,7 +301,7 @@ fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
         nameIn(Ast.NetDecl, b.nets.items, name) or
         nameIn(Ast.BranchDecl, b.branches.items, name) or
         nameIn(Ast.FuncDecl, b.functions.items, name) or
-        std.mem.indexOfScalar(Ast.StrId, b.genvars.items, name) != null;
+        std.mem.findScalar(Ast.StrId, b.genvars.items, name) != null;
 }
 
 /// Reports E0238 for a loop generate whose variable is not a declared genvar,
@@ -320,7 +320,7 @@ fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
 pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!void {
     // A.4.2 `genvar_initialization ::= genvar_identifier = constant_expression`,
     // and a genvar_identifier is what a `genvar_declaration` introduces.
-    for (b.gen_loops.items) |l| if (std.mem.indexOfScalar(Ast.StrId, b.genvars.items, l.name) == null)
+    for (b.gen_loops.items) |l| if (std.mem.findScalar(Ast.StrId, b.genvars.items, l.name) == null)
         try self.report(l.tok, .E0238, "`{s}`", .{self.file.strings.get(l.name)});
     for (b.gen_blocks.items, 0..) |g, i| {
         const clash = inDeclSpaces(b, g.name) or
