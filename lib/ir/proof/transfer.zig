@@ -288,3 +288,219 @@ test "proof: random distribution names do not prove finite results" {
     for ([_][]const u8{ "$rng$uniform", "$rng$normal", "$rng$exponential", "$rng$poisson", "$rng$chi_square", "$rng$t", "$rng$erlang" }) |name|
         try std.testing.expect(!callAbstract(Mir.Callee.fromName(name)).finite);
 }
+
+// ---------------------------------------------------------------- tests --
+//
+// The oracle is the device: each transfer's interval must hold every value
+// the device computes (`opcode_zig.zig`'s host spelling) at points inside its
+// operands' intervals, and a `finite` claim must hold at every in-domain point.
+
+const Interval = proof_lattice.Interval;
+
+fn member(i: Interval, x: f64) bool {
+    if (i.nonzero and x == 0) return false;
+    const above = x > i.lo or (x == i.lo and !i.lo_open);
+    const below = x < i.hi or (x == i.hi and !i.hi_open);
+    return above and below;
+}
+
+/// `member`, with one double of slack past a closed end: exp, log and pow are
+/// faithful (< 1 ulp), not correctly rounded, so a value between two corners
+/// may round one double past the corners' own rounding. An open end gets no
+/// slack: the bugs it guards are device values landing exactly on it.
+fn admits(i: Interval, y: f64) bool {
+    if (i.nonzero and y == 0) return false;
+    const inf = math.inf(f64);
+    const above = y > i.lo or (!i.lo_open and y >= math.nextAfter(f64, i.lo, -inf));
+    const below = y < i.hi or (!i.hi_open and y <= math.nextAfter(f64, i.hi, inf));
+    return above and below;
+}
+
+/// Points of `a` a test evaluates at: each closed end, the double just inside
+/// each end, the midpoint, and whichever of `extra` lie inside.
+fn samplePoints(a: Interval, extra: []const f64, buf: []f64) []const f64 {
+    const inf = math.inf(f64);
+    var n: usize = 0;
+    const ends = [_]f64{ a.lo, a.hi, math.nextAfter(f64, a.lo, inf), math.nextAfter(f64, a.hi, -inf), a.lo / 2 + a.hi / 2 };
+    for (ends) |x| if (!math.isNan(x) and member(a, x) and n < buf.len) {
+        buf[n] = x;
+        n += 1;
+    };
+    for (extra) |x| if (member(a, x) and n < buf.len) {
+        buf[n] = x;
+        n += 1;
+    };
+    return buf[0..n];
+}
+
+/// Every interval with ends in `ends` (lo <= hi) and each openness pair in `opens`.
+fn intervals(ends: []const f64, opens: []const [2]bool, buf: []Interval) []const Interval {
+    var n: usize = 0;
+    for (ends) |lo| for (ends) |hi| {
+        if (lo > hi) continue;
+        for (opens) |o| {
+            buf[n] = .{ .lo = lo, .hi = hi, .lo_open = o[0], .hi_open = o[1] };
+            n += 1;
+        }
+    };
+    return buf[0..n];
+}
+
+const all_opens = [_][2]bool{ .{ false, false }, .{ true, false }, .{ false, true }, .{ true, true } };
+
+const unary_ops = [_]Mir.Opcode{ .exp, .expm1, .ln, .ln1p, .log10, .sqrt, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh, .asin, .acos, .atan, .sin, .cos, .floor, .ceil, .fneg, .fabs, .if_cast, .opt_barrier, .dstop };
+
+/// The device's value of unary `op` at `x`.
+fn device1(op: Mir.Opcode, x: f64) f64 {
+    return switch (op) {
+        .exp => gm.exp(x),
+        .expm1 => math.expm1(x),
+        .ln => gm.log(x),
+        .ln1p => math.log1p(x),
+        .log10 => @log10(x),
+        .sqrt => @sqrt(x),
+        .sinh => math.sinh(x),
+        .cosh => math.cosh(x),
+        .tanh => math.tanh(x),
+        .asinh => math.asinh(x),
+        .acosh => math.acosh(x),
+        .atanh => math.atanh(x),
+        .asin => math.asin(x),
+        .acos => math.acos(x),
+        .atan => math.atan(x),
+        .sin => @sin(x),
+        .cos => @cos(x),
+        .floor => @floor(x),
+        .ceil => @ceil(x),
+        .fneg => -x,
+        .fabs => @abs(x),
+        .if_cast, .opt_barrier, .dstop => x,
+        else => unreachable, // else: a test helper, called only with `unary_ops`
+    };
+}
+
+/// Whether `x` is in the LRM domain of unary `op` (Tables 4-14/4-15).
+fn inDomain1(op: Mir.Opcode, x: f64) bool {
+    return switch (proof_lattice.domainOf(op)) {
+        .all => true,
+        .positive => x > 0,
+        .gt_neg_one => x > -1,
+        .non_negative => x >= 0,
+        .unit_closed => -1 <= x and x <= 1,
+        .unit_open => -1 < x and x < 1,
+        .ge_one => x >= 1,
+        .nonzero_divisor, .tan_poles, .pow_sign => unreachable, // no op in `unary_ops`
+    };
+}
+
+test unaryTransfer {
+    // Ends where the device's rounding collapses an open bound: exp and expm1
+    // underflow below about -745, tanh saturates to ±1 past about ±19.1, floor
+    // and ceil are flat between integers, atan reaches ±pi/2 at ±maxFloat.
+    const inf = math.inf(f64);
+    const ends = [_]f64{ -inf, -800, -20, -2, -1, -0.5, 0, 0.5, 1, 2, 20, 800, inf };
+    const extra = [_]f64{ -799, -19.9, -0.7, 0.7, 1.5, 2.5, 19.9, 799 };
+    var ivs: [ends.len * ends.len * all_opens.len]Interval = undefined;
+    var buf: [16]f64 = undefined;
+    for (unary_ops) |op| for (intervals(&ends, &all_opens, &ivs)) |a| {
+        const out = unaryTransfer(op, a, true);
+        for (samplePoints(a, &extra, &buf)) |x| {
+            const y = device1(op, x);
+            if (math.isNan(y)) continue; // outside the domain: `checkDomain`'s, not the interval's
+            if (!admits(out.iv, y)) {
+                std.debug.print("{s} over [{d}:{d}] open {any}/{any}: f({d}) = {d} outside [{d}:{d}] open {any}/{any}\n", .{ @tagName(op), a.lo, a.hi, a.lo_open, a.hi_open, x, y, out.iv.lo, out.iv.hi, out.iv.lo_open, out.iv.hi_open });
+                return error.TestUnsoundInterval;
+            }
+            if (out.finite and math.isFinite(x) and inDomain1(op, x)) try std.testing.expect(math.isFinite(y));
+        }
+    };
+}
+
+test "unaryTransfer: dstop is its operand's value (vera_nodiff, §2.9)" {
+    const a: Interval = .{ .lo = 1, .hi = 2, .hi_open = true };
+    const out = unaryTransfer(.dstop, a, true);
+    try std.testing.expectEqual(a, out.iv);
+    try std.testing.expect(out.finite);
+}
+
+const binary_ops = [_]Mir.Opcode{ .fadd, .fsub, .fmul, .fdiv, .fmod, .pow, .hypot, .atan2, .fmin, .fmax };
+
+/// The device's value of binary `op` at `(x, y)`.
+fn device2(op: Mir.Opcode, x: f64, y: f64) f64 {
+    return switch (op) {
+        .fadd => x + y,
+        .fsub => x - y,
+        .fmul => x * y,
+        .fdiv => x / y,
+        .fmod => @rem(x, y),
+        .pow => gm.pow(x, y),
+        .hypot => math.hypot(x, y),
+        .atan2 => math.atan2(x, y),
+        .fmin => if (x < y) x else y, // `zMinF`
+        .fmax => if (x > y) x else y, // `zMaxF`
+        else => unreachable, // else: a test helper, called only with `binary_ops`
+    };
+}
+
+test binaryTransfer {
+    // 1e20 absorbs every operand below 2^14 in a sum, so an open end next to it
+    // is not open after rounding.
+    const inf = math.inf(f64);
+    const ends = [_]f64{ -inf, -1, 0, 0.5, 1, 2, 1e20, inf };
+    const opens = [_][2]bool{ .{ false, false }, .{ true, true } };
+    const extra = [_]f64{ -0.7, 0.7 };
+    var ivs: [ends.len * ends.len * opens.len]Interval = undefined;
+    const all = intervals(&ends, &opens, &ivs);
+    var xb: [8]f64 = undefined;
+    var yb: [8]f64 = undefined;
+    for (binary_ops) |op| for (all) |a| for (all) |b| {
+        const out = binaryTransfer(op, a, b, true);
+        for (samplePoints(a, &extra, &xb)) |x| for (samplePoints(b, &extra, &yb)) |y| {
+            const z = device2(op, x, y);
+            if (math.isNan(z)) continue; // 0/0, inf-inf, x % 0, pow(neg, frac): no value to bound
+            if (!admits(out.iv, z)) {
+                std.debug.print("{s}([{d}:{d}] {any}/{any}, [{d}:{d}] {any}/{any}) at ({d}, {d}) = {d} outside [{d}:{d}] {any}/{any}\n", .{ @tagName(op), a.lo, a.hi, a.lo_open, a.hi_open, b.lo, b.hi, b.lo_open, b.hi_open, x, y, z, out.iv.lo, out.iv.hi, out.iv.lo_open, out.iv.hi_open });
+                return error.TestUnsoundInterval;
+            }
+            // Rule 3 (`proof.FloatMode`) is an axiom for `+ - * /`, and hypot
+            // follows it; the other finite claims must hold outright.
+            const checked = switch (op) {
+                .pow => x > 0 or (x == 0 and y > 0) or (x < 0 and y == @trunc(y)),
+                .fmod => y != 0,
+                .atan2, .fmin, .fmax => true,
+                else => false, // else: rule 3 covers every other op in `binary_ops`
+            };
+            if (out.finite and checked and math.isFinite(x) and math.isFinite(y)) try std.testing.expect(math.isFinite(z));
+        };
+    };
+}
+
+test combine {
+    const out = combine(.{ .lo = -1, .hi = 2 }, .{ .lo = 3, .hi = 4 }, mulOp);
+    try std.testing.expectEqual(@as(f64, -4), out.lo);
+    try std.testing.expectEqual(@as(f64, 8), out.hi);
+    // 0 * inf at a corner has no value: no evidence, not a narrow claim.
+    try std.testing.expectEqual(Interval.top, combine(.point(0), .{ .lo = 1 }, mulOp));
+}
+
+test callAbstract {
+    // §9.10 the environment is positive or non-negative, and finite.
+    const t = callAbstract(.@"$temperature");
+    try std.testing.expect(t.finite and t.iv.gt(0) and t.iv.excludesZero());
+    const at = callAbstract(.@"$abstime");
+    try std.testing.expect(at.finite and at.iv.ge(0));
+    // §9.5 descriptor functions are integer-valued.
+    try std.testing.expect(callAbstract(.@"$fopen").finite);
+    // §3.2: an integer-valued call (`callee.ty`) is an i64, never inf or NaN.
+    try std.testing.expect(callAbstract(.@"$param_given").finite);
+    try std.testing.expect(callAbstract(.@"$port_connected").finite);
+    try std.testing.expect(callAbstract(.@"$rtoi").finite);
+    // §4.6.1 analysis() and the §5.2.1/§5.10.2 flags render as 0.0 or 1.0
+    // (`codegen/call.zig`).
+    for ([_]Mir.Callee{ .analysis, .initial_step, .final_step, .analog_initial }) |c| {
+        const f = callAbstract(c);
+        try std.testing.expect(f.finite and f.iv.ge(0) and f.iv.le(1));
+    }
+    // An unmodelled real call stays unknown.
+    try std.testing.expect(!callAbstract(.@"$simparam").finite);
+}

@@ -136,6 +136,14 @@ pub fn proveOpts(
     return p.verdict(); // per-unit join over the backward slices
 }
 
+test FloatMode {
+    // `.strict` absorbs, in either position.
+    try std.testing.expectEqual(FloatMode.optimized, FloatMode.strictest(.optimized, .optimized));
+    try std.testing.expectEqual(FloatMode.strict, FloatMode.strictest(.optimized, .strict));
+    try std.testing.expectEqual(FloatMode.strict, FloatMode.strictest(.strict, .optimized));
+    try std.testing.expectEqual(FloatMode.strict, FloatMode.strictest(.strict, .strict));
+}
+
 test {
     _ = proof_lattice;
     _ = proof_prover;
