@@ -1005,3 +1005,96 @@ test "ParamDecl carries §3.4.2 ranges through to lowering" {
     try std.testing.expectEqual(ExprTag.pos_inf, f.exprs.tag(p.ranges[0].hi));
     try std.testing.expect(!p.ranges[0].lo_inclusive);
 }
+
+test "TimingCheck.transition: every level pair, z read as x (§15.4)" {
+    const levels = "01xz";
+    // Rows `from`, columns `to`, both in the order 0 1 x z. Bit values:
+    // 01 = 1, 0x = 2, 10 = 4, 1x = 8, x0 = 16, x1 = 32.
+    const want = [4][4]u8{
+        .{ 0, 1, 2, 2 },
+        .{ 4, 0, 8, 8 },
+        .{ 16, 32, 0, 0 },
+        .{ 16, 32, 0, 0 },
+    };
+    for (levels, 0..) |from, i| {
+        for (levels, 0..) |to, j| try std.testing.expectEqual(want[i][j], TimingCheck.transition(from, to));
+    }
+    // §15.4's two equivalences, built from the single transitions.
+    const t = TimingCheck.transition;
+    try std.testing.expectEqual(TimingCheck.posedge_mask, t('0', '1') | t('0', 'x') | t('x', '1'));
+    try std.testing.expectEqual(TimingCheck.negedge_mask, t('1', '0') | t('x', '0') | t('1', 'x'));
+}
+
+test "TimingCheck.opposite turns each transition around and is an involution" {
+    for (0..64) |m| {
+        const mask: u8 = @intCast(m);
+        try std.testing.expectEqual(mask, TimingCheck.opposite(TimingCheck.opposite(mask)));
+        try std.testing.expectEqual(@popCount(mask), @popCount(TimingCheck.opposite(mask)));
+    }
+    try std.testing.expectEqual(TimingCheck.negedge_mask, TimingCheck.opposite(TimingCheck.posedge_mask));
+    const levels = "01x";
+    for (levels) |from| {
+        for (levels) |to| {
+            if (from == to) continue;
+            try std.testing.expectEqual(TimingCheck.transition(to, from), TimingCheck.opposite(TimingCheck.transition(from, to)));
+        }
+    }
+    try std.testing.expectEqual(@as(u8, 0), TimingCheck.opposite(0b1100_0000));
+}
+
+test "Strength's backing integers order supply > strong > pull > large > weak > medium > small > highz" {
+    const order = [_]Strength{ .highz, .small, .medium, .weak, .large, .pull, .strong, .supply };
+    try std.testing.expectEqual(std.enums.values(Strength).len, order.len);
+    for (order[0 .. order.len - 1], order[1..]) |lo, hi| try std.testing.expect(@backingInt(lo) < @backingInt(hi));
+}
+
+test "Port.connName prefers the external name; Delay3.any reads the rise slot" {
+    const p: Port = .{ .name = @fromBackingInt(1) };
+    try std.testing.expectEqual(p.name, p.connName());
+    const q: Port = .{ .name = @fromBackingInt(1), .external_name = @fromBackingInt(2) };
+    try std.testing.expectEqual(q.external_name, q.connName());
+    try std.testing.expect(!(Delay3{}).any());
+    try std.testing.expect((Delay3{ .rise = @fromBackingInt(0) }).any());
+}
+
+test "natureAttrExpr: own, inherited, overridden, through a discipline, and a cycle" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const abstol = try f.intern(gpa, "abstol");
+    const units = try f.intern(gpa, "units");
+    const base = try f.intern(gpa, "Base");
+    const derived = try f.intern(gpa, "Derived");
+    const via = try f.intern(gpa, "Via");
+    const half = try f.intern(gpa, "Half");
+    const loop_a = try f.intern(gpa, "LoopA");
+    const loop_b = try f.intern(gpa, "LoopB");
+    const elec = try f.intern(gpa, "elec");
+    const v1 = try f.exprs.addInt(gpa, 0, 1);
+    const v2 = try f.exprs.addInt(gpa, 0, 2);
+    const v3 = try f.exprs.addInt(gpa, 0, 3);
+    const base_attrs = [_]NatureAttr{ .{ .name = abstol, .value = v1 }, .{ .name = units, .value = v2 } };
+    const derived_attrs = [_]NatureAttr{.{ .name = abstol, .value = v3 }};
+    const natures = [_]NatureDecl{
+        .{ .name = base, .attrs = &base_attrs },
+        .{ .name = derived, .parent = base, .attrs = &derived_attrs },
+        // A.1.6 `nature Via : elec.potential;` and `nature Half : elec.flow;`.
+        .{ .name = via, .parent = elec, .parent_access = .potential },
+        .{ .name = half, .parent = elec, .parent_access = .flow },
+        .{ .name = loop_a, .parent = loop_b },
+        .{ .name = loop_b, .parent = loop_a },
+    };
+    // A potential-only discipline: `flow` is unbound.
+    const disciplines = [_]DisciplineDecl{.{ .name = elec, .potential = derived }};
+    f.natures = &natures;
+    f.disciplines = &disciplines;
+    try std.testing.expectEqual(v1, natureAttrExpr(&f, base, "abstol"));
+    try std.testing.expectEqual(v3, natureAttrExpr(&f, derived, "abstol")); // the derived value wins
+    try std.testing.expectEqual(v2, natureAttrExpr(&f, derived, "units")); // inherited
+    try std.testing.expectEqual(v3, natureAttrExpr(&f, via, "abstol")); // elec.potential is Derived
+    try std.testing.expectEqual(v2, f.natureAttrExpr(via, "units")); // and Derived's parent
+    try std.testing.expectEqual(null, natureAttrExpr(&f, half, "abstol")); // elec binds no flow
+    try std.testing.expectEqual(null, natureAttrExpr(&f, base, "access"));
+    try std.testing.expectEqual(null, natureAttrExpr(&f, elec, "abstol")); // a discipline is no nature
+    try std.testing.expectEqual(null, natureAttrExpr(&f, loop_a, "abstol")); // the hop limit ends a cycle
+}
