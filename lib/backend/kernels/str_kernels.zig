@@ -76,7 +76,8 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
             continue;
         }
         if (fc != '%') { // ordinary character: it must be there
-            if (si >= src.len or src[si] != fc) return;
+            if (si >= src.len) return zScanEof(out, tried);
+            if (src[si] != fc) return;
             si += 1;
             fi += 1;
             continue;
@@ -84,16 +85,19 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
         fi += 1;
         if (fi >= fmt.len) return;
         if (fmt[fi] == '%') { // a literal percent, matched not converted
-            if (si >= src.len or src[si] != '%') return;
+            if (si >= src.len) return zScanEof(out, tried);
+            if (src[si] != '%') return;
             si += 1;
             fi += 1;
             continue;
         }
         const suppress = fmt[fi] == '*';
         if (suppress) fi += 1;
+        // Saturating: a width past the input is the whole input, and a run of
+        // digits no usize holds must not overflow.
         var width: usize = 0;
         while (fi < fmt.len and fmt[fi] >= '0' and fmt[fi] <= '9') : (fi += 1)
-            width = width * 10 + (fmt[fi] - '0');
+            width = width *| 10 +| (fmt[fi] - '0');
         if (fi >= fmt.len) return;
         const conv = fmt[fi];
         fi += 1;
@@ -119,23 +123,17 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
         if (conv != 'c') {
             while (si < src.len and zstd.ascii.isWhitespace(src[si])) si += 1;
         }
-        if (si >= src.len) {
-            // "This number can be EOF if the input ends before the first
-            // matching failure or conversion" — an input that ran out before
-            // anything was tried is that case; one that ran out after an
-            // assignment just reports the assignments.
-            if (!tried and out.n == 0) out.n = -1;
-            return;
-        }
+        if (si >= src.len) return zScanEof(out, tried);
         tried = true;
-        const lim = if (width == 0) src.len else @min(src.len, si + width);
+        // `si < src.len` here, so neither sum can pass `src.len`.
+        const lim = if (width == 0) src.len else si + @min(width, src.len - si);
         var item: ZScan = .{};
         var end = si;
         switch (conv) {
             // §9.5.4.2 "%c Matches a single character. The normal skip over
             // white space is suppressed" — a width takes that many characters.
             'c' => {
-                end = @min(lim, si + @max(width, 1));
+                end = if (width == 0) si + 1 else lim;
                 item.i = src[si];
                 item.r = @floatFromInt(item.i);
                 item.s = src[si..end];
@@ -219,7 +217,9 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
                     digits += 1;
                 }
                 if (digits == 0) return; // matching failure, e.g. "%d" on "hello"
-                item.i = if (neg) -acc else acc;
+                // Wrapping, as the accumulation is: "-9223372036854775808"
+                // wraps to minInt, whose plain negation overflows.
+                item.i = if (neg) -%acc else acc;
                 item.r = @floatFromInt(item.i);
                 item.s = src[si..end];
             },
@@ -244,6 +244,15 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
         out.n += 1;
     }
     return;
+}
+
+// "This number can be EOF if the input ends before the first matching failure
+// or conversion": input that ran out before any conversion was tried and any
+// item assigned is that case, whether a conversion or a literal (C11
+// 7.21.6.2p16's input failure) found it gone; input that ran out after an
+// assignment just reports the assignments.
+fn zScanEof(out: *ZScan, tried: bool) void {
+    if (!tried and out.n == 0) out.n = -1;
 }
 
 /// §9.5.4.2's return value on its own.
@@ -528,7 +537,7 @@ fn zcSci(o: *ZCOut, z: *ZCDec, p: usize, upper: bool, strip_from: ?usize) void {
     o.put(if (x < 0) '-' else '+');
     const mag: u32 = @intCast(if (x < 0) -x else x);
     var eb: [8]u8 = undefined;
-    const es = zstd.fmt.bufPrint(&eb, "{d}", .{mag}) catch "0";
+    const es = zstd.mem.print(&eb, "{d}", .{mag}) catch "0";
     if (es.len < 2) o.put('0');
     o.str(es);
 }
@@ -600,13 +609,26 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
         var g: i32 = @divFloor(x, 3) * 3;
         g = @min(12, @max(-18, g)); // outside the table the mantissa absorbs it
         z.dp -= g;
-        const body = o.n;
+        // Every shortest digit past the point: `n - dp` of them, which counts
+        // the zeros between the point and a run that starts below it (dp < 0
+        // once the clamp at -18 has absorbed the exponent).
         const p: usize = if (prec >= 0)
             @intCast(prec)
         else if (z.n > 0 and z.dp < @as(i32, @intCast(z.n)))
-            z.n - @as(usize, @intCast(@max(z.dp, 0)))
+            @intCast(@as(i32, @intCast(z.n)) - z.dp)
         else
             0;
+        // A precision can round the mantissa up to 1000 (999.96 to one place):
+        // the value then takes the next symbol up, as 1.0K, while there is one.
+        if (prec >= 0 and g < 12) {
+            var rounded = z;
+            zcRound(&rounded, rounded.dp + @as(i32, @intCast(p)));
+            if (rounded.dp > 3) {
+                g += 3;
+                z.dp -= 3;
+            }
+        }
+        const body = o.n;
         zcFixed(&o, &z, p);
         if (prec < 0) zcStrip(&o, body);
         const sym = zcScaleSym(g);
@@ -646,14 +668,17 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
     }
 
     if (o.n >= width) return o.b[0..o.n];
+    // A field wider than the row cannot be padded on either side: the text is
+    // returned as it fits, the bounded writer's rule. (Checked before the '-'
+    // arm, whose pad loop could otherwise never reach `width`.)
+    if (width > o.b.len) return o.b[0..o.n];
     const pad = width - o.n;
     if (flags & zc_left != 0) { // '-' wins over '0' and pads on the right
         while (o.n < width) o.put(' ');
         return o.b[0..width];
     }
-    if (width > o.b.len) return o.b[0..o.n];
     const keep: usize = if (flags & zc_zero != 0 and !special and sgn != 0) 1 else 0;
-    zstd.mem.copyBackwards(u8, o.b[keep + pad .. width], o.b[keep..o.n]);
+    @memmove(o.b[keep + pad .. width], o.b[keep..o.n]);
     @memset(o.b[keep .. keep + pad], if (flags & zc_zero != 0 and !special) '0' else ' ');
     return o.b[0..width];
 }
@@ -722,7 +747,7 @@ pub fn zSFormatRt(buf: []u8, fmt: []const u8, scope: []const u8, args: anytype) 
         var tmp: [4096 + 512]u8 = undefined;
         switch (conv | 0x20) {
             'm' => zRtField(&o, scope, flags, width),
-            'l' => zRtField(&o, zstd.fmt.bufPrint(&tmp, "work.{s}", .{scope}) catch zSOver(), flags, width),
+            'l' => zRtField(&o, zstd.mem.print(&tmp, "work.{s}", .{scope}) catch zSOver(), flags, width),
             'd', 'h', 'x', 'o', 'b', 'c', 's', 'e', 'f', 'g', 'r' => {
                 if (next >= args.len) {
                     short = true;
@@ -786,7 +811,7 @@ fn zRtConv(o: *ZRtOut, tmp: []u8, a: anytype, conv: u8, flags: u8, width: usize,
             // C 7.21.6.1: the sign leads the field, '0' fills between it and
             // the digits, '-' pads on the right.
             const sign: []const u8 = if (int < 0) "-" else if (flags & zc_plus != 0) "+" else if (flags & zc_space != 0) " " else "";
-            const digits = zstd.fmt.bufPrint(tmp, "{d}", .{@abs(int)}) catch unreachable;
+            const digits = zstd.mem.print(tmp, "{d}", .{@abs(int)}) catch unreachable;
             const pad = width -| (sign.len + digits.len);
             if (flags & (zc_zero | zc_left) == zc_zero) {
                 o.str(sign);
@@ -802,9 +827,9 @@ fn zRtConv(o: *ZRtOut, tmp: []u8, a: anytype, conv: u8, flags: u8, width: usize,
         else => { // else: the radices %h %x %o %b, the only letters `zSFormatRt` passes besides the arms above
             const u: u64 = @bitCast(int);
             const digits = switch (conv | 0x20) {
-                'o' => zstd.fmt.bufPrint(tmp, "{o}", .{u}),
-                'b' => zstd.fmt.bufPrint(tmp, "{b}", .{u}),
-                else => zstd.fmt.bufPrint(tmp, "{x}", .{u}), // else: %h and %x
+                'o' => zstd.mem.print(tmp, "{o}", .{u}),
+                'b' => zstd.mem.print(tmp, "{b}", .{u}),
+                else => zstd.mem.print(tmp, "{x}", .{u}), // else: %h and %x
             } catch unreachable;
             const pad = width -| digits.len;
             if (flags & (zc_zero | zc_left) == zc_zero) {
