@@ -3,6 +3,10 @@
 //! that changed. Also fixes the canonical unit order and sanitizes identifiers
 //! (§2.7, §2.8.1) injectively. No name may be built from a MIR or `nodes`
 //! index: inserting one source line would renumber every later name.
+//!
+//! Units are §5.6 contributions (named by their §4.4 access and node pair,
+//! §1.3.1.1 ground as `0`) and §4.5 operator, §5.10 event and §9.17
+//! kernel-control calls (named by their callee).
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -200,7 +204,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
             const bare = if (spelling[0] == '$') spelling[1..] else spelling;
             // A synthetic variant `op$variant` (`absdelay$quad`) shares `op`'s
             // state, so it takes `op`'s name: hosts find state by field name.
-            const op_name = bare[0 .. std.mem.indexOfScalar(u8, bare, '$') orelse bare.len];
+            const op_name = bare[0 .. std.mem.findScalar(u8, bare, '$') orelse bare.len];
             const t = try gpa.dupe(u8, try sanitize(&scratch, op_name));
             try units.append(gpa, .{ .role = .analog_op, .target = t, .inst = inst, .op = k });
         }
@@ -324,7 +328,7 @@ test "sanitize is injective on the names that would otherwise collide" {
         const s1 = try sanitize(&b1, p[1]);
         try std.testing.expect(!std.mem.eql(u8, s0, s1));
         // and no sanitized leaf may contain the "__" separator or touch its edges
-        try std.testing.expect(std.mem.indexOf(u8, s0, "__") == null);
+        try std.testing.expect(std.mem.find(u8, s0, "__") == null);
         try std.testing.expect(s0[0] != '_' and s0[s0.len - 1] != '_');
     }
 }

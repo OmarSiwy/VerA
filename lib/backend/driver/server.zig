@@ -42,13 +42,18 @@ pub const Server = struct {
         _ = s.child.wait(io) catch s.child.kill(io);
     }
 
+    /// One update's outcome: the output's cache digest, or the compiler's
+    /// report.
     pub const Update = union(enum) {
         ok: struct { digest: Cache.BinDigest, cache_hit: bool },
         failed: std.zig.ErrorBundle,
     };
 
     /// Reads one update's reply: an `error_bundle` message, possibly empty,
-    /// ends it. A failed bundle is owned by `gpa`.
+    /// ends it. A failed bundle is owned by `gpa`. Fails with
+    /// `error.CompilerGone` when the stream ends or breaks,
+    /// `error.ProtocolMismatch` on another compiler's messages, and
+    /// `error.NoArtifact` when the update emitted nothing.
     pub fn wait(s: *Server, gpa: Allocator) !Update {
         const r = &s.out.interface;
         var digest: ?Cache.BinDigest = null;

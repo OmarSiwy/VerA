@@ -5,7 +5,8 @@
 //! and `kernels`.
 //!
 //! The three `cg_*` entries are here for their tests alone: `codegen.zig`'s
-//! `test` block does not reach them (`docs/seams/s1-codegen.md` proposal 1).
+//! `test` block does not reach them (`docs/seams/s1-codegen.md` at 6e59b3d4^,
+//! proposal 1).
 
 /// Stable declaration names and the canonical unit order.
 pub const naming = @import("naming.zig");
