@@ -11,7 +11,7 @@ const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
 const VTy = Analysis.VTy;
-const diag = @import("diag");
+const strcap = @import("cg_strcap.zig");
 
 // -------------------------------------------------------- §9.4 display ----
 //
@@ -39,12 +39,11 @@ pub const Spec = struct {
     /// The precision; null = no precision given.
     prec: ?usize = null,
 
-    // The scratch for a composed field is a stack array in the emitted block,
-    // so a width or precision above this is refused (E1011) rather than
-    // emitted as a huge frame. 4096 matches `str_kernels.zSBuf`'s row and
-    // `file_kernels.ZFSlot.line`, so a record this formatter composes is one a
-    // §9.5.2 write can emit and a §9.5.4.1 `$fgets` can read back whole.
-    const max_field = 4096;
+    // The scratch for a composed field is a stack array in the emitted block
+    // up to what a field of this width and precision needs; a wider field's
+    // scratch is a static row (`str_kernels.zSRow`), so no field makes a
+    // huge frame (`PrintArg.onStack`).
+    const max_stack = 4096;
     fn w(self: Spec) usize {
         return self.width;
     }
@@ -67,6 +66,9 @@ pub const PrintArg = struct {
     conv: u8 = 0,
     /// Original integer width, before SSA and the i64 storage carrier.
     bits: u7 = 64,
+    /// Where this operand's `{…}` starts in the call's Zig format text: a
+    /// call with more operands than one `std.fmt` call takes is split here.
+    at: usize = 0,
 
     /// How `renderPrintArg` spells the operand: which helper, if any, sits
     /// between the value and the Zig format verb.
@@ -109,6 +111,38 @@ pub const PrintArg = struct {
             else => null,
         };
     }
+
+    /// Whether the scratch is a stack array (`max_stack`) or a static row,
+    /// which the emitted block holds as a pointer.
+    fn onStack(self: PrintArg) bool {
+        // The widest scratch a field of `max_stack` width and precision
+        // takes: `.creal`'s.
+        const most = @max(Spec.max_stack, Spec.max_stack + 320) + 8;
+        return (self.scratch() orelse 0) <= most;
+    }
+
+    /// How the emitted block names the scratch as a slice: `&zb<i>` for the
+    /// stack array, `zb<i>` for the static row's pointer.
+    fn amp(self: PrintArg) []const u8 {
+        return if (self.onStack()) "&" else "";
+    }
+
+    /// The most bytes this operand renders, field padding included: the
+    /// composed modes' scratch, a radix's 64 digits, f64's widest decimal, a
+    /// string operand's capacity (`cg_strcap`).
+    fn textMax(self: PrintArg, g: *Gen) Error!u64 {
+        const body: u64 = switch (self.how) {
+            .creal, .pad, .cint, .ascii => self.scratch().?,
+            .bits => 64,
+            .chr => 1,
+            .plain => switch (self.want) {
+                .int => 20,
+                .real => std.fmt.float.bufferSize(.decimal, f64),
+                .str => try strcap.cap(g, self.v),
+            },
+        };
+        return @max(body, self.spec.w());
+    }
 };
 
 /// §9.4.1's argument-list model, shared by every sink (display, §9.5.2 file
@@ -122,12 +156,11 @@ pub const PrintArg = struct {
 ///     20 columns, unless it is an unsigned sized literal whose width lowering
 ///     records (`decimalWidth`); the radices auto-size at every recorded width;
 ///   - a bare real prints shortest-round-trip decimal, not `%g`.
-fn buildArgs(
+pub fn buildArgs(
     g: *Gen,
     args: []const Mir.Value,
     fmt: *std.ArrayList(u8),
     ops: *Ops,
-    site: usize,
 ) Error!void {
     var i: usize = 0;
     while (i < args.len) {
@@ -139,63 +172,114 @@ fn buildArgs(
             i += 1;
         }
     }
-    // One call's conversions become one Zig format call, and Zig's formatter
-    // takes at most 32 arguments (`std.fmt.ArgSetType`). Refused here rather
-    // than as a compile error in generated Zig.
-    if (ops.n > max_format_args)
-        return refuse(g, fmt, ops, site, .E1010, "this call formats {d} values; one call formats at most {d}", .{ ops.n, max_format_args });
-    for (ops.items()) |p| if (p.spec.width > Spec.max_field or (p.spec.prec orelse 0) > Spec.max_field)
-        return refuse(g, fmt, ops, site, .E1011, "a field width or precision here exceeds {d}", .{Spec.max_field});
 }
 
-/// Reports `code` at call `site` and marks the build fatal. The emptied record
-/// keeps the rest of the device emittable.
-fn refuse(
-    g: *Gen,
-    fmt: *std.ArrayList(u8),
-    ops: *Ops,
-    site: usize,
-    code: diag.Code,
-    comptime msg: []const u8,
-    args: anytype,
-) Error!void {
-    if (g.diags) |bag| try bag.add(.codegen, code, g.lowered.tokenSpan(g.mir.instTok(@fromBackingInt(@intCast(site)))), msg, args);
-    g.any_fatal = true;
-    if (g.fatal == null) g.fatal = "a display or format call exceeds a formatter limit";
-    fmt.clearRetainingCapacity();
-    ops.n = 0;
-}
+/// One call's print operands, in format order.
+pub const Ops = struct {
+    list: std.ArrayList(PrintArg) = .empty,
 
-/// E1010's bound: the argument count Zig's `std.fmt` accepts in one call.
-pub const max_format_args = 32;
-
-/// One call's print operands, bounded by E1010. `n` keeps counting past the
-/// bound so the diagnostic names the call's real operand count; operands past
-/// it are never stored because the call is refused.
-const Ops = struct {
-    buf: [max_format_args]PrintArg = undefined,
-    n: u32 = 0,
-
-    fn append(self: *Ops, p: PrintArg) void {
-        if (self.n < max_format_args) self.buf[self.n] = p;
-        self.n += 1;
+    fn append(self: *Ops, a: std.mem.Allocator, p: PrintArg) Error!void {
+        try self.list.append(a, p);
     }
 
-    fn items(self: *const Ops) []const PrintArg {
-        return self.buf[0..@min(self.n, max_format_args)];
+    pub fn items(self: *const Ops) []const PrintArg {
+        return self.list.items;
     }
 };
 
-/// The per-op scratch declarations of one emitted display block.
-fn emitScratch(g: *Gen, ops: []const PrintArg) Error!void {
-    for (ops, 0..) |p, i| {
-        if (p.scratch()) |n| try g.b("var zb{d}: [{d}]u8 = undefined; ", .{ i, n });
+/// The most operands one `std.fmt` call takes (`std.fmt.ArgSetType`'s bits).
+/// A call with more is emitted as consecutive calls of at most this many.
+const fmt_chunk = @typeInfo(std.fmt.ArgSetType).int.bits;
+
+/// The bytes call `site`'s text can need: the Zig format text (an upper
+/// bound on its literal part) plus each operand's `textMax`, never below
+/// `strcap.row`, the row every site had.
+pub fn siteCap(g: *Gen, fmt: []const u8, ops: []const PrintArg) Error!u64 {
+    var n: u64 = fmt.len;
+    for (ops) |p| n +|= try p.textMax(g);
+    return @max(n, strcap.row);
+}
+
+/// Call `site`'s formatted-text row: `zSBuf` for the 4096-byte row, else a
+/// row of `cap` bytes (`str_kernels.zSRow`, slot 0).
+pub fn emitRow(g: *Gen, site: usize, cap: u64) Error!void {
+    if (cap == strcap.row or !try fits(g, site, cap)) return g.b("zSBuf({d})", .{site});
+    return g.b("zSRow({d}, 0, {d})", .{ site, cap });
+}
+
+/// Whether a row of `cap` bytes at call `site` can exist: past
+/// `strcap.max_row` it is more than a device can address, which is E1011
+/// at compile time (memory, the one bound a row has).
+fn fits(g: *Gen, site: usize, cap: u64) Error!bool {
+    if (cap <= strcap.max_row) return true;
+    if (g.diags) |bag| try bag.add(.codegen, .E1011, g.lowered.tokenSpan(g.mir.instTok(@fromBackingInt(@intCast(site)))), "the text here can need {d} bytes, more than a device can address", .{cap});
+    g.any_fatal = true;
+    if (g.fatal == null) g.fatal = "a string row is larger than a device can address";
+    return false;
+}
+
+/// `std.fmt.bufPrint(row, fmt, .{ops})` into call `site`'s row, as a slice
+/// expression; an overrun is E1011 (`zSOver`). Past `fmt_chunk` operands the
+/// text goes through one fixed writer, a print per chunk.
+fn emitBufPrint(g: *Gen, fmt: []const u8, ops: []const PrintArg, site: usize) Error!void {
+    const cap = try siteCap(g, fmt, ops);
+    if (ops.len <= fmt_chunk) {
+        try g.b("std.fmt.bufPrint(", .{});
+        try emitRow(g, site, cap);
+        try g.b(", \"{f}\", .{{", .{std.zig.fmtString(fmt)});
+        try renderPrintArgs(g, ops, 0);
+        return g.b("}}) catch zSOver()", .{});
+    }
+    try g.b("zw{d}: {{ var zw: std.Io.Writer = .fixed(", .{site});
+    try emitRow(g, site, cap);
+    try g.b("); ", .{});
+    var k: usize = 0;
+    while (k < ops.len) : (k += fmt_chunk) {
+        const end = @min(k + fmt_chunk, ops.len);
+        try g.b("zw.print(\"{f}\", .{{", .{std.zig.fmtString(chunkText(fmt, ops, k, end))});
+        try renderPrintArgs(g, ops[k..end], k);
+        try g.b("}}) catch zSOver(); ", .{});
+    }
+    try g.b("break :zw{d} zw.buffered(); }}", .{site});
+}
+
+/// `std.debug.print(fmt, .{ops})`, one print per `fmt_chunk` operands.
+fn emitDebugPrint(g: *Gen, fmt: []const u8, ops: []const PrintArg) Error!void {
+    var k: usize = 0;
+    while (true) : (k += fmt_chunk) {
+        const end = @min(k + fmt_chunk, ops.len);
+        try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(chunkText(fmt, ops, k, end))});
+        try renderPrintArgs(g, ops[k..end], k);
+        try g.b("}}); ", .{});
+        if (end == ops.len) return;
     }
 }
 
-fn renderPrintArgs(g: *Gen, ops: []const PrintArg) Error!void {
+/// The format text of operands `k..end`: from operand k's `{` (the call's
+/// start for the first chunk) to the next chunk's (the end for the last).
+fn chunkText(fmt: []const u8, ops: []const PrintArg, k: usize, end: usize) []const u8 {
+    const from = if (k == 0) 0 else ops[k].at;
+    const to = if (end == ops.len) fmt.len else ops[end].at;
+    return fmt[from..to];
+}
+
+/// The per-op scratch declarations of one emitted display block: a stack
+/// array, or call `site`'s static row for operand i (`zSRow` slot i + 1) when
+/// the field is wider than `Spec.max_stack`.
+fn emitScratch(g: *Gen, ops: []const PrintArg, site: usize) Error!void {
     for (ops, 0..) |p, i| {
-        if (i != 0) try g.b(", ", .{});
+        const n = p.scratch() orelse continue;
+        if (p.onStack())
+            try g.b("var zb{d}: [{d}]u8 = undefined; ", .{ i, n })
+        else
+            try g.b("const zb{d} = zSRow({d}, {d}, {d}); ", .{ i, site, i + 1, if (try fits(g, site, n)) n else strcap.row });
+    }
+}
+
+/// Operands `ops`, the first of which is the call's operand `first`.
+fn renderPrintArgs(g: *Gen, ops: []const PrintArg, first: usize) Error!void {
+    for (ops, first..) |p, i| {
+        if (i != first) try g.b(", ", .{});
         try renderPrintArg(g, p, i);
     }
 }
@@ -222,7 +306,7 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
         args[1..]
     else
         args;
-    try buildArgs(g, body, &fmt, &ops, site);
+    try buildArgs(g, body, &fmt, &ops);
     // §9.4.1: `$write` is the family member that does NOT end the line.
     if (endsLine(c)) try fmt.append(g.arena, '\n');
 
@@ -230,7 +314,7 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     // writes `+42` where §9.4.3 writes ` 42`; its scratch is a stack array
     // in this block.
     try g.b("zd: {{ ", .{});
-    try emitScratch(g, ops.items());
+    try emitScratch(g, ops.items(), site);
     if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
         // only when a watched argument VALUE differs from the step this site
@@ -238,14 +322,10 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
         // E1011.
         try g.b("if (zMonitor({d}, ", .{monitorKey(g, args)});
         try monitorValues(g, ops.items());
-        try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-        try renderPrintArgs(g, ops.items());
-        try g.b("}}) catch zSOver())) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
-    } else {
-        try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
-        try renderPrintArgs(g, ops.items());
-        try g.b("}}); ", .{});
-    }
+        try g.b(", ", .{});
+        try emitBufPrint(g, fmt.items, ops.items(), site);
+        try g.b(")) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
+    } else try emitDebugPrint(g, fmt.items, ops.items());
     // §9.7.3: `$fatal` "terminates the simulation with an errorcode". The
     // finish_number "may be used in an implementation-specific manner"; here
     // it is the exit status, floored at 1 so a `$fatal` never reads as success
@@ -456,14 +536,16 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
     var ops: Ops = .{};
-    try buildArgs(g, args, &fmt, &ops, site);
+    try buildArgs(g, args, &fmt, &ops);
     try g.b("zs: {{ ", .{});
-    try emitScratch(g, ops.items());
+    try emitScratch(g, ops.items(), site);
     // An overrun ends the run with E1011 (`zSOver`): §9.5.3 states no
-    // truncation rule, and an empty or half string is a wrong answer.
-    try g.b("break :zs zStringStore(std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-    try renderPrintArgs(g, ops.items());
-    try g.b("}}) catch zSOver()); }}", .{});
+    // truncation rule, and an empty or half string is a wrong answer. The
+    // row is sized for every operand (`siteCap`), so only a run-time string
+    // longer than the compiler could know can overrun it.
+    try g.b("break :zs zStringStore(", .{});
+    try emitBufPrint(g, fmt.items, ops.items(), site);
+    try g.b("); }}", .{});
 }
 
 /// Emits §9.5.3 `$sformat` whose format_string is a string VARIABLE ("whose
@@ -472,7 +554,9 @@ pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!voi
 /// `str_kernels.zSFormatRt`, which walks the format at run time. `%m` prints
 /// what `translateFormat` prints for it.
 pub fn emitStringFormatRt(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
-    try g.b("zStringStore(zSFormatRt(zSBuf({d}), ", .{site});
+    try g.b("zStringStore(zSFormatRt(", .{});
+    try emitRow(g, site, try strcap.rtFormatCap(g, args));
+    try g.b(", ", .{});
     try g.renderVal(if (args.len > 0) args[0] else Mir.Value.f_zero, .str);
     try g.b(", \"{f}\", .{{", .{std.zig.fmtString(g.mir.name)});
     for (args[@min(1, args.len)..], 0..) |a, k| {
@@ -579,16 +663,21 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
         },
         // §9.5.4.2 the count. Composed here because `file_kernels.zig` cannot
         // call `str_kernels.zScan` (each kernel file compiles alone). Scan the
-        // unread window, then consume exactly `zScan.used`: "the offending
-        // input character is left unread". Operands are (fd, format); the item
-        // readers below re-scan the window `zFTake` leaves latched.
+        // unread window, widened until the scan stops inside it, then consume
+        // exactly `zScan.used`: "the offending input character is left
+        // unread". Operands are (fd, format); the item readers below re-scan
+        // the window `zFTake` leaves latched.
         .@"$fscanf" => {
             const fd = if (args.len > 0) args[0] else Mir.Value.zero;
-            try g.b("zk{d}: {{ const zw = zFWindow(", .{site});
+            try g.b("zk{d}: while (true) {{ const zw = zFWindow(", .{site});
             try g.renderVal(fd, .int);
             try g.b("); const zr = zScan(zw, ", .{});
             try g.renderVal(if (args.len > 1) args[1] else Mir.Value.f_zero, .str);
-            try g.b(", -1); break :zk{d} zFTake(", .{site});
+            // A scan that read to the end of a full window runs again over a
+            // wider one (`file_kernels.zFMore`).
+            try g.b(", -1); if (zFMore(", .{});
+            try g.renderVal(fd, .int);
+            try g.b(", zr.used)) continue; break :zk{d} zFTake(", .{site});
             try g.renderVal(fd, .int);
             return g.b(", zr.n, @intCast(zr.used)); }}", .{});
         },
@@ -640,7 +729,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
     var ops: Ops = .{};
-    try buildArgs(g, rest, &fmt, &ops, site);
+    try buildArgs(g, rest, &fmt, &ops);
     // The §9.4.1 task §9.5.2 names this one after decides the newline:
     // `$write` is the member that does not end the line, and so is `$fwrite`.
     if (endsLine(c)) try fmt.append(g.arena, '\n');
@@ -649,7 +738,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     // written, which is `emitStringFormat`'s sink with a descriptor instead of a
     // string variable. An overrun is E1011, as for §9.5.3.
     try g.b("zf: {{ ", .{});
-    try emitScratch(g, ops.items());
+    try emitScratch(g, ops.items(), site);
     // §9.5.2 makes `$fmonitor` "just like" `$monitor` with a descriptor in
     // front, so §9.4.1's change condition travels with it: the record is
     // composed either way, and `zMonitor` decides whether it is written.
@@ -658,9 +747,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
         try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", ", .{});
     }
-    try g.b("std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-    try renderPrintArgs(g, ops.items());
-    try g.b("}}) catch zSOver()", .{});
+    try emitBufPrint(g, fmt.items, ops.items(), site);
     if (mon) {
         try g.b("; break :zf if (zMonitor({d}, ", .{monitorKey(g, args)});
         try monitorValues(g, ops.items());
@@ -897,6 +984,7 @@ pub fn appendConv(
             else => {},
         }
     }
+    const at = fmt.items.len;
     switch (conv) {
         // §9.4.3 Table 9-23's four real conversions "have the full formatting
         // capabilities available in the C language"; `%r` adds §2.6.2's
@@ -904,7 +992,7 @@ pub fn appendConv(
         // integer operand converts to real first (§4.2.1.1).
         'e', 'f', 'g', 'r' => {
             try fmt.appendSlice(a, "{s}");
-            ops.append(.{ .v = v, .want = .real, .how = .creal, .spec = spec, .conv = conv_raw });
+            try ops.append(a, .{ .at = at, .v = v, .want = .real, .how = .creal, .spec = spec, .conv = conv_raw });
         },
         // §9.4.3 Table 9-22: a radix conversion shows the operand's
         // two's-complement bit pattern at its width (IEEE 1364 §17.1.1.2):
@@ -917,7 +1005,7 @@ pub fn appendConv(
             try fmt.append(a, if (conv == 'h') 'x' else conv);
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            ops.append(.{ .v = v, .want = .int, .how = .bits, .spec = spec, .bits = bits });
+            try ops.append(a, .{ .at = at, .v = v, .want = .int, .how = .bits, .spec = spec, .bits = bits });
         },
         // Table 9-22 gives %c the single character: the operand's low byte,
         // whatever its type (a string goes through its §2.7 integer value).
@@ -925,7 +1013,7 @@ pub fn appendConv(
             try fmt.appendSlice(a, "{c");
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            ops.append(.{ .v = v, .want = .int, .how = .chr, .spec = spec });
+            try ops.append(a, .{ .at = at, .v = v, .want = .int, .how = .chr, .spec = spec });
         },
         's' => {
             if (ty == .int) {
@@ -935,7 +1023,7 @@ pub fn appendConv(
                 try appendZigSpec(g, fmt, spec, null);
                 try fmt.append(a, '}');
             }
-            ops.append(.{ .v = v, .want = ty, .how = if (ty == .int) .ascii else .plain, .spec = spec, .bits = bits });
+            try ops.append(a, .{ .at = at, .v = v, .want = ty, .how = if (ty == .int) .ascii else .plain, .spec = spec, .bits = bits });
         },
         'd' => {
             // §2.7 makes a string literal an unsigned base-256 integer when
@@ -948,15 +1036,15 @@ pub fn appendConv(
                 // `-0042`). Zig's `{d:0>5}` writes `00-42`, so the field is
                 // composed in scratch (`renderPrintArg`'s .cint arm).
                 try appendStrField(g, fmt, spec, zero_fill);
-                ops.append(.{ .v = v, .want = .int, .how = .cint, .spec = spec });
+                try ops.append(a, .{ .at = at, .v = v, .want = .int, .how = .cint, .spec = spec });
             } else if (spec.width > 0) {
                 // A width alone makes std.fmt spell the sign (`{d:>5}` writes
                 // `+42`), so the decimal TEXT pads instead, via `zPadInt`.
                 try appendStrField(g, fmt, spec, false);
-                ops.append(.{ .v = v, .want = .int, .how = .pad, .spec = spec });
+                try ops.append(a, .{ .at = at, .v = v, .want = .int, .how = .pad, .spec = spec });
             } else {
                 try fmt.appendSlice(a, "{d}");
-                ops.append(.{ .v = v, .want = .int, .spec = spec });
+                try ops.append(a, .{ .at = at, .v = v, .want = .int, .spec = spec });
             }
         },
         else => {
@@ -974,7 +1062,7 @@ pub fn appendConv(
             try fmt.appendSlice(a, verb);
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            ops.append(.{ .v = v, .want = ty, .spec = spec });
+            try ops.append(a, .{ .at = at, .v = v, .want = ty, .spec = spec });
         },
     }
 }
@@ -1024,10 +1112,10 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             if (zero_fill) {
                 // @abs in both branches: Zig spells `+42` for a signed int
                 // once a width fixes the field; a u64 has no sign to spell.
-                try g.b("; if (zv < 0) break :zi{d} std.fmt.bufPrint(&zb{d}, \"-{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable", .{ i, i, w - 1 });
-                try g.b("; break :zi{d} std.fmt.bufPrint(&zb{d}, \"{s}{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable; }}", .{ i, i, sign, w - sign.len });
+                try g.b("; if (zv < 0) break :zi{d} std.fmt.bufPrint({s}zb{d}, \"-{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable", .{ i, p.amp(), i, w - 1 });
+                try g.b("; break :zi{d} std.fmt.bufPrint({s}zb{d}, \"{s}{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable; }}", .{ i, p.amp(), i, sign, w - sign.len });
             } else {
-                try g.b("; break :zi{d} std.fmt.bufPrint(&zb{d}, \"{{s}}{{d}}\", .{{ if (zv < 0) \"\" else \"{s}\", zv }}) catch unreachable; }}", .{ i, i, sign });
+                try g.b("; break :zi{d} std.fmt.bufPrint({s}zb{d}, \"{{s}}{{d}}\", .{{ if (zv < 0) \"\" else \"{s}\", zv }}) catch unreachable; }}", .{ i, p.amp(), i, sign });
             }
         },
         .creal => {
@@ -1037,7 +1125,7 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
                 (@as(u8, @intFromBool(p.spec.plus)) << 1) |
                 (@as(u8, @intFromBool(p.spec.space)) << 2) |
                 (@as(u8, @intFromBool(p.spec.zero)) << 3);
-            try g.b("zCReal(&zb{d}, (", .{i});
+            try g.b("zCReal({s}zb{d}, (", .{ p.amp(), i });
             try g.renderVal(p.v, .real);
             try g.b(").val(), '{c}', {d}, {d}, {d})", .{
                 p.conv,
@@ -1210,19 +1298,19 @@ test "§9.4.1 $monitor reports a step only when the record changed" {
     const k = @import("kernels").str_kernels;
     // "When a $monitor task is invoked ... the simulator sets up a mechanism":
     // before the statement has run there is no mechanism and nothing reports.
-    try std.testing.expect(k.zMonitor(9001, &.{1}, "a\n") == null);
+    try std.testing.expect(k.zMonitor(9001, &[_]u64{1}, "a\n") == null);
     _ = k.zMonitorArm(9001);
     _ = k.zMonitorArm(9002);
-    try std.testing.expectEqualStrings("a\n", k.zMonitor(9001, &.{1}, "a\n").?); // first step: no predecessor
-    try std.testing.expect(k.zMonitor(9001, &.{1}, "a\n") == null); // unchanged
+    try std.testing.expectEqualStrings("a\n", k.zMonitor(9001, &[_]u64{1}, "a\n").?); // first step: no predecessor
+    try std.testing.expect(k.zMonitor(9001, &[_]u64{1}, "a\n") == null); // unchanged
     // The watched VALUES decide, not the text: a line that differs only in an
     // exempt `$abstime` (never in `vals`) is not a change.
-    try std.testing.expect(k.zMonitor(9001, &.{1}, "t=2 a\n") == null);
-    try std.testing.expectEqualStrings("b\n", k.zMonitor(9001, &.{2}, "b\n").?);
-    try std.testing.expect(k.zMonitor(9001, &.{2}, "b\n") == null);
+    try std.testing.expect(k.zMonitor(9001, &[_]u64{1}, "t=2 a\n") == null);
+    try std.testing.expectEqualStrings("b\n", k.zMonitor(9001, &[_]u64{2}, "b\n").?);
+    try std.testing.expect(k.zMonitor(9001, &[_]u64{2}, "b\n") == null);
     // A DISTINCT site is a distinct latch: two monitors must not mask each
     // other, exactly as two `$sformat` sites must not share a row.
-    try std.testing.expectEqualStrings("b\n", k.zMonitor(9002, &.{2}, "b\n").?);
+    try std.testing.expectEqualStrings("b\n", k.zMonitor(9002, &[_]u64{2}, "b\n").?);
 }
 
 test "§9.5.4.2 a scan consumes per DIRECTIVE, and says how much" {
@@ -1369,6 +1457,56 @@ test sayRecords {
     try std.testing.expect(!sayRecords(.@"$monitor"));
     try std.testing.expect(!sayRecords(.@"$fatal"));
     try std.testing.expect(!sayRecords(.@"$error"));
+}
+
+test "§9.4.1 a call past 32 operands prints in runs of 32, in order (#29)" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const rep = struct {
+        fn f(al: std.mem.Allocator, s: []const u8, k: usize) ![]const u8 {
+            var o: std.ArrayList(u8) = .empty;
+            for (0..k) |_| try o.appendSlice(al, s);
+            return o.items;
+        }
+    }.f;
+    // 32 operands: one print, as before.
+    const d32 = try emitBody(a, try std.mem.concat(a, u8, &.{ "$strobe(", try rep(a, "\"%d\", 1, ", 31), "\"%d\", 1);" }));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, d32, "std.debug.print(\"{d}"));
+    // 33: the first print takes 32 and the text up to the 33rd, the second
+    // the 33rd and the newline.
+    const d33 = try emitBody(a, try std.mem.concat(a, u8, &.{ "$strobe(", try rep(a, "\"%d\", 1, ", 32), "\"x%d\", 2);" }));
+    try std.testing.expect(has(d33, try std.mem.concat(a, u8, &.{ "std.debug.print(\"", try rep(a, "{d}", 32), "x\", .{" })));
+    try std.testing.expect(has(d33, "std.debug.print(\"{d}\\n\", .{"));
+}
+
+test "§9.5.3 a site's row is sized from the widths written (#29)" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const src =
+        \\module t(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  string s, w;
+        \\  analog begin
+        \\    $sformat(s, "%4000d", 1);
+        \\    $sformat(w, "%5000d|%06000d", 1, 2);
+        \\    I(p, n) <+ V(p, n) * ((s == w) + 1);
+        \\  end
+        \\endmodule
+        \\
+    ;
+    var h: Harness = undefined;
+    try Harness.run(a, src, &h);
+    const out = try h.genDisplay(a);
+    // Within 4096 bytes: the row every site had.
+    try std.testing.expect(has(out, "zSBuf("));
+    // Past it: the text (5000 + 1 + 6000) plus the Zig format text, and the
+    // zero-filled field's 6002-byte scratch as a static row, not a frame.
+    try std.testing.expect(has(out, ", 0, 110"));
+    try std.testing.expect(has(out, "const zb1 = zSRow("));
+    try std.testing.expect(has(out, ", 2, 6002); "));
 }
 
 test "PrintArg.scratch sizes the stack field each composed mode needs" {

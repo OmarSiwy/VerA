@@ -201,7 +201,7 @@ pub fn detach() void {
     outs = &.{};
     arg_values.clearAndFree(gpa);
     active_call = null;
-    n_derivs = 0;
+    freeDerivs();
     gpa.free(rows);
     gpa.free(now_vals);
     gpa.free(prev_react);
@@ -507,12 +507,19 @@ const vpiStringVal = value.vpiStringVal;
 const vpiExpStrVal: c_int = 710;
 
 /// §12.10's own string buffers, real and imaginary.
-var analog_buf: [2][64]u8 = undefined;
+var analog_buf: [2][analog_len]u8 = undefined;
+
+/// The longest part Table 12-2 can spell, sentinel included. vpiDecStrVal is
+/// Zig's shortest round-trip decimal: at most 17 significant digits, so a
+/// value of at least 1 has at most 309 integer digits and no fraction, and one
+/// below 1 is "0." then at most 323 zeros (5e-324) then its digits. With the
+/// sign that is 1 + 2 + 323 + 17; %e and %g are shorter.
+const analog_len = 1 + 2 + 323 + 17 + 1;
 
 /// One part of an analog value as Table 12-2 spells it: vpiExpStrVal "like
 /// printf %e", vpiDecStrVal "decimal char(s)", vpiStringVal "like printf
 /// %g" — reporting which of the other two %g chose in `chose`.
-fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
+fn analogString(buf: *[analog_len]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
     const text = switch (format) {
         vpiExpStrVal => printfE(buf, x, 6),
         vpiDecStrVal => std.mem.printSentinel(buf, "{d}", .{x}, 0) catch null,
@@ -528,7 +535,7 @@ fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
 /// C's `%.<prec>e`: one digit, the fraction, `e`, a sign and at least two
 /// exponent digits. Zig's `{e}` rounds correctly and spells the exponent
 /// bare (`2.5e-3`), so only the exponent is re-spelled.
-fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
+fn printfE(buf: *[analog_len]u8, x: f64, prec: usize) ?[:0]const u8 {
     if (!std.math.isFinite(x)) return nonFinite(buf, x);
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
@@ -541,7 +548,7 @@ fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
 /// C's `%g` (precision 6): %e when the exponent is below -4 or at least 6,
 /// %f otherwise, trailing zeros and a bare point dropped. `chose` becomes
 /// vpiExpStrVal or vpiDecStrVal after the form taken.
-fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
+fn printfG(buf: *[analog_len]u8, x: f64, chose: *c_int) ?[:0]const u8 {
     if (x == 0) {
         chose.* = vpiDecStrVal;
         return std.mem.printSentinel(buf, "0", .{}, 0) catch null;
@@ -578,7 +585,7 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
 // C11 7.21.6.1's spelling of an infinity or a NaN under %e and %g: `[-]inf`,
 // `[-]nan`, the sign from the sign bit. Zig's `{e}` writes the same words but
 // has no exponent for the callers above to re-spell.
-fn nonFinite(buf: *[64]u8, x: f64) ?[:0]const u8 {
+fn nonFinite(buf: *[analog_len]u8, x: f64) ?[:0]const u8 {
     const word: []const u8 = if (std.math.isNan(x)) "nan" else "inf";
     const sign: []const u8 = if (std.math.signbit(x)) "-" else "";
     return std.mem.printSentinel(buf, "{s}{s}", .{ sign, word }, 0) catch null;
@@ -784,18 +791,27 @@ pub fn putResult(o: *const root.Obj, v: f64) bool {
 // ---------------------------------------------------------------------------
 
 /// One derivative handle: the call, and (of, wrt) in §12.32.2's numbering.
-/// Handed out from a fixed array, so a handle is ours iff it points into it.
+/// Each is its own allocation, so a handle stays put while more are handed
+/// out; a handle is ours iff `derivs` lists it. There are at most as many as
+/// derivtf declared (call, of, wrt) triples, since a repeated request returns
+/// the first handle.
 pub const Deriv = struct { call: u32, of: c_int, wrt: c_int, value: f64 = 0 };
-var derivs: [64]Deriv = undefined;
-var n_derivs: usize = 0;
+var derivs: std.ArrayList(*Deriv) = .empty;
 
-/// Returns `h` as a derivative handle, or null unless it points at one handed
-/// out; never dereferences a foreign pointer.
+/// Returns `h` as a derivative handle, or null unless it is one handed out;
+/// never dereferences a foreign pointer.
+// ponytail: a linear scan over the handed-out handles; a hash set if a
+// design declares thousands of partials and `vpi_get_value` measures hot.
 pub fn asDeriv(h: vpiHandle) ?*Deriv {
-    const p = @intFromPtr(h orelse return null);
-    const lo = @intFromPtr(&derivs[0]);
-    if (p < lo or p >= lo + n_derivs * @sizeOf(Deriv) or (p - lo) % @sizeOf(Deriv) != 0) return null;
-    return @ptrFromInt(p);
+    const p = h orelse return null;
+    for (derivs.items) |dv| if (@as(*anyopaque, @ptrCast(dv)) == p) return dv;
+    return null;
+}
+
+/// Frees every derivative handle (`detach`).
+fn freeDerivs() void {
+    for (derivs.items) |dv| gpa.destroy(dv);
+    derivs.clearAndFree(gpa);
 }
 
 /// Which §12.32.2 position `h` is on call `obj`: 0 for the call itself (the
@@ -813,7 +829,7 @@ fn position(obj: u32, h: vpiHandle) ?c_int {
 /// §12.22.1 `vpi_handle_multi(vpiDerivative, ref1, ref2)`: the partial of
 /// the running call's result or argument `ref1` with respect to argument
 /// `ref2`, if derivtf declared it (§12.32.2). Null, with an error, outside a
-/// calltf or for an undeclared pair. At most 64 until `detach`.
+/// calltf or for an undeclared pair, and NOMEM when no memory is left.
 pub fn derivative(ref1: vpiHandle, ref2: vpiHandle) vpiHandle {
     const st = active_call orelse {
         root.fail("NOCALL", "vpi_handle_multi(vpiDerivative): no analog system task or function call is running", .{});
@@ -830,16 +846,19 @@ pub fn derivative(ref1: vpiHandle, ref2: vpiHandle) vpiHandle {
     }
     for (systf.partialsOf(st.obj)) |p| {
         if (p.of != of or p.wrt != wrt) continue;
-        for (derivs[0..n_derivs]) |*dv| if (dv.call == st.obj and dv.of == of and dv.wrt == wrt) return @ptrCast(dv);
-        if (n_derivs == derivs.len) {
-            root.fail("NOMEM", "vpi_handle_multi(vpiDerivative): more than {d} derivative objects", .{derivs.len});
-            return null;
-        }
-        derivs[n_derivs] = .{ .call = st.obj, .of = of, .wrt = wrt };
-        n_derivs += 1;
-        return @ptrCast(&derivs[n_derivs - 1]);
+        for (derivs.items) |dv| if (dv.call == st.obj and dv.of == of and dv.wrt == wrt) return @ptrCast(dv);
+        derivs.ensureUnusedCapacity(gpa, 1) catch return noMem();
+        const dv = gpa.create(Deriv) catch return noMem();
+        dv.* = .{ .call = st.obj, .of = of, .wrt = wrt };
+        derivs.appendAssumeCapacity(dv);
+        return @ptrCast(dv);
     }
     root.fail("UNDECLARED", "vpi_handle_multi(vpiDerivative): d({d})/d({d}) was not declared by derivtf", .{ of, wrt });
+    return null;
+}
+
+fn noMem() vpiHandle {
+    root.fail("NOMEM", "vpi_handle_multi(vpiDerivative): out of memory", .{});
     return null;
 }
 
@@ -877,7 +896,7 @@ pub fn putDerivative(dv: *Deriv, v: f64) bool {
 // ---------------------------------------------------------------------------
 
 test "§12.10 Table 12-2: vpiExpStrVal is C's %e, two exponent digits and a sign" {
-    var buf: [64]u8 = undefined;
+    var buf: [analog_len]u8 = undefined;
     // Hand-derived as C's printf("%e") spells each.
     for ([_]struct { f64, []const u8 }{
         .{ 1234.5, "1.234500e+03" },
@@ -888,7 +907,7 @@ test "§12.10 Table 12-2: vpiExpStrVal is C's %e, two exponent digits and a sign
 }
 
 test "§12.10 Table 12-2: vpiStringVal is C's %g, and reports the form it took" {
-    var buf: [64]u8 = undefined;
+    var buf: [analog_len]u8 = undefined;
     // C11 7.21.6.1 %g at precision 6: style e when the exponent is below -4
     // or at least 6, else style f with 5 - exponent fraction digits; then
     // trailing zeros and a bare point go. 9999999 rounds up into 1e+07.
@@ -914,7 +933,7 @@ test "§12.10 Table 12-2: a non-finite value is C's inf, -inf or nan in the e an
     // in one of the styles [-]inf or [-]infinity ... A double argument
     // representing a NaN is converted in one of the styles [-]nan". %g of
     // one has no exponent, so it reports vpiDecStrVal.
-    var buf: [64]u8 = undefined;
+    var buf: [analog_len]u8 = undefined;
     for ([_]struct { f64, []const u8 }{
         .{ std.math.inf(f64), "inf" },
         .{ -std.math.inf(f64), "-inf" },
@@ -928,7 +947,7 @@ test "§12.10 Table 12-2: a non-finite value is C's inf, -inf or nan in the e an
 }
 
 test "§12.10 analogString: vpiDecStrVal is the shortest decimal; another format is refused" {
-    var buf: [64]u8 = undefined;
+    var buf: [analog_len]u8 = undefined;
     var chose: c_int = 0;
     const text = analogString(&buf, 0.5, vpiDecStrVal, &chose) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("0.5", std.mem.span(text));
@@ -947,17 +966,38 @@ test "sameTime: one instant up to rounding, symmetric, and no wider" {
     try std.testing.expect(!sameTime(0, 1e-11));
 }
 
-test "asDeriv: a handle is a derivative only on a slot handed out, on its boundary" {
+test "§12.10 Table 12-2: every finite real spells whole in the value buffer" {
+    var chose: c_int = 0;
+    var buf: [analog_len]u8 = undefined;
+    for ([_]f64{ std.math.floatMax(f64), -std.math.floatMax(f64), -std.math.floatTrueMin(f64), -std.math.floatMin(f64), -1.2345678901234567e-300, 1e308 }) |x| {
+        for ([_]c_int{ vpiDecStrVal, vpiExpStrVal, vpiStringVal }) |f| {
+            const t = analogString(&buf, x, f, &chose) orelse return error.TestUnexpectedResult;
+            const text = std.mem.span(t);
+            const back = try std.fmt.parseFloat(f64, text);
+            // %e and %g keep 6 or 7 digits; the decimal keeps every one.
+            if (f == vpiDecStrVal) try std.testing.expectEqual(x, back) else try std.testing.expectApproxEqRel(x, back, 1e-5);
+        }
+    }
+}
+
+test "asDeriv: a handle is a derivative only when it was handed out" {
     try std.testing.expect(asDeriv(null) == null);
-    const saved = n_derivs;
-    defer n_derivs = saved;
-    n_derivs = 0;
-    try std.testing.expect(asDeriv(@ptrCast(&derivs[0])) == null);
-    n_derivs = 1;
-    const first = asDeriv(@ptrCast(&derivs[0])) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(first == &derivs[0]);
-    try std.testing.expect(asDeriv(@ptrFromInt(@intFromPtr(&derivs[0]) + 1)) == null);
-    try std.testing.expect(asDeriv(@ptrCast(&derivs[1])) == null);
+    defer freeDerivs();
+    // Past the 64 a fixed array once held: every handle stays distinct and
+    // valid while more are added.
+    var first: ?*Deriv = null;
+    for (0..200) |k| {
+        try derivs.ensureUnusedCapacity(gpa, 1);
+        const dv = try gpa.create(Deriv);
+        dv.* = .{ .call = @intCast(k), .of = 0, .wrt = 1 };
+        derivs.appendAssumeCapacity(dv);
+        if (first == null) first = dv;
+    }
+    try std.testing.expect(asDeriv(@ptrCast(first.?)) == first.?);
+    try std.testing.expectEqual(@as(u32, 199), asDeriv(@ptrCast(derivs.items[199])).?.call);
+    try std.testing.expect(asDeriv(@ptrFromInt(@intFromPtr(first.?) + 1)) == null);
+    var other: Deriv = .{ .call = 0, .of = 0, .wrt = 1 };
+    try std.testing.expect(asDeriv(@ptrCast(&other)) == null);
 }
 
 test "§12.22.2 deviceOut: an argument calltf put nothing on reads back unchanged" {

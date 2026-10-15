@@ -16,6 +16,7 @@
 //!   filter_kernels §4.5.11/§4.5.12 sections; histories live in `Instance`
 //!   limit_kernels  §4.5.15 SPICE limiters; pure
 //!   timer_kernels  §5.10.3.3 timer deadlines; the controls live in `Instance`
+//!   hist_kernels   §4.5.7 absdelay ring and its thinning; the samples live in `Instance`
 //! The `Instance`/`Model` fields that hold filter, timer and rng state are
 //! codegen's: these files only read and write the slots they are passed.
 //!
@@ -51,6 +52,8 @@ pub const file_kernels = @import("kernels/file_kernels.zig");
 pub const limit_kernels = @import("kernels/limit_kernels.zig");
 /// §5.10.3.3 absolute timer scheduling, also used by the mixed coordinator.
 pub const timer_kernels = @import("kernels/timer_kernels.zig");
+/// §4.5.7 the absdelay ring and its thinning.
+pub const hist_kernels = @import("kernels/hist_kernels.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

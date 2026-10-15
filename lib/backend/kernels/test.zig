@@ -1028,24 +1028,57 @@ test "§3.3 zStringStore/zStrCat/zStrRepeat: NULs dropped, aliasing pieces, N <=
 
 test "§9.4.1 zMonitor: nothing before the invocation, then one report per change" {
     const site = 4242;
-    try std.testing.expect(str_k.zMonitor(site, &.{ 1, 2 }, "t") == null);
+    try std.testing.expect(str_k.zMonitor(site, &[_]u64{ 1, 2 }, "t") == null);
     try std.testing.expectEqual(@as(f64, 0.0), str_k.zMonitorArm(site));
     // The first accepted step has no "last accepted step" to equal.
-    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &.{ 1, 2 }, "t").?);
-    try std.testing.expect(str_k.zMonitor(site, &.{ 1, 2 }, "t") == null);
-    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &.{ 1, 3 }, "t").?);
-    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &.{1}, "t").?);
-    try std.testing.expect(str_k.zMonitor(site, &.{1}, "t") == null);
-    // Past 64 watched values the latch cannot hold them: every step reports.
-    const many: [65]u64 = @splat(0);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &[_]u64{ 1, 2 }, "t").?);
+    try std.testing.expect(str_k.zMonitor(site, &[_]u64{ 1, 2 }, "t") == null);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &[_]u64{ 1, 3 }, "t").?);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &[_]u64{1}, "t").?);
+    try std.testing.expect(str_k.zMonitor(site, &[_]u64{1}, "t") == null);
+    // The latch is as wide as the site watches: past 64 values it still
+    // compares, and reports only the change.
+    var many: [65]u64 = @splat(0);
     try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &many, "t").?);
+    try std.testing.expect(str_k.zMonitor(site, &many, "t") == null);
+    many[64] = 1;
     try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &many, "t").?);
 }
 
-test "§9.5.3 zSBuf: one 4096-byte row per call site" {
-    try std.testing.expect(str_k.zSBuf(9001).ptr != str_k.zSBuf(9002).ptr);
-    try std.testing.expect(str_k.zSBuf(9001).ptr == str_k.zSBuf(9001).ptr);
+test "§9.5.3 zSBuf/zSRow: one row per call site and slot, of the size asked" {
+    try std.testing.expect(str_k.zSBuf(9001) != str_k.zSBuf(9002));
+    try std.testing.expect(str_k.zSBuf(9001) == str_k.zSBuf(9001));
     try std.testing.expectEqual(@as(usize, 4096), str_k.zSBuf(9001).len);
+    try std.testing.expectEqual(@as(usize, 100_000), str_k.zSRow(9001, 0, 100_000).len);
+    try std.testing.expect(@intFromPtr(str_k.zSRow(9001, 0, 5000)) != @intFromPtr(str_k.zSRow(9001, 1, 5000)));
+}
+
+test "§3.3 zStrCat/zStrRepeat: a row past 4096 bytes composes whole" {
+    const row = str_k.zSRow(9003, 0, 10_000);
+    const a: [4096]u8 = @splat('a');
+    const t = str_k.zStrCat(row, &.{ &a, &a, "xy" });
+    try std.testing.expectEqual(@as(usize, 8194), t.len);
+    try std.testing.expectEqualStrings("xy", t[8192..]);
+    // The previous result as a piece of the next (`s = {s, s}`).
+    try std.testing.expectEqual(@as(usize, 16388), str_k.zStrCat(str_k.zSRow(9004, 0, 16388), &.{ t, t }).len);
+    try std.testing.expectEqual(@as(usize, 9000), str_k.zStrRepeat(row, 3000, "abc").len);
+}
+
+test "§9.5.3 zSFormatRt: a width past 4096 fills a row that holds it" {
+    const row = str_k.zSRow(9005, 0, 16_000);
+    const t = str_k.zSFormatRt(row, "%5000d|%-4999.1f|%-4800l|", "m", .{ @as(i64, 7), @as(f64, 0.25) });
+    try std.testing.expectEqual(@as(usize, 5001 + 5000 + 4801), t.len);
+    try std.testing.expectEqualStrings("7|0.2", t[4999..5004]);
+    try std.testing.expectEqualStrings(" |work.m ", t[9999..10008]);
+    // A precision past 4096 is the field's, not a clamp's.
+    const p = str_k.zSFormatRt(str_k.zSRow(9006, 0, 6000), "%.5000f", "m", .{@as(f64, 1)});
+    try std.testing.expectEqual(@as(usize, 5002), p.len);
+}
+
+test "zStrHeldN: a field past 4096 bytes holds its text" {
+    const big: [70_000]u8 = @splat('q');
+    const h = str_k.zStrHeldN(70_000, &big);
+    try std.testing.expectEqual(@as(usize, 70_000), h.get().len);
 }
 
 // The next two tests, and the $fseek overflow test below, trapped (an
@@ -1208,23 +1241,142 @@ test "IEEE 1364 §17.2.4.1 $ungetc needs a byte to step back over, and holds 16"
     _ = file_k.zFClose(r);
 }
 
-test "§9.5.1 thirty channels: the next open fails with EMFILE, and a closed one is reused" {
+/// Runs the file kernels over `gpa` from an empty table, and frees what they
+/// own afterwards: `std.testing.allocator` then reports any leak.
+fn fileOver(gpa: std.mem.Allocator) void {
+    file_k.zFFreeAll();
+    file_k.zf_gpa = gpa;
+}
+fn fileDone() void {
+    file_k.zFFreeAll();
+    file_k.zf_gpa = std.heap.page_allocator;
+}
+
+test "§9.5.1 thirty mcd channels; a file descriptor is not limited by them" {
+    fileOver(std.testing.allocator);
+    defer fileDone();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var pb: [256]u8 = undefined;
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "e.txt", .data = "e" });
     const p = tmpPath(&pb, &tmp, "e.txt");
-    var fds: [30]i64 = undefined;
-    for (&fds) |*fd| {
-        fd.* = file_k.zFOpen(p, "r", false);
-        try std.testing.expect(fd.* != 0);
+    // The mcd shape: bits 1..30, then EMFILE (§9.5.1's 31 with standard output).
+    var mcds: [30]i64 = undefined;
+    for (&mcds, 1..) |*m, b| {
+        m.* = file_k.zFOpen(p, "r", true);
+        try std.testing.expectEqual(@as(i64, 1) << @intCast(b), m.*);
     }
-    try std.testing.expectEqual(@as(i64, 0), file_k.zFOpen(p, "r", false));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFOpen(p, "r", true));
     try std.testing.expectEqual(@as(i64, 24), file_k.zFError(0));
+    // The fd shape keeps opening past the thirty, numbered from 3.
+    var fds: [100]i64 = undefined;
+    for (&fds, 3..) |*fd, c| {
+        fd.* = file_k.zFOpen(p, "r", false);
+        try std.testing.expectEqual((@as(i64, 1) << 31) | @as(i64, @intCast(c)), fd.*);
+    }
+    try std.testing.expectEqual(@as(i64, 'e'), file_k.zFGetc(fds[99]));
     // "The $fopen function shall reuse channels that have been closed."
     _ = file_k.zFClose(fds[7]);
     try std.testing.expectEqual(fds[7], file_k.zFOpen(p, "r", false));
+    _ = file_k.zFClose(mcds[4]);
+    try std.testing.expectEqual(mcds[4], file_k.zFOpen(p, "r", true));
     for (fds) |fd| _ = file_k.zFClose(fd);
+    for (mcds) |m| _ = file_k.zFClose(m);
+}
+
+test "§9.5.1 an open that cannot get memory fails: $fopen 0, $ferror 12" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "n.txt", .data = "n" });
+    const p = tmpPath(&pb, &tmp, "n.txt");
+    // No memory at all: not even the table.
+    var none = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    fileOver(none.allocator());
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFOpen(p, "r", false));
+    try std.testing.expectEqual(@as(i64, 12), file_k.zFError(0));
+    try std.testing.expectEqualStrings("out of memory", file_k.zFErrorStr(12, 0));
+    fileDone();
+    // The table, but no row to remember a path opened for writing.
+    var one = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    fileOver(one.allocator());
+    defer fileDone();
+    var wb: [256]u8 = undefined;
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFOpen(tmpPath(&wb, &tmp, "w.txt"), "w", true));
+    try std.testing.expectEqual(@as(i64, 12), file_k.zFError(0));
+    // A read open on a row the table has needs no memory.
+    const r = file_k.zFOpen(p, "r", true);
+    try std.testing.expect(r != 0);
+    _ = file_k.zFClose(r);
+}
+
+test "§9.5.1.1 every distinct path opened for writing is remembered (past 64)" {
+    fileOver(std.testing.allocator);
+    defer fileDone();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    var nb: [32]u8 = undefined;
+    for (0..100) |k| {
+        const w = file_k.zFOpen(tmpPath(&pb, &tmp, try std.mem.print(&nb, "w{d}.txt", .{k})), "w", false);
+        try std.testing.expect(w != 0);
+        _ = file_k.zFPut(w, "ab");
+        _ = file_k.zFClose(w);
+    }
+    // A later analysis appends to the first path, which a 64-row table forgot.
+    file_k.zFNewAnalysis();
+    const w = file_k.zFOpen(tmpPath(&pb, &tmp, "w0.txt"), "w", false);
+    _ = file_k.zFPut(w, "c");
+    _ = file_k.zFClose(w);
+    var rb: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("abc", try tmp.dir.readFile(std.testing.io, "w0.txt", &rb));
+}
+
+test "§9.5.4.1 $fgets returns a line of any length whole" {
+    fileOver(std.testing.allocator);
+    defer fileDone();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    const long = try std.testing.allocator.alloc(u8, 10001);
+    defer std.testing.allocator.free(long);
+    @memset(long, 'x');
+    long[10000] = '\n';
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "l.txt", .data = long });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "l.txt"), "r", false);
+    try std.testing.expectEqual(@as(i64, 10001), file_k.zFGets(r));
+    try std.testing.expectEqualStrings(long, file_k.zFLine(10001, r));
+    try std.testing.expectEqual(@as(i64, 10001), file_k.zFTell(r));
+    // The next read finds the end: nothing transferred, EOF detected.
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFGets(r));
+    try std.testing.expect(file_k.zFEof(r) != 0);
+    _ = file_k.zFClose(r);
+}
+
+test "§9.5.4.2 $fscanf widens its window until the scan stops inside it" {
+    fileOver(std.testing.allocator);
+    defer fileDone();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    // 9000 spaces before the field: three of the first 4096-byte windows.
+    var data: [9003]u8 = undefined;
+    @memset(data[0..9000], ' ');
+    @memcpy(data[9000..], "42\n");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "w.txt", .data = &data });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "w.txt"), "r", false);
+    // cg_display's loop: scan, and again over a wider window while it asks.
+    var rounds: usize = 0;
+    const n = while (true) : (rounds += 1) {
+        const sc = str_k.zScan(file_k.zFWindow(r), "%d", 0);
+        if (file_k.zFMore(r, sc.used)) continue;
+        try std.testing.expectEqual(@as(i64, 42), sc.i);
+        break file_k.zFTake(r, sc.n, @intCast(sc.used));
+    };
+    try std.testing.expectEqual(@as(i64, 1), n);
+    try std.testing.expect(rounds >= 2);
+    try std.testing.expectEqual(@as(i64, 9002), file_k.zFTell(r));
+    _ = file_k.zFClose(r);
 }
 
 test "§9.5.1.1 a write-mode reopen truncates within an analysis and appends across them" {
@@ -1301,4 +1453,105 @@ test "§9.5.4.2 $fscanf consumes exactly what matched, and only an EOF scan sets
         try std.testing.expectEqual(@as(i64, @intFromBool(want.n < 0)), file_k.zFEof(r));
     }
     _ = file_k.zFClose(r);
+}
+
+// ------------------------------------------------------------ absdelay ring
+
+const hist_k = @import("hist_kernels.zig");
+
+/// One accepted step of a ring as `updateState` runs it: the thinning
+/// against window `w` (`zHistThin`, skipped when `thin` is false: a plain
+/// ring), then the push.
+fn histStep(comptime site: []const u8, ts: []f64, vs: []f64, head: *u64, t: f64, v: f64, w: f64, thin: bool) void {
+    if (thin) hist_k.zHistThin(site, ts, vs, head, t, w);
+    hist_k.zHistPush(ts, vs, head, t, v);
+}
+
+test "§4.5.7 a ring whose oldest sample leaves the window first is a plain ring, bit for bit" {
+    var ta: [64]f64 = @splat(0);
+    var va: [64]f64 = @splat(0);
+    var tb: [64]f64 = @splat(0);
+    var vb: [64]f64 = @splat(0);
+    var ha: u64 = 0;
+    var hb: u64 = 0;
+    // td = 10 steps of a 64-sample ring: the window never needs the oldest.
+    for (0..1000) |k| {
+        const t: f64 = @floatFromInt(k);
+        histStep("plain_a", &ta, &va, &ha, t, @sin(t / 20.0), 10.0, true);
+        histStep("plain_b", &tb, &vb, &hb, t, @sin(t / 20.0), 10.0, false);
+        try std.testing.expectEqual(hb, ha);
+        const q = t - 10.0 + 0.25;
+        try std.testing.expectEqual(hist_k.zHistAt(&tb, &vb, hb, q), hist_k.zHistAt(&ta, &va, ha, q));
+    }
+}
+
+test "§4.5.7 a full ring thins its older half and keeps its window: against the full history" {
+    // A 64-sample ring under a 200-step window: plain, it would forget the
+    // lookback after 64 steps. sin(t/20) has |x''| <= 1/400, so linear
+    // interpolation over samples g apart is within g^2/8/400 of the full
+    // history, whose samples sit on every step (td is a whole number of
+    // steps, so the reference is the exact sample).
+    var ts: [64]f64 = @splat(0);
+    var vs: [64]f64 = @splat(0);
+    var head: u64 = 0;
+    const w = 200.0;
+    var thinned = false;
+    for (0..3000) |k| {
+        const t: f64 = @floatFromInt(k);
+        histStep("thin", &ts, &vs, &head, t, @sin(t / 20.0), w, true);
+        const n = @min(head, ts.len);
+        const oldest: usize = if (head > ts.len) @intCast(head % ts.len) else 0;
+        if (k >= ts.len and head < ts.len) thinned = true;
+        if (t < w) continue;
+        // The window is covered: the lookback is never older than the ring.
+        try std.testing.expect(ts[oldest] <= t - w);
+        var gap: f64 = 0;
+        for (1..n) |i| gap = @max(gap, ts[(oldest + i) % ts.len] - ts[(oldest + i - 1) % ts.len]);
+        const want = @sin((t - w) / 20.0);
+        try std.testing.expect(@abs(hist_k.zHistAt(&ts, &vs, head, t - w) - want) <= gap * gap / 8.0 / 400.0 + 1e-12);
+    }
+    try std.testing.expect(thinned);
+}
+
+test "§4.5.7 a thinned ring answers a ramp exactly, and its newest half keeps every step" {
+    var ts: [16]f64 = @splat(0);
+    var vs: [16]f64 = @splat(0);
+    var head: u64 = 0;
+    for (0..17) |k| histStep("ramp", &ts, &vs, &head, @floatFromInt(k), 3.0 * @as(f64, @floatFromInt(k)) + 1.0, 100.0, true);
+    // Full inside the window at the push of 16: the older half kept 0, 2, 4,
+    // 6; 8..15 whole; then 16.
+    try std.testing.expectEqual(@as(u64, 13), head);
+    try std.testing.expectEqualSlices(f64, &.{ 0, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16 }, ts[0..13]);
+    try std.testing.expectEqual(@as(f64, 3.0 * 5.0 + 1.0), hist_k.zHistAt(&ts, &vs, head, 5.0));
+    try std.testing.expectEqual(@as(f64, 3.0 * 0.5 + 1.0), hist_k.zHistAt(&ts, &vs, head, 0.5));
+}
+
+test "§4.5.7 zHistRevert undoes a thinning push exactly, at every ring size and offset" {
+    var buf_t: [37]f64 = undefined;
+    var buf_v: [37]f64 = undefined;
+    for (8..38) |n| for (0..n) |o| {
+        const ts = buf_t[0..n];
+        const vs = buf_v[0..n];
+        // A full ring whose oldest sample sits at slot o (head = n + o).
+        for (0..n) |i| {
+            const age = (i + n - o) % n; // 0 = oldest
+            ts[i] = @floatFromInt(age);
+            vs[i] = 10.0 * @as(f64, @floatFromInt(age)) + 0.5;
+        }
+        const saved_t = buf_t;
+        const saved_v = buf_v;
+        var head: u64 = n + o;
+        // stateCtl(.commit): the two slots a push may overwrite.
+        const t0 = ts[@intCast(head % n)];
+        const v0 = vs[@intCast(head % n)];
+        const t1 = ts[@intCast((head + 1) % n)];
+        const v1 = vs[@intCast((head + 1) % n)];
+        histStep("revert", ts, vs, &head, @floatFromInt(n), 99.0, 1e9, true);
+        try std.testing.expect(head == hist_k.zhKept(n) + 1);
+        // The live samples are in time order.
+        for (1..@intCast(head)) |i| try std.testing.expect(ts[i] > ts[i - 1]);
+        hist_k.zHistRevert(ts, vs, n + o, head, t0, v0, t1, v1);
+        try std.testing.expectEqualSlices(f64, saved_t[0..n], ts);
+        try std.testing.expectEqualSlices(f64, saved_v[0..n], vs);
+    };
 }

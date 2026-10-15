@@ -514,14 +514,17 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return .{ .v = try self.call("$str$repeat", &.{ n, str }), .ty = .string };
     }
     if (repl) {
-        // The run-time `$str$repeat` of the same text ends the run past
-        // E1011's 4096 bytes, so the folded one stops there too.
+        // Past 4096 bytes the copies are made while the device runs, into a
+        // row sized for them (`cg_strcap`), rather than spelled out in the
+        // device's source: the text is as long as the copies make it, and
+        // memory is the only bound (#29).
         if (@as(u128, @intCast(copies)) * out.items.len > 4096) {
-            try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E1011, "the replication makes {d} copies of {d} bytes", .{ copies, out.items.len });
-            return poison;
+            self.out.uses.insert(.str_tasks);
+            const one = try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena));
+            return .{ .v = try self.call("$str$repeat", &.{ try self.mir.addIntConst(self.arena, copies), one }), .ty = .string };
         }
-        // N copies of "" are "": the E1011 cap above bounds the bytes, not
-        // the count, so `{1e15{""}}` would spin here for the count alone.
+        // N copies of "" are "", and are not counted out, so `{1e15{""}}`
+        // does not spin for the count alone.
         if (out.items.len != 0) {
             const one = try self.arena.dupe(u8, out.items);
             out.clearRetainingCapacity();
@@ -1646,8 +1649,9 @@ test "lowerConcat: §3.3 Table 3-3 string concatenation and replication" {
         // "non-negative" (§4.2.13), and "of integral type" when nonconstant.
         .{ .body = "    s = {neg{\"ab\"}};", .want = .E0327 },
         .{ .body = "    r = V(p, n);\n    s = {r{\"ab\"}};", .want = .E0327 },
-        // The folded copies stop where the run-time ones would (E1011).
-        .{ .body = "    s = {big{\"a\"}};", .want = .E1011 },
+        // The folded copies are as many as asked: past the 4096 bytes a
+        // fixed row once held (#29).
+        .{ .body = "    s = {big{\"a\"}};", .want = null },
         // N copies of "" are "" for any N, at no cost proportional to N.
         .{ .body = "    s = {huge{\"\"}};", .want = null },
     };

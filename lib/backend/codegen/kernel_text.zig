@@ -1032,104 +1032,10 @@ pub const arr_txt =
 
 /// The §4.5.7 `absdelay` history ring and its linear interpolation
 /// (`zAbsdelay`, `zHistAt`). Emitted only when `usesOp(.absdelay)`.
-pub const hist_txt =
-    \\/// §4.5.7 the delayed value, as the residual sees it: Output(t) = Input(t − td).
-    \\///
-    \\/// Two edges are decided HERE rather than by the ring scan below:
-    \\///
-    \\///  · dt ≤ 0 is a static analysis — "In DC and operating point analyses,
-    \\///    absdelay() returns the value of its input" — so `vin` passes through,
-    \\///    derivative and all, exactly like `zTransition`'s DC branch.
-    \\///  · a td SHORTER than the step the host just took queries past the newest
-    \\///    accepted sample. The only data covering (ts[newest], now] is the
-    \\///    CURRENT in-flight value, so the answer interpolates between the newest
-    \\///    sample and `vin` — the same linear reading `zHistAt` applies inside
-    \\///    the history. That keeps the output continuous in t and carries the
-    \\///    f·∂vin derivative the td → 0 (identity) limit requires. The scan used
-    \\///    to fall through to the newest sample here, which silently stretched
-    \\///    every delay shorter than a step to the step itself. (Clamping was the
-    \\///    other candidate; it answers a PAST query with a value from the wrong
-    \\///    time and keeps the Jacobian blind to an input the output already
-    \\///    partially tracks, so interpolation is the sound choice.)
-    \\///
-    \\/// Inside the history the delayed value has no dependence on the current
-    \\/// unknowns, so it is injected as a constant (derivative 0) — the correct
-    \\/// companion model for a pure transport delay. The f ≤ 1 clamp covers a
-    \\/// runtime-negative td, which lowering rejects where it can fold.
-    \\fn zAbsdelay(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u64, now: f64, dt: f64, td: f64) S {
-    \\    if (dt <= 0.0) return vin;
-    \\    // §4.5.15 "no state history prior to time t == 0": nothing has been
-    \\    // accepted yet, so the input IS the output. The ring used to be SEEDED
-    \\    // full on the first push, which made this unreachable; `head` is a
-    \\    // count now, so the empty ring has to answer for itself.
-    \\    if (head == 0) return vin;
-    \\    const t = now - td;
-    \\    const newest: usize = @intCast((head + ts.len - 1) % ts.len);
-    \\    if (t > ts[newest]) {
-    \\        const span = now - ts[newest];
-    \\        if (span <= 0.0) return vin;
-    \\        const f = @min((t - ts[newest]) / span, 1.0);
-    \\        return vin.scale(f).addC(vs[newest] * (1.0 - f));
-    \\    }
-    \\    return S.con(zHistAt(ts, vs, head, t));
-    \\}
-    \\/// §4.5.7 absdelay history: a fixed ring of (t, v) samples, linearly
-    \\/// interpolated. `head` is the TOTAL number of accepted samples pushed, not
-    \\/// a wrapped index — the ring slot is `head % n`. That one extra fact is
-    \\/// what separates the two queries that used to answer the same way: a
-    \\/// query before recorded history began, which §4.5.15 settles ("all analog
-    \\/// operators are considered to have no state history prior to time t == 0")
-    \\/// and `Output(t) = Input(max(t − td, 0))` answers with Input(0); and a
-    \\/// query the ring has FORGOTTEN, which the clause settles not at all.
-    \\fn zHistAt(ts: []const f64, vs: []const f64, head: u64, t: f64) f64 {
-    \\    const n = ts.len;
-    \\    const wrapped = head > n;
-    \\    const oldest: usize = if (wrapped) @intCast(head % n) else 0;
-    \\    // O(1) for a query at or before the oldest sample — the scan would walk
-    \\    // all n entries to reach the same answer.
-    \\    if (t <= ts[oldest]) {
-    \\        // Before the first sample the operator HAS no history, and Input(0)
-    \\        // is the value the formula's max(t − td, 0) floor asks for.
-    \\        if (!wrapped) return vs[oldest];
-    \\        // Older than the whole ring. There is no honest answer here: the
-    \\        // clause bounds no lookback, so shortening the delay to whatever the
-    \\        // ring still holds is not an implementation-defined limit, it is a
-    \\        // different transport delay reported as this one. E1012 ends the
-    \\        // run instead.
-    \\        std.debug.print("error[E1012]: absdelay needs a sample older than its " ++
-    \\            "{d}-sample history holds; see `vera --explain E1012`\n", .{n});
-    \\        std.process.exit(1);
-    \\    }
-    \\    // Binary search in age order (c = 0 is the oldest live sample): `lo`
-    \\    // ends at the newest sample at or before t, so the bracket is the
-    \\    // NEWEST interval holding t, the one a scan from the newest end finds
-    \\    // first. O(log n): a 5 ns line at 1 ps looks 5000 samples back.
-    \\    // `zAbsdelay` covers t > newest, so t ≤ ts[newest] here.
-    \\    const count: usize = @intCast(@min(head, n));
-    \\    if (count < 2) return vs[oldest]; // only a NaN t gets here
-    \\    var lo: usize = 0;
-    \\    var hi: usize = count;
-    \\    while (hi - lo > 1) {
-    \\        const mid = lo + (hi - lo) / 2;
-    \\        if (ts[(oldest + mid) % n] <= t) lo = mid else hi = mid;
-    \\    }
-    \\    const c = @min(lo + 1, count - 1);
-    \\    const older = (oldest + c - 1) % n;
-    \\    const newer = (oldest + c) % n;
-    \\    const span = ts[newer] - ts[older];
-    \\    if (span <= 0.0) return vs[newer];
-    \\    const f = (t - ts[older]) / span;
-    \\    return vs[older] + (vs[newer] - vs[older]) * f;
-    \\}
-    \\fn zHistPush(ts: []f64, vs: []f64, head: *u64, t: f64, v: f64) void {
-    \\    const at: usize = @intCast(head.* % ts.len);
-    \\    ts[at] = t;
-    \\    vs[at] = v;
-    \\    // `head` is a COUNT, and zHistAt reads `head > n` as "the ring has
-    \\    // overwritten its oldest sample"; a u64 of accepted steps never wraps.
-    \\    head.* += 1;
-    \\}
-;
+pub const hist_txt = "// ---- §4.5.7 absdelay history (lib/backend/kernels/hist_kernels.zig) ----\n\n" ++
+    hist_src[std.mem.find(u8, hist_src, "\n\n").? + 2 ..];
+// A file-level //! header cannot be spliced into the middle of device.zig.
+const hist_src = @embedFile("../kernels/hist_kernels.zig");
 
 /// `zAbsdelay` and `zHistAt` under VerA's `(* vera_interp = 2 *)`: 3-point
 /// Lagrange instead of §4.5.7's linear reading, as SPICE's lossless
