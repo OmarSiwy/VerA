@@ -30,18 +30,18 @@ test "§5.6 `//! solve` unties the unknowns nothing else names" {
     // Default netlist: every unknown tied to the reference, so `//! bias V(p)`
     // on a two-terminal device is the potential across it.
     const tied = try tb_runner.renderRunner(arena, "065_tied", try tb_directive.parse(arena, "//! bias V(p) = 0.5\n"));
-    try testing.expect(std.mem.indexOf(u8, tied, "var forced: [n_u]?f64 = @splat(0.0);") != null);
-    try testing.expect(std.mem.indexOf(u8, tied, "set(&x, &forced, \"p\", 0.5);") != null);
+    try testing.expect(std.mem.find(u8, tied, "var forced: [n_u]?f64 = @splat(0.0);") != null);
+    try testing.expect(std.mem.find(u8, tied, "set(&x, &forced, \"p\", 0.5);") != null);
 
     // With `solve`, only what a directive names stays pinned.
     const d = try tb_directive.parse(arena, "//! bias V(ctrl) = 1.5\n//! solve\n");
     try testing.expect(d.solve_free);
     const free = try tb_runner.renderRunner(arena, "066_free", d);
-    try testing.expect(std.mem.indexOf(u8, free, "var forced: [n_u]?f64 = @splat(null);") != null);
-    try testing.expect(std.mem.indexOf(u8, free, "set(&x, &forced, \"ctrl\", 1.5);") != null);
+    try testing.expect(std.mem.find(u8, free, "var forced: [n_u]?f64 = @splat(null);") != null);
+    try testing.expect(std.mem.find(u8, free, "set(&x, &forced, \"ctrl\", 1.5);") != null);
     // The solve runs before the model prints (§5.6: semantics at a solution).
-    const solve_at = std.mem.indexOf(u8, free, "solve(&x, &forced").?;
-    try testing.expect(solve_at < std.mem.indexOf(u8, free, "point(0, &x").?);
+    const solve_at = std.mem.find(u8, free, "solve(&x, &forced").?;
+    try testing.expect(solve_at < std.mem.find(u8, free, "point(0, &x").?);
 
     // It takes no operand.
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! solve V(p)\n"));
@@ -267,8 +267,8 @@ test "renderRunner emits the meta and correlation checks as parseable Zig" {
     var ast = try std.zig.Ast.parse(testing.allocator, z, .{ .mode = .zig });
     defer ast.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), ast.errors.len);
-    try testing.expect(std.mem.indexOf(u8, src, "noise[0].corr[1] got=") != null);
-    try testing.expect(std.mem.indexOf(u8, src, "\"parameter r desc=\\\"R\\\" units=\\\"Ohm\\\"\"") != null);
+    try testing.expect(std.mem.find(u8, src, "noise[0].corr[1] got=") != null);
+    try testing.expect(std.mem.find(u8, src, "\"parameter r desc=\\\"R\\\" units=\\\"Ohm\\\"\"") != null);
 }
 
 test "§2.6 a scale factor is an exponent, not a multiplier" {
@@ -617,7 +617,7 @@ test "each sweep point starts its transient from a fresh State" {
     try testing.expectEqual(@as(usize, 6), std.mem.count(u8, src, "        point("));
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "= newState("));
     // Point numbers are global, so no two transcript blocks share a label.
-    try testing.expect(std.mem.indexOf(u8, src, "point(5, &x") != null);
+    try testing.expect(std.mem.find(u8, src, "point(5, &x") != null);
     // §4.6.2 a dc sweep is one analysis: its points share one `State`.
     const dc = try tb_runner.renderRunner(arena, "061_dc", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1, 2"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, dc, "= newState("));
@@ -632,8 +632,8 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     const swept = try tb_runner.renderRunner(arena, "062_sweep", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.final_step = true;"));
-    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
+    try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
+    try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
     // §5.2.1 `analog initial` re-runs per sub-task: all three points, while
     // the global event fires at one.
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, swept, "sim_state.analog_initial = true;"));
@@ -666,9 +666,9 @@ test "renderRunner emits parseable Zig" {
     defer ast.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), ast.errors.len);
     // The sweep really did become two straight-line blocks.
-    try testing.expect(std.mem.indexOf(u8, src, "point(0, &x") != null);
-    try testing.expect(std.mem.indexOf(u8, src, "point(1, &x") != null);
+    try testing.expect(std.mem.find(u8, src, "point(0, &x") != null);
+    try testing.expect(std.mem.find(u8, src, "point(1, &x") != null);
     // §3.4.1/§4.2.1.1: card values go through `cardValue`, which rounds for
     // an `integer` parameter.
-    try testing.expect(std.mem.indexOf(u8, src, "model.g = cardValue(@TypeOf(model.g), 0.002)") != null);
+    try testing.expect(std.mem.find(u8, src, "model.g = cardValue(@TypeOf(model.g), 0.002)") != null);
 }

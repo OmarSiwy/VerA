@@ -36,7 +36,8 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
     return out.items;
 }
 
-/// The `U` indices of the §4.5.2 operator unknowns (`Directives.op_states`).
+/// Returns the `U` indices of the §4.5.2 operator unknowns
+/// (`Directives.op_states`), ascending, allocated in `arena`.
 pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
     const kinds = lowered.nodes.items(.kind);
     var n: usize = 0;
@@ -100,6 +101,10 @@ pub fn warnGridEvents(bag: *diag.Bag, lowered: *const Lowered, mir: *const Mir) 
 /// `renderMixed` when `d.mixed` is set. `title` keys each transcript block
 /// (the fixture's file stem). All output goes to stderr via `std.debug.print`,
 /// the stream generated `$strobe` uses, so the interleaving is deterministic.
+/// Fails with `error.TooManyPoints` past `max_points`, and with
+/// `error.BadSyntax` for a deck that writes both `//! tran` and
+/// `//! onoise`, or either without `//! solve` or beside a `bias`, `sweep`,
+/// `psweep` or `wave`: `sim.spice` solves every unknown itself.
 pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     if (d.mixed) |mx| return renderMixed(arena, title, d, mx);
     var out: std.ArrayList(u8) = .empty;
@@ -1209,7 +1214,8 @@ pub fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
     return rows;
 }
 
-/// Formats `x` as a Zig expression: shortest round-trip decimal, or a
+/// Formats `x` as a Zig expression that evaluates to the same f64, bit for
+/// bit, wherever an f64 is expected: a shortest round-trip literal, or a
 /// `std.math` call for inf and nan, which have no literal.
 fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
     return .{ .data = x };
