@@ -1,4 +1,6 @@
-//! Tests for the diagnostic system, run on std.testing.allocator.
+//! Tests for the diagnostic system: hand-derived cases and seeded properties
+//! (`Levels`, `Bag`/`Builder`, `LineIndex`, `SourceMap`, `didYouMean`, the
+//! text and JSON renderers) -> pass or fail, on std.testing.allocator.
 
 const std = @import("std");
 const diag = @import("../diag.zig");
@@ -207,8 +209,8 @@ test "render: full diagnostic with label, note, suggestion" {
     var bag = diag_bag.Bag.init(arena);
     try bag.setSingleFile("res.va", src);
 
-    const k_decl = @as(u32, @intCast(std.mem.indexOf(u8, src, "k = 1.0").?));
-    const divisor = @as(u32, @intCast(std.mem.lastIndexOfScalar(u8, src, 'k').?));
+    const k_decl = @as(u32, @intCast(std.mem.find(u8, src, "k = 1.0").?));
+    const divisor = @as(u32, @intCast(std.mem.findScalarLast(u8, src, 'k').?));
 
     var b = bag.build(.proof, .E0601, .{ .start = divisor, .end = divisor + 1 });
     b.msg("divisor is parameter `k`", .{});
@@ -226,18 +228,18 @@ test "render: full diagnostic with label, note, suggestion" {
     // Headline carries severity, code and the catalogue title.
     try std.testing.expect(std.mem.startsWith(u8, out, "error[E0601]: zero divisor: divisor is parameter `k`\n"));
     // Location resolves to the right line and column.
-    try std.testing.expect(std.mem.indexOf(u8, out, "--> res.va:3:31\n") != null);
+    try std.testing.expect(std.mem.find(u8, out, "--> res.va:3:31\n") != null);
     // Both the primary caret and the secondary label are drawn.
-    try std.testing.expect(std.mem.indexOf(u8, out, "^ divisor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "- `k` is unconstrained") != null);
+    try std.testing.expect(std.mem.find(u8, out, "^ divisor") != null);
+    try std.testing.expect(std.mem.find(u8, out, "- `k` is unconstrained") != null);
     // The LRM citation comes from the code table, not from the message.
-    try std.testing.expect(std.mem.indexOf(u8, out, "= note: LRM 4.2.4") != null);
+    try std.testing.expect(std.mem.find(u8, out, "= note: LRM 4.2.4") != null);
     // The suggestion renders as a patched line plus an insertion ruler.
-    try std.testing.expect(std.mem.indexOf(u8, out, "= help: constrain the parameter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "parameter real k = 1.0 from (0:inf);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+++++++++++++") != null);
+    try std.testing.expect(std.mem.find(u8, out, "= help: constrain the parameter") != null);
+    try std.testing.expect(std.mem.find(u8, out, "parameter real k = 1.0 from (0:inf);") != null);
+    try std.testing.expect(std.mem.find(u8, out, "+++++++++++++") != null);
     // Lines 2 and 3 are adjacent, so nothing is elided.
-    try std.testing.expect(std.mem.indexOf(u8, out, "...") == null);
+    try std.testing.expect(std.mem.find(u8, out, "...") == null);
 }
 
 test "render: a gap between labelled lines is elided" {
@@ -254,8 +256,8 @@ test "render: a gap between labelled lines is elided" {
     ;
     var bag = diag_bag.Bag.init(arena);
     try bag.setSingleFile("gap.va", src);
-    const k_decl = @as(u32, @intCast(std.mem.indexOf(u8, src, "k = 1.0").?));
-    const divisor = @as(u32, @intCast(std.mem.lastIndexOfScalar(u8, src, 'k').?));
+    const k_decl = @as(u32, @intCast(std.mem.find(u8, src, "k = 1.0").?));
+    const divisor = @as(u32, @intCast(std.mem.findScalarLast(u8, src, 'k').?));
 
     var b = bag.build(.proof, .E0601, .{ .start = divisor, .end = divisor + 1 });
     b.label(.{ .start = k_decl, .end = k_decl + 1 }, "declared here", .{});
@@ -263,8 +265,8 @@ test "render: a gap between labelled lines is elided" {
 
     const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
     // Lines 1 and 4 are shown; 2 and 3 collapse to `...`.
-    try std.testing.expect(std.mem.indexOf(u8, out, "...") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "filler_a") == null);
+    try std.testing.expect(std.mem.find(u8, out, "...") != null);
+    try std.testing.expect(std.mem.find(u8, out, "filler_a") == null);
 }
 
 test "render: colour is opt-in and structural" {
@@ -278,7 +280,7 @@ test "render: colour is opt-in and structural" {
     try bag.add(.proof, .W0650, .{ .start = 15, .end = 16 }, "", .{});
 
     const plain = try renderToString(&bag, .{});
-    try std.testing.expect(std.mem.indexOfScalar(u8, plain, 0x1b) == null);
+    try std.testing.expect(std.mem.findScalar(u8, plain, 0x1b) == null);
 
     var bag2 = diag_bag.Bag.init(arena);
     try bag2.setSingleFile("x.va", "analog begin\n  x = 1;\nend\n");
@@ -287,9 +289,9 @@ test "render: colour is opt-in and structural" {
     const coloured = try renderToString(&bag2, .{ .palette = .on });
 
     // Error red and warning yellow are distinct, and both appear.
-    try std.testing.expect(std.mem.indexOf(u8, coloured, "\x1b[1;31merror[E0601") == null);
-    try std.testing.expect(std.mem.indexOf(u8, coloured, "\x1b[1;31merror[E0313]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, coloured, "\x1b[1;33mwarning[W0650]") != null);
+    try std.testing.expect(std.mem.find(u8, coloured, "\x1b[1;31merror[E0601") == null);
+    try std.testing.expect(std.mem.find(u8, coloured, "\x1b[1;31merror[E0313]") != null);
+    try std.testing.expect(std.mem.find(u8, coloured, "\x1b[1;33mwarning[W0650]") != null);
     // A warning alone does not fail the compilation.
     try std.testing.expectEqual(@as(u32, 1), bag2.err_count);
     try std.testing.expectEqual(@as(u32, 1), bag2.warn_count);
@@ -303,16 +305,16 @@ test "render: tabs expand so carets line up" {
     const src = "module m;\n\t\tbadtok\nendmodule\n";
     var bag = diag_bag.Bag.init(arena);
     try bag.setSingleFile("t.va", src);
-    const at = @as(u32, @intCast(std.mem.indexOf(u8, src, "badtok").?));
+    const at = @as(u32, @intCast(std.mem.find(u8, src, "badtok").?));
     try bag.add(.parse, .E0207, .{ .start = at, .end = at + 6 }, "", .{});
 
     const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
     // Two tabs become eight spaces in the source line AND in the caret row, so
     // the six carets sit under the six characters of `badtok`.
-    try std.testing.expect(std.mem.indexOf(u8, out, "|         badtok") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "|         ^^^^^^") != null);
+    try std.testing.expect(std.mem.find(u8, out, "|         badtok") != null);
+    try std.testing.expect(std.mem.find(u8, out, "|         ^^^^^^") != null);
     // The reported column is the display column, not the byte column.
-    try std.testing.expect(std.mem.indexOf(u8, out, "t.va:2:9") != null);
+    try std.testing.expect(std.mem.find(u8, out, "t.va:2:9") != null);
 }
 
 test "render: multi-byte UTF-8 counts codepoints, not bytes" {
@@ -324,15 +326,15 @@ test "render: multi-byte UTF-8 counts codepoints, not bytes" {
     const src = "µµµµµµµµbadtok\n";
     var bag = diag_bag.Bag.init(arena);
     try bag.setSingleFile("u.va", src);
-    const at = @as(u32, @intCast(std.mem.indexOf(u8, src, "badtok").?));
+    const at = @as(u32, @intCast(std.mem.find(u8, src, "badtok").?));
     try bag.add(.parse, .E0207, .{ .start = at, .end = at + 6 }, "", .{});
 
     const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
-    try std.testing.expect(std.mem.indexOf(u8, out, "| µµµµµµµµbadtok") != null);
+    try std.testing.expect(std.mem.find(u8, out, "| µµµµµµµµbadtok") != null);
     // Eight spaces of caret indent — one per µ — exactly as the tab test's
     // eight-space indent above, and the reported column is 9, not 17.
-    try std.testing.expect(std.mem.indexOf(u8, out, "|         ^^^^^^") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "u.va:1:9") != null);
+    try std.testing.expect(std.mem.find(u8, out, "|         ^^^^^^") != null);
+    try std.testing.expect(std.mem.find(u8, out, "u.va:1:9") != null);
 }
 
 test "strip marks map span offsets back into the original text" {
@@ -377,11 +379,11 @@ test "render: json is one object per line and escapes properly" {
     try diag_render.renderJson(&bag, &aw.writer);
     const out = aw.writer.buffered();
 
-    try std.testing.expect(std.mem.indexOf(u8, out, "\"code\":\"E0313\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\"level\":\"error\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\\\" and \\\\ and") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\"line\":1,\"col\":8") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\"kind\":\"help\"") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\"code\":\"E0313\"") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\"level\":\"error\"") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\\\" and \\\\ and") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\"line\":1,\"col\":8") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\"kind\":\"help\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\n"));
 }
 
@@ -393,8 +395,8 @@ test "explain prints the catalogue entry" {
     try diag_render.explain(.W0650, &aw.writer, .off);
     const out = aw.writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, out, "W0650: unit is not provably finite"));
-    try std.testing.expect(std.mem.indexOf(u8, out, "@setFloatMode(.optimized)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "--allow=W0650") != null);
+    try std.testing.expect(std.mem.find(u8, out, "@setFloatMode(.optimized)") != null);
+    try std.testing.expect(std.mem.find(u8, out, "--allow=W0650") != null);
 }
 
 test "detach survives the compilation arena, and deinit is leak-free" {
@@ -432,11 +434,11 @@ test "detach survives the compilation arena, and deinit is leak-free" {
     try diag_render.render(&bag, &aw.writer, .{ .explain_hint = false, .summary = false });
     const out = aw.writer.buffered();
 
-    try std.testing.expect(std.mem.indexOf(u8, out, "error[E0313]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "owned.va:2:10") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "^ not declared") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "- in this block") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "real x; analog x = 1;") != null);
+    try std.testing.expect(std.mem.find(u8, out, "error[E0313]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "owned.va:2:10") != null);
+    try std.testing.expect(std.mem.find(u8, out, "^ not declared") != null);
+    try std.testing.expect(std.mem.find(u8, out, "- in this block") != null);
+    try std.testing.expect(std.mem.find(u8, out, "real x; analog x = 1;") != null);
 }
 
 test "detach on a clean bag allocates nothing" {

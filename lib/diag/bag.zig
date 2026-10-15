@@ -23,6 +23,8 @@ pub const max_entries: u32 = 64;
 /// Every diagnostic of one compilation: one `Record` row each, their text in
 /// one string pool. Appended to across stages 1–6, then read by the renderer.
 pub const Bag = struct {
+    /// What every table grows in: the compilation arena until `detach`, the
+    /// caller's gpa after it.
     arena: Allocator,
     /// Every diagnostic string, NUL-terminated: headlines, caret text, label
     /// text, note bodies, fix replacements. Byte 0 is a sentinel NUL so that
@@ -88,11 +90,14 @@ pub const Bag = struct {
 
     /// `String` → bytes. 0 is "none" and decodes to the empty string, which is
     /// also what the renderer wants: an absent `point` and an empty one print
-    /// the same.
+    /// the same. The slice stops at the first NUL, so text formatted with an
+    /// embedded NUL reads back truncated. Invalidated when the pool grows (any
+    /// later `Builder` part or `add`) on a detached bag; on the arena the old
+    /// bytes stay readable until the arena dies.
     pub fn str(self: *const Bag, index: diag_entry.String) []const u8 {
         if (index == 0) return "";
         const bytes = self.string_bytes.items;
-        const end = std.mem.indexOfScalarPos(u8, bytes, index, 0) orelse bytes.len;
+        const end = std.mem.findScalarPos(u8, bytes, index, 0) orelse bytes.len;
         return bytes[index..end];
     }
 
@@ -104,8 +109,9 @@ pub const Bag = struct {
         return self.records.items.len;
     }
 
-    /// The i'th diagnostic, in `sort` order once `sort` has run.
-    /// Precondition: `i < count()`.
+    /// Returns the i'th diagnostic, in `sort` order once `sort` has run. Its
+    /// strings are `str` slices, with their lifetime. Panics in safe builds
+    /// when `i >= count()`.
     pub fn at(self: *const Bag, i: usize) diag_entry.Entry {
         const m = self.records.items[i];
         return .{
@@ -156,7 +162,9 @@ pub const Bag = struct {
 
     /// Points a registered file at its comment-stripped bytes, which every span
     /// from here on indexes. The original stays for rendering and `marks` maps
-    /// stripped offsets back into it. An unknown `id` is ignored.
+    /// stripped offsets back into it; a second call for the same file keeps
+    /// the first original. `stripped` and `marks` are borrowed, like
+    /// `addFile`'s text. An unknown `id` is ignored.
     pub fn setStrippedText(self: *Bag, id: diag_location.FileId, stripped: []const u8, marks: []const diag_location.StripMark) void {
         const i = @backingInt(id);
         if (i >= self.files.items.len) return;
@@ -271,7 +279,9 @@ pub const Bag = struct {
     /// names and texts, macro names) into `gpa`, so the bag outlives the
     /// compilation arena. The caller then owns it and releases it with
     /// `deinit(gpa)`. On `OutOfMemory` nothing is allocated and the bag is
-    /// unchanged, still on its arena.
+    /// unchanged, still on its arena. Call it at most once: a second call
+    /// copies again and leaks the first copy. Slices read before it (`str`,
+    /// `at`, `fileText`, ...) still point into the arena.
     ///
     /// An empty bag is detached too: codegen runs after this and may still
     /// report (E0515), and its snippet needs the file text.
@@ -364,7 +374,8 @@ pub const Bag = struct {
 ///
 /// Methods return void: an allocation failure is latched in `oom` and reported
 /// by `emit`, the only fallible call. Text is interned into the bag's pool as
-/// it is built, so a builder borrows its bag and must not outlive it. Labels
+/// it is built, so a builder borrows its bag and must not outlive it, and
+/// every part invalidates `Bag.str` slices as the pool growing does. Labels
 /// and notes beyond `max_children` are dropped.
 pub const Builder = struct {
     // ponytail: no rollback index. A diagnostic `build` already knows is
@@ -414,7 +425,7 @@ pub const Builder = struct {
         self.point_text = self.text(fmt, args) orelse return;
     }
 
-    /// Adds a secondary span with its own text.
+    /// Adds a secondary span with its own text. Dropped past `max_children`.
     pub fn label(self: *Builder, span: diag_location.Span, comptime fmt: []const u8, args: anytype) void {
         if (self.n_labels == self.labels.len) return;
         const t = self.text(fmt, args) orelse return;
@@ -422,7 +433,8 @@ pub const Builder = struct {
         self.n_labels += 1;
     }
 
-    /// Adds a `= note:` line: context, not an instruction.
+    /// Adds a `= note:` line: context, not an instruction. Notes, helps and
+    /// suggestions share `max_children` slots; later ones are dropped.
     pub fn note(self: *Builder, comptime fmt: []const u8, args: anytype) void {
         self.pushNote(.note, null, fmt, args);
     }

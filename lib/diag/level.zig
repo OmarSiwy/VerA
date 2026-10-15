@@ -39,8 +39,8 @@ pub const Level = enum(u8) {
     warn,
     /// Report and fail the compilation.
     deny,
-    /// Like `deny`, and a later `--allow`/`--warn` for the same code is
-    /// refused rather than silently honoured.
+    /// Like `deny`, and any later level but `forbid` for the same code is
+    /// refused (`error.Forbidden`) rather than silently honoured.
     forbid,
 };
 
@@ -50,9 +50,9 @@ pub const Level = enum(u8) {
 pub const Levels = struct {
     // ponytail: unsorted with a linear scan; consulted once per diagnostic,
     // and the override count is the number of flags a human typed.
-    items: std.ArrayList(Entry_) = .empty,
+    items: std.ArrayList(Override) = .empty,
 
-    const Entry_ = struct { code: Code, level: Level };
+    const Override = struct { code: Code, level: Level };
 
     pub const empty: Levels = .{};
 
@@ -68,7 +68,8 @@ pub const Levels = struct {
 
     /// Records the level for `c` from `--allow=`/`--warn=`/`--deny=`/`--forbid=`.
     /// A later call for the same code overrides an earlier one, except over
-    /// `forbid`. Allocates in `gpa` only for a code not yet overridden.
+    /// `forbid`. Allocates in `gpa` only for a code not yet overridden; on any
+    /// error the levels are unchanged.
     pub fn set(self: *Levels, gpa: Allocator, c: Code, level: Level) SetError!void {
         if (severityOf(c) == .err and level != .forbid and level != .deny)
             return error.CannotAllowError;
@@ -94,9 +95,11 @@ pub const Levels = struct {
     }
 
     /// Parses and applies `allow=W0650`-style text. Returns false when the text
-    /// is not a level directive, so a caller can fall through to other flags.
+    /// is not a level directive or names no known level or code (both are
+    /// case-sensitive: `allow=w0650` is false), so a caller can fall through
+    /// to other flags. Fails as `set` does.
     pub fn parseFlag(self: *Levels, gpa: Allocator, text: []const u8) SetError!bool {
-        const eq = std.mem.indexOfScalar(u8, text, '=') orelse return false;
+        const eq = std.mem.findScalar(u8, text, '=') orelse return false;
         const level = std.meta.stringToEnum(Level, text[0..eq]) orelse return false;
         const c = std.meta.stringToEnum(Code, text[eq + 1 ..]) orelse return false;
         try self.set(gpa, c, level);
