@@ -6,9 +6,14 @@
 //!
 //! The spine is `compileInArena`: preprocess, lex, parse, the §3.7 wreal
 //! check, lower, `pruneHeld`, if-conversion (each followed by the MIR
-//! verifier under runtime safety), prove, then the §9.4 drop warnings. Codegen runs later and lazily, from `CompileResult.generateOutput`.
+//! verifier under runtime safety), prove, then the §9.4 drop warnings.
+//! Codegen runs later and lazily, from `CompileResult.generateOutput`.
 //! This file's pub declarations are the `vera` module's API (`src/main.zig`,
 //! `src/vpi`, `tests/*`), so their names and meanings are frozen.
+//!
+//! Clauses its code cites: §3.2, §3.4, §3.6.2, §3.7, §4.2.12, §4.3.2, §6.2,
+//! §6.5.3, §7.4.4, §7.6, §9.4, §9.5, §9.5.1, §9.7.3, §10, §12.32.1, annex D.1,
+//! D.2, E.1 and E.2; IEEE 1364-2005 §19.1 and §19.6.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -102,10 +107,15 @@ pub const Options = struct {
     /// successful compilation may still fill it (W0650, the finiteness
     /// warning). Detached from the compilation arena before the call returns,
     /// so it stays valid after the `CompileResult` is freed; the caller must
-    /// `deinit(gpa)` it.
+    /// `deinit(gpa)` it. The bag must own nothing on entry (fresh from
+    /// `Bag.init`, or after `deinit`): the call overwrites it without freeing
+    /// what it held. A successful result keeps the pointer, and codegen
+    /// reports into the bag (E0515), so it must outlive the result.
     diags: ?*diag.Bag = null,
     /// Per-code lint levels (`--allow=W0650`, `--deny=W0651`). An error
-    /// code cannot be allowed away; see `diag.Levels.set`.
+    /// code cannot be allowed away; see `diag.Levels.set`. Borrowed, not
+    /// copied: the bag in `diags` reads it until that bag is freed, so it
+    /// must outlive the bag.
     lint: diag.Levels = .empty,
     /// Class-6 knobs (solver compliance bound, overflow model). See proof.zig.
     proof: proof.Options = .{},
@@ -151,10 +161,10 @@ pub const Options = struct {
 ///
 /// Owns every allocation of the run. Preprocessed text, tokens, AST, MIR and
 /// lowering's tables live in `arena`, a `BigArena`: its large tables are the
-/// gpa's own blocks, grown in place and freed with it. Only `verdict.unit_modes` and
-/// `device.text` are gpa-owned (the device text can reach hundreds of
-/// megabytes, and an arena cannot grow a buffer in place). `deinit` frees all
-/// three. The value is freely movable.
+/// gpa's own blocks, grown in place and freed with it. Only
+/// `verdict.unit_modes` and `device.text` are gpa-owned (the device text can
+/// reach hundreds of megabytes, and an arena cannot grow a buffer in place).
+/// `deinit` frees all three. The value is freely movable.
 pub const CompileResult = struct {
     /// The allocator the result was compiled with; `deinit` frees with it.
     gpa: Allocator,
@@ -173,8 +183,9 @@ pub const CompileResult = struct {
     verdict: proof.Verdict,
     /// What the caller asked for; `buildArtifact` refuses a `.lint` result.
     target: Target,
-    /// Codegen output; empty until `generateOutput` runs, which `.lint` never
-    /// does. `text` is gpa-owned and freed by `deinit`; consumers borrow it.
+    /// Codegen output; empty until the first successful `generateOutput`,
+    /// which the pipeline itself never calls. `text` is gpa-owned and freed
+    /// by `deinit`; consumers borrow it.
     /// `names`, `unit_lo` and `unit_hi` are the per-unit file map the
     /// orchestrator writes (see `codegen.Output`).
     device: codegen.Output = .{ .text = "" },
@@ -194,14 +205,16 @@ pub const CompileResult = struct {
     }
 
     /// Runs codegen and returns the device text. Idempotent: the text is
-    /// cached on the result, so a second call costs nothing. The slice lives
-    /// until `deinit`.
+    /// cached on the result, so a second call costs nothing and returns the
+    /// same slice. The slice is borrowed and lives until `deinit`. A failed
+    /// call caches nothing, so the next call runs codegen again.
     pub fn generateDevice(self: *CompileResult) codegen.Error![]const u8 {
         return (try self.generateOutput()).text;
     }
 
     /// Runs codegen (once, as `generateDevice`) and returns the text with the
-    /// per-unit file map the orchestrator needs.
+    /// per-unit file map the orchestrator needs. Every slice in the returned
+    /// value is borrowed from the result and lives until `deinit`.
     pub fn generateOutput(self: *CompileResult) codegen.Error!codegen.Output {
         if (self.device.text.len == 0) {
             self.device = try codegen.generate(
@@ -229,10 +242,14 @@ pub fn compileSource(gpa: Allocator, source: []const u8, target: Target) Error!C
     return compileSourceOpts(gpa, source, target, .{});
 }
 
-/// `compileSource` with explicit settings. When `opts.diags` is set it
-/// receives every diagnostic even on failure, and the caller must
-/// `deinit(gpa)` it. Fails with `error.CompileFailed` when a `--deny`
-/// promoted a warning, even if every stage succeeded.
+/// `compileSource` with explicit settings. Caller owns the result and frees
+/// it with `deinit`. When `opts.diags` is set it receives every diagnostic
+/// even on failure, and the caller must `deinit(gpa)` it; on any failure
+/// that bag is the only thing the call leaves allocated.
+/// Fails with `error.CompileFailed` when a stage reported an error, or when a
+/// `--deny` promoted a warning even if every stage succeeded;
+/// `error.NoModule` when the source declares no module of its own (the
+/// annex D/E prelude and a SPICE netlist's modules do not count).
 pub fn compileSourceOpts(
     gpa: Allocator,
     source: []const u8,
@@ -397,23 +414,7 @@ fn compileInArena(
     // §9.4/§9.5. Reported here, not in lowering, because whether a side effect
     // is kept depends on what the caller asked to build. The model is legal
     // either way, so these are warnings.
-    if (opts.display != .emit) for (lowered.displays.items) |d| {
-        // §9.7.3 a device reports these through its status channel
-        // (`contract.StatusSite`): kept, not dropped.
-        if (std.mem.eql(u8, d.name, "$fatal") or std.mem.eql(u8, d.name, "$error")) continue;
-        // §9.4 a `.record` device's `say` records these; codegen names one
-        // it cannot (`cg_display.planSay`).
-        if (opts.display == .record and cg_display.sayRecords(.fromName(d.name))) continue;
-        const span = lowered.tokenSpan(d.tok);
-        // A §9.5 file task is kept for sequencing, not text; its answer is
-        // §9.5.1's zero descriptor rather than a dropped print.
-        if (Mir.callee.isFileCall(.fromName(d.name)))
-            try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
-        else if (opts.display == .record)
-            try bag.add(.lower, .W0850, span, "`{s}` — a device's `say` records the printing tasks, not this one", .{d.name})
-        else
-            try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
-    };
+    try warnDroppedDisplays(bag, lowered, opts.display);
 
     return .{
         .gpa = gpa,
@@ -436,13 +437,39 @@ fn compileInArena(
     };
 }
 
+/// Reports a W0850 for every display or file task in `lowered.displays` that
+/// the device `display` asks for will not perform. `.emit` drops none.
+fn warnDroppedDisplays(bag: *diag.Bag, lowered: *const Lowered, display: codegen.Display) Allocator.Error!void {
+    if (display == .emit) return;
+    for (lowered.displays.items) |d| {
+        const c: Mir.Callee = .fromName(d.name);
+        // §9.7.3 a device reports these through its status channel
+        // (`contract.StatusSite`): kept, not dropped.
+        if (c == .@"$fatal" or c == .@"$error") continue;
+        // §9.4 a `.record` device's `say` records these; codegen names one
+        // it cannot (`cg_display.planSay`).
+        if (display == .record and cg_display.sayRecords(c)) continue;
+        const span = lowered.tokenSpan(d.tok);
+        // A §9.5 file task is kept for sequencing, not text; its answer is
+        // §9.5.1's zero descriptor rather than a dropped print.
+        if (Mir.callee.isFileCall(c))
+            try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
+        else if (display == .record)
+            try bag.add(.lower, .W0850, span, "`{s}` — a device's `say` records the printing tasks, not this one", .{d.name})
+        else
+            try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Artifact build
 // ---------------------------------------------------------------------------
 
 /// Generates the device and builds it cold into a shared library
-/// (`orchestrator.compileRelease`). The host owns loading it and all
-/// simulation state. Fails with `error.NoArtifact` on a `.lint` result.
+/// (`orchestrator.compileRelease`), `lib<name>.<generation>.so` in
+/// `o.work_dir`. The host owns loading it and all simulation state. Caller
+/// owns the returned `orchestrator.Result` and frees it with `deinit(gpa)`.
+/// Fails with `error.NoArtifact` on a `.lint` result, before anything runs.
 pub fn buildArtifact(
     gpa: Allocator,
     io: std.Io,
