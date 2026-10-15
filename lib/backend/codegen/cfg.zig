@@ -96,69 +96,202 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
 
 /// Writes block `bi` and the dominator subtree it heads, wrapping a loop
 /// header in `L<bi>: while (true)`.
+///
+/// The walk is a loop over a heap stack of what is left to write after each
+/// nested piece (`Resume`), not a recursion: an `if` nested, chained or
+/// following another 100,000 deep is a dominator tree that deep, and each
+/// level costs a stack row instead of a few native frames. The text is the
+/// recursion's, byte for byte (`emitStep`'s pieces are its bodies in order).
 pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
-    if (self.an.is_loop[bi]) {
-        // `setup` ends at a loop with a per-eval branch: nothing it can reach
-        // is placeable, and forcing its tests `then` could spin forever. The
-        // stop is a runtime flag so the structure after it still compiles.
-        const was_dead = self.su.dead;
-        defer self.su.dead = was_dead;
-        if (self.su.mode and self.sinv.loop_varying[bi] and !was_dead) {
-            self.su.stop = true;
-            try gen_setup.emitStores(self, depth, "if (zs_stop) ");
-            self.su.dead = true; // the loop runs only on a false `zs_stop`
+    var stack: std.ArrayList(Resume) = .empty;
+    defer stack.deinit(self.gpa);
+    var next: ?Step = .{ .tree = .{ .bi = bi, .depth = depth } };
+    while (true) {
+        if (next) |s| {
+            next = try emitStep(self, s, &stack, target);
+            continue;
         }
-        try self.ind(depth);
-        try self.b("L{d}: while (true) {{\n", .{bi});
-        try gen_unit.scopeOpen(self);
-        try emitCode(self, bi, depth + 1, target);
-        gen_unit.scopeClose(self, self.out.items.len);
-        try self.ind(depth);
-        try self.b("}}\n", .{});
-    } else {
-        try emitCode(self, bi, depth, target);
+        const r = stack.pop() orelse return;
+        next = try emitResume(self, r, &stack);
+    }
+}
+
+/// A piece `emitTree` writes next: a block's subtree (`tree`, which may open
+/// a loop), a block's own code (`code`), or an edge.
+const Step = union(enum) {
+    tree: struct { bi: u32, depth: u32 },
+    code: struct { bi: u32, depth: u32 },
+    edge: struct { from: u32, to: u32, depth: u32 },
+};
+
+/// What is left to write once the piece below it is done.
+const Resume = union(enum) {
+    /// Close `L<bi>: while (true) {`, putting `su.dead` back.
+    loop_end: struct { depth: u32, was_dead: bool },
+    /// After a block's terminator: drop a fall-through label (`emitCode`'s
+    /// peephole, unless `peeped`), then close each merge label `mc[j..]`
+    /// and write that child.
+    merge_kids: struct { mc: []const u32, j: usize, depth: u32, at_inner: usize, body_start: usize, peeped: bool, dropped: bool },
+    /// After an `if`'s `then` arm: `} else {` and the `else` arm.
+    else_arm: struct { from: u32, to: u32, depth: u32, else_dead: bool },
+    /// After the `else` arm: the closing brace, putting `su.dead` back.
+    if_end: struct { depth: u32, was_dead: bool },
+};
+
+/// Writes `s` up to its first nested piece, pushing what follows that piece
+/// onto `stack`, and returns the nested piece (null when `s` had none).
+fn emitStep(self: *Gen, s: Step, stack: *std.ArrayList(Resume), target: Mir.Value) Error!?Step {
+    switch (s) {
+        .tree => |t| {
+            if (!self.an.is_loop[t.bi]) return .{ .code = .{ .bi = t.bi, .depth = t.depth } };
+            // `setup` ends at a loop with a per-eval branch: nothing it can reach
+            // is placeable, and forcing its tests `then` could spin forever. The
+            // stop is a runtime flag so the structure after it still compiles.
+            const was_dead = self.su.dead;
+            if (self.su.mode and self.sinv.loop_varying[t.bi] and !was_dead) {
+                self.su.stop = true;
+                try gen_setup.emitStores(self, t.depth, "if (zs_stop) ");
+                self.su.dead = true; // the loop runs only on a false `zs_stop`
+            }
+            try self.ind(t.depth);
+            try self.b("L{d}: while (true) {{\n", .{t.bi});
+            try gen_unit.scopeOpen(self);
+            try stack.append(self.gpa, .{ .loop_end = .{ .depth = t.depth, .was_dead = was_dead } });
+            return .{ .code = .{ .bi = t.bi, .depth = t.depth + 1 } };
+        },
+        .code => |c| return emitCode(self, c.bi, c.depth, stack, target),
+        .edge => |e| {
+            try emitPhiCopies(self, e.from, e.to, e.depth);
+            if (self.an.is_loop[e.to] and self.an.dominates(e.to, e.from)) {
+                try self.ind(e.depth);
+                try self.b("continue :L{d};\n", .{e.to});
+            } else if (self.an.is_merge[e.to]) {
+                try self.ind(e.depth);
+                try self.b("break :B{d};\n", .{e.to});
+            } else return .{ .tree = .{ .bi = e.to, .depth = e.depth } };
+            return null;
+        },
+    }
+}
+
+/// Writes what `r` left, up to its next nested piece (see `emitStep`).
+fn emitResume(self: *Gen, r: Resume, stack: *std.ArrayList(Resume)) Error!?Step {
+    switch (r) {
+        .loop_end => |l| {
+            gen_unit.scopeClose(self, self.out.items.len);
+            try self.ind(l.depth);
+            try self.b("}}\n", .{});
+            self.su.dead = l.was_dead;
+            return null;
+        },
+        .else_arm => |e| {
+            gen_unit.scopeClose(self, self.out.items.len);
+            try self.ind(e.depth);
+            try self.b("}} else {{\n", .{});
+            try gen_unit.scopeOpen(self);
+            const was_dead = self.su.dead;
+            self.su.dead = e.else_dead;
+            try stack.append(self.gpa, .{ .if_end = .{ .depth = e.depth, .was_dead = was_dead } });
+            return .{ .edge = .{ .from = e.from, .to = e.to, .depth = e.depth + 1 } };
+        },
+        .if_end => |e| {
+            gen_unit.scopeClose(self, self.out.items.len);
+            try self.ind(e.depth);
+            try self.b("}}\n", .{});
+            self.su.dead = e.was_dead;
+            return null;
+        },
+        .merge_kids => |m0| {
+            var m = m0;
+            // Peephole: `B{k}: { break :B{k}; }` and `B{k}: {}` both fall
+            // through to `k`'s code, emitted right after the brace anyway, so
+            // the label is dropped by rewinding `out`. `planDeadBranches`
+            // leaves many of these.
+            if (!m.peeped) {
+                m.peeped = true;
+                m.dropped = isFallThrough(self, m.body_start, m.depth, m.mc[0]);
+                if (m.dropped) {
+                    self.out.shrinkRetainingCapacity(m.at_inner);
+                    gen_unit.scopeClose(self, m.at_inner);
+                    m.depth -= 1;
+                }
+            }
+            if (m.j == m.mc.len) return null;
+            const k = m.mc[m.j];
+            if (m.j != 0 or !m.dropped) {
+                m.depth -= 1;
+                gen_unit.scopeClose(self, self.out.items.len);
+                try self.ind(m.depth);
+                try self.b("}}\n", .{});
+            }
+            m.j += 1;
+            // The last child is written at this block's own depth after
+            // everything else: no row is left for it.
+            if (m.j != m.mc.len) try stack.append(self.gpa, .{ .merge_kids = m });
+            return .{ .tree = .{ .bi = k, .depth = m.depth } };
+        },
     }
 }
 
 /// Writes block `bi` inside the labelled blocks of the merge children it
-/// dominates, then each of those children after its label closes.
-pub fn emitCode(self: *Gen, bi: u32, depth0: u32, target: Mir.Value) Error!void {
-    const mc = self.an.mk_pool[self.an.mk_off[bi]..self.an.mk_off[bi + 1]];
+/// dominates; the children follow, after their labels close (`merge_kids`).
+/// A chain of blocks each the only, inlined successor of the last (what
+/// if-conversion leaves of a run of `if`s) is written in this loop.
+fn emitCode(self: *Gen, bi0: u32, depth0: u32, stack: *std.ArrayList(Resume), target: Mir.Value) Error!?Step {
+    var bi = bi0;
     var depth = depth0;
-    // Start of the innermost label (`mc[0]`, opened last); the peephole
-    // below rewinds to it.
-    var at_inner: usize = 0;
-    var i = mc.len;
-    while (i > 0) {
-        i -= 1;
-        if (i == 0) at_inner = self.out.items.len;
-        try self.ind(depth);
-        try self.b("B{d}: {{\n", .{mc[i]});
-        try gen_unit.scopeOpen(self);
-        depth += 1;
-    }
-    const body_start = self.out.items.len;
-    try emitBlockInsts(self, bi, depth, false);
-    try emitTerm(self, bi, depth, target);
-
-    // Peephole: `B{k}: { break :B{k}; }` and `B{k}: {}` both fall through to
-    // `k`'s code, emitted right after the brace anyway, so the label is
-    // dropped by rewinding `out`. `planDeadBranches` leaves many of these.
-    const dropped = mc.len != 0 and isFallThrough(self, body_start, depth, mc[0]);
-    if (dropped) {
-        self.out.shrinkRetainingCapacity(at_inner);
-        gen_unit.scopeClose(self, at_inner);
-        depth -= 1;
-    }
-    for (mc, 0..) |k, j| {
-        if (j != 0 or !dropped) {
-            depth -= 1;
-            gen_unit.scopeClose(self, self.out.items.len);
+    while (true) {
+        const mc = self.an.mk_pool[self.an.mk_off[bi]..self.an.mk_off[bi + 1]];
+        // Start of the innermost label (`mc[0]`, opened last); the peephole
+        // rewinds to it.
+        var at_inner: usize = 0;
+        var i = mc.len;
+        while (i > 0) {
+            i -= 1;
+            if (i == 0) at_inner = self.out.items.len;
             try self.ind(depth);
-            try self.b("}}\n", .{});
+            try self.b("B{d}: {{\n", .{mc[i]});
+            try gen_unit.scopeOpen(self);
+            depth += 1;
         }
-        try emitTree(self, k, depth, target);
+        const body_start = self.out.items.len;
+        try emitBlockInsts(self, bi, depth, false);
+        // With no label to close after it, an edge the terminator writes
+        // inline is the last thing this block writes: take it as the next
+        // turn.
+        if (mc.len == 0) if (inlineSuccessor(self, bi)) |to| {
+            try emitPhiCopies(self, bi, to, depth);
+            bi = to;
+            continue;
+        };
+        if (mc.len != 0) try stack.append(self.gpa, .{ .merge_kids = .{
+            .mc = mc,
+            .j = 0,
+            .depth = depth,
+            .at_inner = at_inner,
+            .body_start = body_start,
+            .peeped = false,
+            .dropped = false,
+        } });
+        return emitTerm(self, bi, depth, stack, target);
     }
+}
+
+/// The block `emitTerm` would write inline as `bi`'s only successor, through
+/// an edge and a subtree that opens no loop: the target of a jump, or
+/// the `then` arm of a dead branch, when that is neither a back edge nor a
+/// merge nor a loop header. Null otherwise. If-conversion leaves a chain of
+/// such jumps, one per converted `if`.
+fn inlineSuccessor(self: *const Gen, bi: u32) ?u32 {
+    const t = self.an.term[bi];
+    if (t == .none) return null;
+    const to: u32 = switch (self.mir.instData(t)) {
+        .jump => |d| @backingInt(d.target),
+        .branch => |d| if (self.plan.dead_branch[bi]) @backingInt(d.then_block) else return null,
+        .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => unreachable,
+    };
+    if (self.an.is_loop[to] or self.an.is_merge[to]) return null;
+    return to;
 }
 
 /// Is everything emitted since `at` exactly "leave the block labelled `k`"?
@@ -169,32 +302,31 @@ fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
     if (body.len == 0) return true;
     var buf: [64]u8 = undefined;
     const want = std.mem.print(&buf, "break :B{d};\n", .{k}) catch return false;
-    if (body.len != depth * 4 + want.len) return false;
-    return std.mem.allEqual(u8, body[0 .. depth * 4], ' ') and std.mem.eql(u8, body[depth * 4 ..], want);
+    const w = Gen.indWidth(depth);
+    if (body.len != w + want.len) return false;
+    return std.mem.allEqual(u8, body[0..w], ' ') and std.mem.eql(u8, body[w..], want);
 }
 
-/// Writes block `bi`'s terminator: the unit's return, a jump edge, or an
-/// `if` over both branch edges.
-pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
+/// Writes block `bi`'s terminator up to its first edge: the unit's return,
+/// or the edge of a jump, or `if (cond) {` with the `else` arm pushed.
+fn emitTerm(self: *Gen, bi: u32, depth: u32, stack: *std.ArrayList(Resume), target: Mir.Value) Error!?Step {
     const t = self.an.term[bi];
     if (t == .none) {
         // The block lowering ended in: the contribution accumulators are
         // read here (§5.6.1.3).
         try emitReturn(self, depth, target);
-        return;
+        return null;
     }
     switch (self.mir.instData(t)) {
-        .jump => |d| try emitEdge(self, bi, @backingInt(d.target), depth, target),
+        .jump => |d| return .{ .edge = .{ .from = bi, .to = @backingInt(d.target), .depth = depth } },
         .branch => |d| {
             // `planDeadBranches`: both arms reconverge with nothing this
             // unit can observe in between, so emit the common action once.
             if (self.plan.dead_branch[bi])
-                return emitEdge(self, bi, @backingInt(d.then_block), depth, target);
+                return .{ .edge = .{ .from = bi, .to = @backingInt(d.then_block), .depth = depth } };
             try self.ind(depth);
             try self.b("if (", .{});
-            const was_dead = self.su.dead;
-            defer self.su.dead = was_dead;
-            var else_dead = was_dead;
+            var else_dead = self.su.dead;
             if (self.su.mode and !self.sinv.val[@backingInt(self.an.rv(d.cond))]) {
                 // `setup` takes a per-eval branch `then` without testing it:
                 // neither arm holds setup work, and a §5.10.2 initial-step
@@ -208,16 +340,8 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
             } else try renderCond(self, d.cond);
             try self.b(") {{\n", .{});
             try gen_unit.scopeOpen(self);
-            try emitEdge(self, bi, @backingInt(d.then_block), depth + 1, target);
-            gen_unit.scopeClose(self, self.out.items.len);
-            try self.ind(depth);
-            try self.b("}} else {{\n", .{});
-            try gen_unit.scopeOpen(self);
-            self.su.dead = else_dead;
-            try emitEdge(self, bi, @backingInt(d.else_block), depth + 1, target);
-            gen_unit.scopeClose(self, self.out.items.len);
-            try self.ind(depth);
-            try self.b("}}\n", .{});
+            try stack.append(self.gpa, .{ .else_arm = .{ .from = bi, .to = @backingInt(d.else_block), .depth = depth, .else_dead = else_dead } });
+            return .{ .edge = .{ .from = bi, .to = @backingInt(d.then_block), .depth = depth + 1 } };
         },
         // `an.term` is the block's branch or jump, found by opcode.
         .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => unreachable,
@@ -237,21 +361,6 @@ pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
         try self.b("zCmp(S, .neq, ", .{});
         try gen_render.renderVal(self, v, .real);
         try self.b(", S.con(0.0))", .{});
-    }
-}
-
-/// Writes the edge `from -> to`: its phi copies, then `continue` for a back
-/// edge, `break` into a merge block, or `to`'s subtree inline.
-pub fn emitEdge(self: *Gen, from: u32, to: u32, depth: u32, target: Mir.Value) Error!void {
-    try emitPhiCopies(self, from, to, depth);
-    if (self.an.is_loop[to] and self.an.dominates(to, from)) {
-        try self.ind(depth);
-        try self.b("continue :L{d};\n", .{to});
-    } else if (self.an.is_merge[to]) {
-        try self.ind(depth);
-        try self.b("break :B{d};\n", .{to});
-    } else {
-        try emitTree(self, to, depth, target);
     }
 }
 

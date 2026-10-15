@@ -47,8 +47,9 @@ fn ofDiscipline(file: *const Ast.SourceFile, d: Ast.StrId, declared: bool) Seg {
 /// digital behavioral code uses is digital whatever is below it (4.a), its
 /// discipline the discrete children's, or none (§3.6.2.4).
 ///
-/// Memoized per segment. `depth` stops a recursive instantiation, which the
-/// walk itself reports (E0905, E1018).
+/// Memoized per segment. A module already being climbed (`Flatten.seg_on`)
+/// stops a recursive instantiation, which the walk itself reports (E0905);
+/// `depth` is 0 at the level being planned.
 ///
 /// The children are the ones the walk that inserts nothing elaborated below
 /// `path` (`Flatten.tree`): every generate block's instances whose scheme
@@ -75,7 +76,10 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     // §3.6.2.4: "If the net is referenced in behavioral code, then it shall
     // be treated as having no discipline with a domain binding of discrete."
     const behavioral = digitalUse(file, module, net);
-    if (depth >= elaborate.max_depth) return .{ .domain = if (behavioral) .discrete else .unspecified, .behavioral = behavioral };
+    if (std.mem.findScalar(Ast.StrId, self.seg_on.items, module.name) != null)
+        return .{ .domain = if (behavioral) .discrete else .unspecified, .behavioral = behavioral };
+    try self.seg_on.append(self.ctx.arena, module.name);
+    defer _ = self.seg_on.pop();
     var below: std.ArrayList(Seg) = .empty;
     if (self.tree.get(path)) |kids| {
         for (kids.items) |*kid| try visitChild(self, &kid.inst, kid.module, kid.path, net, depth, &below);

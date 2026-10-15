@@ -9,8 +9,7 @@ const std = @import("std");
 const Mir = @import("mir.zig");
 const assert = std.debug.assert;
 
-// Spelled out, not inferred: readFrom, readVariableRecursive and
-// addPhiOperands are mutually recursive.
+// Spelled out, not inferred: sealBlock's addPhiOperands calls readFrom.
 const Error = std.mem.Allocator.Error;
 
 /// A "place" is an assignable location (a variable or a lowered temp).
@@ -29,8 +28,8 @@ const list_end: u32 = std.math.maxInt(u32);
 const absent: u32 = 0;
 
 /// "This (place, block) is a join whose predecessors are being read right
-/// now"; see the ≥2-preds arm of `readVariableRecursive`. A read that meets
-/// it has come round a cycle and mints the phi there (`readFrom`). Never
+/// now"; see the ≥2-preds arm of `readJoin`. A read that meets
+/// it has come round a cycle and mints the phi there (`climb`). Never
 /// a biased Value: `writeVariable` keeps the Value space two short of it.
 const pending: u32 = std.math.maxInt(u32);
 
@@ -120,6 +119,8 @@ pub const SsaBuilder = struct {
     scratch: std.ArrayList(Mir.PhiPair) = .empty,
     /// Trivial-phi worklist, with the same save/restore discipline as `scratch`.
     phi_work: std.ArrayList(Mir.Value) = .empty,
+    /// `readFrom`'s explicit stack of joins being read, same discipline.
+    joins: std.ArrayList(JoinRead) = .empty,
     /// Places handed out so far (`newPlace`); directory rows past it are
     /// all chunk 0.
     next_place: u32 = 0,
@@ -179,6 +180,7 @@ pub const SsaBuilder = struct {
         self.user_head.deinit(map_gpa);
         self.scratch.deinit(map_gpa);
         self.phi_work.deinit(map_gpa);
+        self.joins.deinit(map_gpa);
         self.* = .{ .gpa = self.gpa, .mir = self.mir };
     }
 
@@ -272,14 +274,56 @@ pub const SsaBuilder = struct {
 
     /// `readVariable` for a block that has a `block_state` row. Every block it
     /// reaches has one too: `addPredecessor` gives each predecessor a row.
+    ///
+    /// Braun's readVariable/readVariableRecursive recursion, run on an
+    /// explicit stack (`joins`): a join being read is a `JoinRead` row, and
+    /// the top row reads its predecessors one at a time. The order of reads,
+    /// phi emissions and memo writes is the recursion's (depth first, each
+    /// join's predecessors in declaration order), so the emitted MIR is the
+    /// same; the depth is bounded by memory, not by the native stack
+    /// (10,000 sequential `if`s: `lower/test.zig`).
     fn readFrom(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
-        // A sealed block with one predecessor reads what that predecessor
-        // ends with, so the walk climbs through it and memoizes nothing
-        // there: two thirds of Braun's memo writes landed in such blocks (the
-        // arms of every `if`), and skipping them is 4-5% of a compact
-        // model's whole compile (callgrind, psp103/bsim4va/hisimhv_va). It
-        // also makes the climb a loop, so a long single-predecessor chain no
-        // longer costs a stack frame per block.
+        const base = self.joins.items.len;
+        defer self.joins.shrinkRetainingCapacity(base);
+        var got = try self.climb(place, block);
+        while (true) {
+            if (got) |v| {
+                if (self.joins.items.len == base) return v;
+                // The value at the end of the top join's current predecessor.
+                const top = self.joins.items[self.joins.items.len - 1];
+                try self.scratch.append(map_gpa, .{ .block = top.pred, .value = v });
+            }
+            const j = &self.joins.items[self.joins.items.len - 1];
+            if (j.node != list_end) {
+                const pred = self.pred_pool.items[j.node];
+                j.node = pred.next;
+                j.pred = pred.block;
+                got = try self.climb(place, pred.block); // may push: `j` is stale after
+                continue;
+            }
+            got = try self.finishJoin(self.joins.pop().?);
+        }
+    }
+
+    /// One join `readFrom` is reading: its cell (marked `pending`), where its
+    /// phi pairs start in `scratch`, and its place in the predecessor list.
+    const JoinRead = struct {
+        block: Mir.Block,
+        cell: usize,
+        top: usize,
+        /// The next predecessor node to read (`list_end` once all are read).
+        node: u32,
+        /// The predecessor whose value is being read now.
+        pred: Mir.Block = undefined,
+    };
+
+    /// Climbs from `block` through sealed single-predecessor blocks, which
+    /// memoize nothing there: two thirds of Braun's memo writes landed in such
+    /// blocks (the arms of every `if`), and skipping them is 4-5% of a compact
+    /// model's whole compile (callgrind, psp103/bsim4va/hisimhv_va). Returns
+    /// the value found, or null after pushing a `JoinRead` for a sealed join
+    /// whose predecessors must be read first.
+    fn climb(self: *SsaBuilder, place: Place, block: Mir.Block) Error!?Mir.Value {
         assert(@backingInt(block) < self.block_state.len);
         const sealed = self.block_state.items(.sealed);
         const preds_len = self.block_state.items(.preds_len);
@@ -291,7 +335,7 @@ pub const SsaBuilder = struct {
             if (raw == pending) {
                 // The read came round a cycle (§5.9) into a join whose
                 // predecessors are still being read: the join needs a real
-                // phi after all. Mint it empty; the frame that set `pending`
+                // phi after all. Mint it empty; that join's `finishJoin`
                 // fills it.
                 const phi = try self.mir.emitPhi(self.gpa, b, &.{});
                 try self.writeVariable(place, b, phi);
@@ -299,9 +343,70 @@ pub const SsaBuilder = struct {
             }
             if (raw != absent) return @fromBackingInt(@intCast(raw - 1));
             const i = @backingInt(b);
-            if (!sealed[i] or preds_len[i] != 1) return self.readVariableRecursive(place, b);
+            if (!sealed[i] or preds_len[i] != 1) return self.readJoin(place, b);
             b = self.pred_pool.items[preds_head[i]].block;
         }
+    }
+
+    /// Braun §readVariableRecursive, for a block `climb` cannot climb: an
+    /// unsealed block's incomplete phi, or a sealed join pushed for
+    /// `readFrom` to read. Both memoize in the block's cell, which is also
+    /// what breaks cycles on the loop path.
+    fn readJoin(self: *SsaBuilder, place: Place, block: Mir.Block) Error!?Mir.Value {
+        const b = @backingInt(block);
+        assert(b < self.block_state.len); // `readVariable` ensured it
+
+        if (!self.block_state.items(.sealed)[b]) {
+            // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
+            const phi = try self.mir.emitPhi(self.gpa, block, &.{});
+            const node: u32 = @intCast(self.incomplete_pool.items.len);
+            try self.incomplete_pool.append(map_gpa, .{
+                .place = place,
+                .value = phi,
+                .next = self.block_state.items(.phis_head)[b],
+            });
+            self.block_state.items(.phis_head)[b] = node;
+            try self.writeVariable(place, block, phi);
+            return phi;
+        }
+        assert(self.block_state.items(.preds_len)[b] != 1); // `climb` climbs those
+        // ≥2 preds (or 0: an undefined read in a source-less block).
+        //
+        // Braun emits the phi first and collapses a trivial one by aliasing,
+        // which leaves a dead row behind; on a compact model with long `if`
+        // chains nearly every phi row was dead. So the cell is marked
+        // `pending` instead, and a phi is emitted only when a read cycles
+        // back here (`climb` mints it) or the predecessors disagree.
+        // An acyclic trivial join gets no row at all.
+        //
+        // `cell` stays valid across the reads: they may regrow `cells` and
+        // the directory, but a chunk keeps its number in both.
+        const slot = self.slotOf(b);
+        assert(slot != arm_slot); // sealed and not single-predecessor
+        const cell = try self.cellIndex(place, slot);
+        self.cells.items[cell] = pending;
+        try self.joins.append(map_gpa, .{ .block = block, .cell = cell, .top = self.scratch.items.len, .node = self.predsHead(block) });
+        return null;
+    }
+
+    /// A join whose predecessors have all been read (their pairs are
+    /// `scratch[j.top..]`): its phi, or the one value they agree on.
+    fn finishJoin(self: *SsaBuilder, j: JoinRead) Error!Mir.Value {
+        defer self.scratch.shrinkRetainingCapacity(j.top);
+        const pairs = self.scratch.items[j.top..];
+        const now = self.cells.items[j.cell];
+        const val = if (now != pending)
+            try self.fillPhi(@fromBackingInt(@intCast(now - 1)), pairs)
+        else if (sameValue(self.mir, pairs)) |same|
+            same
+        else blk: {
+            const phi = try self.mir.emitPhi(self.gpa, j.block, pairs);
+            for (pairs) |p| try self.addUser(p.value, phi);
+            break :blk phi;
+        };
+        assert(@backingInt(val) < std.math.maxInt(u32) - 1); // see `writeVariable`
+        self.cells.items[j.cell] = @backingInt(val) + 1;
+        return val;
     }
 
     /// Load without growing: an unallocated cell reads as absent, exactly like an
@@ -389,66 +494,6 @@ pub const SsaBuilder = struct {
             self.dir[d] = @intCast(chunk);
         }
         return @as(usize, self.dir[d]) << chunk_bits | (slot & (chunk_len - 1));
-    }
-
-    /// Braun §readVariableRecursive, for a block `readFrom` cannot climb.
-    /// Both paths memoize their result in the block's cell, which is also
-    /// what breaks cycles on the loop path.
-    // ponytail: recursive, with depth the number of joins the first read of a
-    // place climbs (single-predecessor blocks are `readFrom`'s loop), not a
-    // nesting depth. Ceiling: a few frames per join, so ~10⁵ sequential `if`s
-    // in one module would blow the stack.
-    // The fix is an explicit stack with a resume state for the ≥2-preds arm.
-    fn readVariableRecursive(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
-        const b = @backingInt(block);
-        assert(b < self.block_state.len); // `readVariable` ensured it
-
-        if (!self.block_state.items(.sealed)[b]) {
-            // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
-            const phi = try self.mir.emitPhi(self.gpa, block, &.{});
-            const node: u32 = @intCast(self.incomplete_pool.items.len);
-            try self.incomplete_pool.append(map_gpa, .{
-                .place = place,
-                .value = phi,
-                .next = self.block_state.items(.phis_head)[b],
-            });
-            self.block_state.items(.phis_head)[b] = node;
-            try self.writeVariable(place, block, phi);
-            return phi;
-        }
-        assert(self.block_state.items(.preds_len)[b] != 1); // `readFrom` climbs those
-        // ≥2 preds (or 0: an undefined read in a source-less block).
-        //
-        // Braun emits the phi first and collapses a trivial one by aliasing,
-        // which leaves a dead row behind; on a compact model with long `if`
-        // chains nearly every phi row was dead. So the cell is marked
-        // `pending` instead, and a phi is emitted only when a read cycles
-        // back here (`readFrom` mints it) or the predecessors disagree.
-        // An acyclic trivial join gets no row at all.
-        //
-        // `cell` stays valid across the reads: they may regrow `cells` and
-        // the directory, but a chunk keeps its number in both.
-        const slot = self.slotOf(b);
-        assert(slot != arm_slot); // sealed and not single-predecessor
-        const cell = try self.cellIndex(place, slot);
-        self.cells.items[cell] = pending;
-        const top = self.scratch.items.len;
-        defer self.scratch.shrinkRetainingCapacity(top);
-        try self.readPreds(place, block);
-        const pairs = self.scratch.items[top..];
-        const now = self.cells.items[cell];
-        const val = if (now != pending)
-            try self.fillPhi(@fromBackingInt(@intCast(now - 1)), pairs)
-        else if (sameValue(self.mir, pairs)) |same|
-            same
-        else blk: {
-            const phi = try self.mir.emitPhi(self.gpa, block, pairs);
-            for (pairs) |p| try self.addUser(p.value, phi);
-            break :blk phi;
-        };
-        assert(@backingInt(val) < std.math.maxInt(u32) - 1); // see `writeVariable`
-        self.cells.items[cell] = @backingInt(val) + 1;
-        return val;
     }
 
     /// Braun §addPhiOperands: one operand per predecessor edge, then collapse.

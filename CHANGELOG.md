@@ -20,6 +20,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 - VPI: `vpiRealVal` of a signed value wider than 64 bits, a time past 2^64 (now `BADTIME`), analog `%e`/`%g` of inf/nan, and `vpi_put_delays` on a generate-scope object are fixed (#29).
 - CLI: a NaN `--param` or `--unknown-bound` is refused; `--emit-exe` with `--emit-so` exits 2; `--deny` on a `.v` with `--emit-zig` exits 1; `--emit-osdi` compiles devices whose names contain `Z` (`Zener`, `Zth`) and keeps their source names (#29).
 - Contract: `contract.laneMasks` called at run time on a device without `lane_masks` returned a slice into a stack temporary; it now returns a constant (#29).
+- Elaboration limits lifted: an instance tree of any depth elaborates (E1018, 64 levels, retired), a recursive instantiation (E0905) and an upward defparam whose value reads a cycle (E0907) name the cycle module by module or parameter by parameter, a loop generate that ends is unrolled however many iterations it takes (E0485, 4096, retired) and one that never ends (E0420) names the genvar value that repeats; 10,000 sequential `if`s compile (SSA, the prover and codegen walk them on heap stacks), and emitted indentation stops growing past 32 levels so device text is linear in nesting (#29).
 
 ## v1.1.0 — 2026-10-08
 

@@ -1220,13 +1220,16 @@ test "lower: a 60000-statement dependency chain lowers without exhausting the st
     try std.testing.expectEqual(@as(usize, 0), h.bag.count());
 }
 
-test "§6.6.1 a genvar loop of exactly the unroll limit is legal; a longer one is E0485; an endless one is E0420" {
+test "§6.6.1 a genvar loop that ends is unrolled however long; one that never ends is E0420" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { cond: []const u8, step: []const u8, code: ?diag.Code }{
-        .{ .cond = "i < 4096", .step = "i = i + 1", .code = null }, // ends exactly at the cap
-        .{ .cond = "i < 5000", .step = "i = i + 1", .code = .E0485 }, // ends, past the cap
-        .{ .cond = "i < 3", .step = "i = i - 1", .code = .E0420 }, // runs away
+        .{ .cond = "i < 4096", .step = "i = i + 1", .code = null }, // the old cap
+        .{ .cond = "i < 4097", .step = "i = i + 1", .code = null }, // one past it
+        .{ .cond = "i < 100000", .step = "i = i + 1", .code = null }, // far past it
         .{ .cond = "i < 9000", .step = "i = (i + 1) % 8", .code = .E0420 }, // repeats a value
+        .{ .cond = "i < 3", .step = "i = i", .code = .E0420 }, // repeats at once
+        // A cycle far longer than the old cap.
+        .{ .cond = "i < 300000", .step = "i = (i + 1) % 100000", .code = .E0420 },
     };
     for (cases) |c| {
         const src = try gpa.print(

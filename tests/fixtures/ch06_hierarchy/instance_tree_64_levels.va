@@ -1,14 +1,14 @@
 // §6.2.2 builds a finite instance tree and bounds nothing about its depth.
-// VerA elaborates at most 64 nested instances below the top module (E1018 is
-// the 65th; instance_tree_deeper_than_64_rejected.va). e0 instantiates e1 and
-// so on to e64, which holds the only analog block: 64 nested instances, the
-// deepest tree VerA accepts.
+// e0 instantiates e1 and so on to e64, which holds the only analog block: 64
+// nested instances, the deepest tree VerA accepted until 2026-10-15
+// (instance_tree_65_levels.va is one past it; no limit remains).
 //
 // HAND DERIVATION. The bias pins V(p) = 0.5 and V(n) = 0 at the top, and e64
 // reads them through 64 levels of port connections: V(p, n) = 0.5.
 //
 //! lrm 6.2.2
 //! bias V(p) = 0.5, V(n) = 0
+//! checks 1
 `include "check.vh"
 module e0(p, n);
   inout p, n; electrical p, n;
