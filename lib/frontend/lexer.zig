@@ -27,7 +27,8 @@ pub const Lexer = struct {
         len: u32,
     };
 
-    /// Lexes all of `src`; the list ends with `.eof`.
+    /// Lexes all of `src`; the list ends with `.eof`. Fails only with
+    /// `OutOfMemory`: malformed text becomes `.invalid` rows.
     /// The caller owns the list and frees it with `list.deinit(arena)`.
     pub fn tokenize(arena: std.mem.Allocator, src: []const u8) !TokenList {
         return tokenizeSeeded(arena, src, null);
@@ -328,6 +329,7 @@ pub const Lexer = struct {
         };
     }
 
+    /// The byte `n` past the cursor, or 0 past the end.
     fn peek(self: *const Lexer, n: u32) u8 {
         const i = self.pos + n;
         return if (i < self.src.len) self.src[i] else 0; // NUL never appears in source
@@ -454,7 +456,9 @@ pub fn stringRunaway(src: []const u8, span: diag.Span) StringRunaway {
 /// `parseReal`'s errors. §2.6.1 integer decoding is `integer.parse`, with its
 /// own error set.
 pub const ValueError = error{
-    /// Value does not fit in 64 bits.
+    /// `std.fmt.parseFloat` refused the text. The lexer never produces such a
+    /// literal; a value too large for f64 is not this error but inf (§2.6.2
+    /// leaves it to IEEE 754).
     Overflow,
     /// Literal longer than the fixed decode buffer (see `parseReal`).
     LiteralTooLong,
@@ -510,7 +514,11 @@ pub fn parseReal(text: []const u8) ValueError!f64 {
 
 /// Decodes a `.string_literal`'s text (quotes included) into its bytes
 /// (LRM §2.7 Table 2-2: \n \t \\ \" and \ddd, 1 to 3 octal digits).
-/// Asserts `text` is quoted. The caller owns the result, allocated with `gpa`.
+/// An escape Table 2-2 does not list decodes to the escaped character alone
+/// (`\q` is `q`), and an octal escape above `\377` keeps its low 8 bits;
+/// `badEscape` finds both so the caller can report them first.
+/// Asserts `text` is quoted. Caller owns returned memory and must free it
+/// with `gpa`.
 pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
     std.debug.assert(text.len >= 2 and text[0] == '"' and text[text.len - 1] == '"');
     const body = text[1 .. text.len - 1];

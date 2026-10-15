@@ -13,44 +13,44 @@ const SourceFile = ast.SourceFile;
 
 /// A.8.6 unary_operator. Stored in the `extra` column of a `.unary` node.
 pub const UnaryOp = enum(u8) {
-    plus, // +      §4.2.1
-    minus, // -      §4.2.1
-    logical_not, // !      §4.2.7
-    bit_not, // ~      §4.2.8
-    reduce_and, // &      §4.2.9
-    reduce_nand, // ~&     §4.2.9
-    reduce_or, // |      §4.2.9
-    reduce_nor, // ~|     §4.2.9
-    reduce_xor, // ^      §4.2.9
-    reduce_xnor, // ~^ ^~  §4.2.9
+    plus, // +      §4.2.4
+    minus, // -      §4.2.4
+    logical_not, // !      §4.2.8
+    bit_not, // ~      §4.2.9
+    reduce_and, // &      §4.2.10
+    reduce_nand, // ~&     §4.2.10
+    reduce_or, // |      §4.2.10
+    reduce_nor, // ~|     §4.2.10
+    reduce_xor, // ^      §4.2.10
+    reduce_xnor, // ~^ ^~  §4.2.10
 };
 
 /// A.8.6 binary_operator. Stored in the `extra` column of a `.binary` node.
 pub const BinaryOp = enum(u8) {
-    add, // +    §4.2.1
-    sub, // -    §4.2.1
-    mul, // *    §4.2.1
-    div, // /    §4.2.1
-    mod, // %    §4.2.1
-    pow, // **   §4.2.1
-    eq, // ==   §4.2.5
-    neq, // !=   §4.2.5
-    case_eq, // ===  §4.2.5 (digital; rejected in the analog subset, annex C)
-    case_neq, // !==  §4.2.5
-    lt, // <    §4.2.4
-    le, // <=   §4.2.4
-    gt, // >    §4.2.4
-    ge, // >=   §4.2.4
-    logical_and, // &&   §4.2.7
-    logical_or, // ||   §4.2.7
-    bit_and, // &    §4.2.8
-    bit_or, // |    §4.2.8
-    bit_xor, // ^    §4.2.8
-    bit_xnor, // ~^ ^~ §4.2.8
-    shl, // <<   §4.2.10
-    shr, // >>   §4.2.10
-    ashl, // <<<  §4.2.10
-    ashr, // >>>  §4.2.10
+    add, // +    §4.2.4
+    sub, // -    §4.2.4
+    mul, // *    §4.2.4
+    div, // /    §4.2.4
+    mod, // %    §4.2.4
+    pow, // **   §4.2.4
+    eq, // ==   §4.2.7
+    neq, // !=   §4.2.7
+    case_eq, // ===  §4.2.6 (digital; rejected in the analog subset, annex C)
+    case_neq, // !==  §4.2.6
+    lt, // <    §4.2.5
+    le, // <=   §4.2.5
+    gt, // >    §4.2.5
+    ge, // >=   §4.2.5
+    logical_and, // &&   §4.2.8
+    logical_or, // ||   §4.2.8
+    bit_and, // &    §4.2.9
+    bit_or, // |    §4.2.9
+    bit_xor, // ^    §4.2.9
+    bit_xnor, // ~^ ^~ §4.2.9
+    shl, // <<   §4.2.11
+    shr, // >>   §4.2.11
+    ashl, // <<<  §4.2.11
+    ashr, // >>>  §4.2.11
 };
 
 // ---------------------------------------------------------------------------
@@ -91,12 +91,15 @@ pub const ExprTag = enum(u8) {
     hier_ident,
 
     // ---- operators: §4.2 ----
-    /// `lhs` = operand, `extra` = @intFromEnum(UnaryOp).
+    /// `lhs` = operand, `extra` = the `UnaryOp`'s `@backingInt`. Read it
+    /// with `ExprStore.unOp`.
     unary,
-    /// `lhs`, `rhs` operands, `extra` = @intFromEnum(BinaryOp).
+    /// `lhs`, `rhs` operands, `extra` = the `BinaryOp`'s `@backingInt`. Read
+    /// it with `ExprStore.binOp`.
     binary,
-    /// §4.2.12 `?:`: `lhs` = cond, `rhs` = then, `extra` = @intFromEnum(else).
-    /// Read the third operand with `ExprStore.ternaryElse`.
+    /// §4.2.12 `?:`: `lhs` = cond, `rhs` = then, `extra` = the else
+    /// operand's `ExprId` as its `@backingInt`. Read the third operand with
+    /// `ExprStore.ternaryElse`.
     ternary,
 
     // ---- calls (all: `str` = callee name, `extra` = ExprId list offset) ----
@@ -226,6 +229,10 @@ pub const ExprStore = struct {
     }
 
     /// Appends one row (all columns in lockstep) and returns its handle.
+    /// Ids are dense and in append order. On OOM nothing is appended.
+    /// Invalidates column slices taken from `nodes`.
+    /// Asserts the store holds fewer than `maxInt(u32)` rows (that value is
+    /// `ExprId.none`).
     pub fn add(self: *ExprStore, gpa: std.mem.Allocator, node: Node) !ExprId {
         const id: u32 = @intCast(self.nodes.len);
         std.debug.assert(id != @backingInt(ExprId.none));
@@ -233,7 +240,8 @@ pub const ExprStore = struct {
         return @fromBackingInt(@intCast(id));
     }
 
-    /// Appends a `.real_literal` row whose value lives in `reals`.
+    /// Appends a `.real_literal` row whose value lives in `reals`. On OOM
+    /// neither table grows.
     pub fn addReal(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, value: f64) !ExprId {
         const idx: u32 = @intCast(self.reals.items.len);
         try self.reals.append(gpa, value);
@@ -246,15 +254,17 @@ pub const ExprStore = struct {
         return self.addIntLiteral(gpa, main_tok, .{ .value = value, .width = 0, .signed = true });
     }
 
-    /// Appends an `.int_literal` row whose value lives in `ints`.
+    /// Appends an `.int_literal` row whose value lives in `ints`, keeping its
+    /// width, sign and radix. On OOM neither table grows.
     pub fn addIntLiteral(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: IntLiteral) !ExprId {
         const idx: u32 = @intCast(self.ints.items.len);
         try self.ints.append(gpa, literal);
         return self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
     }
 
-    /// Appends a `.logic_literal` row. Takes ownership of `literal.planes`,
-    /// which must be allocated with `gpa`; `deinit` frees it.
+    /// Appends a `.logic_literal` row. On success the store owns
+    /// `literal.planes`, which must be allocated with `gpa`; `deinit` frees
+    /// it. On OOM nothing is stored and the planes stay the caller's.
     pub fn addLogic(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: Integer.Literal) !ExprId {
         const idx: u32 = @intCast(self.logic.items.len);
         try self.logic.append(gpa, literal);
@@ -325,7 +335,8 @@ pub const ExprStore = struct {
         return self.reals.items[self.extraOf(id)];
     }
 
-    /// Stores a variable-arity list; returns the offset to put in a row's `extra`.
+    /// Stores a variable-arity list; returns the offset to put in a row's
+    /// `extra`. Invalidates slices returned by `list`, `args` and `nameParts`.
     fn addList(self: *ExprStore, gpa: std.mem.Allocator, items: []const u32) !u32 {
         const off: u32 = @intCast(self.pool.items.len);
         try self.pool.ensureUnusedCapacity(gpa, items.len + 1);
@@ -342,21 +353,22 @@ pub const ExprStore = struct {
         return self.addList(gpa, @ptrCast(items));
     }
 
-    /// Returns the list stored at pool offset `off`. The slice is invalidated
-    /// by the next list append.
+    /// Returns the list stored at pool offset `off`, which must be an offset
+    /// `addExprList` or `addStrList` returned. The slice is invalidated by the
+    /// next list append.
     pub fn list(self: *const ExprStore, off: u32) []const u32 {
         const n = self.pool.items[off];
         return self.pool.items[off + 1 ..][0..n];
     }
 
-    /// Arguments of any call-shaped tag (`call`, `builtin_call`, `sys_call`,
-    /// `filter_call`, `noise_call`, `event_function`) and the elements of
-    /// `concat` / `assign_pattern`.
+    /// Returns the arguments of any call-shaped tag (`call`, `builtin_call`,
+    /// `sys_call`, `filter_call`, `noise_call`, `event_function`) or the
+    /// elements of a `concat` / `assign_pattern`. Same lifetime as `list`.
     pub fn args(self: *const ExprStore, id: ExprId) []const ExprId {
         return @ptrCast(self.list(self.extraOf(id)));
     }
-    /// Parts of a `.hier_ident`, and the analysis names of
-    /// `.event_initial_step` / `.event_final_step`.
+    /// Returns the parts of a `.hier_ident`, or the analysis names of an
+    /// `.event_initial_step` / `.event_final_step`. Same lifetime as `list`.
     pub fn nameParts(self: *const ExprStore, id: ExprId) []const StrId {
         return @ptrCast(self.list(self.extraOf(id)));
     }

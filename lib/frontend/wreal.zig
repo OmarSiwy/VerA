@@ -12,7 +12,13 @@ const Ast = @import("ast.zig");
 // elaborated net, which `declare` builds after this.
 
 /// Reports every E0918 and E0919 in `file` into `bag`. Runs on the parsed file,
-/// before elaboration, so a violation gets the LRM's reason.
+/// before elaboration, so a violation gets the LRM's reason. `starts` is the
+/// token list's `.start` column and places each diagnostic; a token index
+/// past it is clamped to the last token, so `starts` must not be empty (a
+/// token list always ends with `.eof`).
+/// An ordered connection binds the n-th port of A.1.3's `list_of_ports`, so a
+/// concatenated port (`.p({a, b})`) counts once.
+/// Fails only with `OutOfMemory`, from `bag`.
 pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) std.mem.Allocator.Error!void {
     const ex = &file.exprs;
     for (file.modules) |*m| {

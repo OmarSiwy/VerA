@@ -1,4 +1,6 @@
 //! Token kinds, the keyword table and the §10.6 reserved-word sets (LRM §2.5-§2.8, §10.6, annex B).
+//! In: a word's spelling. Out: its `Tag` (`lookupKeyword`), whether a §10.6 set
+//! reserves it (`isReserved`), and the call group the parser files it under.
 //! A stored token is `{tag, start}`; its end is recomputed by re-lexing from `start`.
 //! `Tag` is ordered `invalid, eof, literals, symbols, keywords`, keywords contiguous and last,
 //! so `isKeyword` is one compare. Every keyword tag is `kw_` ++ its source spelling and
@@ -323,6 +325,8 @@ pub const Tag = enum(u8) {
 
     /// Returns the source spelling, for diagnostics. `null` when the tag does not
     /// imply the text (identifiers, literals, `kw_reserved`); slice the source then.
+    /// `.dir_outside_module` stands for three directives and returns a
+    /// description instead of one spelling.
     pub fn lexeme(tag: Tag) ?[]const u8 {
         return switch (tag) {
             .invalid, .eof, .kw_reserved => null,

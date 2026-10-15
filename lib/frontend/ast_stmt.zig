@@ -225,9 +225,13 @@ pub const Edge = enum {
 
 /// Visits every edge of statement `id`: `v.expr(e, edge)` for each of its own
 /// expressions and `v.stmt(s)` for each child statement, in source order,
-/// except that an assignment's intra-assignment timing comes after its
-/// value. `.none` operands and children are passed through. `v` is
-/// duck-typed; this is the statement counterpart of `ExprStore.children`.
+/// except that an assignment's intra-assignment timing (its `repeat` count,
+/// then its event or delay) comes after its value. An `-> event` target is
+/// an identity, so only its index expressions are visited. A block's own
+/// declarations are not statements and are not visited. `.none` operands and
+/// children are passed through. `v` is duck-typed (`expr(ExprId, Edge)` and
+/// `stmt(StmtId)`, both returning the same error union); this is the
+/// statement counterpart of `ExprStore.children`. `id` must not be `.none`.
 pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
     switch (self.stmt(id)) {
         .empty, .disable => {},
@@ -300,7 +304,8 @@ pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
 /// An array actual written as an A.8.1 assignment pattern (§4.7.2.3 "an
 /// array assignment pattern of analog variables") yields its elements.
 /// The appended ids are the lvalues as written (`x[i]` stays `x[i]`); see
-/// `lvalueBase` for the declaration it names.
+/// `lvalueBase` for the declaration it names. A `.none` `id` appends nothing.
+/// Invalidates `out`'s element pointers if it grows; `out` is grown with `gpa`.
 pub fn stmtWrites(self: *const SourceFile, funcs: []const FuncDecl, id: StmtId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
     if (id == .none) return;
     if (self.stmt(id) == .sys_task) {
