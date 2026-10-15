@@ -191,7 +191,9 @@ pub fn release(self: *Run, slot: u32, force: bool) Error!void {
     if (layer.*) |old| _ = try exec.stopRange(self, old.start, old.end);
     layer.* = null;
     const held = layers.assign;
-    if (layers.force == null and layers.assign == null) _ = self.overrides.remove(slot);
+    // A forced select is a layer of its own (§9.3.2), released only by its
+    // own select: the slot stays held while one remains.
+    if (layers.force == null and layers.assign == null and layers.parts.items.len == 0) _ = self.overrides.remove(slot);
     // §9.3.2: a released net is its drivers' again; a released
     // variable keeps its value, unless an assign holds it.
     if (force) {

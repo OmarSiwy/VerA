@@ -1888,7 +1888,7 @@ fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: SinkOf) Erro
     };
     try compile.checkExpr(r, arg);
     if (index != .none and !compile.constantExpression(r, index)) return r.exprFail(arg, refused);
-    const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, "an output port can only drive a net");
+    const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, not_net);
     const sel = (try evaluate.selection(r, r.arena, arg)) orelse return r.exprFail(arg, "§12.3.9.2: the select's index is x or z");
     if (sel.first < 0 or sel.first + sel.count > e.nets.items[net].resolved.width) return r.exprFail(arg, "§12.3.9.2: the select is outside its net");
     return .{ .net = net, .lo = @intCast(sel.first), .width = sel.count };
