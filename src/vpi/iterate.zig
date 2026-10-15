@@ -336,6 +336,7 @@ pub const Relations = struct {
     /// Scope -> its `.port` rows.
     ports: Csr,
 
+    /// Frees the four indexes; `gpa` must be `Design.gpa`, which built them.
     pub fn deinit(r: *Relations, gpa: std.mem.Allocator) void {
         r.users.deinit(gpa);
         r.by_obj.deinit(gpa);
@@ -575,4 +576,45 @@ pub fn destroyIter(d: *Design, it: *Iter) void {
     _ = d.iters.remove(@intFromPtr(it));
     if (it.handles) |hs| d.gpa.free(hs);
     d.gpa.destroy(it);
+}
+
+// ---------------------------------------------------------------------------
+// Tests. The relations over designs are test.zig's.
+// ---------------------------------------------------------------------------
+
+test "Csr: every key's rows in the order given, against a scan of the pairs" {
+    var prng: std.Random.DefaultPrng = .init(0x5eed);
+    const random = prng.random();
+    var pairs: [64][2]u32 = undefined;
+    for (0..40) |round| {
+        // 1..5 keys, 0..64 pairs: empty keys, empty tables and repeats.
+        const n_keys: usize = round % 5 + 1;
+        const n = random.uintLessThan(usize, pairs.len + 1);
+        for (pairs[0..n], 0..) |*p, i| p.* = .{ random.uintLessThan(u32, @intCast(n_keys)), @intCast(i) };
+        var c: Csr = try .init(std.testing.allocator, n_keys, pairs[0..n]);
+        defer c.deinit(std.testing.allocator);
+        for (0..n_keys) |key| {
+            var want: [64]u32 = undefined;
+            var w: usize = 0;
+            for (pairs[0..n]) |p| {
+                if (p[0] != key) continue;
+                want[w] = p[1];
+                w += 1;
+            }
+            try std.testing.expectEqualSlices(u32, want[0..w], c.of(@intCast(key)));
+        }
+        // A key past the table has no rows.
+        try std.testing.expectEqual(@as(usize, 0), c.of(@intCast(n_keys)).len);
+        try std.testing.expectEqual(@as(usize, 0), c.of(std.math.maxInt(u32)).len);
+    }
+}
+
+fn csrOnce(a: std.mem.Allocator, pairs: []const [2]u32) !void {
+    var c: Csr = try .init(a, 3, pairs);
+    c.deinit(a);
+}
+
+test "Csr.init frees what it built when an allocation fails" {
+    const pairs = [_][2]u32{ .{ 2, 0 }, .{ 0, 1 }, .{ 2, 2 } };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, csrOnce, .{@as([]const [2]u32, &pairs)});
 }

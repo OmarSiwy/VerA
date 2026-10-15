@@ -80,6 +80,8 @@ pub const ByOwner = struct {
     /// after the last.
     next: []u32 = &.{},
 
+    /// Indexes `file.attributes` in one pass, O(bindings). Caller owns the
+    /// result and frees it with `deinit` and the same `gpa`.
     pub fn init(gpa: std.mem.Allocator, file: *const Ast.SourceFile) error{OutOfMemory}!ByOwner {
         const bindings = file.attributes.items;
         var self: ByOwner = .{ .next = try gpa.alloc(u32, bindings.len) };
@@ -94,6 +96,7 @@ pub const ByOwner = struct {
         return self;
     }
 
+    /// Frees both tables; `gpa` must be the one `init` used.
     pub fn deinit(self: *ByOwner, gpa: std.mem.Allocator) void {
         self.heads.deinit(gpa);
         gpa.free(self.next);

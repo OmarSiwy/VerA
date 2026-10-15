@@ -5,9 +5,11 @@
 //! src/vpi/vpi_user.h).
 
 const std = @import("std");
+const Ast = @import("frontend").Ast;
 const Elaborate = @import("ir").Elaborate;
 const callback = @import("callback.zig");
 const code = @import("code.zig");
+const delays = @import("delays.zig");
 const handle = @import("handle.zig");
 const iterate = @import("iterate.zig");
 const property = @import("property.zig");
@@ -934,4 +936,236 @@ test "IEEE 1364-2005 §26.6.13 switches, pull sources and strengths; §26.6.6 l 
     // pullup and the switch drive it too.
     try std.testing.expectEqual(@as(usize, 1), count(code.vpiLocalDriver, ux));
     try std.testing.expectEqual(@as(usize, 3), count(code.vpiDriver, ux));
+}
+
+// ---- root.zig's own pieces --------------------------------------------------
+
+test "OptU32 packs null as none and round-trips every other value" {
+    try std.testing.expectEqual(root.OptU32.none, root.OptU32.of(null));
+    try std.testing.expectEqual(@as(?u32, null), root.OptU32.none.get());
+    for ([_]u32{ 0, 1, 0x7fff_ffff, std.math.maxInt(u32) - 1 }) |v| try std.testing.expectEqual(@as(?u32, v), root.OptU32.of(v).get());
+}
+
+test "every declared class has a vpiType with a spelling" {
+    for (std.enums.values(root.Kind)) |k| {
+        if (k == .code) continue;
+        // A variable array's type follows its element type.
+        for ([_]Ast.Type{ .integer, .real }) |ty| {
+            const o: Obj = .{ .kind = k, .owner = .none, .name = "", .full = "", .ty = ty };
+            try std.testing.expect(!std.mem.eql(u8, "vpiUndefined", root.typeName(root.typeOf(&o))));
+        }
+    }
+}
+
+test "§12.2: a message past the 512-byte buffer is cut short and still terminated" {
+    close();
+    const long: [600]u8 = @splat('m');
+    root.fail("LONG", "{s}", .{&long});
+    var info: ErrorInfo = undefined;
+    try std.testing.expectEqual(vpiError, vpi_chk_error(&info));
+    const message = std.mem.span(info.message);
+    try std.testing.expectEqual(@as(usize, 511), message.len);
+    try std.testing.expect(std.mem.allEqual(u8, message, 'm'));
+    try std.testing.expectEqualStrings("LONG", std.mem.span(info.code));
+    // The application's call site is reported absent, not invented.
+    try std.testing.expect(info.file == null);
+    try std.testing.expectEqual(@as(c_int, 0), info.line);
+    // vpi_chk_error leaves the status as it found it.
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}
+
+var probe_starting = false;
+var probe_get: c_int = 0;
+var probe_refused = false;
+var probe_timed: vpiHandle = null;
+var probe_compile: vpiHandle = null;
+
+fn noteNothing(_: *callback.CbData) callconv(.c) c_int {
+    return 0;
+}
+
+fn probeStartup() callconv(.c) void {
+    probe_starting = root.starting;
+    probe_get = vpi_get(vpiType, null);
+    var info: ErrorInfo = undefined;
+    _ = vpi_chk_error(&info);
+    probe_refused = info.code != null and std.mem.eql(u8, std.mem.span(info.code), "STARTUP");
+    var t: callback.Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 1, .real = 0 };
+    const timed: callback.CbData = .{ .reason = callback.cbAfterDelay, .cb_rtn = noteNothing, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    probe_timed = callback.vpi_register_cb(&timed);
+    const compiled: callback.CbData = .{ .reason = callback.cbEndOfCompile, .cb_rtn = noteNothing, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    probe_compile = callback.vpi_register_cb(&compiled);
+}
+
+test "IEEE 1364-2005 §26.2.4: during startup only the registrations answer" {
+    close();
+    defer close();
+    const table = [_]?StartupFn{ &probeStartup, null };
+    runStartupTable(&table);
+    try std.testing.expect(probe_starting);
+    try std.testing.expect(!root.starting);
+    try std.testing.expectEqual(vpiUndefined, probe_get);
+    try std.testing.expect(probe_refused);
+    // A time callback waits for the run; an end-of-compile one is legal now.
+    try std.testing.expect(probe_timed == null);
+    try std.testing.expect(probe_compile != null);
+}
+
+test "§12.17 vpi_get_vlog_info: the host's invocation and the product" {
+    var argv0 = "vera".*;
+    var argv = [_][*c]u8{&argv0};
+    root.setInvocation(1, &argv);
+    defer root.setInvocation(0, null);
+    var info: root.VlogInfo = undefined;
+    try std.testing.expectEqual(@as(c_int, 1), root.vpi_get_vlog_info(&info));
+    try std.testing.expectEqual(@as(c_int, 1), info.argc);
+    try std.testing.expectEqualStrings("vera", std.mem.span(info.argv[0]));
+    try std.testing.expectEqualStrings("VerA", std.mem.span(info.product));
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_get_vlog_info(null));
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}
+
+test "a pointer one row below the object array is no handle" {
+    var res = try openSource(nested_src);
+    defer res.deinit();
+    defer close();
+    const base = @intFromPtr(root.design.?.objects.ptr);
+    try std.testing.expect(asObj(@ptrFromInt(base - @sizeOf(Obj))) == null);
+    try std.testing.expect(root.issued(@ptrFromInt(base - @sizeOf(Obj))) == null);
+    const first = asObj(@ptrFromInt(base)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first == &root.design.?.objects[0]);
+}
+
+test "§12.19-§12.21, IEEE 1364-2005 §27.18 and §26.6.43: the lookup routines' refusals" {
+    var res = try openSource(nested_src);
+    defer res.deinit();
+    defer close();
+    const top = vpi_handle_by_name("top", null);
+    // §12.21: a NULL name; a name absent from the design and from a scope.
+    try std.testing.expect(vpi_handle_by_name(null, null) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    try std.testing.expect(vpi_handle_by_name("top.nothing", null) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    try std.testing.expect(vpi_handle_by_name("nothing", top) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    // §27.18: a NULL index array, and two indices on a class that takes one.
+    const indices = [_]c_int{ 0, 1 };
+    try std.testing.expect(handle.vpi_handle_by_multi_index(top, 1, null) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    try std.testing.expect(handle.vpi_handle_by_multi_index(top, 2, &indices) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    // §26.6.43: an iterator's one edge is vpiUse, the reference it was made
+    // from; any other is no relationship.
+    const itr = vpi_iterate(vpiNet, top);
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_handle(root.vpiUse, itr), top));
+    try std.testing.expect(vpi_handle(vpiScope, itr) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_free_object(itr));
+    // A relationship a net's diagram does not draw.
+    try std.testing.expect(vpi_handle(vpiPosNode, vpi_handle_by_name("top.mid", null)) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}
+
+test "IEEE 1364-2005 §26.6.34: a forever loop is a vpiForever, and spells its type" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module f;
+        \\  reg r;
+        \\  initial forever #5 r = ~r;
+        \\endmodule
+    );
+    defer h.deinit();
+    const procs = vpi_iterate(code.vpiProcess, vpi_handle_by_name("f", null));
+    const init = vpi_scan(procs);
+    _ = vpi_free_object(procs);
+    const loop = vpi_handle(code.vpiStmt, init);
+    try std.testing.expectEqual(code.vpiForever, vpi_get(vpiType, loop));
+    try std.testing.expectEqualStrings("vpiForever", std.mem.span(vpi_get_str(vpiType, loop)));
+}
+
+test "§12.11: a continuous assignment's delays, derived where not written, and the counts refused" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\`timescale 1ns/1ns
+        \\module d;
+        \\  reg a;
+        \\  wire w;
+        \\  assign #(2, 7) w = a;
+        \\endmodule
+    );
+    defer h.deinit();
+    const assigns = vpi_iterate(code.vpiContAssign, vpi_handle_by_name("d", null));
+    const ca = vpi_scan(assigns) orelse return error.TestUnexpectedResult;
+    _ = vpi_free_object(assigns);
+    var da: [3]callback.Time = undefined;
+    var dl: delays.Delay = .{ .da = &da, .no_of_delays = 3, .time_type = callback.vpiScaledRealTime, .mtm_flag = 0, .append_flag = 0, .pulsere_flag = 0 };
+    delays.vpi_get_delays(ca, &dl);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    // Rise and fall as written; turn-off is IEEE 1364 §7.14's min(rise, fall).
+    for (da, [_]f64{ 2, 7, 2 }) |t, want| try std.testing.expectEqual(want, t.real);
+    for ([_]c_int{ 0, 4 }) |n| {
+        dl.no_of_delays = n;
+        delays.vpi_get_delays(ca, &dl);
+        try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    }
+}
+
+test "§12.29: vpi_put_delays reaches the engine driver of a gate in a generated instance" {
+    // The instance's model scope (1) is not its engine scope: the loop
+    // iteration `b[0]` is an engine scope of its own between it and `top`.
+    var h: run.Harness = undefined;
+    try h.init(
+        \\`timescale 1ns/1ns
+        \\module leaf; reg a; wire y; buf g(y, a); endmodule
+        \\module top;
+        \\  genvar i;
+        \\  generate for (i = 0; i < 1; i = i + 1) begin : b
+        \\    leaf u();
+        \\  end endgenerate
+        \\endmodule
+    );
+    defer h.deinit();
+    const g = vpi_handle_by_name("top.b[0].u.g", null) orelse return error.TestUnexpectedResult;
+    var da = [2]callback.Time{
+        .{ .type = callback.vpiSimTime, .high = 0, .low = 3, .real = 0 },
+        .{ .type = callback.vpiSimTime, .high = 0, .low = 4, .real = 0 },
+    };
+    var dl: delays.Delay = .{ .da = &da, .no_of_delays = 2, .time_type = callback.vpiSimTime, .mtm_flag = 0, .append_flag = 0, .pulsere_flag = 0 };
+    delays.vpi_put_delays(g, &dl);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    // The one driver the gate became: rise 3, fall 4, turn-off min(3, 4).
+    const tok = (asObj(g) orelse return error.TestUnexpectedResult).src_tok;
+    var hits: usize = 0;
+    for (h.run.drivers) |drv| {
+        if (drv.tok != tok) continue;
+        hits += 1;
+        try std.testing.expect(drv.delay.present);
+        try std.testing.expectEqual(@as(u64, 3), drv.delay.rise);
+        try std.testing.expectEqual(@as(u64, 4), drv.delay.fall);
+        try std.testing.expectEqual(@as(u64, 3), drv.delay.off);
+    }
+    try std.testing.expectEqual(@as(usize, 1), hits);
+}
+
+test "§12.30/IEEE 1364 §19.8: a scaled time is in the unit of the object's own module, past a generate" {
+    // `leaf` is in microseconds, `top` in nanoseconds, and the tick is the
+    // finest precision, 1 ns. `u`'s model scope (1) is the engine's loop
+    // iteration `b[0]`, a scope of `top`'s, so only the engine scope finds
+    // `leaf`'s unit: 2 us is 2000 ticks, where `top`'s unit would make it 2.
+    var h: run.Harness = undefined;
+    try h.init(
+        \\`timescale 1us/1ns
+        \\module leaf; reg a; endmodule
+        \\`timescale 1ns/1ns
+        \\module top;
+        \\  genvar i;
+        \\  generate for (i = 0; i < 1; i = i + 1) begin : b
+        \\    leaf u();
+        \\  end endgenerate
+        \\endmodule
+    );
+    defer h.deinit();
+    const a = vpi_handle_by_name("top.b[0].u.a", null) orelse return error.TestUnexpectedResult;
+    const two: callback.Time = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 2 };
+    try std.testing.expectEqual(@as(?u64, 2000), run.ticksOf(two, a));
 }

@@ -1054,3 +1054,205 @@ test "registrations VerA cannot keep are refused with vpiError" {
     try std.testing.expect(vpi_register_cb(&stmt) == null);
     try std.testing.expectEqual(@as(usize, 0), cbs.items.len);
 }
+
+test "the reason classes: analog, startup and time" {
+    try std.testing.expect(!isAnalogReason(acbInitialStep - 1));
+    try std.testing.expect(isAnalogReason(acbInitialStep));
+    try std.testing.expect(isAnalogReason(acbAcceptedPoint));
+    try std.testing.expect(!isAnalogReason(acbAcceptedPoint + 1));
+    for ([_]c_int{ cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError }) |r| try std.testing.expect(startupReason(r));
+    for ([_]c_int{ cbValueChange, cbAfterDelay, cbInteractiveScopeChange, cbTchkViolation, acbInitialStep }) |r| try std.testing.expect(!startupReason(r));
+    for ([_]c_int{ cbAtStartOfSimTime, cbReadWriteSynch, cbReadOnlySynch, cbNextSimTime, cbAfterDelay }) |r| try std.testing.expect(isTimeReason(r));
+    for ([_]c_int{ cbValueChange, cbStmt, cbEndOfCompile, acbAbsTime }) |r| try std.testing.expect(!isTimeReason(r));
+}
+
+test "§12.31.3: an analog time is a finite, non-negative vpiScaledRealTime, forced in order" {
+    reset();
+    defer reset();
+    var t: Time = .{ .type = vpiScaledRealTime, .high = 0, .low = 0, .real = 0.5 };
+    var d: CbData = .{ .reason = acbAbsTime, .cb_rtn = onStart, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(vpi_register_cb(&d) == null);
+    d.time = &t;
+    t.type = vpiSimTime;
+    try std.testing.expect(vpi_register_cb(&d) == null);
+    t.type = vpiScaledRealTime;
+    for ([_]f64{ -1, std.math.nan(f64), std.math.inf(f64) }) |bad| {
+        t.real = bad;
+        try std.testing.expect(vpi_register_cb(&d) == null);
+        try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    }
+    t.real = 0.5;
+    try std.testing.expect(vpi_register_cb(&d) != null);
+    // Outside an analysis an elapsed time counts from 0.
+    d.reason = acbElapsedTime;
+    t.real = 0.25;
+    try std.testing.expect(vpi_register_cb(&d) != null);
+    // nextForced: strictly after `after`, at most `until`.
+    try std.testing.expectEqual(@as(?f64, 0.25), nextForced(0, 1));
+    try std.testing.expectEqual(@as(?f64, 0.5), nextForced(0.25, 1));
+    try std.testing.expectEqual(@as(?f64, null), nextForced(0.5, 1));
+    try std.testing.expectEqual(@as(?f64, 0.25), nextForced(0, 0.3));
+    try std.testing.expectEqual(@as(?f64, null), nextForced(0.3, 0.4));
+}
+
+var timed_calls: u32 = 0;
+fn onTimed(_: *CbData) callconv(.c) c_int {
+    timed_calls += 1;
+    return 0;
+}
+
+test "§12.31.3: a timed analog callback fires once, at its time up to rounding, then is retired" {
+    reset();
+    defer reset();
+    timed_calls = 0;
+    var t: Time = .{ .type = vpiScaledRealTime, .high = 0, .low = 0, .real = 1.0 };
+    const d: CbData = .{ .reason = acbAbsTime, .cb_rtn = onTimed, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    const h = vpi_register_cb(&d);
+    try std.testing.expect(h != null);
+    fireTimed(0.5);
+    try std.testing.expectEqual(@as(u32, 0), timed_calls);
+    fireTimed(1.0 + 1e-15);
+    try std.testing.expectEqual(@as(u32, 1), timed_calls);
+    try std.testing.expect(asCb(h) == null);
+    fireTimed(1.0);
+    try std.testing.expectEqual(@as(u32, 1), timed_calls);
+    try std.testing.expectEqual(@as(usize, 0), cbs.items.len);
+}
+
+var verdicts: [2]c_int = .{ 0, 0 };
+var verdict_calls: u32 = 0;
+fn verdict(d: *CbData) callconv(.c) c_int {
+    verdict_calls += 1;
+    return verdicts[@intCast(d.index)];
+}
+
+test "§12.31.3 acbConvergenceTest: every callback runs, and any nonzero rejects" {
+    reset();
+    defer reset();
+    for (0..2) |i| {
+        const d: CbData = .{ .reason = acbConvergenceTest, .cb_rtn = verdict, .obj = null, .time = null, .value = null, .index = @intCast(i), .user_data = null };
+        try std.testing.expect(vpi_register_cb(&d) != null);
+    }
+    verdict_calls = 0;
+    verdicts = .{ 0, 0 };
+    try std.testing.expect(!convergenceRejected());
+    // The first rejects; the second still runs.
+    verdicts = .{ 7, 0 };
+    try std.testing.expect(convergenceRejected());
+    try std.testing.expectEqual(@as(u32, 4), verdict_calls);
+}
+
+fn registerAt(reason: c_int, low: c_uint) !void {
+    var t: Time = .{ .type = vpiSimTime, .high = 0, .low = low, .real = 0 };
+    const d: CbData = .{ .reason = reason, .cb_rtn = onStart, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    if (vpi_register_cb(&d) == null) return error.TestUnexpectedResult;
+}
+
+test "§12.31.2 nextDue: the earliest pending time callback; cbNextSimTime holds no time" {
+    root.close();
+    defer root.close();
+    try registerAt(cbAfterDelay, 5);
+    try registerAt(cbReadOnlySynch, 9);
+    const next: CbData = .{ .reason = cbNextSimTime, .cb_rtn = onStart, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(vpi_register_cb(&next) != null);
+    try std.testing.expectEqual(@as(?u64, 5), nextDue(0, true));
+    try std.testing.expectEqual(@as(?u64, 5), nextDue(5, true));
+    try std.testing.expectEqual(@as(?u64, 9), nextDue(5, false));
+    try std.testing.expectEqual(@as(?u64, null), nextDue(9, false));
+}
+
+var chain_calls: u32 = 0;
+fn chain(_: *CbData) callconv(.c) c_int {
+    chain_calls += 1;
+    if (chain_calls == 1) {
+        const again: CbData = .{ .reason = cbEndOfCompile, .cb_rtn = chain, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+        std.debug.assert(vpi_register_cb(&again) != null);
+    }
+    return 0;
+}
+
+test "a callback registered during a dispatch waits for the next occurrence" {
+    reset();
+    defer reset();
+    chain_calls = 0;
+    const first: CbData = .{ .reason = cbEndOfCompile, .cb_rtn = chain, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(vpi_register_cb(&first) != null);
+    endOfCompile();
+    try std.testing.expectEqual(@as(u32, 1), chain_calls);
+    try std.testing.expectEqual(@as(usize, 2), cbs.items.len);
+    endOfCompile();
+    try std.testing.expectEqual(@as(u32, 3), chain_calls);
+}
+
+var victim: vpiHandle = null;
+var victim_calls: u32 = 0;
+fn killer(_: *CbData) callconv(.c) c_int {
+    std.debug.assert(vpi_remove_cb(victim) == 1);
+    return 0;
+}
+fn victimRoutine(_: *CbData) callconv(.c) c_int {
+    victim_calls += 1;
+    return 0;
+}
+
+test "§12.34: a callback removed by an earlier one in the same dispatch does not fire" {
+    reset();
+    defer reset();
+    victim_calls = 0;
+    const k: CbData = .{ .reason = cbStartOfSimulation, .cb_rtn = killer, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    const v: CbData = .{ .reason = cbStartOfSimulation, .cb_rtn = victimRoutine, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(vpi_register_cb(&k) != null);
+    victim = vpi_register_cb(&v);
+    try std.testing.expect(victim != null);
+    startOfSimulation();
+    try std.testing.expectEqual(@as(u32, 0), victim_calls);
+    // The sweep after the dispatch dropped the removed record.
+    try std.testing.expectEqual(@as(usize, 1), cbs.items.len);
+}
+
+var pli_calls: u32 = 0;
+fn onPli(_: *CbData) callconv(.c) c_int {
+    pli_calls += 1;
+    // A routine failing inside cbPLIError fires no second cbPLIError.
+    _ = vpi_remove_cb(null);
+    return 0;
+}
+
+test "IEEE 1364-2005 §27.33.3 cbPLIError: once per failing call, and the caller keeps its error" {
+    reset();
+    defer reset();
+    pli_calls = 0;
+    const d: CbData = .{ .reason = cbPLIError, .cb_rtn = onPli, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(vpi_register_cb(&d) != null);
+    var junk: u32 = 0;
+    try std.testing.expectEqual(@as(c_int, 0), vpi_remove_cb(@ptrCast(&junk)));
+    try std.testing.expectEqual(@as(u32, 1), pli_calls);
+    // The status is the outer call's, not the one the callback's own failing
+    // call left.
+    var info: root.ErrorInfo = undefined;
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(&info));
+    try std.testing.expectEqualStrings("BADHANDLE", std.mem.span(info.code));
+    try std.testing.expect(std.mem.find(u8, std.mem.span(info.message), "that handle") != null);
+}
+
+test "IEEE 1364-2005 §27.8/§27.29 and §12.6: no save or restart; info into nothing" {
+    reset();
+    defer reset();
+    var buf: [4]u8 = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), vpi_get_data(1, &buf, 4));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_put_data(1, &buf, 4));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    const d: CbData = .{ .reason = cbEndOfCompile, .cb_rtn = onStart, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    const h = vpi_register_cb(&d);
+    vpi_get_cb_info(h, null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // A registration with no time or value leaves those of the structure
+    // read into alone.
+    var info: CbData = .{ .reason = 0, .cb_rtn = null, .obj = null, .time = null, .value = null, .index = 9, .user_data = null };
+    vpi_get_cb_info(h, &info);
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    try std.testing.expectEqual(cbEndOfCompile, info.reason);
+    try std.testing.expectEqual(@as(c_int, 0), info.index);
+    try std.testing.expect(info.time == null and info.value == null);
+}

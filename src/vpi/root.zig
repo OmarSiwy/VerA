@@ -32,11 +32,17 @@ const sim = @import("sim");
 // The routine families that live in their own files. Referenced here so their
 // `export fn`s are emitted and their tests run with this module's.
 const print = @import("print.zig");
+/// The digital run a host drives (`run.simulate`) and its time queues.
 pub const run = @import("run.zig");
+/// The callback registry; a host fires the §12.31.4 action reasons here.
 pub const callback = @import("callback.zig");
+/// §12.16/§12.30 values.
 pub const value = @import("value.zig");
+/// The systf registry; `systf.hook` is the digital engine's view of it.
 pub const systf = @import("systf.zig");
+/// The behavioural rows and the Annex G type constants.
 pub const code = @import("code.zig");
+/// The analog analysis a host attaches a device library to and runs.
 pub const analog_run = @import("analog.zig");
 const handle = @import("handle.zig");
 const iterate = @import("iterate.zig");
@@ -64,6 +70,12 @@ test {
     _ = value;
     _ = systf;
     _ = code;
+    _ = analog_run;
+    _ = handle;
+    _ = iterate;
+    _ = property;
+    _ = delays;
+    _ = @import("model.zig");
     _ = @import("decompile.zig");
     _ = @import("test.zig");
 }
@@ -319,12 +331,15 @@ pub const OptU32 = enum(u32) {
     none = std.math.maxInt(u32),
     _,
 
+    /// Packs `v`. Asserts that `v` is not `maxInt(u32)`, the value `none`
+    /// spends.
     pub fn of(v: ?u32) OptU32 {
         const x = v orelse return .none;
         std.debug.assert(x != std.math.maxInt(u32));
         return @fromBackingInt(@intCast(x));
     }
 
+    /// Unpacks `o`: null for `none`.
     pub fn get(o: OptU32) ?u32 {
         return if (o == .none) null else @backingInt(o);
     }

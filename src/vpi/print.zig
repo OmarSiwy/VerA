@@ -277,15 +277,11 @@ fn channelFile(i: usize) error{NotOpen}!?Io.File {
     };
 }
 
-/// The body of `varargs.c`'s vpi_printf (mcd 1 | 4: stdout and the log),
-/// vpi_mcd_printf and their IEEE 1364-2005 §27.37/§27.27 `v` forms over a
-/// started `va_list`.
-///
-/// §12.28 "shall write to both stdout and the current product log file ...
-/// shall return the number of characters printed or EOF if an error occurred."
-/// VD-044's startup gate for `varargs.c`'s wrappers, which cannot name a
-/// routine to the comptime `root.refused`: 0 vpi_printf, 1 vpi_mcd_printf,
-/// 2 vpi_vprintf, 3 vpi_mcd_vprintf, 4 vpi_control (vpi_sim_control too).
+/// Returns 1 when the startup gate refuses the variadic routine `which`, with
+/// the error recorded, else 0 (VD-044). `varargs.c`'s wrappers cannot name a
+/// routine to the comptime `root.refused`, so they pass its number: 0
+/// vpi_printf, 1 vpi_mcd_printf, 2 vpi_vprintf, 3 vpi_mcd_vprintf, anything
+/// else vpi_control (vpi_sim_control too).
 export fn vera_vpi_refused(which: c_int) c_int {
     return @intFromBool(switch (which) {
         0 => root.refused("vpi_printf"),
@@ -296,6 +292,12 @@ export fn vera_vpi_refused(which: c_int) c_int {
     });
 }
 
+/// The body of `varargs.c`'s vpi_printf (mcd 1 | 4: stdout and the log),
+/// vpi_mcd_printf and their IEEE 1364-2005 §27.37/§27.27 `v` forms, over a
+/// `va_list` the C side started. Clears the §12.2 status first.
+///
+/// §12.28 "shall write to both stdout and the current product log file ...
+/// shall return the number of characters printed or EOF if an error occurred."
 /// §12.27: the return is the number of characters in ONE expansion, however
 /// many channels receive it: "the number of characters printed" is a property
 /// of the format and its arguments, and a count multiplied by the channel set
@@ -396,7 +398,7 @@ fn expand(w: *Io.Writer, fmt: []const u8, ap: *va.List) Io.Writer.Error!void {
     var i: usize = 0;
     while (i < fmt.len) {
         if (fmt[i] != '%') {
-            const end = std.mem.indexOfScalarPos(u8, fmt, i, '%') orelse fmt.len;
+            const end = std.mem.findScalarPos(u8, fmt, i, '%') orelse fmt.len;
             try w.writeAll(fmt[i..end]);
             i = end;
             continue;
@@ -650,7 +652,7 @@ const max_sci = 17;
 fn exponentAfterRounding(a: f64, p: usize) i32 {
     var buf: [64]u8 = undefined;
     const r = std.fmt.float.render(&buf, a, .{ .mode = .scientific, .precision = @min(p, max_sci) }) catch return 0;
-    const e = std.mem.indexOfScalar(u8, r, 'e') orelse return 0;
+    const e = std.mem.findScalar(u8, r, 'e') orelse return 0;
     return std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
 }
 
@@ -668,7 +670,7 @@ fn fixed(buf: []u8, a: f64, p: usize, alt: bool) Body {
 fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) Body {
     var tmp: [64]u8 = undefined;
     const r = std.fmt.float.render(&tmp, a, .{ .mode = .scientific, .precision = @min(p, max_sci) }) catch return .{ .head = "?" };
-    const e = std.mem.indexOfScalar(u8, r, 'e') orelse return .{ .head = "?" };
+    const e = std.mem.findScalar(u8, r, 'e') orelse return .{ .head = "?" };
     const x = std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
     const mant = r[0..e];
     const dot = if (p == 0 and alt) "." else "";
@@ -683,7 +685,7 @@ fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) Body {
 /// and the decimal-point character is removed if there is no fractional
 /// portion remaining", on a fixed result or an e-style mantissa.
 fn stripZeros(s: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    if (std.mem.findScalar(u8, s, '.') == null) return s;
     var end = s.len;
     while (end > 0 and s[end - 1] == '0') end -= 1;
     if (end > 0 and s[end - 1] == '.') end -= 1;
@@ -703,11 +705,12 @@ export fn vera_vpi_cformat(buf: [*]u8, len: usize, format: [*:0]const u8, ap: *v
     return w.end;
 }
 
-/// Calls `cformat` the way a C caller would: through a variadic, into a
-/// 512-byte buffer.
-/// `varargs.c`, for the tests below.
+/// `varargs.c`'s vpi_mcd_printf, for the tests below.
 extern fn vpi_mcd_printf(mcd: c_uint, format: [*:0]const u8, ...) c_int;
 
+/// Calls `cformat` the way a C caller would: through a variadic, into a
+/// 512-byte buffer (`varargs.c`'s `vera_vpi_format`). Returns the length
+/// written, 0 on failure.
 const formatted = @extern(*const fn (buf: [*]u8, format: [*:0]const u8, ...) callconv(.c) usize, .{ .name = "vera_vpi_format" });
 
 fn expectFormat(want: []const u8, got_len: usize, buf: []const u8) !void {
@@ -749,7 +752,7 @@ test "§12.24–§12.26: channel numbering, reopen, and the three predefined cha
     defer tmp.cleanup();
     // Channel files are created relative to the cwd, so the test names an
     // absolute path inside its own temporary directory.
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = path_buf[0..try tmp.dir.realPath(io(), &path_buf)];
     const a_path = try std.testing.allocator.printSentinel("{s}/a.log", .{dir}, 0);
     defer std.testing.allocator.free(a_path);
@@ -775,4 +778,57 @@ test "§12.24–§12.26: channel numbering, reopen, and the three predefined cha
     var got: [16]u8 = undefined;
     const text = try tmp.dir.readFile(io(), "a.log", &got);
     try std.testing.expectEqualStrings("alpha\n", text);
+}
+
+test "C conversions: flags, lengths, and the conversions C leaves undefined" {
+    var b: [512]u8 = undefined;
+    // C11 7.21.6.1: '+' and ' ' on a signed conversion; '0' is ignored when a
+    // precision is given.
+    try expectFormat("+0| 42|  007|7    ", formatted(&b, "%+d|% d|%05.3d|%-5d", @as(c_int, 0), @as(c_int, 42), @as(c_int, 7), @as(c_int, 7)), &b);
+    // A zero at precision 0 is no digits, but keeps its sign; '#' with 'o'
+    // still prints the one 0.
+    try expectFormat("[][+][0]", formatted(&b, "[%.0d][%+.0d][%#.0o]", @as(c_int, 0), @as(c_int, 0), @as(c_uint, 0)), &b);
+    // hh and h convert to char and short first: 300 is 44, 70000 is 4464,
+    // 255 as a signed char is -1.
+    try expectFormat("44 4464 -1", formatted(&b, "%hhd %hd %hhd", @as(c_int, 300), @as(c_int, 70000), @as(c_int, 255)), &b);
+    // A negative '*' width is the '-' flag; a negative '*' precision is none.
+    try expectFormat("[ab   ][abc]", formatted(&b, "[%*s][%.*s]", @as(c_int, -5), @as([*:0]const u8, "ab"), @as(c_int, -1), @as([*:0]const u8, "abc")), &b);
+    // An unknown conversion goes out as written and takes no argument; so
+    // does a spec the format ends inside.
+    try expectFormat("%q 5 %", formatted(&b, "%q %d %", @as(c_int, 5)), &b);
+    try expectFormat("[  x][y  ]", formatted(&b, "[%3c][%-3c]", @as(c_int, 'x'), @as(c_int, 'y')), &b);
+    try expectFormat("-9223372036854775808 8000000000000000", formatted(&b, "%lld %llx", @as(c_longlong, std.math.minInt(i64)), @as(c_ulonglong, 1 << 63)), &b);
+}
+
+test "C conversions: reals at the edges" {
+    var b: [512]u8 = undefined;
+    // Zero in each style; %g strips "0.00000" to "0".
+    try expectFormat("0.000000 0.000000e+00 0", formatted(&b, "%f %e %g", @as(f64, 0), @as(f64, 0), @as(f64, 0)), &b);
+    // A negative zero keeps its sign; '+' and ' ' on a positive value.
+    try expectFormat("-0.0 +1.5 [ 1.5]", formatted(&b, "%.1f %+.1f [% .1f]", @as(f64, -0.0), @as(f64, 1.5), @as(f64, 1.5)), &b);
+    // %E and %G upper-case the exponent; '#' keeps %g's trailing zeros.
+    try expectFormat("1.000000E-10 1E-10 1.00000", formatted(&b, "%E %G %#g", @as(f64, 1e-10), @as(f64, 1e-10), @as(f64, 1.0)), &b);
+    // Precision 0: no point unless '#'.
+    try expectFormat("3 3. 1e+04 1.e+04", formatted(&b, "%.0f %#.0f %.0e %#.0e", @as(f64, 2.6), @as(f64, 2.6), @as(f64, 12345), @as(f64, 12345)), &b);
+    // '0' pads between the sign and the digits; '-' pads on the right.
+    try expectFormat("-00003.142|1.23e+03  |", formatted(&b, "%010.3f|%-10.2e|", @as(f64, -3.14159), @as(f64, 1234.5)), &b);
+    // Infinities and NaN: no zero padding, case from the conversion.
+    try expectFormat("nan|  INF|-inf  |  inf", formatted(&b, "%f|%5F|%-6f|%05f", std.math.nan(f64), std.math.inf(f64), -std.math.inf(f64), std.math.inf(f64)), &b);
+}
+
+test "§12.25/IEEE 1364-2005 §27.23: names and flushes of descriptors that are not open" {
+    try std.testing.expect(vpi_mcd_name(0) == null);
+    try std.testing.expectEqualStrings("stderr", std.mem.span(vpi_mcd_name(2)));
+    // Channel 21 is not open; fd 63 is no file $fopen opened.
+    try std.testing.expect(vpi_mcd_name(1 << 20) == null);
+    try std.testing.expect(vpi_mcd_name(fd_bit | 63) == null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // The predefined channels are always open, and unbuffered.
+    try std.testing.expectEqual(@as(c_int, 0), vpi_mcd_flush(0x7));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_mcd_flush(1 << 20));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_mcd_flush(fd_bit));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_flush());
+    // vpi_mcd_printf writes to no fd, and needs a format.
+    try std.testing.expectEqual(EOF, vpi_mcd_printf(fd_bit, "x"));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
 }

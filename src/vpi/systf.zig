@@ -88,9 +88,10 @@ pub fn find(name: []const u8, domain: Domain) ?*Systf {
 /// until `reset`.
 pub fn intAnalogNames(a: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(a);
     for (regs.items) |s| if (s.domain == .analog and s.analog.type == vpiAnalogSysFunc and s.analog.sysfunctype == vpiIntFunc)
         try out.append(a, s.name);
-    return out.items;
+    return out.toOwnedSlice(a);
 }
 
 /// One registration, owned by this file until `reset`.
@@ -255,7 +256,9 @@ pub fn reset() void {
     live.clearAndFree(gpa);
 }
 
-/// Every registration, in order, for `vpi_iterate(vpiUserSystf, NULL)`.
+/// Every registration's handle, in registration order, for
+/// `vpi_iterate(vpiUserSystf, NULL)`. Caller owns the slice and frees it with
+/// `a`.
 pub fn all(a: std.mem.Allocator) ![]vpiHandle {
     const out = try a.alloc(vpiHandle, regs.items.len);
     for (regs.items, out) |s, *h| h.* = @ptrCast(s);
@@ -519,5 +522,157 @@ test "§11.6.16/§12.22.1: with no call active there is no call and no derivativ
     try std.testing.expect(handle.vpi_handle(vpiSysTfCall, null) == null);
     try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
     try std.testing.expect(vpi_handle_multi(vpiDerivative, null, null) == null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+/// Registers five analog vpiIntFunc names ($i1..$i5) between a real function
+/// and a task: more than one growth of a list built from them.
+fn registerIntAnalogs() !void {
+    var names = [_][3:0]u8{ "$i1".*, "$i2".*, "$ra".*, "$i3".*, "$ta".*, "$i4".*, "$i5".* };
+    const kinds = [_][2]c_int{
+        .{ vpiAnalogSysFunc, vpiIntFunc },
+        .{ vpiAnalogSysFunc, vpiIntFunc },
+        .{ vpiAnalogSysFunc, vpiRealFunc },
+        .{ vpiAnalogSysFunc, vpiIntFunc },
+        .{ vpiAnalogSysTask, 0 },
+        .{ vpiAnalogSysFunc, vpiIntFunc },
+        .{ vpiAnalogSysFunc, vpiIntFunc },
+    };
+    for (&names, kinds) |*n, k| {
+        const d: AnalogSystfData = .{ .type = k[0], .sysfunctype = k[1], .tfname = n, .calltf = aCall, .compiletf = null, .sizetf = null, .derivtf = null, .user_data = null };
+        if (vpi_register_analog_systf(&d) == null) return error.TestUnexpectedResult;
+    }
+}
+
+test "§12.32.1 intAnalogNames: the analog vpiIntFunc names, in a slice the caller owns" {
+    reset();
+    defer reset();
+    try registerIntAnalogs();
+    const names = try intAnalogNames(std.testing.allocator);
+    defer std.testing.allocator.free(names);
+    try std.testing.expectEqual(@as(usize, 5), names.len);
+    for (names, [_][]const u8{ "$i1", "$i2", "$i3", "$i4", "$i5" }) |got, want| try std.testing.expectEqualStrings(want, got);
+}
+
+fn intNamesOnce(a: std.mem.Allocator) !void {
+    const names = try intAnalogNames(a);
+    a.free(names);
+}
+
+test "intAnalogNames frees what it built when an allocation fails" {
+    reset();
+    defer reset();
+    try registerIntAnalogs();
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, intNamesOnce, .{});
+}
+
+var sizetf_calls: u32 = 0;
+fn sizetfZero(_: [*c]u8) callconv(.c) c_int {
+    sizetf_calls += 1;
+    return 0;
+}
+
+test "§12.33.1/IEEE 1364-2005 §26.1.1: each function type's width, sizetf called at most once" {
+    reset();
+    defer reset();
+    var names = [_][3:0]u8{ "$fi".*, "$fr".*, "$ft".*, "$fs".*, "$fg".*, "$tk".* };
+    const kinds = [_][2]c_int{
+        .{ vpiSysFunc, vpiIntFunc },
+        .{ vpiSysFunc, vpiRealFunc },
+        .{ vpiSysFunc, vpiTimeFunc },
+        .{ vpiSysFunc, vpiSizedFunc },
+        .{ vpiSysFunc, vpiSizedSignedFunc },
+        .{ vpiSysTask, 0 },
+    };
+    for (&names, kinds) |*n, k| {
+        const d: SystfData = .{ .type = k[0], .sysfunctype = k[1], .tfname = n, .calltf = dCall, .compiletf = null, .sizetf = if (k[1] == vpiSizedFunc) &sizetfZero else null, .user_data = null };
+        try std.testing.expect(vpi_register_systf(&d) != null);
+    }
+    sizetf_calls = 0;
+    // A sized function whose sizetf answers 0 is 1 bit wide; one with no
+    // sizetf is 32 (§26.1.1 "If no sizetf routine is specified, a
+    // user-defined system function shall return 32 bits").
+    for ([_]struct { []const u8, u32, bool, bool }{
+        .{ "$fi", 32, true, false },
+        .{ "$fr", 64, true, true },
+        .{ "$ft", 64, false, false },
+        .{ "$fs", 1, false, false },
+        .{ "$fg", 32, true, false },
+    }) |want| {
+        const k = kindOf(want[0]) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(want[1], k.func.width);
+        try std.testing.expectEqual(want[2], k.func.signed);
+        try std.testing.expectEqual(want[3], k.func.real);
+    }
+    _ = kindOf("$fs");
+    try std.testing.expectEqual(@as(u32, 1), sizetf_calls);
+    try std.testing.expect(kindOf("$tk").? == .task);
+    try std.testing.expect(kindOf("$none") == null);
+}
+
+test "§12.32/§12.33: registrations refused, and vpi_handle_multi's refusals" {
+    reset();
+    defer reset();
+    var dollar = "$".*;
+    var d: SystfData = .{ .type = vpiSysTask, .sysfunctype = 0, .tfname = &dollar, .calltf = dCall, .compiletf = null, .sizetf = null, .user_data = null };
+    // `$` alone names nothing; a NULL name, a NULL structure, a type that is
+    // neither a task nor a function, a function type past vpiSizedSignedFunc.
+    try std.testing.expect(vpi_register_systf(&d) == null);
+    d.tfname = null;
+    try std.testing.expect(vpi_register_systf(&d) == null);
+    try std.testing.expect(vpi_register_systf(null) == null);
+    var good = "$ok".*;
+    d.tfname = &good;
+    d.type = 3;
+    try std.testing.expect(vpi_register_systf(&d) == null);
+    d.type = vpiSysFunc;
+    for ([_]c_int{ 0, vpiSizedSignedFunc + 1 }) |t| {
+        d.sysfunctype = t;
+        try std.testing.expect(vpi_register_systf(&d) == null);
+    }
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // §12.32.1: a digital type, and a function that is neither int nor real.
+    var an = "$an".*;
+    var ad: AnalogSystfData = .{ .type = vpiSysTask, .sysfunctype = 0, .tfname = &an, .calltf = aCall, .compiletf = null, .sizetf = null, .derivtf = null, .user_data = null };
+    try std.testing.expect(vpi_register_analog_systf(&ad) == null);
+    ad.type = vpiAnalogSysFunc;
+    ad.sysfunctype = vpiTimeFunc;
+    try std.testing.expect(vpi_register_analog_systf(&ad) == null);
+    ad.sysfunctype = vpiRealFunc;
+    try std.testing.expect(vpi_register_analog_systf(&ad) != null);
+    try std.testing.expectEqual(@as(usize, 1), regs.items.len);
+    // §12.14 with no structure to fill.
+    vpi_get_systf_info(@ptrCast(regs.items[0]), null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+
+    var info: root.ErrorInfo = undefined;
+    try std.testing.expect(vpi_handle_multi(vpiInterModPath, null, null) == null);
+    _ = root.vpi_chk_error(&info);
+    try std.testing.expectEqualStrings("BADHANDLE", std.mem.span(info.code));
+    try std.testing.expect(vpi_handle_multi(999, null, null) == null);
+    _ = root.vpi_chk_error(&info);
+    try std.testing.expectEqualStrings("NOTRAVERSE", std.mem.span(info.code));
+}
+
+test "§12.32.2: declared partials are copied, and a negative count declares none" {
+    reset();
+    defer reset();
+    var of = [_]c_int{ 0, 1 };
+    var wrt = [_]c_int{ 1, 2 };
+    declarePartials(3, &.{ .count = 2, .derivative_of = &of, .derivative_wrt = &wrt });
+    // The application's arrays stay its own.
+    of[0] = 9;
+    try std.testing.expectEqualSlices(Pair, &.{ .{ .of = 0, .wrt = 1 }, .{ .of = 1, .wrt = 2 } }, partialsOf(3));
+    declarePartials(4, &.{ .count = -1, .derivative_of = null, .derivative_wrt = null });
+    try std.testing.expectEqual(@as(usize, 0), partialsOf(4).len);
+    try std.testing.expectEqual(@as(usize, 0), partialsOf(5).len);
+}
+
+test "IEEE 1364-2005 §27.13/§27.31: user data needs an open design" {
+    root.close();
+    var x: u8 = 0;
+    try std.testing.expectEqual(@as(c_int, 0), vpi_put_userdata(null, &x));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    try std.testing.expect(vpi_get_userdata(null) == null);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
 }
