@@ -1,6 +1,8 @@
 //! Scheduled payloads -> the VAMS-2023 §8.5 / IEEE 1364-2005 §11 order
 //! they run in: time, then region. A payload indexes a caller-owned record;
 //! this module evaluates no HDL.
+//! Clauses: VAMS-2023 §8.4.4, §8.5.1, §8.5.2, §8.5.3.6, §8.5.3.7; IEEE
+//! 1364-2005 §10.3, §11.4.1, §11.4.2, §26.6.25.
 const std = @import("std");
 
 /// Integer ticks at the design's finest time precision. Scaling/rounding belongs
@@ -112,6 +114,8 @@ pub const Scheduler = struct {
 
     /// Schedule at now. A2D notifications use ordinary active events; the caller
     /// posts analog requests when an implicit/explicit D2A dependency needs one.
+    /// May allocate one slot; invalidates no `Handle`. `MonitorMutation`
+    /// while a monitor event is dispatched, `Stopped` after `finish`.
     pub fn schedule(self: *Scheduler, region: Region, payload: u32) Error!Handle {
         try self.checkMutation();
         const handle = try self.allocate(region, payload);
@@ -121,6 +125,7 @@ pub const Scheduler = struct {
 
     /// Future work has precisely the two categories specified by §8.5.1.
     /// At the current time, inactive means #0; NBA stays in the NBA region.
+    /// `TimeInPast` for a `time` before `now`; on any error nothing is queued.
     pub fn scheduleAt(self: *Scheduler, time: Time, kind: FutureKind, payload: u32) Error!Handle {
         try self.checkMutation();
         if (time < self.now) return error.TimeInPast;
@@ -254,7 +259,9 @@ pub const Scheduler = struct {
     /// current-time event reports `now`. Read-only: the future heap is
     /// scanned, not popped. Readers: VAMS §9.23's pending-driver queries
     /// (src/sim/digital/driver.zig) and IEEE 1364 §26.6.25's `vpiTimeQueue`
-    /// iteration (src/vpi/run.zig).
+    /// iteration (src/vpi/run.zig). Appends to `out`, which the caller owns
+    /// and frees with `a`; on `OutOfMemory` it holds what was appended. A
+    /// stopped queue appends nothing. O(events ever pending at once).
     pub fn pendingPayloads(self: *const Scheduler, a: std.mem.Allocator, out: *std.ArrayList(Live)) std.mem.Allocator.Error!void {
         if (self.phase == .stopped) return;
         const state = self.slots.items(.state);
@@ -274,7 +281,9 @@ pub const Scheduler = struct {
     /// The whole queue as bytes `restore` reads back: every slot, so a
     /// `Handle` taken before `save` names the same event after `restore`;
     /// the region lists; the future heap in its array order; the clock.
-    /// Its length is O(the most events ever pending at once).
+    /// Its length is O(the most events ever pending at once). The bytes are
+    /// this build's layout of the slots and heap entries: only `restore` in
+    /// the same build reads them.
     pub fn save(self: *const Scheduler, w: *std.Io.Writer) std.Io.Writer.Error!void {
         const lens = [2]u32{ @intCast(self.slots.len), @intCast(self.future.items.len) };
         try w.writeAll(std.mem.asBytes(&lens));
@@ -283,7 +292,9 @@ pub const Scheduler = struct {
         try w.writeAll(std.mem.sliceAsBytes(self.future.items));
     }
 
-    /// The queue `save` wrote to `r`.
+    /// The queue `save` wrote to `r`, replacing every slot, region list and
+    /// heap entry; `allocator` is kept. A queue `restore` failed on is partly
+    /// overwritten: `deinit` it, never run it.
     pub fn restore(self: *Scheduler, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.Error)!void {
         var lens: [2]u32 = undefined;
         try r.readSliceAll(std.mem.asBytes(&lens));
@@ -717,4 +728,113 @@ test "pendingPayloads lists the live events and skips cancelled ones" {
 
 fn byTime(_: void, a: Live, b: Live) bool {
     return a.time < b.time;
+}
+
+test "future events dispatch by time, inactive before NBA, then schedule order; cancelled ones never" {
+    // A model check: random future events and cancels against the order
+    // §8.5.1 states, kept as a plain sorted list.
+    const Row = struct { time: Time, kind: FutureKind, seq: u32, handle: Handle, live: bool };
+    var prng = std.Random.DefaultPrng.init(0x851);
+    const rand = prng.random();
+    for (0..200) |_| {
+        var s = Scheduler.init(t.allocator);
+        defer s.deinit();
+        var model: [64]Row = undefined;
+        const n = rand.intRangeAtMost(usize, 0, model.len);
+        for (model[0..n], 0..) |*row, i| {
+            const at = rand.intRangeAtMost(Time, 1, 8);
+            const kind: FutureKind = if (rand.boolean()) .inactive else .nba;
+            row.* = .{ .time = at, .kind = kind, .seq = @intCast(i), .handle = try s.scheduleAt(at, kind, @intCast(i)), .live = true };
+            // Now and then cancel an earlier event, which may be cancelled already.
+            if (i != 0 and rand.uintLessThan(u8, 4) == 0) {
+                const victim = &model[rand.uintLessThan(usize, i)];
+                try t.expectEqual(victim.live, try s.cancel(victim.handle));
+                victim.live = false;
+            }
+        }
+        var want: [64]Row = undefined;
+        var m: usize = 0;
+        for (model[0..n]) |row| if (row.live) {
+            want[m] = row;
+            m += 1;
+        };
+        std.mem.sort(Row, want[0..m], {}, struct {
+            fn lt(_: void, a: Row, b: Row) bool {
+                if (a.time != b.time) return a.time < b.time;
+                if (a.kind != b.kind) return a.kind == .inactive;
+                return a.seq < b.seq;
+            }
+        }.lt);
+        for (want[0..m]) |row| {
+            try t.expectEqual(row.seq, s.payloadOf(row.handle).?);
+            const e = s.next().?;
+            try t.expectEqual(row.seq, e.payload);
+            try t.expectEqual(row.time, e.time);
+            try t.expectEqual(row.kind.region(), e.region);
+            try t.expectEqual(@as(?u32, null), s.payloadOf(row.handle));
+        }
+        try t.expect(s.next() == null);
+    }
+}
+
+test "cancelRange cancels the pending payloads in [lo, hi), now and later, and only those" {
+    var s = Scheduler.init(t.allocator);
+    defer s.deinit();
+    _ = try s.schedule(.active, 4);
+    _ = try s.schedule(.active, 5);
+    _ = try s.scheduleAt(3, .inactive, 9);
+    _ = try s.scheduleAt(3, .inactive, 10);
+    try t.expect(try s.cancelRange(5, 10));
+    // Nothing pending is left in the range.
+    try t.expect(!try s.cancelRange(5, 10));
+    try t.expect(!try s.cancelRange(7, 7));
+    try t.expectEqual(@as(u32, 4), s.next().?.payload);
+    const e = s.next().?;
+    try t.expectEqual(@as(u32, 10), e.payload);
+    try t.expectEqual(@as(Time, 3), e.time);
+    try t.expect(s.next() == null);
+}
+
+test "peekTime skips a cancelled current-time event; a stopped queue has nothing pending" {
+    var s = Scheduler.init(t.allocator);
+    defer s.deinit();
+    const h = try s.schedule(.active, 1);
+    _ = try s.scheduleAt(5, .nba, 2);
+    try t.expect(try s.cancel(h));
+    try t.expectEqual(@as(?Time, 5), s.peekTime());
+    s.finish();
+    try t.expectEqual(@as(?Time, null), s.peekTime());
+    var out: std.ArrayList(Live) = .empty;
+    defer out.deinit(t.allocator);
+    try s.pendingPayloads(t.allocator, &out);
+    try t.expectEqual(@as(usize, 0), out.items.len);
+}
+
+test "restore into a fresh queue replays the saved one, and a saved finish stays finished" {
+    var a = Scheduler.init(t.allocator);
+    defer a.deinit();
+    _ = try a.schedule(.monitor, 1);
+    _ = try a.scheduleAt(4, .nba, 2);
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try a.save(&w);
+    var b = Scheduler.init(t.allocator);
+    defer b.deinit();
+    var r: std.Io.Reader = .fixed(w.buffered());
+    try b.restore(&r);
+    try t.expectEqual(@as(u32, 1), b.next().?.payload);
+    const e = b.next().?;
+    try t.expectEqual(@as(u32, 2), e.payload);
+    try t.expectEqual(@as(Time, 4), e.time);
+    try t.expect(b.next() == null);
+
+    a.finish();
+    var w2: std.Io.Writer = .fixed(&buf);
+    try a.save(&w2);
+    var c = Scheduler.init(t.allocator);
+    defer c.deinit();
+    var r2: std.Io.Reader = .fixed(w2.buffered());
+    try c.restore(&r2);
+    try t.expect(c.next() == null);
+    try t.expectError(error.Stopped, c.schedule(.active, 3));
 }

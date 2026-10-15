@@ -128,7 +128,7 @@ fn orX(comptime w: u32, r: [words(w)]u64, unk: bool) T(w) {
 /// One bit, as `Integer.Bit` encodes it: `v | x << 1`.
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
 
-/// The mask of a `w`-bit value; `w` is 1 to 64.
+/// The mask of a `w`-bit value. Asserts at comptime that `w` is 1 to 64.
 pub fn mask(comptime w: u32) u64 {
     comptime std.debug.assert(w >= 1 and w <= 64);
     return if (w == 64) std.math.maxInt(u64) else (@as(u64, 1) << w) - 1;
@@ -985,6 +985,108 @@ test "indexed part-select shifts preserve declaration direction and distant indi
         try std.testing.expectEqual(W{ .v = 0, .x = 0 }, place(W{ .v = 0xf, .x = 0 }, sh, 4, 8));
     }
     try std.testing.expectEqual(@as(?u32, null), pos(std.math.minInt(i64), 11, 4, 8));
+}
+
+test "&&, || and ! are Kleene's three-valued logic over 0, 1 and unknown (§5.1.9)" {
+    const bits = [_]Bit{ .zero, .one, .z, .x };
+    for (bits) |a| for (bits) |b| {
+        // Kleene: 0, 1/2 for x or z, 1; `and` is the minimum, `or` the maximum.
+        const ka = kleene(a);
+        const kb = kleene(b);
+        try std.testing.expectEqual(fromKleene(@min(ka, kb)), logical(.@"and", a, b));
+        try std.testing.expectEqual(fromKleene(@max(ka, kb)), logical(.@"or", a, b));
+    };
+    for (bits) |a| try std.testing.expectEqual(fromKleene(2 - kleene(a)), invert(a));
+}
+
+fn kleene(b: Bit) u2 {
+    return switch (b) {
+        .zero => 0,
+        .x, .z => 1,
+        .one => 2,
+    };
+}
+
+fn fromKleene(level: u2) Bit {
+    return switch (level) {
+        0 => .zero,
+        1 => .x,
+        2 => .one,
+        3 => unreachable,
+    };
+}
+
+test "low and ctx read and widen one bit, sign-extended when signed" {
+    try std.testing.expectEqual(Bit.one, low(W{ .v = 0b11, .x = 0 }));
+    try std.testing.expectEqual(Bit.x, low(W{ .v = 1, .x = 1 }));
+    try std.testing.expectEqual(Bit.z, low(W{ .v = 0, .x = 1 }));
+    try std.testing.expectEqual(Bit.zero, low(Wide(2){ .v = .{ 2, 1 }, .x = .{ 0, 1 } }));
+    // A 1-bit signed 1 is -1: four 1s at 4 bits; unsigned it is 1.
+    try std.testing.expectEqual(W{ .v = 0xf, .x = 0 }, ctx(.one, 4, true));
+    try std.testing.expectEqual(W{ .v = 1, .x = 0 }, ctx(.one, 4, false));
+    try std.testing.expectEqual(W{ .v = 0xf, .x = 0xf }, ctx(.x, 4, true));
+    try std.testing.expectEqual(W{ .v = 0, .x = 1 }, ctx(.z, 4, false));
+    try std.testing.expectEqual(W{ .v = 0, .x = 0xf }, ctx(.z, 4, true));
+    try std.testing.expectEqual(W{ .v = 0, .x = 0 }, ctx(.zero, 4, true));
+}
+
+test "$clog2 of a one-word value is the least k with 2^k >= it; x reads as 0 (§17.11)" {
+    for (0..1025) |i| {
+        const v: u64 = @intCast(i);
+        var want: u64 = 0;
+        while (std.math.shl(u64, 1, want) < v) want += 1;
+        try std.testing.expectEqual(want, clog2(W{ .v = v, .x = 0 }, 64));
+    }
+    try std.testing.expectEqual(@as(u64, 64), clog2(W{ .v = std.math.maxInt(u64), .x = 0 }, 64));
+    try std.testing.expectEqual(@as(u64, 63), clog2(W{ .v = 1 << 63, .x = 0 }, 64));
+    try std.testing.expectEqual(@as(u64, 0), clog2(W{ .v = 1000, .x = 8 }, 64));
+}
+
+test "real to integer rounds half away from zero; one with no 64-bit integer is x (§4.8.2)" {
+    const of = struct {
+        fn int(i: i64) W {
+            return .{ .v = @bitCast(i), .x = 0 };
+        }
+    }.int;
+    try std.testing.expectEqual(of(36), ofReal(35.5));
+    try std.testing.expectEqual(of(-2), ofReal(-1.5));
+    try std.testing.expectEqual(of(1), ofReal(0.5));
+    try std.testing.expectEqual(of(-1), ofReal(-0.5));
+    try std.testing.expectEqual(of(0), ofReal(0.49999999999999994));
+    // The largest binary64 below 2^63.
+    try std.testing.expectEqual(of(0x7fff_ffff_ffff_fc00), ofReal(0x1p63 - 1024));
+    const x64: W = .{ .v = std.math.maxInt(u64), .x = std.math.maxInt(u64) };
+    for ([_]f64{ 0x1p63, std.math.inf(f64), -std.math.inf(f64), std.math.nan(f64) }) |r|
+        try std.testing.expectEqual(x64, ofReal(r));
+}
+
+test "$rtoi truncates toward zero into 32 bits; one with no 32-bit integer is x (§17.8)" {
+    try std.testing.expectEqual(W{ .v = 2, .x = 0 }, rtoi(2.9));
+    try std.testing.expectEqual(W{ .v = 0xffff_fffe, .x = 0 }, rtoi(-2.9));
+    try std.testing.expectEqual(W{ .v = 0x7fff_ffff, .x = 0 }, rtoi(2147483647.9));
+    const x32: W = .{ .v = 0xffff_ffff, .x = 0xffff_ffff };
+    for ([_]f64{ 0x1p31, std.math.inf(f64), std.math.nan(f64) }) |r|
+        try std.testing.expectEqual(x32, rtoi(r));
+}
+
+test "integer to real reads the operand's own signedness, x and z bits as 0 (§4.8.2)" {
+    try std.testing.expectEqual(@as(f64, -1), toReal(W{ .v = 0xff, .x = 0 }, 8, true));
+    try std.testing.expectEqual(@as(f64, 255), toReal(W{ .v = 0xff, .x = 0 }, 8, false));
+    // 2'b1x: the x bit is 0, so 2.
+    try std.testing.expectEqual(@as(f64, 2), toReal(W{ .v = 0b11, .x = 0b01 }, 2, false));
+    // 4'bx000 signed: its sign bit is x, read as 0.
+    try std.testing.expectEqual(@as(f64, 0), toReal(W{ .v = 0b1000, .x = 0b1000 }, 4, true));
+    // A real slot's bits round-trip.
+    try std.testing.expectEqual(@as(f64, -0.0), real(realBits(-0.0)));
+    try std.testing.expect(std.math.signbit(real(realBits(-0.0))));
+    // A real `?:` under an unknown condition is 0 (§5.1.13); a real's truth
+    // is "not zero", -0.0 included.
+    try std.testing.expectEqual(@as(f64, 0), realCond(.x, 1, 2));
+    try std.testing.expectEqual(@as(f64, 0), realCond(.z, 1, 2));
+    try std.testing.expectEqual(@as(f64, 1), realCond(.one, 1, 2));
+    try std.testing.expectEqual(@as(f64, 2), realCond(.zero, 1, 2));
+    try std.testing.expectEqual(Bit.zero, realTruth(-0.0));
+    try std.testing.expectEqual(Bit.one, realTruth(1e-300));
 }
 
 test "casez/casex agree with the per-bit wildcard rule" {

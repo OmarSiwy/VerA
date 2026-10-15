@@ -693,6 +693,47 @@ test "§7.3.6.5 the solve at t reads the greatest tick <= t, not the next and no
     try testing.expect(f.points.items[4].last and !f.points.items[3].last);
 }
 
+test "§8.4.2 a run of one declared time is its DC point, first and last at once" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // `v` is never assigned: x, which the fake reads as -1.
+    const f = try drive(arena.allocator(),
+        \\`timescale 1ns/1ns
+        \\module m; reg v;
+        \\endmodule
+    , "v", &.{0});
+    try expectPoints(f, &.{.{ 0, -1 }});
+    const p = f.points.items[0];
+    try testing.expect(p.first and p.last and p.dt == 0);
+    try testing.expectEqual(@as(usize, 1), f.solves.items.len);
+}
+
+test "digital activity after the last declared time never reaches a solution" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const f = try drive(arena.allocator(),
+        \\`timescale 1ns/1ns
+        \\module m; reg v;
+        \\initial begin v = 0; #30 v = 1; end
+        \\endmodule
+    , "v", &.{ 0, 10e-9 });
+    try expectPoints(f, &.{ .{ 0, 0 }, .{ 10e-9, 0 } });
+}
+
+test "§8.5.1 two writes in one tick reach one solution, with the tick's last value" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const f = try drive(arena.allocator(),
+        \\`timescale 1ns/1ns
+        \\module m; reg [3:0] v;
+        \\initial begin v = 0; #4 v = 1; v = 2; end
+        \\endmodule
+    , "v", &.{ 0, 10e-9 });
+    try expectPoints(f, &.{ .{ 0, 0 }, .{ 4e-9, 2 }, .{ 10e-9, 2 } });
+    // One solve per point: region 3b runs once per tick (§8.5.1).
+    try testing.expectEqual(@as(usize, 3), f.solves.items.len);
+}
+
 test "§8.4.7 an implicit D2A off the declared grid is an analog solution of its own" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

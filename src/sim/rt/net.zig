@@ -317,12 +317,14 @@ pub fn gate(s: *State, i: u32, comptime kind: Ast.GateKind, ins: []const Bit) Er
     return driveBit(s, i, s.nets.drivers[i].source.gate, o.bit, o.or_z);
 }
 
-/// §8 UDP driver `i` over its input bits (`resolution.udpValue`).
+/// §8 UDP driver `i` over its input bits (`resolution.udpValue`). Asserts
+/// the UDP has at most 64 inputs.
 pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     const t = &s.nets;
     const k = t.drivers[i].source.udp;
     const u = t.udps[k];
     var buf: [64]Int.Bit = undefined;
+    std.debug.assert(ins.len <= buf.len);
     const bits = buf[0..ins.len];
     // §8.1.6: a z input is read as x.
     for (ins, bits) |b, *o| o.* = if (b == .z) .x else int(b);
@@ -530,7 +532,7 @@ fn resolveJoined(s: *State, start: u32) Error!void {
             const res = t.res[t.nat[y.net]..][0 .. 2 * words(n.width)];
             // A net first reached here keeps what it shows on the bits no
             // switch joins (`exec`'s `resolved`, which it published).
-            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) {
+            if (std.mem.findScalar(u32, touched.items, y.net) == null) {
                 try touched.append(a, y.net);
                 const nw = words(n.width);
                 @memcpy(res[0..nw], s.v[n.off..][0..nw]);
@@ -797,4 +799,64 @@ test "the all-strong plane fold is Signal's fold" {
             if (kind == .trireg) try std.testing.expectEqual(f2, f1);
         }
     };
+}
+
+test "the all-strong plane fold is Signal's fold across word boundaries" {
+    // Widths that end inside a word, on a word's end, and past it: a word
+    // index or mask slip in either fold shows as a differing bit past 63.
+    const kinds = [_]Ast.NetKind{ .wire, .tri, .wand, .wor, .triand, .trior, .tri0, .tri1, .supply0, .supply1, .trireg };
+    var prng = std.Random.DefaultPrng.init(0x79);
+    const rand = prng.random();
+    inline for (.{ 64, 70, 128, 130 }) |width| {
+        const nw = comptime words(width);
+        for (kinds) |kind| for (0..50) |_| {
+            // Three drivers, each `2 * nw` words (values then unknowns), and
+            // the trireg charge; every bit one of the four states at random.
+            var cur: [3 * 2 * nw]u64 = @splat(0);
+            var charge: [2 * nw]u64 = @splat(0);
+            for (0..width) |bi| {
+                const at: u32 = @intCast(bi);
+                for (0..3) |j| setBit(cur[2 * nw * j ..][0 .. 2 * nw], at, @fromBackingInt(rand.int(u2)));
+                setBit(&charge, at, @fromBackingInt(rand.int(u2)));
+            }
+            const starts = [_]u32{ 0, 2 * nw, 4 * nw };
+            const n: Net = .{ .kind = kind, .slot = 0, .off = 0, .width = width, .drivers = &.{ 0, 1, 2 }, .strong = true };
+            var or_z = [_]bool{ false, false, false };
+            var s0 = [_]Ast.Strength{ .strong, .strong, .strong };
+            var s1 = [_]Ast.Strength{ .strong, .strong, .strong };
+            var sig0 = [_]Signal{.{}};
+            var tt: Nets = .{
+                .nets = &.{n},
+                .drivers = &.{},
+                .udps = &.{},
+                .at = @constCast(&starts),
+                .cur = &cur,
+                .tgt = &.{},
+                .or_z = &or_z,
+                .tgt_or_z = &.{},
+                .s0 = &s0,
+                .s1 = &s1,
+                .flight = &.{},
+                .started = &.{},
+                .nat = &.{},
+                .res = &.{},
+                .ntgt = &.{},
+                .nflight = &.{},
+                .capacitive = &.{},
+                .decay_ev = &.{},
+                .sig0 = &sig0,
+                .pat = &.{},
+                .prev = &.{},
+                .state = &.{},
+                .ones = &.{},
+                .scratch = &.{},
+            };
+            var fast: [2 * nw]u64 = undefined;
+            var slow: [2 * nw]u64 = @splat(0);
+            const f1 = foldStrong(&tt, n, &fast, charge[0..nw], charge[nw..]);
+            const f2 = fold(&tt, 0, &slow, charge[0..nw], charge[nw..]);
+            try std.testing.expectEqual(slow, fast);
+            if (kind == .trireg) try std.testing.expectEqual(f2, f1);
+        };
+    }
 }
