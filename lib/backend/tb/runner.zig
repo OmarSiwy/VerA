@@ -36,7 +36,8 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
     return out.items;
 }
 
-/// The `U` indices of the §4.5.2 operator unknowns (`Directives.op_states`).
+/// Returns the `U` indices of the §4.5.2 operator unknowns
+/// (`Directives.op_states`), ascending, allocated in `arena`.
 pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
     const kinds = lowered.nodes.items(.kind);
     var n: usize = 0;
@@ -100,6 +101,10 @@ pub fn warnGridEvents(bag: *diag.Bag, lowered: *const Lowered, mir: *const Mir) 
 /// `renderMixed` when `d.mixed` is set. `title` keys each transcript block
 /// (the fixture's file stem). All output goes to stderr via `std.debug.print`,
 /// the stream generated `$strobe` uses, so the interleaving is deterministic.
+/// Fails with `error.TooManyPoints` past `max_points`, and with
+/// `error.BadSyntax` for a deck that writes both `//! tran` and
+/// `//! onoise`, or either without `//! solve` or beside a `bias`, `sweep`,
+/// `psweep` or `wave`: `sim.spice` solves every unknown itself.
 pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     if (d.mixed) |mx| return renderMixed(arena, title, d, mx);
     var out: std.ArrayList(u8) = .empty;
@@ -188,8 +193,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\                // Every field is comptime, so the row is too, at any length.
             \\                const got = comptime std.fmt.comptimePrint("{s}({s},{s})#{?d}", .{
             \\                    @tagName(g.kind),
-            \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
-            \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+            \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.row)))),
+            \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.col)))),
             \\                    g.source,
             \\                });
             \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
@@ -225,7 +230,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // --- §3.6.1.2 the published tolerances ----------------------------------
     for (d.abstols) |b| try out.print(arena,
         \\    if (comptime std.meta.stringToEnum(D.U, "{0f}")) |u| {{
-        \\        const g = u_abstol[@intFromEnum(u)];
+        \\        const g = u_abstol[@backingInt(u)];
         \\        std.debug.print("abstol[{0f}] got={{e}} want={{e}} ok={{d}}\n", .{{ g, @as(f64, {1f}), @intFromBool(near(g, {1f})) }});
         \\    }} else std.debug.print("abstol[{0f}] got=none want={{e}} ok=0\n", .{{@as(f64, {1f})}});
         \\
@@ -240,7 +245,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try out.print(arena, "    @import(\"sim\").spice.deck.runTran(D, title, &model, &inst, {f}, {f});\n", .{ fmtF64(tr[0]), fmtF64(tr[1]) });
         } else {
             const on = d.onoise.?;
-            try out.print(arena, "    @import(\"sim\").spice.deck.runNoise(D, title, &model, &inst, @enumFromInt(ix(\"{f}\")), &.{{", .{std.zig.fmtString(on.name)});
+            try out.print(arena, "    @import(\"sim\").spice.deck.runNoise(D, title, &model, &inst, @fromBackingInt(@intCast(ix(\"{f}\"))), &.{{", .{std.zig.fmtString(on.name)});
             for (on.values, 0..) |f, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(f) });
             try out.appendSlice(arena, " });\n");
         }
@@ -642,7 +647,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     try deriveCard(&out, arena, "    ", "g_model", d.temp);
     try out.appendSlice(arena, "    g_inst = .{};\n");
     try out.appendSlice(arena,
-        \\    sim_state = .{ .kind = @enumFromInt(kind) };
+        \\    sim_state = .{ .kind = @fromBackingInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
         \\    if (comptime @hasField(D.Instance, "cwd")) g_inst.cwd = cwdPath();
@@ -1011,8 +1016,8 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
         \\                // `U`'s tag names ARE the spelling contract, same as the
         \\                // `//! noise` block and the same as `//! bias`.
         \\                const got = comptime std.fmt.comptimePrint("({s},{s})", .{
-        \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
-        \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+        \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.row)))),
+        \\                    @tagName(@as(D.U, @fromBackingInt(@intCast(g.col)))),
         \\                });
         \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
         \\                std.debug.print("acstim[{d}] got={s} want={s} ok={d}\n", .{
@@ -1130,18 +1135,20 @@ fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error
         \\    // §9.17.3 the cold start a host writes into its limited image.
         \\    {
         \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(Val, &model, &inst, sim_state) else @splat(null);
-        \\        var want: [n_u]?f64 = @splat(null);
         \\
     );
+    // `//! seed none` writes no lane, and a `var` nothing writes is an
+    // AstGen error ("never mutated").
+    try out.print(arena, "        {s} want: [n_u]?f64 = @splat(null);\n", .{if (d.seeds.len == 0) "const" else "var"});
     for (d.seeds) |b| try out.print(arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
     try out.appendSlice(arena,
         \\        const writes: u64 = if (comptime @hasDecl(D, "limit_writes")) D.limit_writes else 0;
         \\        for (got, want, 0..) |g, w, i| {
         \\            if (g == null and w == null) continue;
         \\            const ok = g != null and w != null and near(g.?, w.?);
-        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @enumFromInt(i))), g, w, @intFromBool(ok) });
+        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @fromBackingInt(@intCast(i)))), g, w, @intFromBool(ok) });
         \\            if (g != null) std.debug.print("seed[{s}] in limit_writes ok={d}\n", .{
-        \\                @tagName(@as(D.U, @enumFromInt(i))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
+        \\                @tagName(@as(D.U, @fromBackingInt(@intCast(i)))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
         \\            });
         \\        }
         \\    }
@@ -1209,7 +1216,8 @@ pub fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
     return rows;
 }
 
-/// Formats `x` as a Zig expression: shortest round-trip decimal, or a
+/// Formats `x` as a Zig expression that evaluates to the same f64, bit for
+/// bit, wherever an f64 is expected: a shortest round-trip literal, or a
 /// `std.math` call for inf and nan, which have no literal.
 fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
     return .{ .data = x };
@@ -1218,5 +1226,67 @@ fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
 fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     if (std.math.isNan(x)) return w.writeAll("std.math.nan(f64)");
     if (std.math.isInf(x)) return w.writeAll(if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)");
+    // `{d}` writes these as integer literals, which Zig reads as a
+    // comptime_int: `-0` loses its sign, and past 2^53 the shortest digits
+    // are not the double's own integer. `{e}` is a float literal.
+    if (x == 0 and std.math.signbit(x)) return w.writeAll("-0.0");
+    if (@abs(x) >= 0x1p53) return w.print("{e}", .{x});
     try w.print("{d}", .{x});
+}
+
+test fmtF64 {
+    // The oracle is Zig's own reading of the text. `parseNumberLiteral`
+    // classifies it as the tokenizer does: a float literal is rounded
+    // correctly (`parseFloat`), but an integer literal is a comptime_int,
+    // which an f64 holds exactly only when the double is that integer, and
+    // which has no negative zero.
+    const edge = [_]f64{
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        2.5e-3,
+        300.15,
+        1e20,
+        0x1p53,
+        0x1p53 + 2.0,
+        1e23,
+        -1e23,
+        std.math.floatMax(f64),
+        std.math.floatMin(f64),
+        std.math.floatTrueMin(f64),
+        -std.math.floatTrueMin(f64),
+    };
+    for (edge) |x| try expectExactLiteral(x);
+    var prng = std.Random.DefaultPrng.init(0x5eed_f64);
+    const r = prng.random();
+    for (0..4096) |_| {
+        const x: f64 = @bitCast(r.int(u64));
+        if (!std.math.isFinite(x)) continue;
+        try expectExactLiteral(x);
+    }
+    // inf and nan have no literal.
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("std.math.nan(f64)", try std.mem.print(&buf, "{f}", .{fmtF64(std.math.nan(f64))}));
+    try std.testing.expectEqualStrings("-std.math.inf(f64)", try std.mem.print(&buf, "{f}", .{fmtF64(-std.math.inf(f64))}));
+}
+
+/// Asserts that `fmtF64(x)` is a literal Zig reads back as `x`, bit for bit.
+fn expectExactLiteral(x: f64) !void {
+    var buf: [512]u8 = undefined;
+    const text = try std.mem.print(&buf, "{f}", .{fmtF64(x)});
+    errdefer std.debug.print("fmtF64({e}) = {s}\n", .{ x, text });
+    const digits = if (text[0] == '-') text[1..] else text;
+    switch (std.zig.parseNumberLiteral(digits)) {
+        .float => {},
+        .int => |v| {
+            try std.testing.expect(!(x == 0 and std.math.signbit(x)));
+            const nearest: f64 = @floatFromInt(v);
+            try std.testing.expect(nearest < 0x1p64 and @as(u64, @intFromFloat(nearest)) == v);
+        },
+        .big_int, .failure => return error.TestUnexpectedResult,
+    }
+    const back = try std.fmt.parseFloat(f64, text);
+    try std.testing.expectEqual(@as(u64, @bitCast(x)), @as(u64, @bitCast(back)));
 }
