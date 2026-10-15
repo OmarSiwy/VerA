@@ -61,6 +61,9 @@ pub const flatReference = elab_names.flatReference;
 pub const unnamedGenScopes = elab_names.unnamedGenScopes;
 /// E.2.1 for a netlist card's names: see `elaborate/names.zig`.
 pub const spiceCase = elab_names.spiceCase;
+/// §6.6.1 whether a loop generate scheme ends, which lowering's unroll
+/// asks too: see `elaborate/instance.zig`.
+pub const genvarLoop = elab_instance.genvarLoop;
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");
@@ -83,13 +86,6 @@ pub const Error = error{ OutOfMemory, NoModule, DiagnosticsReported };
 /// `parser.internTok` interns that period as a space, so a period in a flat
 /// name is always a join and the mangling is injective.
 pub const sep = '.';
-
-/// §6.2.2 how deep the instance tree may go before the walk gives up.
-///
-/// A cycle is caught by name first (E0905 keeps the module stack), so hitting
-/// the limit means a deep but finite design. The limit turns that into a
-/// diagnostic (E1018) instead of a stack overflow.
-pub const max_depth = 64;
 
 /// The elaborated design lowering walks: one module with the hierarchy already
 /// applied. Runtime dynamic hierarchical access (`$simprobe` with a computed
@@ -579,6 +575,10 @@ pub const Flatten = struct {
     /// `segment.up`'s answers for the level `insert.plan` is planning, keyed
     /// by instance path and local net name.
     seg_up: std.StringHashMapUnmanaged(elab_segment.Seg) = .empty,
+    /// The modules `segment.up` is below right now, outermost first: a
+    /// source instance list that instantiates one of them again is a cycle
+    /// the walk refuses (E0905), so the climb stops there.
+    seg_on: std.ArrayList(Ast.StrId) = .empty,
     /// The answer each port's lower connection resolved to when its parent
     /// was planned (`segment.down`), the same keys: the upper connection of
     /// the ports one level further down.
@@ -815,9 +815,9 @@ pub const Flatten = struct {
         });
 
         self.unit.module = top;
-        var stack: [max_depth + 1]Ast.StrId = undefined;
-        stack[0] = top.name;
-        try elab_instance.walkInstances(self, top, "", &stack, 0);
+        var stack: std.ArrayList(Ast.StrId) = .empty;
+        try stack.append(self.ctx.arena, top.name);
+        try elab_instance.walkInstances(self, top, &stack);
 
         // E.3.2.2 "If there are no continuous disciplines defined on the net
         // segment, then the discipline shall default to electrical": the

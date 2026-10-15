@@ -3,7 +3,8 @@
 //! records the level's §6.3.1 defparams and Annex F.2.1 out-of-context
 //! declarations, plans §7.8.4 connect modules, then per instance binds the
 //! ports (§6.2.2), applies the overrides (§6.3, §6.4), names every
-//! declaration (§6.7), clones the body (`clone.zig`) and recurses.
+//! declaration (§6.7) and clones the body (`clone.zig`); the walk keeps its
+//! levels on a heap stack, so any finite depth is walked.
 //! LRM §3.6.2, §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.5, §6.5.7.1,
 //! §6.6, §6.7.1, §7.1, §7.8.4, §9.15, §9.19, A.4.1, A.5.4, Annex E.3.2;
 //! IEEE 1364-2005 §5.2.1, §12.3.3, §12.3.6, §19.9.
@@ -14,7 +15,6 @@ const Flatten = elaborate.Flatten;
 const Unit = Flatten.Unit;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
-const max_depth = elaborate.max_depth;
 const elab_clone = @import("clone.zig");
 const elab_insert = @import("insert.zig");
 const elab_names = @import("names.zig");
@@ -183,8 +183,8 @@ fn bindGenLocals(self: *Flatten, e: Ast.ExprId, locals: []const Ast.ParamDecl) E
 /// loop's block (`bindGenLocals`, before the genvar is bound, so a
 /// localparam computed from the genvar takes this iteration's value).
 /// §6.9.2's paramset selection then sees those values. The scheme folds in the module's names; one that does
-/// not fold, or runs past `max_iterations`, yields no instances here, and
-/// lowering's unroll of the same loop reports why (E0417-E0420, E0485, E0486).
+/// not fold, or never ends (`genvarLoop`), yields no instances here, and
+/// lowering's unroll of the same loop reports why (E0417-E0420, E0486).
 ///
 /// ponytail: instances written directly in the loop's block only. One under
 /// a nested generate scheme or block is E0235; the upgrade is recursing
@@ -206,11 +206,31 @@ fn loopInstances(self: *Flatten, init: Ast.StmtId, cond: Ast.ExprId, step: Ast.S
     const gv = file.exprs.strOf(gv_e);
     const inner_locals = if (blk.params.len == 0) locals else try std.mem.concat(self.ctx.arena, Ast.ParamDecl, &.{ locals, blk.params });
     var v = (try constGenvar(self, file.stmt(init).assign.value, gv, null)) orelse return;
-    var n: u32 = 0;
-    while (n < max_iterations) : (n += 1) {
-        const lit = try file.exprs.addInt(self.ctx.arena, file.exprs.mainTok(cond), v);
-        const c = elab_names.constValue(self, try substIdent(self, cond, gv, lit), true, null) orelse return;
-        if (!c.isTrue()) return;
+    const Scheme = struct {
+        self: *Flatten,
+        gv: Ast.StrId,
+        cond: Ast.ExprId,
+        step: Ast.ExprId,
+        fn lit(sc: @This(), at: i64) Error!Ast.ExprId {
+            const x = &sc.self.ctx.file.exprs;
+            return x.addInt(sc.self.ctx.arena, x.mainTok(sc.cond), at);
+        }
+        pub fn holds(sc: @This(), at: i64) Error!?bool {
+            const c = elab_names.constValue(sc.self, try substIdent(sc.self, sc.cond, sc.gv, try sc.lit(at)), true, null) orelse return null;
+            return c.isTrue();
+        }
+        pub fn next(sc: @This(), at: i64) Error!?i64 {
+            return constGenvar(sc.self, sc.step, sc.gv, try sc.lit(at));
+        }
+        pub fn same(a: i64, b: i64) bool {
+            return a == b;
+        }
+    };
+    const scheme: Scheme = .{ .self = self, .gv = gv, .cond = cond, .step = file.stmt(step).assign.value };
+    if (try genvarLoop(i64, scheme, v) != .ends) return;
+    while (true) {
+        const lit = try scheme.lit(v);
+        if (!(try scheme.holds(v)).?) return;
         for (blk.instances) |inst| {
             var copy = inst;
             copy.name = try file.intern(self.ctx.arena, try self.ctx.arena.print("{s}{s}[{d}]{c}{s}", .{ prefix, file.str(blk.gen_name), v, sep, file.str(inst.name) }));
@@ -223,12 +243,77 @@ fn loopInstances(self: *Flatten, init: Ast.StmtId, cond: Ast.ExprId, step: Ast.S
             try out.append(self.ctx.arena, copy);
             try gates.append(self.ctx.arena, gate);
         }
-        v = (try constGenvar(self, file.stmt(step).assign.value, gv, lit)) orelse return;
+        v = (try scheme.next(v)).?;
     }
 }
 
-/// Lowering's `max_unroll`: past it lowering refuses the loop (E0485/E0420).
-const max_iterations = 4096;
+/// How a §6.6.1 loop generate scheme runs, followed from its first genvar
+/// value without its body: it `ends` after that many iterations, it
+/// `repeats` a value with the condition true and so never ends, or it is
+/// `unfolded`: the condition or step did not fold at some iteration, which
+/// the unroll then reports.
+pub fn LoopRun(comptime T: type) type {
+    return union(enum) { ends: u64, repeats: T, unfolded };
+}
+
+/// §6.6.1 "It shall be an error if the loop does not terminate" and "if a
+/// genvar value is repeated during evaluation of the loop". The genvar is
+/// the scheme's whole state (§3.5: the step reads only it, parameters and
+/// enclosing genvars, all fixed while it runs), so the scheme either ends
+/// or repeats a value, and a §3.2 integer genvar has 2^32 values to repeat.
+/// Brent's cycle detection finds the repeat with O(1) memory in at most
+/// about three times the iterations before it, so no count stands in for
+/// the answer: every loop that ends is reported as ending, however long.
+/// `scheme` folds: `holds(v) !?bool` (the condition at genvar value `v`),
+/// `next(v) !?T` (the step's value), and `same(a, b) bool`.
+pub fn genvarLoop(comptime T: type, scheme: anytype, first: T) !LoopRun(T) {
+    var tortoise = first;
+    var hare = first;
+    var power: u64 = 1;
+    var lam: u64 = 0;
+    var n: u64 = 0;
+    while (true) {
+        if (!((try scheme.holds(hare)) orelse return .unfolded)) return .{ .ends = n };
+        hare = (try scheme.next(hare)) orelse return .unfolded;
+        n += 1;
+        lam += 1;
+        if (@TypeOf(scheme).same(hare, tortoise)) return .{ .repeats = hare };
+        if (lam == power) {
+            tortoise = hare;
+            power *|= 2;
+            lam = 0;
+        }
+    }
+}
+
+test genvarLoop {
+    // f(v) = (v + 1) % m from 0 under `v < lim`: the scheme of
+    // `for (i = 0; i < lim; i = (i + 1) % m)`.
+    const Mod = struct {
+        m: i64,
+        lim: i64,
+        pub fn holds(sc: @This(), v: i64) error{}!?bool {
+            return v < sc.lim;
+        }
+        pub fn next(sc: @This(), v: i64) error{}!?i64 {
+            return @mod(v + 1, sc.m);
+        }
+        pub fn same(a: i64, b: i64) bool {
+            return a == b;
+        }
+    };
+    // Ends at exactly the old 4096 cap, one past it, and far past it.
+    for ([_]i64{ 4096, 4097, 1 << 20 }) |lim| {
+        const r = try genvarLoop(i64, Mod{ .m = std.math.maxInt(i64), .lim = lim }, 0);
+        try std.testing.expectEqual(LoopRun(i64){ .ends = @intCast(lim) }, r);
+    }
+    // Never ends: every cycle length, short and long, is a repeat.
+    for ([_]i64{ 1, 2, 3, 4096, 4097, 100_000 }) |m| {
+        const r = try genvarLoop(i64, Mod{ .m = m, .lim = m }, 0);
+        try std.testing.expect(r == .repeats);
+        try std.testing.expect(r.repeats >= 0 and r.repeats < m);
+    }
+}
 
 /// A genvar assignment's value, folded in the module's names with the genvar
 /// at `at` (null for the initialization), or null when it is no integer.
@@ -305,17 +390,88 @@ fn conj(self: *Flatten, a: Ast.ExprId, c: Ast.ExprId, negate: bool) Error!Ast.Ex
     });
 }
 
-/// §6.2.2 every instance of one unit, in source order, depth first. `path`
-/// is the unit's own hierarchical prefix ("" at the top).
+/// §6.2.2 the instance tree below `top`, in source order, depth first: each
+/// instance is inlined (`inlineInstance`), then the instances of its module
+/// are walked before its next sibling. One `Level` per unit being walked
+/// sits on a heap stack, so the walk is as deep as the tree with no native
+/// stack per level: §6.2.2 bounds nothing about the depth.
 pub fn walkInstances(
     self: *Flatten,
-    source_module: *const Ast.ModuleDecl,
-    path: []const u8,
-    /// The module names being elaborated, top first: `stack[0..depth + 1]`.
-    /// `depth < max_depth` holds before each push (E1018), so it never overflows.
-    stack: *[max_depth + 1]Ast.StrId,
-    depth: u32,
+    top: *const Ast.ModuleDecl,
+    /// The module names being elaborated, top first, `top` already on it.
+    /// Each is on it once (E0905), so it is no deeper than the source has
+    /// modules, and any finite tree is walked.
+    stack: *std.ArrayList(Ast.StrId),
 ) Error!void {
+    const a = self.ctx.arena;
+    var levels: std.ArrayList(Level) = .empty;
+    if (try enterLevel(self, top, "", stack.items)) |l| try levels.append(a, l);
+    while (levels.items.len != 0) {
+        if (try nextChild(self, &levels.items[levels.items.len - 1], stack.items)) |c| {
+            const parent = try inlineInstance(self, c.inst, c.child, c.ps, c.path, c.gate);
+            try stack.append(a, c.child.name);
+            if (try enterLevel(self, c.child, c.path, stack.items)) |l| {
+                var below = l;
+                below.parent = parent;
+                try levels.append(a, below);
+            } else {
+                _ = stack.pop();
+                self.unit = parent.*;
+            }
+            continue;
+        }
+        const done = levels.pop().?;
+        if (done.parent) |p| {
+            _ = stack.pop();
+            self.unit = p.*;
+        }
+    }
+}
+
+/// One unit `walkInstances` is walking: its instance list as planned, and
+/// where the walk is in it.
+const Level = struct {
+    /// The unit's module with its instance arrays scalarized.
+    module: *const Ast.ModuleDecl,
+    /// The unit's hierarchical prefix ("" at the top).
+    path: []const u8,
+    /// The source instances, then the §6.6 generate instances (`gates`
+    /// holds their schemes from index `module.instances.len` on), then the
+    /// §7.8.4 connect modules `insert.plan` appended.
+    all: []const Ast.Instance,
+    /// The source and generate instances as written, before `plan`
+    /// re-pointed any port: the implicit nets are read from these.
+    src: []const Ast.Instance,
+    gates: []const Ast.ExprId,
+    /// The instance being walked, and for it its generate scheme and the
+    /// §6.2.2 array element next to inline, `k` in `lo..hi`.
+    idx: usize = 0,
+    started: bool = false,
+    gate: Ast.ExprId = .none,
+    is_array: bool = false,
+    /// The end may be maxInt(i64), so the one-past-end value needs a
+    /// wider carrier.
+    k: i128 = 0,
+    hi: i64 = 0,
+    /// The unit in force above this one (`inlineInstance`'s return), put
+    /// back when this level is done; null at the top.
+    parent: ?*const Unit = null,
+};
+
+/// The next instance `walkInstances` inlines from `lv`.
+const Child = struct {
+    inst: *const Ast.Instance,
+    child: *const Ast.ModuleDecl,
+    ps: ?*const Ast.ParamsetDecl,
+    path: []const u8,
+    gate: Ast.ExprId,
+};
+
+/// What a unit's walk does before its first instance: recorded defparams and
+/// out-of-context declarations, the planned connect modules, the
+/// primitives' disciplines. Null when the unit's instance list is refused
+/// (E0905, an unknown module), so nothing below it is walked.
+fn enterLevel(self: *Flatten, source_module: *const Ast.ModuleDecl, path: []const u8, stack: []const Ast.StrId) Error!?Level {
     // §6.3/§6.4.2 an indexed defparam can select a different paramset for
     // each array element. Expand before §6.9.3 connect planning, so both
     // passes use the same external instance paths and selected modules.
@@ -324,29 +480,23 @@ pub fn walkInstances(
         if (inst.range == null) continue;
         if (isUdp(self.ctx.file, inst.module)) continue;
         if (elab_names.findModule(self, inst.module)) |child| {
-            for (stack[0 .. depth + 1]) |on_stack| if (on_stack == child.name) {
-                try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
-                    self.ctx.file.str(child.name), path, self.ctx.file.str(inst.name),
-                });
-                return;
-            };
+            if (try cycle(self, stack, child.name)) |names| {
+                try self.err(inst.main_tok, .E0905, "{s} closes at `{s}{s}`", .{ names, path, self.ctx.file.str(inst.name) });
+                return null;
+            }
         } else {
             const known = for (self.ctx.file.paramsets) |ps| {
                 if (ps.name == inst.module) break true;
             } else false;
             if (!known) {
                 try elab_names.unknownModule(self, &inst);
-                return;
+                return null;
             }
         }
-        if (depth >= max_depth) {
-            try self.err(inst.main_tok, .E1018, "at `{s}{s}`", .{ path, self.ctx.file.str(inst.name) });
-            return;
-        }
     }
-    var expanded = source_module.*;
-    expanded.instances = try expandInstanceArrays(self, source_module.instances);
-    const module = &expanded;
+    const module = try self.ctx.arena.create(Ast.ModuleDecl);
+    module.* = source_module.*;
+    module.instances = try expandInstanceArrays(self, source_module.instances);
     // Both before the children: each names something below this module.
     try elab_override.collectDefparams(self, module, path); // §6.3.1
     try elab_resolve.collectOoc(self, module, path); // Annex F.2.1 step 3
@@ -384,98 +534,139 @@ pub fn walkInstances(
             try elab_resolve.resolveDiscipline(self, child_path, q, self.unit.rename.get(n) orelse n, conn.main_tok);
         }
     }
+    return .{ .module = module, .path = path, .all = all, .src = src.items, .gates = gates.items };
+}
 
-    for (all, 0..) |inst, idx| {
-        const auto = idx >= src.items.len;
-        const gate: Ast.ExprId = if (idx < module.instances.len or auto) .none else gates.items[idx - module.instances.len];
-        // §3.6.5, the structural half: an actual that names nothing `module`
-        // declared is an implicit net (see `Design.implicit_nets`).
-        // Collected here, not in `inlineInstance`, because only this loop
-        // still has `module` in hand; one level down the names are flat.
-        // Reads the source's own connections, not `plan`'s segments.
-        if (!auto and idx < module.instances.len) try checkVariableActuals(self, module, &module.instances[idx]);
-        if (!auto) for (src.items[idx].ports) |c| {
-            const n = elab_names.netRefName(self, c.expr) orelse continue;
-            if (declares(module, n)) continue;
-            try self.implicit_nets.append(self.ctx.arena, .{
-                .name = self.ctx.file.str(n),
-                .main_tok = c.main_tok,
-            });
-        };
-
-        // A.4.1 `module_instantiation ::= module_or_paramset_identifier ...`:
-        // §6.4 says a paramset "can be instantiated exactly like a module".
-        // A module wins; §6.4.2 selection runs only when nothing else matches.
-        //
-        // A.5.4: a named udp_instance parses as a module instance
-        // (`parseUdpInst`), so its `#( … )` arrives as a
-        // parameter_value_assignment. It is A.2.2.3's `delay2` (at most two
-        // positional values), and the instance reaches no analog device (W0252).
-        if (isUdp(self.ctx.file, inst.module)) {
-            for (inst.params) |p| if (p.scaled_literal_tok) |tok|
-                try self.err(tok, .E0247, "a scaled literal in `{s}`'s UDP delay", .{self.ctx.file.str(inst.module)});
-            if (inst.params.len > 2 or (inst.params.len != 0 and inst.params[0].name != .none))
-                try self.err(inst.main_tok, .E0239, "`{s} #(…) {s}`: {d} value(s)", .{ self.ctx.file.str(inst.module), self.ctx.file.str(inst.name), inst.params.len })
-            else
-                try self.ctx.bag.add(.lower, .W0252, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, inst.main_tok), "`{s}` primitive", .{self.ctx.file.str(inst.module)});
+/// Advances `lv` to its next instance to inline, doing for each instance on
+/// the way what needs no recursion: implicit nets, UDPs, array bounds,
+/// paramset selection, the cycle check and the first walk's tree. Null when
+/// the level is done, or ends at a cycle (E0905).
+fn nextChild(self: *Flatten, lv: *Level, stack: []const Ast.StrId) Error!?Child {
+    const module = lv.module;
+    const path = lv.path;
+    while (true) {
+        if (!lv.started) {
+            if (lv.idx == lv.all.len) return null;
+            if (!try startInstance(self, lv)) {
+                lv.idx += 1;
+                continue;
+            }
+            lv.started = true;
+        }
+        if (lv.k > lv.hi) {
+            lv.started = false;
+            lv.idx += 1;
             continue;
         }
-        // §6.2.2 `name_of_module_instance ::= module_instance_identifier
-        // [ range ]`: one instance per element, each addressable as §6.7's
-        // `adder1[5].sum`.
-        var lo: i64 = 0;
-        var hi: i64 = 0;
-        var is_array = false;
-        if (inst.range) |r| {
-            const msb = elab_names.constInt(self, r.msb) orelse {
-                try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
-                continue;
-            };
-            const lsb = elab_names.constInt(self, r.lsb) orelse {
-                try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
-                continue;
-            };
-            lo = @min(msb, lsb);
-            hi = @max(msb, lsb);
-            is_array = true;
+        const k = lv.k;
+        lv.k += 1;
+        const inst = &lv.all[lv.idx];
+        const leaf = if (lv.is_array)
+            try self.ctx.arena.print("{s}[{d}]", .{ self.ctx.file.str(inst.name), k })
+        else
+            self.ctx.file.str(inst.name);
+        const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, leaf, sep });
+        var ps: ?*const Ast.ParamsetDecl = null;
+        const child = elab_names.findModule(self, inst.module) orelse blk: {
+            ps = try elab_paramset.selectParamset(self, inst, child_path) orelse continue;
+            break :blk try elab_names.chainEnd(self, ps.?) orelse continue;
+        };
+        if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, inst);
+        // §7.1 manually and automatically inserted connect modules
+        // follow this same instance walk.
+        if (try cycle(self, stack, child.name)) |names| {
+            try self.err(inst.main_tok, .E0905, "{s} closes at `{s}`", .{ names, child_path[0 .. child_path.len - 1] });
+            lv.idx = lv.all.len;
+            lv.started = false;
+            return null;
         }
-
-        // The end may be maxInt(i64). Keep the loop's one-past-end
-        // value in a wider carrier; `continue` must advance safely too.
-        var k: i128 = lo;
-        while (k <= hi) : (k += 1) {
-            const leaf = if (is_array)
-                try self.ctx.arena.print("{s}[{d}]", .{ self.ctx.file.str(inst.name), k })
-            else
-                self.ctx.file.str(inst.name);
-            const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, leaf, sep });
-            var ps: ?*const Ast.ParamsetDecl = null;
-            const child = elab_names.findModule(self, inst.module) orelse blk: {
-                ps = try elab_paramset.selectParamset(self, &inst, child_path) orelse continue;
-                break :blk try elab_names.chainEnd(self, ps.?) orelse continue;
-            };
-            if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
-            // §7.1 manually and automatically inserted connect modules
-            // follow this same instance walk.
-            for (stack[0 .. depth + 1]) |on_stack| if (on_stack == child.name) {
-                try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}`", .{ self.ctx.file.str(child.name), child_path });
-                return;
-            };
-            if (depth >= max_depth) {
-                try self.err(inst.main_tok, .E1018, "at `{s}`", .{child_path});
-                return;
-            }
-            // Both arms of an if-generate are inlined under their gates; the
-            // tree holds only an instance its scheme brings into existence
-            // (one whose gate does not fold is left out, as unknown).
-            if (self.dry and elab_names.gateHolds(self, gate)) {
-                const kids = try self.tree.getOrPut(self.ctx.arena, path);
-                if (!kids.found_existing) kids.value_ptr.* = .empty;
-                try kids.value_ptr.append(self.ctx.arena, .{ .inst = inst, .module = child, .path = child_path });
-            }
-            try inlineInstance(self, &inst, child, ps, child_path, stack, depth, gate);
+        // Both arms of an if-generate are inlined under their gates; the
+        // tree holds only an instance its scheme brings into existence
+        // (one whose gate does not fold is left out, as unknown).
+        if (self.dry and elab_names.gateHolds(self, lv.gate)) {
+            const kids = try self.tree.getOrPut(self.ctx.arena, path);
+            if (!kids.found_existing) kids.value_ptr.* = .empty;
+            try kids.value_ptr.append(self.ctx.arena, .{ .inst = inst.*, .module = child, .path = child_path });
         }
+        return .{ .inst = inst, .child = child, .ps = ps, .path = child_path, .gate = lv.gate };
     }
+}
+
+/// The per-instance work before its first element: implicit nets, a UDP
+/// (judged here and never inlined) and the §6.2.2 array range. False when
+/// the instance inlines nothing.
+fn startInstance(self: *Flatten, lv: *Level) Error!bool {
+    const module = lv.module;
+    const idx = lv.idx;
+    const inst = &lv.all[idx];
+    const auto = idx >= lv.src.len;
+    lv.gate = if (idx < module.instances.len or auto) .none else lv.gates[idx - module.instances.len];
+    // §3.6.5, the structural half: an actual that names nothing `module`
+    // declared is an implicit net (see `Design.implicit_nets`).
+    // Collected here, not in `inlineInstance`, because only this loop
+    // still has `module` in hand; one level down the names are flat.
+    // Reads the source's own connections, not `plan`'s segments.
+    if (!auto and idx < module.instances.len) try checkVariableActuals(self, module, &module.instances[idx]);
+    if (!auto) for (lv.src[idx].ports) |c| {
+        const n = elab_names.netRefName(self, c.expr) orelse continue;
+        if (declares(module, n)) continue;
+        try self.implicit_nets.append(self.ctx.arena, .{
+            .name = self.ctx.file.str(n),
+            .main_tok = c.main_tok,
+        });
+    };
+
+    // A.4.1 `module_instantiation ::= module_or_paramset_identifier ...`:
+    // §6.4 says a paramset "can be instantiated exactly like a module".
+    // A module wins; §6.4.2 selection runs only when nothing else matches.
+    //
+    // A.5.4: a named udp_instance parses as a module instance
+    // (`parseUdpInst`), so its `#( … )` arrives as a
+    // parameter_value_assignment. It is A.2.2.3's `delay2` (at most two
+    // positional values), and the instance reaches no analog device (W0252).
+    if (isUdp(self.ctx.file, inst.module)) {
+        for (inst.params) |p| if (p.scaled_literal_tok) |tok|
+            try self.err(tok, .E0247, "a scaled literal in `{s}`'s UDP delay", .{self.ctx.file.str(inst.module)});
+        if (inst.params.len > 2 or (inst.params.len != 0 and inst.params[0].name != .none))
+            try self.err(inst.main_tok, .E0239, "`{s} #(…) {s}`: {d} value(s)", .{ self.ctx.file.str(inst.module), self.ctx.file.str(inst.name), inst.params.len })
+        else
+            try self.ctx.bag.add(.lower, .W0252, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, inst.main_tok), "`{s}` primitive", .{self.ctx.file.str(inst.module)});
+        return false;
+    }
+    // §6.2.2 `name_of_module_instance ::= module_instance_identifier
+    // [ range ]`: one instance per element, each addressable as §6.7's
+    // `adder1[5].sum`.
+    lv.k = 0;
+    lv.hi = 0;
+    lv.is_array = false;
+    if (inst.range) |r| {
+        const msb = elab_names.constInt(self, r.msb) orelse {
+            try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
+            return false;
+        };
+        const lsb = elab_names.constInt(self, r.lsb) orelse {
+            try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
+            return false;
+        };
+        lv.k = @min(msb, lsb);
+        lv.hi = @max(msb, lsb);
+        lv.is_array = true;
+    }
+    return true;
+}
+
+/// §6.2.2/§6.6.2 the cycle instantiating `child` under `stack` would close,
+/// named module by module (`` `a` → `b` → `a` ``), or null when `child` is
+/// not being elaborated. A module that instantiates itself has no finite
+/// instance tree here: the walk does not fold a generate scheme that could
+/// end the recursion, so any cycle is refused (E0905), and any finite depth
+/// is walked.
+fn cycle(self: *Flatten, stack: []const Ast.StrId, child: Ast.StrId) Error!?[]const u8 {
+    const at = std.mem.findScalar(Ast.StrId, stack, child) orelse return null;
+    var names: std.ArrayList(u8) = .empty;
+    for (stack[at..]) |m| try names.print(self.ctx.arena, "`{s}` → ", .{self.ctx.file.str(m)});
+    try names.print(self.ctx.arena, "`{s}`", .{self.ctx.file.str(child)});
+    return names.items;
 }
 
 /// Scalarize §6.2.2 module arrays before per-instance decisions. The source
@@ -516,7 +707,9 @@ fn expandInstanceArrays(self: *Flatten, insts: []const Ast.Instance) Error![]con
 }
 
 /// Inline ONE instance: bind its ports, apply its §6.3 overrides, rename its
-/// declarations into the flat namespace, clone its body, then recurse.
+/// declarations into the flat namespace and clone its body, leaving its unit
+/// in force for `walkInstances` to walk its instances under. Returns the
+/// unit that was in force, which the walk puts back after them.
 ///
 /// `path` already ends in `sep`, so a flat name is `path ++ local`.
 fn inlineInstance(
@@ -528,19 +721,19 @@ fn inlineInstance(
     /// overrides belong to the paramset, not to `child`.
     ps: ?*const Ast.ParamsetDecl,
     path: []const u8,
-    stack: *[max_depth + 1]Ast.StrId,
-    depth: u32,
     /// §6.6 the scheme of the generate block `inst` sits in (`genInstances`).
     gate: Ast.ExprId,
-) Error!void {
-    const parent = self.unit; // restored below; the rename map is a stack
+) Error!*const Unit {
+    // Put back by the walk; the rename map is a stack.
+    const parent = try self.ctx.arena.create(Unit);
+    parent.* = self.unit;
     var unit: Unit = .{
         .path = path,
         .primitive = elab_names.isPrimitive(self, child),
         .gate = if (gate == .none) parent.gate else try conj(self, parent.gate, gate, false),
         .paramset_instance = if (ps != null) path[0 .. path.len - 1] else parent.paramset_instance,
         .module = child,
-        .up = &parent,
+        .up = parent,
     };
 
     // §3.6.2 every out-of-context declaration naming a segment of this
@@ -568,11 +761,11 @@ fn inlineInstance(
             const is_concat = self.ctx.file.exprs.tag(c.expr) == .concat;
             var ok = true;
             if (is_concat) {
-                for (self.ctx.file.exprs.args(c.expr)) |o| if (!try netPart(self, &parent, o, &parts)) {
+                for (self.ctx.file.exprs.args(c.expr)) |o| if (!try netPart(self, parent, o, &parts)) {
                     ok = false;
                     break;
                 };
-            } else ok = try netPart(self, &parent, c.expr, &parts);
+            } else ok = try netPart(self, parent, c.expr, &parts);
             if (!ok) {
                 try self.err(c.main_tok, .E0906, "a port connection lists scalar nets, constant bit-selects and constant part-selects of nets", .{});
                 continue;
@@ -649,9 +842,9 @@ fn inlineInstance(
     var over: std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId) = .empty;
     var ps_stmts: std.ArrayList(Ast.StmtId) = .empty;
     if (ps) |p|
-        try elab_paramset.paramsetOverrides(self, inst, p, child, &parent, &over, &unit, path, &ps_stmts)
+        try elab_paramset.paramsetOverrides(self, inst, p, child, parent, &over, &unit, path, &ps_stmts)
     else
-        try elab_override.collectOverrides(self, inst, child, &parent, &over, &unit, path);
+        try elab_override.collectOverrides(self, inst, child, parent, &over, &unit, path);
     // §6.4.3 an undescribed paramset variable hides the module's variable of
     // the same name from this instance's reporting. Only the selected
     // paramset's own declarations; a chain's earlier links are not read.
@@ -795,11 +988,8 @@ fn inlineInstance(
         o.delay = try elab_clone.cloneDelay(self, sw.delay);
         try self.switches.append(self.ctx.arena, o);
     }
-    // ---- recurse, with this unit's map in force ------------------------
-    stack[depth + 1] = child.name;
-    try walkInstances(self, child, path, stack, depth + 1);
-
-    self.unit = parent;
+    // `walkInstances` walks this unit's instances with its map in force.
+    return parent;
 }
 
 /// Appends the parent net part `e` names: a net `x` whole, §6.5.5's scalar
@@ -1236,4 +1426,35 @@ test "§6.4.3 a paramset variable without a description hides the module's varia
     const scale = fixture.paramNamed(&f.file, d.top, "u.scale").?;
     try std.testing.expect(scale.is_override);
     try std.testing.expectEqual(@as(f64, 4.0), f.file.exprs.realValue(scale.default));
+}
+
+test "§6.2.2 an instance tree of any finite depth elaborates; a cycle is E0905, named" {
+    const gpa = std.testing.allocator;
+    // e0 -> e1 -> ... -> e<depth>: the old 64-level bound, one past it, and
+    // far past it, every level on the walk's heap stack.
+    for ([_]usize{ 64, 65, 5_000 }) |depth| {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(gpa);
+        for (0..depth) |i| try text.print(gpa, "module e{d}(p); inout p; electrical p; e{d} u(p); endmodule\n", .{ i, i + 1 });
+        try text.print(gpa, "module e{d}(p); inout p; electrical p; analog I(p) <+ V(p); endmodule\n", .{depth});
+        var f: fixture.Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try fixture.parse(&f, text.items);
+        const d = try elaborate.elaborate(f.ctx());
+        try std.testing.expectEqual(@as(usize, 0), f.bag.count());
+        try std.testing.expectEqual(@as(usize, 1), d.top.analog.len); // the deepest module's block
+        try std.testing.expectEqual(depth + 1, d.units.len);
+    }
+    // A cycle through an instance array: refused, named module by module.
+    var f: fixture.Fixture = .{ .arena = .init(gpa) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; ca u(p); endmodule
+        \\module ca(p); inout p; electrical p; cb v(p); endmodule
+        \\module cb(p); inout p; electrical p; cc w[1:0](p); endmodule
+        \\module cc(p); inout p; electrical p; ca x(p); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+    try std.testing.expectEqual(@import("diag").Code.E0905, f.bag.at(0).code);
+    try std.testing.expectEqualStrings("`ca` → `cb` → `cc` → `ca` closes at `u.v.w[0].x`", f.bag.at(0).message);
 }

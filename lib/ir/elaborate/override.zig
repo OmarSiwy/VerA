@@ -170,30 +170,87 @@ fn readsUndeclared(self: *Flatten, e: Ast.ExprId) ?Ast.ExprId {
 /// expression: the value another seeded defparam gives it, else its value in
 /// the first walk (`seed_params`), which is an expression in flat names and so
 /// the same in this one. Null after E0907, when no such value exists or the
-/// replacement does not end (a defparam whose value reads, through the
-/// declaring module's parameters, its own target).
+/// replacements never end: a value that reads, through those parameters,
+/// itself (a defparam whose value reads its own target), named as the cycle.
+/// Any chain without one is followed to its end.
 pub fn seededValue(self: *Flatten, path: []const u8, local: []const u8, dp: *Defparam) Error!?Ast.ExprId {
     if (!dp.seeded or dp.collected) return dp.value;
+    if (try substitutionCycle(self, dp.value)) |names| {
+        dp.used = true;
+        try self.err(dp.tok, .E0907, "`{s}{s}` is applied before its declaring instance is elaborated, and its value reads the cycle {s}, which no replacement ends (IEEE 1364-2005 12.8.1)", .{ path, local, names });
+        return null;
+    }
+    // Acyclic, so this ends: each replacement trades a name for names
+    // strictly further down a finite graph.
     var v = dp.value;
-    var n: u32 = 0;
-    while (readsUndeclared(self, v)) |hit| : (n += 1) {
+    while (readsUndeclared(self, v)) |hit| {
         const name = self.ctx.file.exprs.strOf(hit);
-        const with = seedValueOf(self, name);
-        if (with == null or n == max_substitutions) {
+        const with = seedValueOf(self, name) orelse {
             dp.used = true;
-            try self.err(dp.tok, .E0907, "`{s}{s}` is applied before its declaring instance is elaborated, and its value reads `{s}`, {s} (IEEE 1364-2005 12.8.1)", .{
-                path,                                                                                                                     local, self.ctx.file.str(name),
-                if (with == null) "which names no parameter of the elaborated design" else "whose value reads the defparam's own target",
-            });
+            try self.err(dp.tok, .E0907, "`{s}{s}` is applied before its declaring instance is elaborated, and its value reads `{s}`, which names no parameter of the elaborated design (IEEE 1364-2005 12.8.1)", .{ path, local, self.ctx.file.str(name) });
             return null;
-        }
-        v = try @import("instance.zig").substIdent(self, v, name, with.?);
+        };
+        v = try @import("instance.zig").substIdent(self, v, name, with);
     }
     return v;
 }
 
-/// Bound on `seededValue`'s replacements: past it the chain is a cycle.
-const max_substitutions = 64;
+/// The cycle `seededValue`'s replacements would run round from `e`, named
+/// parameter by parameter (`` `a` → `b` → `a` ``), or null. A depth-first
+/// walk over "the final expression of `a` reads `b`", on a heap stack.
+fn substitutionCycle(self: *Flatten, e: Ast.ExprId) Error!?[]const u8 {
+    const Frame = struct { name: Ast.StrId, reads: []const Ast.StrId, next: usize = 0 };
+    // true while on the walk's path, false once every name below is done.
+    var on_path: std.AutoHashMapUnmanaged(Ast.StrId, bool) = .empty;
+    var stack: std.ArrayList(Frame) = .empty;
+    const a = self.ctx.arena;
+    for (try undeclaredReads(self, e)) |root| {
+        if (on_path.contains(root)) continue;
+        try on_path.put(a, root, true);
+        try stack.append(a, .{ .name = root, .reads = try undeclaredReads(self, seedValueOf(self, root) orelse .none) });
+        while (stack.items.len != 0) {
+            const top = &stack.items[stack.items.len - 1];
+            if (top.next == top.reads.len) {
+                try on_path.put(a, top.name, false);
+                _ = stack.pop();
+                continue;
+            }
+            const c = top.reads[top.next];
+            top.next += 1;
+            if (on_path.get(c)) |open| {
+                if (!open) continue;
+                var names: std.ArrayList(u8) = .empty;
+                var at = stack.items.len;
+                while (stack.items[at - 1].name != c) at -= 1;
+                for (stack.items[at - 1 ..]) |f| try names.print(a, "`{s}` → ", .{self.ctx.file.str(f.name)});
+                try names.print(a, "`{s}`", .{self.ctx.file.str(c)});
+                return names.items;
+            }
+            try on_path.put(a, c, true);
+            try stack.append(a, .{ .name = c, .reads = try undeclaredReads(self, seedValueOf(self, c) orelse .none) });
+        }
+    }
+    return null;
+}
+
+/// Every identifier `readsUndeclared` could return from `e`, once each.
+fn undeclaredReads(self: *Flatten, e: Ast.ExprId) Error![]const Ast.StrId {
+    var out: std.ArrayList(Ast.StrId) = .empty;
+    var todo: std.ArrayList(Ast.ExprId) = .empty;
+    if (e != .none) try todo.append(self.ctx.arena, e);
+    const x = &self.ctx.file.exprs;
+    while (todo.pop()) |n| {
+        if (x.tag(n) == .ident) {
+            const name = x.strOf(n);
+            if (readsUndeclared(self, n) != null and std.mem.findScalar(Ast.StrId, out.items, name) == null)
+                try out.append(self.ctx.arena, name);
+            continue;
+        }
+        var buf: [3]Ast.ExprId = undefined;
+        for (x.children(n, &buf)) |c| if (c != .none) try todo.append(self.ctx.arena, c);
+    }
+    return out.items;
+}
 
 /// The final expression of flat parameter `name` in this design: a seeded
 /// defparam's value, else its first-walk value (scalars only).
@@ -630,4 +687,44 @@ test "§6.3 an ordered override list longer than the overridable parameters is E
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
     try std.testing.expect(fixture.hasCode(&f.bag, .E0907));
+}
+
+test "IEEE 1364-2005 §12.8.1 an upward defparam's value is replaced down a chain of any length; a cycle is E0907, named" {
+    const gpa = std.testing.allocator;
+    // `w`'s `p<n>` is `p<n-1> + 1.0` from `p0 = 1.0`, and `w` sets the top's
+    // `u.g`, inlined before `w`, to `p<n>`: n replacements. 64 was the old
+    // bound on them, so 65 and far past it. The value itself is run by
+    // `ch06_hierarchy/defparam_upward_value_chain_65.va`.
+    for ([_]usize{ 64, 65, 2000 }) |n| {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(gpa);
+        try text.appendSlice(gpa,
+            \\module top(p); inout p; electrical p; kid u(p); writer w(p); endmodule
+            \\module kid(c); inout c; electrical c; parameter real g = 0.0; endmodule
+            \\module writer(c); inout c; electrical c; parameter real p0 = 1.0;
+            \\
+        );
+        for (1..n + 1) |i| try text.print(gpa, "parameter real p{d} = p{d} + 1.0;\n", .{ i, i - 1 });
+        try text.print(gpa, "defparam top.u.g = p{d};\nendmodule\n", .{n});
+        var f: fixture.Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try fixture.parse(&f, text.items);
+        const d = try elaborate.elaborate(f.ctx());
+        try std.testing.expectEqual(@as(usize, 0), f.bag.count());
+        try std.testing.expect(fixture.paramNamed(&f.file, d.top, "u.g").?.is_override);
+    }
+    // `u.g`'s value reads `w.y`, `w.y` reads `w.x`, and the defparam on
+    // `w.x` reads `w.y` again: no replacement ends.
+    var f: fixture.Fixture = .{ .arena = .init(gpa) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u(p); writer w(p); endmodule
+        \\module kid(c); inout c; electrical c; parameter real g = 0.0; endmodule
+        \\module writer(c); inout c; electrical c; parameter real x = 1.0; parameter real y = x;
+        \\  defparam top.u.g = y; defparam w.x = y;
+        \\endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+    try std.testing.expectEqual(@import("diag").Code.E0907, f.bag.at(0).code);
+    try std.testing.expect(std.mem.indexOf(u8, f.bag.at(0).message, "the cycle `w.y` → `w.x` → `w.y`") != null);
 }

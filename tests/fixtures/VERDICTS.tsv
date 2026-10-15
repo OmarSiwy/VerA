@@ -1379,6 +1379,7 @@ pass	ch05_analog_behavior/named_event_unsupported.va
 pass	ch05_analog_behavior/nature_attribute_nonconstant_invalid.va
 pass	ch05_analog_behavior/nature_attribute_unsupported.va
 pass	ch05_analog_behavior/nested_event_control_invalid.va
+pass	ch05_analog_behavior/nested_ifs_500.va
 pass	ch05_analog_behavior/nested_sequential_blocks.va
 pass	ch05_analog_behavior/net_named_gnd_is_not_ground.va
 pass	ch05_analog_behavior/parallel_instances_own_unnamed_branch.va
@@ -1421,6 +1422,7 @@ pass	ch05_analog_behavior/resistor.va
 pass	ch05_analog_behavior/retained_conditional_contribution.va
 pass	ch05_analog_behavior/rlc.va
 pass	ch05_analog_behavior/sequential_block.va
+pass	ch05_analog_behavior/sequential_ifs_10000.va
 pass	ch05_analog_behavior/single_terminal_branch.va
 pass	ch05_analog_behavior/source_both_potential_and_flow_rejected.va
 pass	ch05_analog_behavior/source_probe_both.va
@@ -1504,6 +1506,8 @@ pass	ch06_hierarchy/defparam_precedence_over_instance_override.va
 pass	ch06_hierarchy/defparam_unsupported.va
 pass	ch06_hierarchy/defparam_upward_collect_first.va
 pass	ch06_hierarchy/defparam_upward_module_name_path.va
+pass	ch06_hierarchy/defparam_upward_value_chain_65.va
+pass	ch06_hierarchy/defparam_upward_value_cycle_rejected.va
 pass	ch06_hierarchy/dependent_parameter_transcendental.va
 pass	ch06_hierarchy/dependent_parameters.va
 pass	ch06_hierarchy/disable_in_a_child_instance.va
@@ -1532,6 +1536,7 @@ pass	ch06_hierarchy/generate_if_true.va
 pass	ch06_hierarchy/generate_implicit_localparam.va
 pass	ch06_hierarchy/generate_implicit_region_unsupported.va
 pass	ch06_hierarchy/generate_loop.va
+pass	ch06_hierarchy/generate_loop_4097_instances.va
 pass	ch06_hierarchy/generate_loop_count_parameter_override.va
 pass	ch06_hierarchy/generate_loop_descending.va
 pass	ch06_hierarchy/generate_mismatched_genvar_rejected.va
@@ -1544,8 +1549,8 @@ pass	ch06_hierarchy/generate_parameter_declaration_rejected.va
 pass	ch06_hierarchy/generate_region.va
 pass	ch06_hierarchy/generate_two_loops.va
 pass	ch06_hierarchy/genvar_init_self_reference_rejected.va
+pass	ch06_hierarchy/genvar_loop_4097_iterations.va
 pass	ch06_hierarchy/genvar_loop_at_unroll_limit.va
-pass	ch06_hierarchy/genvar_loop_beyond_unroll_limit_rejected.va
 pass	ch06_hierarchy/genvar_outside_loop_rejected.va
 pass	ch06_hierarchy/geometric_system_parameters.va
 pass	ch06_hierarchy/h01_01_paramset_string_range_selection.va
@@ -1569,7 +1574,7 @@ pass	ch06_hierarchy/instance_array_range_over_parameter.va
 pass	ch06_hierarchy/instance_array_range_variable_rejected.va
 pass	ch06_hierarchy/instance_array_unsupported.va
 pass	ch06_hierarchy/instance_tree_64_levels.va
-pass	ch06_hierarchy/instance_tree_deeper_than_64_rejected.va
+pass	ch06_hierarchy/instance_tree_65_levels.va
 pass	ch06_hierarchy/local_scope_declaration_shadow.va
 pass	ch06_hierarchy/local_scope_shadow.va
 pass	ch06_hierarchy/local_scope_variable_shadows_parameter.va

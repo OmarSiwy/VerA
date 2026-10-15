@@ -585,7 +585,7 @@ pub fn scopeOpen(self: *Gen) Error!void {
 }
 
 /// Records that the innermost open scope ends at `at`, which is not always
-/// `out.len`: the `emitCode` peephole rewinds over a label it drops.
+/// `out.len`: the `cfg.zig` peephole rewinds over a label it drops.
 /// No-op unless `probe.active`.
 pub fn scopeClose(self: *Gen, at: usize) void {
     if (!self.probe.active) return;
