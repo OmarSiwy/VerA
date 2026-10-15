@@ -3,8 +3,8 @@
 //! bits), or the place an lvalue names right now and the write that lands
 //! there. Every read of a variable, net or array element goes through here.
 //! Clauses: IEEE 1364-2005 §3.5.1, §3.6, §3.9, §4.8.2, §4.9, §5.1.13,
-//! §5.1.14, §5.2.1, §5.2.2, §5.5.2, §5.5.3, §9.2, §10.4.1, §17.8,
-//! §17.11.1 `$clog2`, §17.11.2; VAMS §7.3.6.3 analog probes.
+//! §5.1.14, §5.2.1, §5.2.2, §5.5.2, §5.5.3, §9.2, §9.4, §10.4.1, §17.8,
+//! §17.11.1 `$clog2`, §17.11.2; VAMS §3.7 wreal, §7.3.6.3 analog probes.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -56,8 +56,9 @@ pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     return base + (elementOffset(arr, indices[0..c.depth]) orelse return null);
 }
 
-/// Address conversion preserves unsigned magnitude: the engine's signed
-/// index range cannot contain an unsigned value above maxInt(i64).
+/// `value` as an index, read by its own signedness; null when it has an x or
+/// z bit or lies outside i64. An unsigned value above maxInt(i64) is null,
+/// not wrapped negative, so it can never name an element.
 pub fn indexInt(value: Int.Literal) ?i64 {
     return std.math.cast(i64, value.asIndex() orelse return null);
 }
@@ -132,11 +133,34 @@ fn readSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal
     const at = (try selectSlot(self, a, e)) orelse return out;
     const sel = (try selection(self, a, e)) orelse return out;
     const v = self.values[at];
-    for (0..sel.count) |i| {
-        const pos = sel.first + @as(i64, @intCast(i));
-        if (pos >= 0 and pos < v.width) setBit(out, @intCast(i), v.bit(@intCast(pos)));
-    }
+    // The selected positions the vector has; the rest stay x.
+    const lo = @max(sel.first, 0);
+    const hi = @min(sel.first + @as(i64, sel.count), @as(i64, v.width));
+    if (lo < hi) copyBits(out, @intCast(lo - sel.first), v, @intCast(lo), @intCast(hi - lo));
     return out;
+}
+
+/// Copies bits [src_lo, src_lo + count) of `src` into bits [dst_lo, dst_lo +
+/// count) of `dst`, value and unknown planes alike, leaving `dst`'s other
+/// bits alone. Asserts both ranges lie inside their widths. A word at a
+/// time: a chunk ends where either side's word does.
+pub fn copyBits(dst: Int.Literal, dst_lo: u32, src: Int.Literal, src_lo: u32, count: u32) void {
+    std.debug.assert(@as(u64, src_lo) + count <= src.width);
+    std.debug.assert(@as(u64, dst_lo) + count <= dst.width);
+    const planes = [2][2][]u64{ .{ dst.values(), src.values() }, .{ dst.unknowns(), src.unknowns() } };
+    var done: u32 = 0;
+    while (done < count) {
+        const s = src_lo + done;
+        const d = dst_lo + done;
+        const n = @min(count - done, 64 - d % 64, 64 - s % 64);
+        const mask: u64 = if (n == 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(n)) - 1;
+        const ds: u6 = @intCast(d % 64);
+        for (planes) |p| {
+            const bits = (p[1][s / 64] >> @intCast(s % 64)) & mask;
+            p[0][d / 64] = (p[0][d / 64] & ~(mask << ds)) | (bits << ds);
+        }
+        done += n;
+    }
 }
 
 /// Where `e` lands if written now, or null when it names no storage (an
@@ -158,9 +182,10 @@ pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.L
 
 /// `assign` of a real, which an integral target takes rounded (§4.8.2).
 pub fn assignReal(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, r: f64) Error!void {
-    const p = (try place(self, a, target)) orelse return;
+    // `put`, as `assign` does: a concatenation target splits the rounded
+    // value among its operands (§9.2); `place` alone names one slot.
     const tt = try targetType(self, target);
-    try write(self, a, p, try convertValue(a, try realLiteral(a, r), true, tt));
+    try put(self, a, target, try convertValue(a, try realLiteral(a, r), true, tt), false, null);
 }
 
 /// `assign` of an integer.
@@ -197,7 +222,7 @@ pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Lite
 /// Bits [lo, lo + w) of `v`, unsigned.
 pub fn bitsOf(a: std.mem.Allocator, v: Int.Literal, lo: u32, w: u32) Error!Int.Literal {
     const out = try filled(a, w, false, .zero);
-    for (0..w) |i| setBit(out, @intCast(i), v.bit(lo + @as(u32, @intCast(i))));
+    copyBits(out, 0, v, lo, w);
     return out;
 }
 
@@ -210,10 +235,11 @@ pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Err
     const cur = self.values[p.slot];
     const merged = try filled(a, cur.width, cur.signed, .zero);
     @memcpy(merged.planes, cur.planes);
-    for (0..sel.count) |i| {
-        const pos = sel.first + @as(i64, @intCast(i));
-        if (pos >= 0 and pos < cur.width) setBit(merged, @intCast(pos), value.bit(@intCast(i)));
-    }
+    // The selected positions the slot has; the value's bits for the others
+    // are dropped.
+    const lo = @max(sel.first, 0);
+    const hi = @min(sel.first + @as(i64, sel.count), @as(i64, cur.width));
+    if (lo < hi) copyBits(merged, @intCast(lo), value, @intCast(lo - sel.first), @intCast(hi - lo));
     return waiters.store(self, p.slot, merged.planes);
 }
 
@@ -312,8 +338,9 @@ pub fn realLiteral(a: std.mem.Allocator, r: f64) Error!Int.Literal {
 
 /// §4.8.2 integer-to-real: the value, read by its own signedness, "Individual
 /// bits that are x or z in the net or the variable shall be treated as zero".
-/// ponytail: the low 64 bits of a wider operand.
+/// A wider operand converts its low 64 bits, unsigned.
 fn realOfInt(v: Int.Literal) f64 {
+    // ponytail: the low 64 bits of a wider operand.
     const lo = v.values()[0] & ~v.unknowns()[0];
     if (!v.signed or v.width > 64) return @floatFromInt(lo);
     const shift: u6 = @intCast(64 - v.width);
@@ -473,10 +500,12 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
 /// operands get Table 5-22's self-determined or common comparison context.
 pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
     // §4.8: a real context is a double; a real operand in an integral
-    // context is its §4.8.2 rounded integer.
+    // context is its §4.8.2 rounded integer. A real context comes first: an
+    // unsized x or z constant there is §4.8.2's conversion too (its unknown
+    // bits are 0), not a fill of the real's 64 bits.
     if (ty.real) return realLiteral(a, try evalReal(self, a, e));
+    if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
     if (compile.typeOf(self, e).real) return normalize(a, try intOfReal(a, try evalReal(self, a, e)), ty);
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
@@ -703,6 +732,35 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
 
 // ---- tests ------------------------------------------------------------------
 
+test copyBits {
+    // Oracle: the bit-at-a-time copy it replaced, over random 4-state data at
+    // every alignment of both sides up to a few words.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var prng = std.Random.DefaultPrng.init(0xc0b1e5);
+    const rand = prng.random();
+    for (0..3000) |_| {
+        const sw = rand.intRangeAtMost(u32, 1, 200);
+        const dw = rand.intRangeAtMost(u32, 1, 200);
+        const count = rand.intRangeAtMost(u32, 1, @min(sw, dw));
+        const src_lo = rand.intRangeAtMost(u32, 0, sw - count);
+        const dst_lo = rand.intRangeAtMost(u32, 0, dw - count);
+        const src = try filled(a, sw, false, .zero);
+        const got = try filled(a, dw, false, .zero);
+        const want = try filled(a, dw, false, .zero);
+        for (0..sw) |i| setBit(src, @intCast(i), rand.enumValue(Int.Bit));
+        for (0..dw) |i| {
+            const b = rand.enumValue(Int.Bit);
+            setBit(got, @intCast(i), b);
+            setBit(want, @intCast(i), b);
+        }
+        copyBits(got, dst_lo, src, src_lo, count);
+        for (0..count) |i| setBit(want, dst_lo + @as(u32, @intCast(i)), src.bit(src_lo + @as(u32, @intCast(i))));
+        try std.testing.expectEqualSlices(u64, want.planes, got.planes);
+    }
+}
+
 test "§4.8 real variables, conversions, and a VAMS §3.7 wreal" {
     try expectRun(
         \\module m;
@@ -819,6 +877,105 @@ test "digital assignment context extends before operations and preserves X Z" {
         \\end
         \\endmodule
     , "wide 11111111\nsigned 11111000\nunsigned 00001000\nlogic 000010xz\ninteger 11111111111111111111111111111111\n");
+}
+
+test "§5.1.9/§5.1.11/§5.1.8 logical, reduction and equality operators over x" {
+    // && with a 0 side is 0, || with a 1 side is 1, otherwise x decides x.
+    // &1x11 has no 0 (x); &0x11 has one (0); |0x00 has no 1 (x); |1x00 has
+    // one (1); ^ over any x is x. == over an x bit in both is x, === compares
+    // it (1), and a known differing bit makes == 0.
+    try expectRun(
+        \\module m;
+        \\initial begin
+        \\  $display("%b%b%b", 1'bx && 1'b0, 1'bx || 1'b1, 1'bx && 1'b1);
+        \\  $display("%b%b%b%b%b", &4'b1x11, &4'b0x11, |4'b0x00, |4'b1x00, ^4'b1x00);
+        \\  $display("%b%b%b", 4'b1x00 == 4'b1x00, 4'b1x00 === 4'b1x00, 4'b1x00 == 4'b0x00);
+        \\end
+        \\endmodule
+    , "01x\nx0x1x\nx10\n");
+}
+
+test "§5.2.1 a select partly outside its vector reads x there and writes only the bits inside" {
+    // a[9:6] of a [7:0] vector: bits 9 and 8 do not exist (x), 7 and 6 are 1.
+    // v is [7:4] = 1010, so v[7]=1 v[6]=0 v[5]=1 v[4]=0. v[2 +: 4] ascends
+    // from 2 to 5: {v[5], v[4], v[3], v[2]} = 1 0 x x. Writing 0110 there
+    // lands bit 2 (1) in v[4] and bit 3 (0) in v[5]: v = 1001.
+    try expectRun(
+        \\module m; reg [7:0] a; reg [7:4] v;
+        \\initial begin
+        \\  a = 8'hff; v = 4'b1010;
+        \\  $display("%b %b", a[9:6], v[2 +: 4]);
+        \\  v[2 +: 4] = 4'b0110;
+        \\  $display("%b", v);
+        \\end
+        \\endmodule
+    , "xx11 10xx\n1001\n");
+}
+
+test "§4.2.1.4 $signed/$unsigned retype their operand before it is extended; >>> is arithmetic on a signed operand only" {
+    // $signed(4'b1111) is -1, extended to 8 bits by sign; $unsigned(4'sb1111)
+    // is 15, extended by zero. 8'sb1000_0000 >>> 2 fills with its sign bit;
+    // the unsigned operand fills with 0.
+    try expectRun(
+        \\module m; reg [7:0] r;
+        \\initial begin
+        \\  r = $signed(4'b1111) + 8'sd0; $display("%b", r);
+        \\  r = $unsigned(4'sb1111) + 8'sd0; $display("%b", r);
+        \\  r = 8'sb1000_0000 >>> 2; $display("%b", r);
+        \\  r = 8'b1000_0000 >>> 2; $display("%b", r);
+        \\end
+        \\endmodule
+    , "11111111\n00001111\n11100000\n00100000\n");
+}
+
+test "§4.8.2 an integer becomes a real with x and z bits as 0; a non-finite real becomes x" {
+    // 4'b1x01 reads as 1001 = 9; 4'sb1111 as -1. 1.0/0.0 is infinite, which
+    // no integer holds: every bit of i is x (VerA's choice, §4.8.2 is silent).
+    try expectRun(
+        \\module m; real r; integer i;
+        \\initial begin
+        \\  r = 4'b1x01; $display("%g", r);
+        \\  r = 4'sb1111; $display("%g", r);
+        \\  r = 1.0 / 0.0; i = r; $display("%b", i);
+        \\end
+        \\endmodule
+    , "9\n-1\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+}
+
+test "§5.1.13 a real result under an x condition is 0, even when the arms agree" {
+    try expectRun("module m; real r; reg c; initial begin c = 1'bx; r = c ? 1.5 : 1.5; $display(\"%g\", r); end endmodule", "0\n");
+}
+
+test "§5.1.14 a zero replication inside a concatenation contributes no bits" {
+    try expectRun("module m; initial $display(\"%b\", {{0{1'b1}}, 2'b10}); endmodule", "10\n");
+}
+
+test "§3.9 an index past i64 names no element, signed or not" {
+    try expectRun(
+        \\module m; reg [3:0] mem [0:1];
+        \\initial begin mem[0] = 4'h5; $display("%b %b %h", mem[65'h1_0000_0000_0000_0000], mem[64'hffff_ffff_ffff_ffff], mem[0]); end
+        \\endmodule
+    , "xxxx xxxx 5\n");
+}
+
+test "§4.8.2/§5.5.1 a case label meets a real scrutinee as a real" {
+    // The label 'bx is integral; against the real r it converts to a real,
+    // and §4.8.2 reads each x bit as 0, so it is 0.0 and matches r = 0.0.
+    try expectRun(
+        \\module m; real r;
+        \\initial begin r = 0.0; case (r) 'bx: $display("x"); default: $display("other"); endcase end
+        \\endmodule
+    , "x\n");
+}
+
+test "§17.2.4.3 a %f conversion into a concatenation rounds to an integer and splits it" {
+    // One item matched. 2.5 rounds away from zero to 3 (§4.8.2): {hi, lo}
+    // is the 8-bit 3, hi 0 and lo 3.
+    try expectRun(
+        \\module m; reg [3:0] hi, lo; integer n;
+        \\initial begin n = $sscanf("2.5", "%f", {hi, lo}); $display("%0d %0d %0d", n, hi, lo); end
+        \\endmodule
+    , "1 0 3\n");
 }
 
 test "unpacked array elements are addressed, and an out-of-range index reads X" {

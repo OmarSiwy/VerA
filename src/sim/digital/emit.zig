@@ -4,6 +4,9 @@
 //! reaches with `emit_expr`'s expressions, once per `rt.Phase` (`Code(two)`).
 //! A construct that is not native refuses by name; the executable then embeds
 //! the source and runs the interpreter (`rt.interpret`, `Program.fallback`).
+//! Clauses: IEEE 1364-2005 §3.2, §4.8.2, §6.1/§6.1.3, §7.6, §7.9, §9.2.2,
+//! §9.3, §9.7.6, §9.7.7, §9.8.2, §10.2.2/§10.2.3, §10.3, §15, §17.1 to §17.6,
+//! §18; VAMS §9.22 driver access (refused).
 const std = @import("std");
 const no_cold = @import("net.zig").no_cold;
 const Front = @import("frontend");
@@ -28,12 +31,19 @@ test {
 
 /// What `vera --emit-exe design.v` was given: enough to run the source again.
 pub const Embed = struct {
+    /// The design's source text, before preprocessing.
     source: []const u8,
+    /// The name diagnostics and `$finish` reports give the source.
     file_name: []const u8,
+    /// `-I` directories, searched by `` `include ``.
     include_dirs: []const []const u8,
+    /// `--std=`'s keyword set.
     language: Front.token.KeywordSet,
+    /// §13.2.3 the library the source maps into.
     lib: []const u8 = "work",
+    /// More sources, each with its own library (§13.2).
     more: []const root.Unit = &.{},
+    /// §13.7.1 `-L`'s library search order; empty is the default order.
     search: []const []const u8 = &.{},
 };
 
@@ -63,6 +73,8 @@ pub const Error = error{ Unsupported, OutOfMemory };
 /// The root module of `r`'s executable. `r` is read and its time-0 queue
 /// drained, never run. Under `.two` a design where an x or z carries
 /// meaning is refused; under `.auto` it is 4-state throughout (`Program.four`).
+/// A refused design's root embeds `embed` and runs the interpreter. Every
+/// returned slice is in `arena`.
 pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = logic == .two, .auto = logic == .auto };
     if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null, .four = e.four } else |err| switch (err) {
@@ -304,7 +316,7 @@ pub const Emitter = struct {
             return self.print("a{d}, {d} + (a{d} - {d}) * {d}, ", .{lb} ++ off);
         }
         const count = self.r.arrays.get(base).?.count;
-        const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
+        const watched = std.mem.findScalar(bool, self.watched[base..][0..count], true) != null;
         if (how == .blocking and !watched) return self.print("try M.set(s, {d} + (a{d} - {d}) * {d}, ", off);
         var wakes: plan.Reach = .{};
         for (self.reach[base..][0..count]) |x| wakes = @bitCast(@as(u8, @bitCast(wakes)) | @as(u8, @bitCast(x)));
@@ -854,7 +866,7 @@ fn emitShows(self: *Emitter) Error!void {
 
 /// The `show` index of the `$strobe`/`$monitor` at `pc`.
 fn site(self: *Emitter, pc: u32) Error!u32 {
-    const k = std.mem.indexOfScalar(u32, self.shows.items, pc) orelse blk: {
+    const k = std.mem.findScalar(u32, self.shows.items, pc) orelse blk: {
         try self.shows.append(self.arena, pc);
         break :blk self.shows.items.len - 1;
     };
@@ -922,7 +934,7 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
             // continues past it.
             .call_timed => |c| {
                 if (self.device) return self.refuse("a §10.2.3 timed task that reaches itself");
-                if (std.mem.indexOfScalar(u32, self.timed.items, c.sub) == null) try self.timed.append(self.arena, c.sub);
+                if (std.mem.findScalar(u32, self.timed.items, c.sub) == null) try self.timed.append(self.arena, c.sub);
                 try work.append(self.arena, next);
             },
             .task_return => {},
@@ -964,13 +976,13 @@ fn process(self: *Emitter, pcs: []const u32) Error!void {
     // Zig refuses an unused label and an unused parameter, so each is
     // declared only when the body uses it.
     const text = self.out.written()[head..];
-    if (std.mem.indexOf(u8, text, "continue :sw") != null) try insert(self, sw + 4, "sw: ");
+    if (std.mem.find(u8, text, "continue :sw") != null) try insert(self, sw + 4, "sw: ");
     if (!usesS(self.out.written()[head..])) try insert(self, sw, "    _ = s;\n");
 }
 
 /// Does a function's text use its parameter `s`?
 fn usesS(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, "s.") != null or std.mem.indexOf(u8, text, "(s,") != null;
+    return std.mem.find(u8, text, "s.") != null or std.mem.find(u8, text, "(s,") != null;
 }
 
 fn insert(self: *Emitter, at: usize, text: []const u8) Error!void {
@@ -1190,7 +1202,13 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             if (x.clamp) {
                 try self.print("            const c = ", .{});
                 const ty = try expr.selfDetermined(self, x.count);
-                try self.print(";\n            const n: u64 = if ((L.asInt(c, {d}, {}) orelse 0) > 0) try s.repeatCount(c, {d}, false) else 0;\n", .{ ty.width, ty.signed, ty.width });
+                // §9.7.7: only a signed count can be <= 0; an unsigned one is
+                // its 64-bit magnitude, which `asInt` would read as negative
+                // from 2^63 on.
+                if (ty.signed)
+                    try self.print(";\n            const n: u64 = if ((L.asInt(c, {d}, true) orelse 0) > 0) try s.repeatCount(c, {d}, false) else 0;\n", .{ ty.width, ty.width })
+                else
+                    try self.print(";\n            const n: u64 = try s.repeatCount(c, {d}, false);\n", .{ty.width});
                 return self.print("            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.end, next });
             }
             try self.print("            const n = try s.repeatCount(", .{});
@@ -1274,14 +1292,18 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            continue :sw {d};\n", .{next});
         },
         // §10.3: a disable inside the block it names continues after it.
-        .disable_block => |b| try self.print("            try s.disable({d}, {d}, {d});\n            continue :sw {d};\n", .{
-            b.start, b.end, b.end, if (pc >= b.start and pc < b.end) b.end else next,
-        }),
+        .disable_block => |b| {
+            if (pc >= b.start and pc < b.end and hostsOthers(r, b.start, b.end)) return self.refuse(disable_inside);
+            try self.print("            try s.disable({d}, {d}, {d});\n            continue :sw {d};\n", .{
+                b.start, b.end, b.end, if (pc >= b.start and pc < b.end) b.end else next,
+            });
+        },
         // §10.3 every activation of the task ends: each inlined copy, and
         // the synchronous ones, which unwind back to their callers.
         .disable_task => |idx| {
             var after = next;
             for (r.subs.items[idx].ranges.items) |rg| {
+                if (pc >= rg.start and pc < rg.end and hostsOthers(r, rg.start, rg.end)) return self.refuse(disable_inside);
                 try self.print("            try s.disable({d}, {d}, {d});\n", .{ rg.start, rg.end, rg.end });
                 if (pc >= rg.start and pc < rg.end) after = rg.end;
             }
@@ -1371,6 +1393,27 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            s.jump = try s.returnTimed();\n            return;\n", .{});
         },
     }
+}
+
+const disable_inside = "a §10.3 disable from inside a block other processes may still be inside";
+
+/// Can another process be suspended or queued inside pcs [start, end) when a
+/// `disable` inside them runs: a §9.8.2 fork arm, a process a `pla_start`
+/// or `override_on` starts, or a §9.7.2 expression term's tracker, whose
+/// first instruction keeps its hidden slot (`compile.exprTerm`)? Then
+/// `rt.State.disable` would resume the end besides the disabling process,
+/// which `exec.disableInside` avoids and `rt` cannot yet.
+fn hostsOthers(r: *const Run, start: u32, end: u32) bool {
+    // ponytail: a refusal; `rt` exposing `stop` lets these disables be native.
+    for (r.code.items[start..end]) |ins| switch (ins) {
+        .fork, .pla_start, .override_on => return true,
+        .init_var => |x| {
+            var it = r.term_slots.valueIterator();
+            while (it.next()) |at| if (at.* == x.slot) return true;
+        },
+        else => {}, // else: every other instruction runs in the process that reaches it
+    };
+    return false;
 }
 
 /// The cell a timed task's output formal `at` waits in between its
@@ -1590,9 +1633,12 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     const scale = r.timeOf(r.scope).scale;
     const t = try expr.natural(self, amount);
     if (t.real) {
-        if (compile.constantExpression(r, amount)) {
+        // A constant no tick count holds fails at run time, as the
+        // interpreter's does, through `s.realTicks`: a `return` here would
+        // sit in the argument list of the call that schedules the delay.
+        if (compile.constantExpression(r, amount)) fold: {
             const v = evaluate.evalReal(r, self.arena, amount) catch return self.refuse("a delay the engine does not fold");
-            const ticks = scale.realDelay(v) catch |e| return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
+            const ticks = scale.realDelay(v) catch break :fold;
             return self.print("{d}", .{ticks});
         }
         try self.print("try s.realTicks(", .{});
@@ -1604,12 +1650,18 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
         const v = evaluate.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
         // `--two-state` computes an unknown constant from its 0-valued leaves.
         if (self.two_state and v.hasUnknown()) break :fold;
-        const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch |e|
-            return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
+        const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch break :fold;
         return self.print("{d}", .{ticks});
     }
+    // `s.ticks` reads the 64-bit word as a time: a narrower signed delay is
+    // sign-extended to it first, so a negative one is the §9.7.1 64-bit
+    // two's complement `exec.delayOf` takes, not its own width's.
     try self.print("try s.ticks(", .{});
-    try expr.value(self, amount, t);
+    if (t.signed and t.width < 64) {
+        try self.print("L.rs(", .{});
+        try expr.value(self, amount, t);
+        try self.print(", {d}, 64, true)", .{t.width});
+    } else try expr.value(self, amount, t);
     try self.print(", {}, .{{ .local_per_unit = {d}, .global_per_local = {d} }})", .{ t.signed, scale.local_per_unit, scale.global_per_local });
 }
 
@@ -2297,6 +2349,83 @@ fn dynamicFormat(self: *Emitter, args: []const Ast.ExprId) Error!void {
         try self.print(", c{d}_{d}.conv, c{d}_{d}.precision, c{d}_{d}.width),\n            }}\n", .{ lb, k, lb, k, lb, k });
     }
     try self.print("            try s.endFormat(&f{d}, \"{f}\", \"{f}\");\n            }}\n            }}\n", .{ lb, scope, lib });
+}
+
+/// Test helper: `source` elaborated, its transcript discarded, and emitted
+/// as `vera --emit-exe` would under `schedule` and `logic`. In `arena`.
+fn emitted(arena: std.mem.Allocator, source: []const u8, schedule: Schedule, logic: Logic) !Program {
+    var bag = @import("diag").Bag.init(arena);
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try root.elaborate(arena, source, .{}, &bag, &sink.writer);
+    return program(arena, &r, .{ .source = source, .file_name = "<digital>", .include_dirs = &.{}, .language = Front.token.default_keyword_set }, schedule, logic);
+}
+
+test program {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Every instruction native: no fallback, an `rt` main.
+    const p = try emitted(a, "module m; reg a; initial begin a = 1'b0; #1 a = 1'b1; $display(\"%b\", a); end endmodule", .static, .auto);
+    try std.testing.expectEqual(@as(?[]const u8, null), p.fallback);
+    try std.testing.expect(std.mem.find(u8, p.text, "pub fn main(") != null);
+    try std.testing.expect(std.mem.find(u8, p.text, "rt.interpret(") == null);
+}
+
+test "a construct that is not native names itself and embeds the interpreter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §9.5 over a real: a `logic.T` holds no real.
+    const real_case = try emitted(a, "module m; real r; initial begin r = 1.0; case (r) 1.0: $display(\"one\"); endcase end endmodule", .static, .auto);
+    try std.testing.expectEqualStrings("a real value", real_case.fallback.?);
+    try std.testing.expect(std.mem.find(u8, real_case.text, "rt.interpret(") != null);
+    // §15: `rt` evaluates no timing check.
+    const tchk_source =
+        \\module ff(input clk, input d); specify $setup(d, posedge clk, 1); endspecify endmodule
+        \\module m; reg clk, d; ff u(clk, d); initial begin clk = 0; d = 0; #1 clk = 1; end endmodule
+    ;
+    const tchk = try emitted(a, tchk_source, .static, .auto);
+    try std.testing.expectEqualStrings("IEEE 1364-2005 §15 timing checks", tchk.fallback.?);
+}
+
+test "--two-state refuses an x that carries meaning; auto keeps it 4-state and says why" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "module m; reg a; initial #1 if (a === 1'bx) $display(\"x\"); endmodule";
+    const why = "`===` or `!==` against an x or z, which asks whether a value is unknown";
+    const two = try emitted(a, source, .static, .two);
+    try std.testing.expectEqualStrings(why, two.fallback.?);
+    const auto = try emitted(a, source, .static, .auto);
+    try std.testing.expectEqual(@as(?[]const u8, null), auto.fallback);
+    try std.testing.expectEqualStrings(why, auto.four.?.why);
+}
+
+test device {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var bag = @import("diag").Bag.init(a);
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try root.elaborate(a, "module m(output reg q); initial assign q = 1'b1; endmodule", .{}, &bag, &sink.writer);
+    const why = switch (try device(a, &r, "<digital>", .static)) {
+        .refused => |w| w,
+        .zig => "native",
+    };
+    try std.testing.expectEqualStrings("a §9.3 procedural continuous assignment (assign or force)", why);
+}
+
+test "§10.3 a disable from inside a fork, whose other arms may be suspended, runs on the interpreter" {
+    // `rt.State.disable` resumes the block's end when it ended a sibling, and
+    // the disabling arm continues there too: the interpreter resumes it once.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source =
+        \\`timescale 1ns/1ns
+        \\module m; initial begin fork : f #1 $display("a"); #2 disable f; join $display("after"); end endmodule
+    ;
+    const p = try emitted(arena.allocator(), source, .static, .auto);
+    try std.testing.expectEqualStrings("a §10.3 disable from inside a block other processes may still be inside", p.fallback.?);
 }
 
 fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {

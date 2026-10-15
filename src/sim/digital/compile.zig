@@ -2,8 +2,11 @@
 //! scope, -> `Instruction` rows in `Run.code`, each expression's type in
 //! `Run.types`, and the static slot lists drivers and `@*` wait on; or E1100
 //! before any process has run.
-//! Clauses: IEEE 1364-2005 §5.5.1 Table 5-22, §5.1.14, A.6.5, §9.7.1, §9.7.5,
-//! §5.10.4, §6.1, §8.5.3.3/§8.5.3.4, §17.7; VAMS §9.14 Table 9-11 `$clog2`.
+//! Clauses: IEEE 1364-2005 §4.8.1, §5.1.1, §5.1.14, §5.2.1/§5.2.2, §5.5.1
+//! Table 5-22, §5.10.4, §6.1, §8.5.3.3/§8.5.3.4, §9.3, §9.5, §9.6, §9.7.1 to
+//! §9.7.7, §9.8.2, §10.2.2/§10.2.3, §10.4.4/§10.4.5, §12.7, §17.1 to §17.11,
+//! §20.4, A.6.5; VAMS §7.3.6.3 analog probes, §9.14 Table 9-11 `$clog2`,
+//! §9.22 driver access.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -43,12 +46,20 @@ pub const Instruction = union(enum(u5)) {
     /// §6.1 continuous assignment `n`: evaluate, drive, resolve, then suspend
     /// on its own operands, resuming at its own pc.
     continuous: u32,
+    /// §9.4 continue at the next pc when `condition` is true, else at
+    /// `otherwise`; x and z are false.
     branch: struct { condition: Ast.ExprId, otherwise: u32 },
+    /// Continue at this pc.
     jump: u32,
+    /// §9.5 the first arm whose label matches `statement`'s scrutinee, both in
+    /// `ty`, continues at `Run.case_targets[targets + arm]`; no match continues
+    /// at `fallback` (the `default` arm, or past the statement).
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
     /// `clamp`: §9.7.7's repeat event control, where a count <= 0 is no
     /// occurrence; the §9.6 statement refuses a negative one.
     repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32, clamp: bool = false },
+    /// The end of a `repeat` body: one count spent from `Run.repeats[counter]`;
+    /// while some remain, the body runs again from `body`.
     repeat_next: struct { counter: u32, body: u32 },
     /// §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
@@ -117,6 +128,7 @@ pub const Instruction = union(enum(u5)) {
     /// §7.6 a controlled pass switch: read the control, re-resolve both
     /// sides, and wait on the control's operands.
     switch_ctrl: struct { tran: u32, slots: []const u32 },
+    /// The end of a process, a subroutine body or an out-of-line helper.
     stop,
 
     // Budget: one row per pc, read by every dispatch of `exec.execute`. The
@@ -139,6 +151,8 @@ pub const SysFn = enum {
     stime,
     /// §9.14 Table 9-11 / IEEE 1364 §17.11: ceiling of log base 2.
     clog2,
+    /// §4.2.1.4 `$signed`/`$unsigned`: the operand's bits, self-determined,
+    /// retyped; the width is unchanged.
     make_signed,
     make_unsigned,
     /// IEEE 1364-2005 §17.10.1/§17.10.2, the plusarg queries. `vera --run`
@@ -481,9 +495,9 @@ pub fn constantFunction(self: *Run, idx: u32) Error!bool {
 /// it calls may be in a constant expression. Asked of a framed function; one
 /// it calls is framed early (`earlyFrame`) if need be. A recursive call is
 /// taken as constant while it is being asked about.
-/// ponytail: a system task is refused, not ignored as §10.4.5 says, and a
-/// named block's own locals are not the function's.
 pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
+    // ponytail: a system task is refused, not ignored as §10.4.5 says, and a
+    // named block's own locals are not the function's.
     const sub = &self.subs.items[idx];
     if (sub.constant) |c| return if (c) null else "it is not a constant function";
     if (!sub.decl.is_function) return "it is a task";
@@ -891,10 +905,10 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
 fn plusargFormat(self: *Run, e: Ast.ExprId) Error!void {
     const text = self.file.str(self.file.exprs.strOf(e));
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, text, i, '%')) |at| {
+    while (std.mem.findScalarPos(u8, text, i, '%')) |at| {
         i = at + 1;
         while (i < text.len and text[i] == '0') i += 1;
-        if (i == text.len or std.mem.indexOfScalar(u8, "dohbefgsDOHBEFGS", text[i]) == null)
+        if (i == text.len or std.mem.findScalar(u8, "dohbefgsDOHBEFGS", text[i]) == null)
             return self.fail(self.file.exprs.mainTok(e), "§17.10.2: a $value$plusargs format is one of %d %o %h %b %e %f %g %s, not `%{s}`", .{text[@min(i, text.len)..@min(i + 1, text.len)]});
         i += 1;
     }
@@ -957,7 +971,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 self.scope = try elab.blockScope(self, outer, id);
             }
             const start = position(self);
-            if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
+            // §9.8.2 in a function: §10.4.4 leaves no arm a timing control,
+            // so each runs to its end, and running them one after another,
+            // in order, is one execution of the parallel block, joined
+            // before the call returns. A queued arm would outlive the call.
+            if (b.parallel and !self.in_function) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
             self.scope = outer;
             if (b.name != .none) {
                 const entry = try self.blocks.getOrPut(self.arena, .{ .scope = self.scope, .str = b.name });
@@ -1459,11 +1477,11 @@ pub fn compileSub(self: *Run, idx: u32) Error!void {
 /// Task `idx`'s body compiled once, jumped over where it is emitted, for
 /// `.call_timed`. An automatic task gets a frame of its own, which each
 /// activation fills in turn; a static one shares its one frame (§10.2.3).
-/// ponytail: `disable` of the task stops its inlined copies, not these
-/// activations; and `repeat` counters and intra-assignment cells are per
-/// site, so a body that suspends inside one of them across its own
-/// recursion shares it.
 fn outOfLine(self: *Run, idx: u32, depth: u16) Error!void {
+    // ponytail: `disable` of the task stops its inlined copies, not these
+    // activations; and `repeat` counters and intra-assignment cells are per
+    // site, so a body that suspends inside one of them across its own
+    // recursion shares it.
     if (self.subs.items[idx].body != null) return;
     const decl = self.subs.items[idx].decl;
     const f = if (decl.automatic) try elab.frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
@@ -1494,7 +1512,10 @@ fn stmtTimed(self: *Run, inst: u32, id: Ast.StmtId) Error!bool {
     return switch (self.file.stmt(id)) {
         .event_control => true,
         .assign => |s| intraTimed(s),
-        .block => |b| for (b.body) |s| {
+        // §9.8.2: the parent waits at the join for arms that run as
+        // processes of their own, which only a process can do; a task with a
+        // fork is inlined into its caller like one with a timing control.
+        .block => |b| if (b.parallel) true else for (b.body) |s| {
             if (try stmtTimed(self, inst, s)) break true;
         } else false,
         .if_stmt => |s| try stmtTimed(self, inst, s.then_s) or try stmtTimed(self, inst, s.else_s),
@@ -1546,7 +1567,7 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
     // the last dot name instances as a §12.5 reference's do, and the task is
     // the last part, declared in the final one.
     const text = self.file.str(name);
-    if (std.mem.lastIndexOfScalar(u8, text, '.')) |dot| {
+    if (std.mem.findScalarLast(u8, text, '.')) |dot| {
         var parts = std.mem.splitScalar(u8, text[0..dot], '.');
         var k: usize = 0;
         while (parts.next()) |part| : (k += 1) {
@@ -1594,9 +1615,11 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
 /// Appends to `out`, once each, the slots `e` reads: §6.1 "a continuous
 /// assignment is evaluated whenever an operand changes". They resolve at
 /// compile time, like an event term, so a resumption cannot fail mid-dispatch.
-// ponytail: an array element operand watches every element of its array;
-// a per-array wake list if a big memory ever feeds one.
+/// An array element operand lists every element of its array. `out`'s items
+/// are in `self.arena`.
 pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
+    // ponytail: an array element operand watches every element of its array;
+    // a per-array wake list if a big memory ever feeds one.
     return sensitivityProbes(self, e, out, null);
 }
 
@@ -1617,7 +1640,15 @@ pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), pr
             // names is known only when it is read; a vector select its vector.
             if (try self.indexedArray(e)) |arr| {
                 const base = try self.slot(self.chainBase(e).base);
-                for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
+                // The elements enter `out` together and in order, so the last
+                // one there means all are; before them only the first can be,
+                // as a bare name (`$fread`'s memory). `watch` element by
+                // element was quadratic in the array's size.
+                if (std.mem.findScalar(u32, out.items, base + arr.count - 1) == null) {
+                    const has_base = std.mem.findScalar(u32, out.items, base) != null;
+                    try out.ensureUnusedCapacity(self.arena, arr.count);
+                    for (@intFromBool(has_base)..arr.count) |i| out.appendAssumeCapacity(base + @as(u32, @intCast(i)));
+                }
                 var x = e;
                 while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivityProbes(self, ex.rhs(x), out, probes);
             } else {
@@ -2020,4 +2051,163 @@ test "concat unsized boundary and cast arity are explicit" {
     try expectRejected("module m; initial $display(\"%b\",$signed()); endmodule", "exactly one integral argument");
     try expectRejected("module m; initial $display(\"%b\",$unsigned(1,2)); endmodule", "exactly one integral argument");
     try expectRejected("module m; initial $display(\"%b\",$signed(1.0)); endmodule", "exactly one integral argument");
+}
+
+test "§17.10.2 a $value$plusargs format names only the listed conversions, and no query matches" {
+    // `vera --run` takes no plusargs, so both queries are §17.10's "no
+    // match": an integer 0, and the variable keeps its 5.
+    try expectRun(
+        \\module m; integer v;
+        \\initial begin v = 5; $display("%0d %0d %0d", $test$plusargs("X"), $value$plusargs("N=%0d", v), v); end
+        \\endmodule
+    , "0 0 5\n");
+    try expectRejected("module m; integer v; initial if ($value$plusargs(\"N=%u\", v)) v = 1; endmodule", "a $value$plusargs format is one of");
+}
+
+test "§17.3.2 $timeformat takes no arguments or four, units 0 to -15 and a literal suffix" {
+    try expectRun("module m; initial begin $timeformat(-15, 0, \"\", 0); $timeformat; $display(\"ok\"); end endmodule", "ok\n");
+    try expectRejected("module m; initial $timeformat(-9, 2); endmodule", "no arguments or exactly four");
+    try expectRejected("module m; initial $timeformat(1, 0, \"\", 0); endmodule", "range from 0 to -15");
+    try expectRejected("module m; initial $timeformat(-16, 0, \"\", 0); endmodule", "range from 0 to -15");
+    try expectRejected("module m; initial $timeformat(-9, 0, 5, 0); endmodule", "suffix must be a string literal");
+}
+
+test "§17.2.1 an $fopen type is one of Table 17-7's" {
+    try expectRejected("module m; integer f; initial f = $fopen(\"x.txt\", \"q\"); endmodule", "Table 17-7");
+}
+
+test "§17.9 a distribution takes its own argument count and a variable seed" {
+    try expectRun("module m; integer s, i; initial begin s = 7; i = $random(s); i = $random; $display(\"ok\"); end endmodule", "ok\n");
+    try expectRejected("module m; integer s, i; initial i = $dist_uniform(s, 1); endmodule", "wrong number of arguments to a §17.9");
+    try expectRejected("module m; integer i; initial i = $random(5); endmodule", "§17.9.1: the seed argument");
+    try expectRejected("module m; integer s, i; initial i = $dist_normal(s, 1.5, 2); endmodule", "§17.9.2");
+}
+
+test "§17.8 and §17.11.2 conversions and math functions take their own argument types and counts" {
+    // $rtoi truncates -2.7 toward zero; $itor(3) is 3.0, which %g prints as 3.
+    try expectRun("module m; initial $display(\"%0d %g %g\", $rtoi(-2.7), $itor(3), $pow(2.0, 10.0)); endmodule", "-2 3 1024\n");
+    try expectRejected("module m; integer i; initial i = $rtoi(1); endmodule", "$rtoi and $realtobits convert a real");
+    try expectRejected("module m; real r; initial r = $itor(1.5); endmodule", "$rtoi and $realtobits convert a real");
+    try expectRejected("module m; real r; initial r = $pow(2.0); endmodule", "wrong number of arguments to a §17.11.2");
+    try expectRejected("module m; integer i; initial i = $time(1); endmodule", "$time and $stime take no arguments");
+    try expectRejected("module m; real r; initial r = $realtime(1); endmodule", "$realtime takes no arguments");
+    try expectRejected("module m; integer i; initial i = $clog2(); endmodule", "$clog2 takes exactly one argument");
+    try expectRejected("module m; integer i; initial i = $clog2(2.0); endmodule", "§17.11.1");
+}
+
+test "§5.2.1 a part-select names its more significant bit first; bounds and widths are constant integers" {
+    // a = 1010_0110: a[3:0] is its low nibble; c[0:3] the four bits from
+    // c's left index; a[2:2] the one bit 2.
+    try expectRun(
+        \\module m; reg [7:0] a; reg [0:7] c;
+        \\initial begin a = 8'b1010_0110; c = 8'b1010_0110; $display("%b %b %b", a[3:0], c[0:3], a[2:2]); end
+        \\endmodule
+    , "0110 1010 1\n");
+    try expectRejected("module m; reg [7:0] a; reg [3:0] b; initial b = a[0:3]; endmodule", "names its more significant bit first");
+    try expectRejected("module m; reg [0:7] a; reg [3:0] b; initial b = a[3:0]; endmodule", "names its more significant bit first");
+    try expectRejected("module m; reg [7:0] a; reg b; initial b = a[1 +: 0]; endmodule", "width is a positive constant");
+    try expectRejected("module m; reg [7:0] a; reg b; initial b = a[1.0:0]; endmodule", "a real is not a part-select bound");
+    try expectRejected("module m; reg [7:0] a; real r; reg [1:0] b; initial b = a[r +: 2]; endmodule", "a real is not a part-select index");
+    try expectRejected("module m; reg [7:0] a; real r; reg b; initial b = a[r]; endmodule", "a real is not a bit-select index");
+}
+
+test "§5.1.1 a real takes no bitwise operator and is no concatenation operand" {
+    // !0.0 is 1: the logical operators take a real.
+    try expectRun("module m; real r; initial begin r = 0.0; $display(\"%b\", !r); end endmodule", "1\n");
+    try expectRejected("module m; real r; initial $display(\"%b\", ~r); endmodule", "does not take a real operand");
+    try expectRejected("module m; real r; initial $display(\"%b\", {r, 1'b0}); endmodule", "a real cannot be a concatenation operand");
+}
+
+test "§10.2/§10.4 a task is enabled and a function called, each with one argument per formal" {
+    // f(2) is 3; t doubles it into x.
+    try expectRun(
+        \\module m; integer x;
+        \\function integer f(input integer a); f = a + 1; endfunction
+        \\task t(input integer a, output integer b); b = a * 2; endtask
+        \\initial begin t(f(2), x); $display("%0d", x); end
+        \\endmodule
+    , "6\n");
+    try expectRejected("module m; function integer f(input integer a); f = a; endfunction initial f(1); endmodule", "a function is called in an expression, not enabled");
+    try expectRejected("module m; integer x; task t(input integer a); x = a; endtask initial x = t(1); endmodule", "a task is enabled as a statement");
+    try expectRejected("module m; integer x; task t(input integer a); x = a; endtask initial t(1, 2); endmodule", "`t` takes 1 arguments, not 2");
+    try expectRejected("module m; integer x; task t(output integer a); a = 1; endtask initial t(x + 1); endmodule", "a task output actual must be a procedural lvalue");
+}
+
+test "§10.4.4 a function body has no timing, nonblocking or procedural continuous assignment, trigger or enable" {
+    const tail = " initial y = f(1); endmodule";
+    try expectRejected("module m; integer y; function integer f(input integer a); f <= a; endfunction" ++ tail, "cannot contain a nonblocking assignment");
+    try expectRejected("module m; integer y; function integer f(input integer a); #1 f = a; endfunction" ++ tail, "cannot contain a time control");
+    try expectRejected("module m; integer y; event e; function integer f(input integer a); begin -> e; f = a; end endfunction" ++ tail, "cannot contain an event trigger");
+    try expectRejected("module m; integer y; task t; y = 0; endtask function integer f(input integer a); begin t; f = a; end endfunction" ++ tail, "a function cannot enable a task");
+    try expectRejected("module m; integer y; reg q; function integer f(input integer a); begin assign q = 1'b1; f = a; end endfunction" ++ tail, "cannot contain a procedural continuous assignment");
+}
+
+test "§10.2.3 an automatic variable is neither a nonblocking target nor monitored" {
+    try expectRejected("module m; task automatic t; integer k; k <= 1; endtask initial t; endmodule", "a nonblocking assignment cannot name a variable of an automatic task");
+    try expectRejected("module m; task automatic t; integer k; $monitor(\"%0d\", k); endtask initial t; endmodule", "$monitor cannot name a variable of an automatic task");
+}
+
+test "§9.3 assign takes a variable, force a variable or net; a select is of a net, by constant" {
+    try expectRun("module m; wire w; initial begin force w = 1'b1; #1 $display(\"%b\", w); end endmodule", "1\n");
+    try expectRejected("module m; wire w; initial assign w = 1'b1; endmodule", "assign/deassign take a variable; a net is forced");
+    const refused = "a procedural continuous assignment names one whole variable or net";
+    try expectRejected("module m; reg [3:0] r; initial force r[1:0] = 2'b11; endmodule", refused);
+    try expectRejected("module m; wire [3:0] w; integer i; initial force w[i] = 1'b1; endmodule", refused);
+}
+
+test "§12.2 a parameter is not an assignment target" {
+    try expectRejected("module m; parameter P = 1; initial P = 2; endmodule", "a parameter is a constant; it cannot be assigned");
+}
+
+test "A.6.9 a hierarchical task name walks instances before the task" {
+    try expectRun("module c; task t; $display(\"in\"); endtask endmodule module m; c u(); initial u.t; endmodule", "in\n");
+    try expectRejected("module c; task t; $display(\"in\"); endtask endmodule module m; c u(); initial nope.t; endmodule", "undeclared instance `nope` in a hierarchical task name");
+}
+
+test "§17 system task argument forms are checked before any process runs" {
+    try expectRejected("module m; initial $stop(0, 1); endmodule", "$stop accepts zero or one argument");
+    try expectRejected("module m; reg [7:0] mem [0:3]; reg [8*4:1] f; initial $readmemh(f, mem); endmodule", "the memory file name is a string literal");
+    try expectRejected("module m; reg [7:0] mem [0:1][0:1]; initial $readmemh(\"x.hex\", mem); endmodule", "load a one-dimensional unpacked array");
+    try expectRejected("module m; initial $readmemh(\"x.hex\"); endmodule", "take (file, memory [, start [, finish]])");
+    try expectRejected("module m; initial $q_initialize(1, 1, 5); endmodule", "the §17.6 queue tasks take four arguments");
+    try expectRejected("module m; integer v, st; initial $q_exam(1, 7, v, st); endmodule", "Table 17-15's codes 1 to 6");
+    try expectRejected("module m; initial $fflush(1, 2); endmodule", "$fflush takes at most one descriptor");
+    try expectRejected("module m; initial $printtimescale(m, m); endmodule", "$printtimescale takes at most one module instance");
+    try expectRejected("module m; initial $fclose(); endmodule", "$fclose takes one descriptor");
+    try expectRejected("module m; initial $sdf_annotate(\"x.sdf\"); endmodule", "E1102");
+}
+
+test "§9.7.3 a named event is waited on whole, declared first, and has no edge; a real has no edge" {
+    try expectRejected("module m; event e; initial @(posedge e) ; endmodule", "a named event has no value for a posedge or negedge");
+    try expectRejected("module m; real r; initial @(posedge r) ; endmodule", "posedge and negedge do not apply to a real variable");
+    try expectRejected("module m; initial @(e) ; event e; endmodule", "a named event is declared before it is used");
+    try expectRejected("module m; initial -> nope; endmodule", "undeclared named event");
+}
+
+test "a delay or repeat count wider than 64 bits is refused before any process runs" {
+    try expectRejected("module m; initial #(65'd1) ; endmodule", "delay values wider than 64 bits");
+    try expectRejected("module m; reg a; event e; initial a = repeat (65'd2) @(e) 1'b1; endmodule", "repeat counts wider than 64 bits");
+}
+
+test "§9.8.2 a fork in a task with no timing control joins before the enable returns" {
+    // The arm sets x = 1 and the join completes before `x = x + 1`; the
+    // enable completes after the task body does, so $display reads 2. A fork
+    // that only queued its arms would let $display read 0.
+    try expectRun(
+        \\module m; integer x;
+        \\task t; begin fork x = 1; join x = x + 1; end endtask
+        \\initial begin x = 0; t; $display("%0d", x); end
+        \\endmodule
+    , "2\n");
+}
+
+test "§9.8.2 a fork in a function completes inside the call" {
+    // §10.4.4 forbids timing in a function, so each arm runs to its end and
+    // the join is complete before the next statement: f(4) is 4 + 1.
+    try expectRun(
+        \\module m; integer y;
+        \\function integer f(input integer a); begin fork f = a; join f = f + 1; end endfunction
+        \\initial begin y = f(4); $display("%0d", y); end
+        \\endmodule
+    , "5\n");
 }
