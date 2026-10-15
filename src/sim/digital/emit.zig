@@ -76,6 +76,10 @@ pub const Error = error{ Unsupported, OutOfMemory };
 /// A refused design's root embeds `embed` and runs the interpreter. Every
 /// returned slice is in `arena`.
 pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
+    return @import("../deep.zig").run(0, programDeep, .{ arena, r, embed, schedule, logic });
+}
+
+fn programDeep(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = logic == .two, .auto = logic == .auto };
     if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null, .four = e.four } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -244,6 +248,11 @@ pub const Emitter = struct {
     rt_drivers: std.ArrayList(u32) = .empty,
     /// §18.3 each `$dumpports` call (`rt.evcd.File`), by the pc it is at.
     port_files: std.ArrayList(PortFile) = .empty,
+    /// §9.3.2 each distinct forced select's row in `rt.State.parts`, by
+    /// slot and bits, and per slot its first row (`rt.Design.part_start`):
+    /// `forcedParts`.
+    parts: std.AutoHashMapUnmanaged(struct { slot: u32, bits: compile.Bits }, u32) = .empty,
+    part_start: []const u32 = &.{},
 
     /// Appends formatted Zig text to `out`; a writer failure is OOM.
     pub fn print(self: *Emitter, comptime f: []const u8, args: anytype) Error!void {
@@ -560,7 +569,11 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{file_name});
     if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
-    for (r.code.items) |ins| if (ins == .override_on) break try self.print("pub const vera_overrides = true;\n", .{});
+    for (r.code.items) |ins| if (ins == .override_on) {
+        try self.print("pub const vera_overrides = true;\n", .{});
+        try forcedParts(self);
+        break;
+    };
     if (r.budget != @import("root.zig").max_events_per_tick) try self.print("pub const vera_event_budget: u64 = {d};\n", .{r.budget});
     // Every function of the design, once per phase (`rt.Phase`): `main`
     // names `Code(true)` only when it runs both, and Zig compiles only what
@@ -693,6 +706,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try netTables(self);
     try portTables(self);
     try table(self, "order", order.items);
+    if (self.part_start.len != 0) try table(self, "part_start", self.part_start);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
         try self.print("    .comb = &.{{", .{});
@@ -1329,7 +1343,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         // §17.5 an asynchronous array's own process starts now.
         .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
         .override_on => |o| if (o.bits) |b|
-            try self.print("            try s.overrideBits({d}, {d}, {d}, {d}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, (try partOf(self, o.slot, b)).?, b.lo, b.width, o.start, o.end, next })
+            try self.print("            try s.overrideBits({d}, {d}, {d}, {d}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, partOf(self, o.slot, b).?, b.lo, b.width, o.start, o.end, next })
         else
             try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
         // An `assign` under a `force` keeps tracking but does not write.
@@ -1354,7 +1368,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .override_off => |o| {
             if (o.bits) |b| {
                 // Releasing a select never forced is a no-op (`waiters.releaseBits`).
-                if (try partOf(self, o.slot, b)) |k| {
+                if (partOf(self, o.slot, b)) |k| {
                     const net = r.net_of.get(o.slot) orelse return self.refuse("a force of a select of a variable");
                     try self.print("            try s.releaseBits({d}, {d});\n            try s.resolve({d});\n", .{ o.slot, k, self.net_ix[net].? });
                 }
@@ -1831,24 +1845,31 @@ fn portTask(self: *Emitter, pc: u32, op: @import("evcd.zig").Op, args: []const A
     } else try self.print("0);\n", .{});
 }
 
-/// Which of `slot`'s forced selects (§9.3.2) `sel` is: its place among the
-/// distinct ones the code forces, in code order (`rt.Layers.parts`); null
-/// when none forces it.
-fn partOf(self: *Emitter, slot: u32, sel: compile.Bits) Error!?u32 {
-    // `rt.max_parts` distinct selects are all the executable keeps: one past
-    // them that is `sel` is refused, any other is never asked for.
-    var seen: [@import("../rt/root.zig").max_parts]compile.Bits = undefined;
-    var n: u8 = 0;
-    for (self.r.code.items) |ins| if (ins == .override_on) if (ins.override_on.bits) |b| if (ins.override_on.slot == slot) {
-        for (seen[0..n]) |q| {
-            if (std.meta.eql(q, b)) break;
-        } else if (n < seen.len) {
-            seen[n] = b;
-            n += 1;
-        } else if (std.meta.eql(b, sel)) return self.refuse("more forced selects of one net than the executable keeps");
+/// Numbers the distinct selects the code forces (§9.3.2), slot by slot and
+/// in code order within a slot, into `parts` and `part_start`: a net may
+/// have any number of them.
+fn forcedParts(self: *Emitter) Error!void {
+    const r = self.r;
+    const start = try self.arena.alloc(u32, r.values.len + 1);
+    @memset(start, 0);
+    // First each one's place within its slot, counted in `start[slot + 1]`.
+    for (r.code.items) |ins| if (ins == .override_on) if (ins.override_on.bits) |b| {
+        const slot = ins.override_on.slot;
+        const gop = try self.parts.getOrPut(self.arena, .{ .slot = slot, .bits = b });
+        if (gop.found_existing) continue;
+        gop.value_ptr.* = start[slot + 1];
+        start[slot + 1] += 1;
     };
-    for (seen[0..n], 0..) |q, k| if (std.meta.eql(q, sel)) return @intCast(k);
-    return null;
+    for (1..start.len) |i| start[i] += start[i - 1];
+    var it = self.parts.iterator();
+    while (it.next()) |e| e.value_ptr.* += start[e.key_ptr.slot];
+    self.part_start = start;
+}
+
+/// The row in `rt.State.parts` of `slot`'s forced select `sel` (§9.3.2);
+/// null when no `force` names it.
+fn partOf(self: *Emitter, slot: u32, sel: compile.Bits) ?u32 {
+    return self.parts.get(.{ .slot = slot, .bits = sel });
 }
 
 /// Does some `force` hold a select of `slot` (§9.3.2)? Its net then
@@ -2005,7 +2026,6 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
                 try self.print("            try s.gate({d}, .{t}, &b);\n", .{ k, g.kind });
             },
             .udp => |u| {
-                if (u.ins.len > 64) return self.refuse("a UDP of more than 64 inputs");
                 try bits(self, u.ins, u.lane);
                 try self.print("            try s.udp({d}, &b);\n", .{k});
             },
@@ -2227,7 +2247,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                 try text.append(self.arena, '%');
                 continue;
             }
-            var width: ?u32 = null;
+            var width: ?u64 = null;
             while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
                 width = (width orelse 0) *| 10 +| (format[i] - '0');
             var precision: i64 = -1;
@@ -2435,7 +2455,7 @@ fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {
 }
 
 /// One `%b %o %h %d` operand, or an argument with no format (`emitValue`).
-fn operand(self: *Emitter, e: Ast.ExprId, radix: fmt.Radix, width: ?u32) Error!void {
+fn operand(self: *Emitter, e: Ast.ExprId, radix: fmt.Radix, width: ?u64) Error!void {
     try self.print("            try s.value(", .{});
     const t = try expr.selfDetermined(self, e);
     try self.print(", {d}, {}, .{t}, {?d});\n", .{ t.width, t.signed, radix, width });

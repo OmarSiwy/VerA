@@ -29,39 +29,69 @@ const fmt = @import("../fmt.zig");
 
 /// IEEE 1364-2005 §17.2.9's memory-file lexer: white space and §2.4 comments
 /// separate tokens, and a token is either an `@`-address or one data word.
+/// It reads the file as a stream, so the file's size bounds nothing; one
+/// token is held at a time. A byte that is not printable ASCII is a token of
+/// its own, which no word or address accepts, so a binary file (or a stream
+/// with no end, such as /dev/zero) is refused at its first such byte.
 const MemTokens = struct {
-    text: []const u8,
-    at: usize = 0,
+    in: *std.Io.Reader,
+    token: std.ArrayList(u8) = .empty,
 
-    fn next(self: *MemTokens) ?[]const u8 {
-        while (self.at < self.text.len) {
-            const c = self.text[self.at];
-            if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == '\x0c') {
-                self.at += 1;
+    fn isSpace(c: u8) bool {
+        return c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == '\x0c';
+    }
+
+    /// Byte `k` ahead, or null past the end of the file.
+    fn peek(self: *MemTokens, k: usize) error{ReadFailed}!?u8 {
+        const ahead = self.in.peek(k + 1) catch |e| return switch (e) {
+            error.EndOfStream => null,
+            error.ReadFailed => error.ReadFailed,
+        };
+        return ahead[k];
+    }
+
+    /// Is the byte at the read position the start of a comment?
+    fn comment(self: *MemTokens) error{ReadFailed}!?u8 {
+        if (try self.peek(0) != '/') return null;
+        const d = try self.peek(1) orelse return null;
+        return if (d == '/' or d == '*') d else null;
+    }
+
+    fn next(self: *MemTokens, a: std.mem.Allocator) error{ ReadFailed, OutOfMemory }!?[]const u8 {
+        self.token.clearRetainingCapacity();
+        while (try self.peek(0)) |c| {
+            if (isSpace(c)) {
+                self.in.toss(1);
                 continue;
             }
-            if (c == '/' and self.at + 1 < self.text.len) {
-                if (self.text[self.at + 1] == '/') {
-                    self.at = std.mem.findScalarPos(u8, self.text, self.at, '\n') orelse self.text.len;
-                    continue;
-                }
-                if (self.text[self.at + 1] == '*') {
-                    self.at = if (std.mem.findPos(u8, self.text, self.at + 2, "*/")) |e| e + 2 else self.text.len;
-                    continue;
-                }
+            const kind = try self.comment() orelse break;
+            self.in.toss(2);
+            if (kind == '/') {
+                while (try self.peek(0)) |d| : (self.in.toss(1)) if (d == '\n') break;
+                continue;
             }
-            const start = self.at;
-            while (self.at < self.text.len) : (self.at += 1) {
-                const d = self.text[self.at];
-                if (d == ' ' or d == '\t' or d == '\r' or d == '\n' or d == '\x0c') break;
-                // A comment may abut a word: `/* ... */ d4` is one word, and so
-                // is `d4// trailing`.
-                if (d == '/' and self.at + 1 < self.text.len and
-                    (self.text[self.at + 1] == '/' or self.text[self.at + 1] == '*')) break;
+            // `/*` closes at the first `*/` after it: `/*/` does not.
+            var star = false;
+            while (try self.peek(0)) |d| {
+                self.in.toss(1);
+                if (star and d == '/') break;
+                star = d == '*';
             }
-            if (self.at > start) return self.text[start..self.at];
+        } else return null;
+        const first = (try self.peek(0)).?;
+        if (!std.ascii.isPrint(first)) {
+            self.in.toss(1);
+            try self.token.append(a, first);
+            return self.token.items;
         }
-        return null;
+        while (try self.peek(0)) |d| {
+            // A comment may abut a word: `/* ... */ d4` is one word, and so
+            // is `d4// trailing`.
+            if (isSpace(d) or !std.ascii.isPrint(d) or try self.comment() != null) break;
+            try self.token.append(a, d);
+            self.in.toss(1);
+        }
+        return self.token.items;
     }
 };
 
@@ -159,12 +189,14 @@ pub const MemLoad = struct {
 
     /// §17.2.9: `BadAddress`, an `@` address that is not hex;
     /// `AddressOutOfRange`, an address outside the call's start..finish
-    /// range; `BadWord`, a word that is not a number in the task's radix.
-    pub const Failure = error{ BadAddress, AddressOutOfRange, BadWord } || std.mem.Allocator.Error;
+    /// range; `BadWord`, a word that is not a number in the task's radix;
+    /// `ReadFailed`, the file could not be read to its end.
+    pub const Failure = error{ BadAddress, AddressOutOfRange, BadWord, ReadFailed } || std.mem.Allocator.Error;
 
-    /// `given` is how many of the start and finish arguments the call has;
-    /// `start`/`finish` are their values, null where x or z.
-    pub fn init(text: []const u8, radix: Radix, width: u32, low: i64, high: i64, given: u2, start: ?i64, finish: ?i64) MemLoad {
+    /// `in` is the file. `given` is how many of the start and finish
+    /// arguments the call has; `start`/`finish` are their values, null where
+    /// x or z.
+    pub fn init(in: *std.Io.Reader, radix: Radix, width: u32, low: i64, high: i64, given: u2, start: ?i64, finish: ?i64) MemLoad {
         // §17.2.9: default traversal is lowest to highest, independent of
         // the declaration's direction.
         const at = if (given >= 1) start orelse low else low;
@@ -172,7 +204,7 @@ pub const MemLoad = struct {
         // With start alone, finish defaults to the highest address and the
         // walk stays upward, including after a file address specification.
         return .{
-            .it = .{ .text = text },
+            .it = .{ .in = in },
             .radix = radix,
             .width = width,
             .low = low,
@@ -189,7 +221,7 @@ pub const MemLoad = struct {
     /// The next word to store, or null at the end of the file. A word
     /// outside the declared range is dropped.
     pub fn next(self: *MemLoad, a: std.mem.Allocator) Failure!?Word {
-        while (self.it.next()) |token| {
+        while (try self.it.next(a)) |token| {
             if (token[0] == '@') {
                 self.addressed = true;
                 // §3.5.1: `_` is legal anywhere but first, so also last,
@@ -245,6 +277,7 @@ pub const MemLoad = struct {
             error.BadAddress => "the memory file has a malformed `@` address",
             error.AddressOutOfRange => "memory file address is outside the requested load range",
             error.BadWord => "the memory file has a malformed data word",
+            error.ReadFailed => cannot_read,
             error.OutOfMemory => "out of memory",
         };
     }
@@ -262,13 +295,14 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
     const base = try self.slot(args[1]);
     const arr = self.arrays.get(base).?;
     const name = self.file.str(ex.strOf(args[0]));
-    const text = readSideFile(self, a, name) catch |e| return if (e == error.StreamTooLong)
-        self.exprFail(args[0], too_large)
-    else
-        self.exprFail(args[0], "the memory file cannot be read");
+    const io = self.io orelse return self.exprFail(args[0], cannot_read);
+    const file = sideFile(io, a, self.file_name, name) catch return self.exprFail(args[0], cannot_read);
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var in = file.reader(io, &buf);
     const start = if (args.len >= 3) (try evaluate.eval(self, a, args[2], 0)).asInt() orelse return self.exprFail(args[2], unknown_bound) else null;
     const finish = if (args.len == 4) (try evaluate.eval(self, a, args[3], 0)).asInt() orelse return self.exprFail(args[3], unknown_bound) else null;
-    var load: MemLoad = .init(text, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
+    var load: MemLoad = .init(&in.interface, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
     while (load.next(a) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => |f| return self.fail(ex.mainTok(args[0]), "{s}", .{MemLoad.message(f)}),
@@ -289,28 +323,21 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
 /// one names no address and the load is refused rather than defaulted.
 pub const unknown_bound = "a $readmem start or finish address evaluates to x or z";
 
-/// The data file sits beside the source that names it, which is what makes
-/// a fixture self-contained. The working directory is tried second, so a
-/// path written relative to where the simulator was launched still works.
-pub fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const u8 {
-    return sideFile(self.io orelse return error.NoIo, a, self.file_name, name);
-}
+/// The refusal of a memory file that cannot be opened or read to its end.
+pub const cannot_read = "the memory file cannot be read";
 
-/// `sideFile`'s cap. IEEE 1364-2005 §17.2.9 bounds no memory file.
-pub const side_file_limit: usize = 1 << 22;
-/// The refusal past `side_file_limit`, which `sideFile` reports as
-/// `error.StreamTooLong`.
-pub const too_large = std.fmt.comptimePrint("the memory file is larger than the {d} bytes VerA reads", .{side_file_limit});
-
-/// `readSideFile` for the source `file_name`.
-pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: []const u8) ![]const u8 {
-    const limit = side_file_limit;
+/// The memory file `name`, opened. It sits beside the source `file_name`
+/// that names it, which is what makes a fixture self-contained; the working
+/// directory is tried second, so a path written relative to where the
+/// simulator was launched still works. IEEE 1364-2005 §17.2.9 bounds no
+/// memory file, and `MemLoad` reads it as a stream.
+pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: []const u8) !std.Io.File {
     const cwd = std.Io.Dir.cwd();
     if (std.Io.Dir.path.dirname(file_name)) |dir| {
         const joined = try std.Io.Dir.path.join(a, &.{ dir, name });
-        if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |e| if (e == error.StreamTooLong) return e;
+        if (cwd.openFile(io, joined, .{})) |file| return file else |_| {}
     }
-    return cwd.readFileAlloc(io, name, a, .limited(limit));
+    return cwd.openFile(io, name, .{});
 }
 
 // ---- the task table (§9.4.1 Table 9-1, §17.3) -------------------------------
@@ -469,12 +496,21 @@ fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
-/// The widest field width or precision a format gives (E1011).
-pub const max_field = 4096;
-/// One real conversion's text: the longest %f of an f64 is a sign, 309
-/// integer digits and the point, then `max_field` fractional digits; a field
-/// width is padded outside it.
-pub const real_buf = 512 + max_field;
+/// §17.1.1.2 one real conversion (`%e %f %g`, §9.4.7 `%r`): C's text,
+/// padded on the left to `width`, for both engines. No width or precision
+/// is too large: the padding is written, not buffered, and the text goes
+/// through a buffer sized for this precision (from `gpa` past a small one on
+/// the stack). The longest %f of an f64 is a sign, 309 integer digits and the
+/// point, then `precision` fractional digits, inside 512 + precision.
+pub fn real(out: *std.Io.Writer, gpa: std.mem.Allocator, r: f64, conv: u8, precision: i64, width: ?u64) (std.mem.Allocator.Error || std.Io.Writer.Error)!void {
+    var stack: [1024]u8 = undefined;
+    const need = 512 + @as(usize, @intCast(@max(precision, 0)));
+    const buf = if (need <= stack.len) &stack else try gpa.alloc(u8, need);
+    defer if (buf.ptr != &stack) gpa.free(buf);
+    const text = zCReal(buf, r, conv, 0, 0, precision);
+    if (width) |w| if (text.len < w) try out.splatByteAll(' ', w - text.len);
+    try out.writeAll(text);
+}
 
 fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
     const ex = &self.file.exprs;
@@ -502,7 +538,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
         // the default of this task, so $displayh's bare argument is hex.
         if (ex.tag(e) != .str_literal and !dynamic) {
             try compile.checkExpr(self, e);
-            if (allocator) |a| try emitValue(self, try evaluate.eval(self, a, e, 0), show.radix, null);
+            if (allocator) |a| try fmt.value(self.out, a, try evaluate.eval(self, a, e, 0), show.radix, null);
             continue;
         }
         if (dynamic and allocator == null) {
@@ -526,7 +562,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             // source writes and means "minimum width"; a non-zero width is
             // an explicit column count. Absent means §17.1.1.3's automatic
             // sizing, which is `null` here and computed from the operand.
-            var width: ?u32 = null;
+            var width: ?u64 = null;
             while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1) {
                 const d = format[i] - '0';
                 width = (width orelse 0) *| 10 +| d;
@@ -540,9 +576,6 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     precision = precision *| 10 +| (format[i] - '0');
             }
             if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
-            // The analog side's bound (E1011): a field is composed whole.
-            if ((width orelse 0) > max_field or precision > max_field)
-                return self.failWith(.E1011, ex.mainTok(e), "a field width or precision here exceeds {d}", .{max_field});
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
@@ -612,16 +645,10 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
             if (radix) |r| {
                 try compile.checkExpr(self, args[arg]);
-                if (allocator) |a| try emitValue(self, try evaluate.eval(self, a, args[arg], 0), r, width);
+                if (allocator) |a| try fmt.value(self.out, a, try evaluate.eval(self, a, args[arg], 0), r, width);
             } else {
                 try compile.checkExpr(self, args[arg]);
-                if (allocator) |a| {
-                    const real = try evaluate.evalReal(self, a, args[arg]);
-                    var buf: [real_buf]u8 = undefined;
-                    const text = zCReal(&buf, real, format[i], 0, 0, precision);
-                    if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
-                    try self.out.writeAll(text);
-                }
+                if (allocator) |a| try real(self.out, a, try evaluate.evalReal(self, a, args[arg]), format[i], precision, width);
             }
         }
     }
@@ -636,9 +663,9 @@ pub fn emitScope(self: *Run) Error!void {
     // The named blocks enclosing `pc` in this scope nest, so each is one
     // statement level deeper than the last: printed shallowest first, with no
     // bound on how many.
-    var last: i32 = -1;
+    var last: i64 = -1;
     while (true) {
-        var next: ?struct { depth: u16, name: Ast.StrId } = null;
+        var next: ?struct { depth: u32, name: Ast.StrId } = null;
         var it = self.blocks.iterator();
         while (it.next()) |b| {
             if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end) continue;
@@ -681,7 +708,7 @@ pub fn strength(out: *std.Io.Writer, s: Signal) std.Io.Writer.Error!void {
 
 /// `%t`; a field width in the format (`%0t`: none) replaces §17.3.2's
 /// minimum field width.
-fn emitTime(self: *Run, v: Int.Literal, width: ?u32) Error!void {
+fn emitTime(self: *Run, v: Int.Literal, width: ?u64) Error!void {
     var f = self.time_format;
     if (width) |w| f.width = w;
     try fmt.time(self.out, v, f, self.timeOf(self.scope).unit_exp);
@@ -713,13 +740,6 @@ pub fn timescaleScope(self: *Run, e: Ast.ExprId) Error!u32 {
     return switch (try @import("vcd.zig").target(self, e)) {
         .scope => |sc| sc,
         .slot => self.exprFail(e, "§17.3.1: $printtimescale names a module instance"),
-    };
-}
-
-fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
-    fmt.value(self.out, v, radix, width) catch |e| return switch (e) {
-        error.TooWide => self.fail(0, "decimal display of an operand wider than 64 bits is not implemented", .{}),
-        error.WriteFailed => error.WriteFailed,
     };
 }
 
@@ -979,9 +999,17 @@ test strength {
 }
 
 test "§17.2.9 memory-file tokens: white space and both comment forms separate them" {
-    var it: MemTokens = .{ .text = "a//x\nb/*y*/c \x0c d/* never closed" };
-    for ([_][]const u8{ "a", "b", "c", "d" }) |want| try std.testing.expectEqualStrings(want, it.next().?);
-    try std.testing.expect(it.next() == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var in: std.Io.Reader = .fixed("a//x\nb/*y*/c \x0c d/*/ e */f/g/* never closed");
+    var it: MemTokens = .{ .in = &in };
+    for ([_][]const u8{ "a", "b", "c", "d", "f/g" }) |want| try std.testing.expectEqualStrings(want, (try it.next(a)).?);
+    try std.testing.expect(try it.next(a) == null);
+    // A byte that is not printable ASCII ends a word and is a token itself.
+    var bin: std.Io.Reader = .fixed("1f\x00\x002");
+    it = .{ .in = &bin };
+    for ([_][]const u8{ "1f", "\x00", "\x00", "2" }) |want| try std.testing.expectEqualStrings(want, (try it.next(a)).?);
 }
 
 test MemLoad {
@@ -990,7 +1018,8 @@ test MemLoad {
     const a = arena.allocator();
     // §17.2.9 with no address arguments: lowest address up, one word each.
     {
-        var load: MemLoad = .init("11 22 // c\n33", .hex, 8, 0, 3, 0, null, null);
+        var in1: std.Io.Reader = .fixed("11 22 // c\n33");
+        var load: MemLoad = .init(&in1, .hex, 8, 0, 3, 0, null, null);
         for ([_]u32{ 0, 1, 2 }, [_]i64{ 0x11, 0x22, 0x33 }) |index, value| {
             const w = (try load.next(a)).?;
             try std.testing.expectEqual(index, w.index);
@@ -1005,7 +1034,8 @@ test MemLoad {
     // `@` relocates, a word past the last address has nowhere to go, and an
     // addressed file is not counted.
     {
-        var load: MemLoad = .init("@2 aa bb cc", .hex, 8, 0, 3, 0, null, null);
+        var in2: std.Io.Reader = .fixed("@2 aa bb cc");
+        var load: MemLoad = .init(&in2, .hex, 8, 0, 3, 0, null, null);
         try std.testing.expectEqual(@as(u32, 2), (try load.next(a)).?.index);
         try std.testing.expectEqual(@as(u32, 3), (try load.next(a)).?.index);
         try std.testing.expect((try load.next(a)) == null);
@@ -1013,33 +1043,39 @@ test MemLoad {
     }
     // No bounds: an address outside the declaration skips its words (W1156).
     {
-        var load: MemLoad = .init("@5 11", .hex, 8, 0, 3, 0, null, null);
+        var in3: std.Io.Reader = .fixed("@5 11");
+        var load: MemLoad = .init(&in3, .hex, 8, 0, 3, 0, null, null);
         try std.testing.expect((try load.next(a)) == null);
         try std.testing.expectEqual(@as(?i64, 5), load.outside);
     }
     // A start after the finish walks downward.
     {
-        var load: MemLoad = .init("11 22", .hex, 8, 0, 3, 2, 3, 0);
+        var in4: std.Io.Reader = .fixed("11 22");
+        var load: MemLoad = .init(&in4, .hex, 8, 0, 3, 2, 3, 0);
         try std.testing.expectEqual(@as(u32, 3), (try load.next(a)).?.index);
         try std.testing.expectEqual(@as(u32, 2), (try load.next(a)).?.index);
     }
     // The clause's errors: an address outside the call's range, an address
     // that is not hex, and a word that is not a number in the radix.
     {
-        var load: MemLoad = .init("@0 11", .hex, 8, 0, 3, 2, 1, 2);
+        var in5: std.Io.Reader = .fixed("@0 11");
+        var load: MemLoad = .init(&in5, .hex, 8, 0, 3, 2, 1, 2);
         try std.testing.expectError(error.AddressOutOfRange, load.next(a));
     }
     {
-        var load: MemLoad = .init("@g 11", .hex, 8, 0, 3, 0, null, null);
+        var in6: std.Io.Reader = .fixed("@g 11");
+        var load: MemLoad = .init(&in6, .hex, 8, 0, 3, 0, null, null);
         try std.testing.expectError(error.BadAddress, load.next(a));
     }
     {
-        var load: MemLoad = .init("12", .binary, 8, 0, 3, 0, null, null);
+        var in7: std.Io.Reader = .fixed("12");
+        var load: MemLoad = .init(&in7, .binary, 8, 0, 3, 0, null, null);
         try std.testing.expectError(error.BadWord, load.next(a));
     }
     // VD-041: a trailing `_` in an address is legal.
     {
-        var load: MemLoad = .init("@1_ 7", .hex, 8, 0, 3, 0, null, null);
+        var in8: std.Io.Reader = .fixed("@1_ 7");
+        var load: MemLoad = .init(&in8, .hex, 8, 0, 3, 0, null, null);
         try std.testing.expectEqual(@as(u32, 1), (try load.next(a)).?.index);
     }
 }
@@ -1061,5 +1097,18 @@ test "§17.1.1 a malformed format is refused before anything prints" {
     try @import("root.zig").expectRejected("module m; initial $display(\"%\"); endmodule", "unterminated display format");
     try @import("root.zig").expectRejected("module m; initial $display(\"%q\", 1); endmodule", "only the §9.4.3 Table 9-22 conversions");
     try @import("root.zig").expectRejected("module m; initial $display(\"%d\"); endmodule", "missing display argument");
-    try @import("root.zig").expectRejected("module m; initial $display(\"%5000d\", 1); endmodule", "exceeds 4096");
+}
+
+test "§17.1.1.2 no field width or precision is too large" {
+    // One past the old 4096 bound and well past it; `%.5000f` of 0.5 is
+    // "0." and 5000 digits, a 5 then 4999 zeros.
+    var want: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer want.deinit();
+    try want.writer.splatByteAll(' ', 4096);
+    try want.writer.writeAll("1|");
+    try want.writer.splatByteAll(' ', 19999);
+    try want.writer.writeAll("x|0.5");
+    try want.writer.splatByteAll('0', 4999);
+    try want.writer.writeAll("\n");
+    try @import("root.zig").expectRun("module m; initial $display(\"%4097d|%20000s|%.5000f\", 1, \"x\", 0.5); endmodule", want.written());
 }

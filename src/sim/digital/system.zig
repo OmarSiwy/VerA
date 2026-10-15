@@ -319,7 +319,7 @@ pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, na
     const ty = if (mcd) "w" else mode orelse return 0;
     if (!fileType(ty)) return 0;
     // A file read is looked for beside the source first, as `$readmemh`
-    // looks (`display.readSideFile`).
+    // looks (`display.sideFile`).
     if (ty[0] == 'r') if (std.Io.Dir.path.dirname(file_name)) |dir| {
         const d = t.open(try std.Io.Dir.path.join(a, &.{ dir, path }), ty, mcd);
         if (d != 0) return d;

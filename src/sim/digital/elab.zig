@@ -26,6 +26,7 @@ const expectRun = root.expectRun;
 const expectRejected = root.expectRejected;
 const compile = @import("compile.zig");
 const evaluate = @import("evaluate.zig");
+const deep = @import("../deep.zig");
 const binding = @import("bind.zig");
 const Type = compile.Type;
 const net_mod = @import("net.zig");
@@ -227,9 +228,9 @@ pub fn defOf(r: *const Run, m: *const Ast.ModuleDecl) u32 {
 /// driver rows its continuous assignments and port connections contribute.
 /// Recurses into child instances AFTER its own nets exist, so a port connection
 /// always resolves against a parent that is fully declared.
-pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, over: []const Ast.ParamOverride, depth: u16) Error!void {
+pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, over: []const Ast.ParamOverride, depth: u32) Error!void {
     const arena = r.arena;
-    if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
+    if (deep.exhausted()) return r.deepFail(m.main_tok);
     if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.functions.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     // A digital parse makes each generate construct an `analog` block over
@@ -904,7 +905,7 @@ fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?
 /// ponytail: the parser hoists a generate block's nets to the module, so they
 /// are the enclosing instance's names. A part-select bound written with a genvar is folded once, with
 /// the first iteration's value; a bit-select is read per iteration.
-fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
+fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u32) Error!void {
     if (s == .none) return;
     const tok = r.file.stmtTok(s);
     switch (r.file.stmt(s)) {
@@ -959,12 +960,14 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 .block => |b| b.name == .none,
                 else => true, // else: a lone item is an unnamed generate block
             };
-            var seen: std.ArrayList(i64) = .empty;
+            // §12.4.1: "It shall be an error if a genvar value is repeated".
+            // A genvar holds 32 bits, so a loop that does not terminate
+            // repeats one within 2^32 iterations: this set is the loop's
+            // non-termination test, and no count bounds a loop that ends.
+            var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
             while ((try r.constant(f.cond, tok)).truth() == .one) {
-                if (seen.items.len == 65536) return r.fail(tok, "§12.4.1: this loop generate does not terminate within 65536 iterations", .{});
                 const value = e.values.items[at].asInt() orelse return r.fail(tok, "§12.4.1: a genvar shall not be x or z", .{});
-                if (std.mem.findScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
-                try seen.append(r.arena, value);
+                if ((try seen.fetchPut(r.arena, value, {})) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated, so this loop generate does not terminate", .{});
                 const iter = try newScope(r, tok);
                 try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value, .implicit = implicit });
                 try selectable(r, scope, name, value, iter);
@@ -1192,7 +1195,7 @@ fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
 /// §6.2.2 one module or UDP instance, declared in `scope`, or IEEE 1364
 /// §12.1.2's array of them, one instance per element from the lower index
 /// up, each a scope named `u[k]` (the same order the analog elaborator uses).
-fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
+fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u32) Error!void {
     r.scope = scope;
     const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
     if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
@@ -1235,7 +1238,7 @@ fn arrayConn(r: *Run, e: *Elab, inst: *const Ast.Instance, port: Ast.Port, conn:
     };
 }
 
-fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16, index: ?i64) Error!void {
+fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u32, index: ?i64) Error!void {
     const arena = r.arena;
     r.scope = scope;
     {
@@ -1433,8 +1436,6 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
 /// with `dims`, and its element count; 1, and no row, for no dimensions.
 fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
     if (dims.len == 0) return 1;
-    // `address` and `netSlot` gather one index per dimension on the stack.
-    if (dims.len > 16) return r.fail(tok, "arrays of more than 16 dimensions are not implemented", .{});
     var count: u32 = 1;
     const spans = try r.arena.alloc(Span, dims.len);
     var left: i64 = 0;
@@ -1460,15 +1461,16 @@ fn netSlot(r: *Run, e: Ast.ExprId, tok: u32) Error!u32 {
     const arr = (try r.indexedArray(e)) orelse return r.scalarSlot(e);
     const ex = &r.file.exprs;
     const c = r.chainBase(e);
-    var indices: [16]i64 = undefined;
+    var offset: evaluate.Offset = .{};
+    var inside = true;
     var x = e;
     var k = c.depth;
     while (k != 0) : (x = ex.lhs(x)) {
         k -= 1;
-        indices[k] = try r.declaredBound(ex.rhs(x), tok);
+        inside = offset.add(arr, k, try r.declaredBound(ex.rhs(x), tok)) and inside;
     }
-    const offset = evaluate.elementOffset(arr, indices[0..c.depth]) orelse return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
-    return try r.slot(c.base) + offset;
+    if (!inside) return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
+    return try r.slot(c.base) + offset.at;
 }
 
 fn usesReal(t: *const Ast.Subroutine) bool {

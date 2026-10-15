@@ -45,15 +45,18 @@ pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     const c = self.chainBase(e);
     const base = try self.slot(c.base);
     const arr = self.arrays.get(base).?; // infer proved this is an array
-    // §4.9 row-major: the innermost select is the last dimension.
-    var indices: [16]i64 = undefined;
+    // §4.9 row-major: the innermost select is the last dimension. Every
+    // index is evaluated before an out-of-range one names no element.
+    var offset: Offset = .{};
+    var inside = true;
     var x = e;
     var k = c.depth;
     while (k != 0) : (x = ex.lhs(x)) {
         k -= 1;
-        indices[k] = indexInt(try eval(self, a, ex.rhs(x), 0)) orelse return null;
+        const at = indexInt(try eval(self, a, ex.rhs(x), 0)) orelse return null;
+        inside = offset.add(arr, k, at) and inside;
     }
-    return base + (elementOffset(arr, indices[0..c.depth]) orelse return null);
+    return if (inside) base + offset.at else null;
 }
 
 /// `value` as an index, read by its own signedness; null when it has an x or
@@ -63,18 +66,24 @@ pub fn indexInt(value: Int.Literal) ?i64 {
     return std.math.cast(i64, value.asIndex() orelse return null);
 }
 
-/// §4.9 row-major: the element `indices` (one per dimension, outermost
-/// first) names, counted from the array's first; null when one is outside
-/// its declared range.
-pub fn elementOffset(arr: @import("root.zig").Array, indices: []const i64) ?u32 {
-    var offset: u64 = 0;
-    for (indices, 0..) |at, d| {
+/// §4.9 row-major: an element's offset from the array's first, built from
+/// its indices innermost dimension first, so an index chain of any depth
+/// needs no buffer. `at` stays below the array's element count, a u32.
+pub const Offset = struct {
+    at: u32 = 0,
+    /// The element count of the dimensions already added.
+    stride: u64 = 1,
+
+    /// Adds dimension `d`'s index (0 is the outermost). Returns false, and
+    /// leaves `at` alone, when it is outside the declared range.
+    pub fn add(o: *Offset, arr: @import("root.zig").Array, d: usize, index: i64) bool {
         const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
-        if (at < span.low or at > span.high) return null;
-        offset = offset * @as(u64, @intCast(span.high - span.low + 1)) + @as(u64, @intCast(at - span.low));
+        if (index < span.low or index > span.high) return false;
+        o.at += @intCast(o.stride * @as(u64, @intCast(index - span.low)));
+        o.stride *= @as(u64, @intCast(span.high - span.low + 1));
+        return true;
     }
-    return @intCast(offset);
-}
+};
 
 /// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the bit
 /// positions it names: the selected value's bit i is bit `first + i` of the
@@ -789,6 +798,26 @@ test "§4.9 a multidimensional array is addressed row-major, one index per dimen
         \\end
         \\endmodule
     , "0 2 1 f xxxx\n");
+}
+
+test "§4.9 no dimension count: 17 dimensions (one past the old table) and 100" {
+    // `@`/`~`: sixteen `[0:0]`/`[0]` on `w`; `^`/`|`: ninety-eight on `r`.
+    const template =
+        \\module m; wire w @[0:1]; assign w~[1] = 1'b1; assign w~[0] = 1'b0;
+        \\reg [3:0] r [1:0]^[0:2]; integer i;
+        \\initial begin i = 2; r[1]|[i] = 4'd7; r[0]|[0] = 4'd1;
+        \\#1 $display("%b%b %0d %0d %b", w~[1], w~[0], r[1]|[2], r[0]|[0], r[1]|[3]); end endmodule
+    ;
+    var src: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer src.deinit();
+    for (template) |c| switch (c) {
+        '@' => for (0..16) |_| try src.writer.writeAll("[0:0]"),
+        '~' => for (0..16) |_| try src.writer.writeAll("[0]"),
+        '^' => for (0..98) |_| try src.writer.writeAll("[0:0]"),
+        '|' => for (0..98) |_| try src.writer.writeAll("[0]"),
+        else => try src.writer.writeByte(c),
+    };
+    try expectRun(src.written(), "10 7 1 xxxx\n");
 }
 
 test "§5.2.1 bit and part selects read and write against the declared range" {
