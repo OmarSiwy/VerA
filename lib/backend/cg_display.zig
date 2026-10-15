@@ -392,6 +392,30 @@ pub fn planSay(g: *Gen) Error![]const SaySite {
     return out.items;
 }
 
+/// §9.4.1/§9.5.9 sets `g.passes` when a printing artifact's display unit has
+/// a task that shows output at every iteration of the solver, `$debug` or
+/// `$fdebug`, and collects the calls an `analog initial` block makes into
+/// `g.init_calls` (`callee.isFileCall`'s through `Lower.sequenceFileCall`'s
+/// `$itor` carrier). Such a unit takes a `comptime pass: contract.SayPass`
+/// and gates each call on it (`gen_call.passCond`).
+pub fn planPasses(g: *Gen) Error!void {
+    var init: std.ArrayList(Mir.Inst) = .empty;
+    for (g.lowered.displays.items) |d| {
+        const c: Mir.Callee = .fromName(d.name);
+        if (c == .@"$debug" or c == .@"$fdebug") g.passes = true;
+        if (!d.analog_initial or d.val == .undef) continue;
+        var def = g.mir.valueDef(g.an.rv(d.val));
+        if (def != .inst_result) continue;
+        const data = g.mir.instData(def.inst_result);
+        if (data == .call and data.call.callee == .@"$itor" and data.call.args.len == 1) {
+            def = g.mir.valueDef(g.an.rv(data.call.args[0]));
+            if (def != .inst_result) continue;
+        }
+        try init.append(g.arena, def.inst_result);
+    }
+    if (g.passes) g.init_calls = init.items;
+}
+
 /// Whether a `.record` device records task `c` (`planSay`).
 pub fn sayRecords(c: Mir.Callee) bool {
     return Mir.callee.family(c) == .display and switch (c) {

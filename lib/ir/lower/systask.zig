@@ -263,6 +263,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
             .name = name,
             .tok = tok,
             .conditional = cond,
+            .analog_initial = self.in_analog_initial,
         });
     }
 }
@@ -1071,6 +1072,7 @@ pub fn sequenceFileCall(self: *Lower, tok: u32, name: []const u8, v: Mir.Value) 
         .name = name,
         .tok = tok,
         .conditional = cond,
+        .analog_initial = self.in_analog_initial,
     });
 }
 
