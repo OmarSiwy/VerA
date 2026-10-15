@@ -30,11 +30,13 @@ pub const Jobs = struct {
 
 /// What `plan` reads besides the lowered module.
 pub const From = struct {
+    /// `plan/names.zig`: the canonical units, whose operators queue inputs.
     names: *const Names,
     /// `proof.Verdict.unit_modes`: the float mode of each CONTRIBUTION unit.
     unit_modes: []const proof.FloatMode,
     /// `Limits.calls`: the honoured §4.5.15 sites.
     limits: []const LimitCall,
+    /// `plan/noise.zig`: the §4.6.4 generator rows and §4.6.3 stimulus rows.
     noise: *const plan_noise.Noise,
     /// `Options.display == .emit`: the §9.4 tasks become a unit of their own.
     emit_display: bool,
@@ -73,6 +75,8 @@ pub const Job = struct {
     /// Why the target is in the core. `plan` queues the kinds in this order,
     /// which is the order of the core's fields: a model that gains a target
     /// of one kind appends fields and renumbers none of the earlier kinds.
+    /// The one interleave: each contribution's `.react` jobs follow its own
+    /// `.resist` job.
     pub const Kind = enum {
         /// §5.6 a contribution's resistive target.
         resist,
@@ -417,13 +421,14 @@ fn queueVpi(self: Input, jobs: *std.ArrayList(Job), from: From, v: Mir.Value, ro
 }
 
 /// Value -> some instruction reads it, or a job in `queued` returns it. Dead
-/// instructions count: the answer only has to be a superset.
+/// instructions count: the answer only has to be a superset. One sweep of
+/// every instruction, O(instructions).
 fn readSet(self: Input, queued: []const Job) ![]bool {
     const read = try self.arena.alloc(bool, self.an.nv);
     @memset(read, false);
     for (queued) |j| read[@backingInt(self.an.rv(j.target))] = true;
     for (0..self.mir.insts.len) |ii| {
-        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
         switch (self.mir.instData(inst)) {
             .unary => |d| read[@backingInt(self.an.rv(d.operand))] = true,
             .binary => |d| for ([_]Mir.Value{ d.lhs, d.rhs }) |v| {

@@ -10,6 +10,7 @@ const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
+const assert = std.debug.assert;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
@@ -43,6 +44,8 @@ const Term = struct { sign: f64, contrib: u32 };
 ///   - a §5.4.3 port probe: minus the finished port row.
 /// A site whose charge is constant or solve-invariant has dq/dt = 0 and gets
 /// no slot; nor does a site that stamps no row (a ground-ground branch).
+/// `branch_u` is `Names.branch_u`, one entry per contribution; `sinv` is
+/// `Sinv.val`. O(rows · terms · sites); a module has tens of each.
 pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []const bool) Error!QSites {
     const a = in.arena;
     const lw = in.lowered;
@@ -153,6 +156,15 @@ pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []
             return if (x.row != y.row) x.row < y.row else x.slot < y.slot;
         }
     }.lt);
+    // Exit invariant `QSites.stamps` states: strictly ascending (row, slot),
+    // so no pair twice, and no zero sign.
+    for (out.items, 0..) |o, k| {
+        assert(o.sign != 0);
+        if (k != 0) {
+            const p = out.items[k - 1];
+            assert(p.row < o.row or (p.row == o.row and p.slot < o.slot));
+        }
+    }
     return .{ .sites = sites.items, .stamps = out.items };
 }
 

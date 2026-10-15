@@ -2,9 +2,11 @@
 //! writing (every `x[u]` and `.ddxAt(u)` it spells, every dispatcher row's
 //! constant coefficients) -> which derivative lanes `eval`/`q` read, and the
 //! exact constant partials of every column they do not. Soundness is argued
-//! at `dispatch.emitDerivReads`, which formats the result.
+//! at `dispatch.emitDerivReads`, which formats the result. Clauses: §4.5.14
+//! (`ddx` reads a lane), §5.6.5 (a collapsible switch row's guarded stamps).
 
 const std = @import("std");
+const assert = std.debug.assert;
 
 /// One constant partial: `g` of `eval`, `c` of `q`, at (row, col). Absent is 0.
 /// `when` is a GUARDED entry's collapse pair (`plan/topology.zig`
@@ -31,6 +33,10 @@ pub const JacConst = struct {
 /// rules. A (row, col) the table would have to state twice (unguarded and
 /// guarded, or under two guards) keeps its lane instead: `contract` wants
 /// (row, col) unique.
+///
+/// Asserts, at or below 64 unknowns, that both `lin` halves hold `n_u * n_u`
+/// entries and that every guarded entry lies inside the matrix. O(n_u² ·
+/// guarded) on a matrix of at most 64².
 pub fn plan(
     arena: std.mem.Allocator,
     n_u: u32,
@@ -43,6 +49,8 @@ pub fn plan(
     if (n_u > 64) return null;
     var mask = deriv_reads | ddx_reads | limit_writes;
     const n = n_u;
+    assert(lin[0].len == n * n and lin[1].len == n * n);
+    for (guarded) |e| assert(e.row < n and e.col < n);
     for (guarded, 0..) |e, k| {
         const clash = lin[0][e.row * n + e.col] != 0 or lin[1][e.row * n + e.col] != 0 or
             for (guarded[0..k]) |p| {

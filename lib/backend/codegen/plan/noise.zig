@@ -24,7 +24,9 @@ pub const Noise = struct {
     /// The same knots as `tabs`, in the same order, as MIR values, only for a
     /// table an A.8.2 `parameter_identifier` made model-dependent: `tabs`
     /// holds its declared defaults, and only this can state the card's. An
-    /// empty slice is a table of literals. See `emitNoiseTablePoints`.
+    /// empty slice is a table of literals, and so is every position past the
+    /// end (the slice stops at the last parametric table). See
+    /// `emitNoiseTablePoints`.
     tab_vals: []const []const [2]Mir.Value = &.{},
     /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `rows`,
     /// separated by `kind`: a stimulus is not a generator and must never
@@ -45,6 +47,8 @@ pub const Noise = struct {
 /// positional in each other (`PsdTerm` k belongs to `noise_gens[k]`), so
 /// they are built once here.
 pub const NoiseRow = struct {
+    /// The generator's `nodes` rows: `hi` and `lo`, or `row == col` for a
+    /// generator to §1.3.1.1 ground.
     row: u16,
     col: u16,
     kind: Lower.NoiseKind,

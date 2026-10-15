@@ -24,7 +24,8 @@ pub const Topology = struct {
     /// needs the membership test.
     cpairs: []const CollapsePair = &.{},
 
-    /// The `FreeFlow` for the pair `(hi, lo)`, if that branch has one.
+    /// The `FreeFlow` for the pair `(hi, lo)`, if that branch has one. The
+    /// pair is ordered: `(lo, hi)` is another branch. O(free flows).
     pub fn freeFlowOf(self: Topology, hi: u16, lo: u16) ?FreeFlow {
         for (self.free_flows) |f| if (f.hi == hi and f.lo == lo) return f;
         return null;
@@ -182,7 +183,7 @@ pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
     while (it.next()) |e| {
         const u: u32 = e.value_ptr.*;
         // A potential/indirect source already pins this current.
-        if (std.mem.indexOfScalar(u32, branch_u, u) != null) continue;
+        if (std.mem.findScalar(u32, branch_u, u) != null) continue;
         var sourced = false;
         var signal_flow = false;
         for (self.lowered.contributions.items) |c| {
