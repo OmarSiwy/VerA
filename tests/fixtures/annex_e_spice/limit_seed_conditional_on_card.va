@@ -15,11 +15,15 @@
 // the value of the access function reference, within appropriate tolerances"
 // is the CHECK (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va
 // argues).
+//
+// Verdicts: `//! seed` asserts each seeded net's value and that the net is in
+// `limit_writes`, two per net over ai and c (4), and the CHECK runs at the one
+// bias point (1): 5.
 //! lrm 9.17.3
 //! bias V(a) = 0.3, V(ai) = 0.3, V(c) = 0.0
 //! print none
 //! seed V(ai) = 0.3, V(c) = 0.0
-//! checks 1
+//! checks 5
 `include "check.vh"
 module limit_seed_conditional_on_card(a, c);
   inout a, c; electrical a, c, ai;

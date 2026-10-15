@@ -28,7 +28,7 @@ module conditional_capacitance_not_constant(p, n);
   real cq;
   analog begin
     cq = V(p) > -0.1 ? 1p : 2p;
-    `CHECKX("V(p) > -0.1 takes expression2", cq, 1p);
+    `CHECKX("V(p) > -0.1 takes expression2", cq, 1e-12);
     I(p, n) <+ V(p, n) / 1k;
     I(p, n) <+ ddt(V(p, n) * cq);
   end
