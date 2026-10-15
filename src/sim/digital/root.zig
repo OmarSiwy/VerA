@@ -19,6 +19,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 /// Scheduler ticks. `Time` below is the timescale module, not this.
 pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
+const deep = @import("../deep.zig");
 const compile = @import("compile.zig");
 /// Public for the VPI (src/vpi/value.zig), which writes a value the way a
 /// process does (`waiters.store` now, `exec.enqueue` of a `.write` later), so a
@@ -321,10 +322,6 @@ pub const Run = struct {
     /// §10.3 a `disable` of a subroutine with synchronous activations in
     /// progress: every activation returns at once until the outermost one.
     unwind: ?u32 = null,
-    sync_depth: u16 = 0,
-    /// The frame address of the outermost synchronous activation, which
-    /// `callSync` measures the stack from.
-    sync_stack: usize = 0,
     /// Compiling a function body, which §10.4.4 restricts.
     in_function: bool = false,
     /// §9.7.2 each event term that is an expression, by the scope it is
@@ -417,7 +414,7 @@ pub const Run = struct {
     /// definition disable their own copy and not each other's.
     /// `depth` is the block's statement nesting, which orders two named
     /// blocks with the same range (`begin : a begin : b ... end end`) for `%m`.
-    blocks: std.AutoHashMapUnmanaged(Name, struct { start: u32, end: u32, depth: u16 }) = .empty,
+    blocks: std.AutoHashMapUnmanaged(Name, struct { start: u32, end: u32, depth: u32 }) = .empty,
     /// The `.disable_block` instructions still waiting for their range, and the
     /// name each one is waiting for. A.6.5 puts no ordering rule on a
     /// `disable`: the block it names is routinely in ANOTHER process, which may
@@ -968,6 +965,10 @@ pub const Run = struct {
         return error.DigitalFailed;
     }
     /// `fail` at expression `e`'s main token, with a fixed message.
+    /// A walk ran out of the stack `deep.run` reserved, at token `tok`.
+    pub fn deepFail(self: *Run, tok: u32) Error {
+        return self.fail(tok, deep.message, .{deep.mib()});
+    }
     pub fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
         return self.fail(self.file.exprs.mainTok(e), "{s}", .{msg});
     }
@@ -1400,6 +1401,10 @@ const default_quantum: Time.Quantum = .s;
 /// Runs `source` to completion: `elaborate`, then every event. `arena` and
 /// `bag` must outlive the call; the transcript goes to `out`.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
+    return deep.run(0, runDeep, .{ arena, source, opts, bag, out });
+}
+
+fn runDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
     var r = try elaborate(arena, source, opts, bag, out);
     // Nothing is `watchAnalog`ed in a digital-only run, so it never stops early.
     _ = try r.runUntil(std.math.maxInt(Tick));
@@ -1418,6 +1423,10 @@ pub const DeviceZig = struct {
 /// under `schedule`. A design that cannot be one is E1103 in `bag` and
 /// `error.DigitalFailed`; a 1 s tick (no `timescale) is W1155.
 pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
+    return deep.run(0, emitDeviceDeep, .{ arena, source, opts, schedule, bag });
+}
+
+fn emitDeviceDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
     var discard: std.Io.Writer.Discarding = .init(&.{});
     var r = try elaborate(arena, source, opts, bag, &discard.writer);
     const top = r.file.modules[r.scope_info.items[0].def];
@@ -1440,6 +1449,10 @@ pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, s
 /// caller that holds it may step it with `runUntil` for as long as the arena
 /// lives, as a mixed-signal coordinator does.
 pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
+    return deep.run(0, elaborateDeep, .{ arena, source, opts, bag, out });
+}
+
+fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
     const pp: Front.Preprocessor.Output = if (opts.mixed) |mx| .{
         .text = source,
         .directives = .{ .timescales = if (mx.timescale) |t| try arena.dupe(Front.Preprocessor.TimescaleEvent, &.{.{ .at = 0, .value = t }}) else &.{} },
