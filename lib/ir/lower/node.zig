@@ -473,24 +473,9 @@ fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!voi
 }
 
 /// §10.2 the `default_discipline in force for a wire at token `main_tok`, or null.
-/// The most recent directive wins, and a wire-qualified one wins over an
-/// unqualified one however old it is ("the more specific directives have higher
-/// precedence").
 fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
     if (main_tok >= self.tok_starts.len) return null;
-    const at = self.tok_starts[main_tok];
-    var fallback: ?[]const u8 = null;
-    var i = self.directives.disciplines.len;
-    return while (i > 0) {
-        i -= 1;
-        const e = self.directives.disciplines[i];
-        if (e.at > at) continue;
-        // §10.2: the bare form and `resetall withdraw the default outright,
-        // so nothing older than one of those is still in force.
-        if (e.discipline.len == 0) break fallback;
-        if (e.qualifier == .wire) break e.discipline;
-        if (e.qualifier == null and fallback == null) fallback = e.discipline;
-    } else fallback;
+    return Preprocessor.DefaultDiscipline.inForce(self.directives.disciplines, self.tok_starts[main_tok]);
 }
 
 /// §3.9 "For digital primitives the domain is discrete and thus the discipline

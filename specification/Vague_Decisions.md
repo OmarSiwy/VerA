@@ -154,6 +154,7 @@ summary and has a **Status** line naming what landed.
 | VD-110 | VAMS 9.15 Table 9-28 | `$simparam$str` strings reach a device through `Model` u32 indices into `contract.host_strings`; index 0 falls back to the `Instance` slices (GPU always does) | DONE (2026-10-08) |
 | VD-111 | VAMS 8.4.3.2, 8.4.4, 8.5.1, 7.3.6.3; IEEE 1364-2005 17.1.3 | A digital `$monitor`'s analog probe is an operand: a report is due when a probe's value changed (VD-032's `!=`), checked at every digital time step and at every analog solution at a tick no digital event reached; time moving inside an argument is no change | DONE (2026-10-08) |
 | VD-112 | VAMS 4.5.7 | A full `absdelay` ring keeps its window by thinning its older half, never by refusing (E1012 retired) or shortening the delay; W1051 once per site | DONE (2026-10-15) |
+| VD-113 | VAMS 7.8.5.1, 7.8.4, 3.9 | A gate's mixed terminal is bridged like a port, its lower side the `default_discipline` in force at the gate; enable gates, gate arrays, unnamed gates, pulls and switches are not bridged yet | DONE (#29) |
 
 ## 1. Open decisions (CLAUSE-AUDIT §7.5)
 
@@ -1261,6 +1262,15 @@ clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
 - **Measure impact**: A (`ch04_expressions/absdelay_history_past_capacity.va` replaces the refusal). C: 4.5.7 gains positive evidence past the old capacity.
 - **Status**: DONE 2026-10-15 (#29): `absdelay_history_past_capacity.va`; `lib/backend/kernels/test.zig` "§4.5.7 a full ring thins its older half and keeps its window: against the full history" and the plain-ring bit-identity test.
 
+### VD-113: Connect modules on a built-in gate's terminals
+- **Source**: GitHub issue #29, phase 3; `ch07_mixed_signal/b5_gate_generated_connect_name_defparam.va` was XFAIL ("an analog compile keeps no gate and insertion walks module instances only").
+- **Rule**: VAMS 7.8.5.1 gives built-in primitives port names "for the purpose of naming the connect modules", so 7.8.4's insertion applies to a primitive's ports. 3.9: "For digital primitives the domain is discrete and thus the discipline is set via the default_discipline directive".
+- **Why vague**: 7.8.5.1 names the ports of N-input gates, N-output gates, MOS and pass switches and pull sources, but not of the enable gates (`bufif0/1`, `notif0/1`); 7.8.5's split name needs an InstName an unnamed gate does not have; an instance array's lanes have no name of their own.
+- **Decision**: a gate terminal is a port whose direction is the terminal's (output or input) and whose lower connection is the discipline the `default_discipline` in force at the gate names (none in force: no insertion, and lowering's E0960 judges a continuous net). N-input gates and `buf`/`not` are bridged, named `out`/`in1..`, `in`/`out1..`. Not bridged yet, left joined as before: enable gates, unnamed gates, gate arrays, pull sources and switches (§10).
+- **VerA today**: `lib/ir/elaborate/insert.zig` `plan` (the gate rows are the tail of `Flatten.gates`); `Ast.GateInst.connectPortName` is the one naming rule, read by the mixed runner's `bridged` (`src/sim/digital/elab.zig`) too. A design whose top has only gates and connect rules now takes the flatten.
+- **Measure impact**: A (the XFAIL passes; `b5_gate_connect_bridge_drives_gate_input.va` added). C: 7.8.5.1 gains positive evidence.
+- **Status**: DONE 2026-10-15 (#29).
+
 ## 6. Implementation-defined choices
 
 A fixture here tests VerA's choice, not the clause. A tool that chooses
@@ -1634,6 +1644,7 @@ express them or the work was larger than the pass. Each names its clause.
 
 - ~~**VAMS 5.4.3: a module's own `I(<a>)` inside an instance** reads the flattened net's port flow: the top's port flow when the net is a top port, else E0508~~ refused by name 2026-10-08: now a §7 limit row (E0997, `port_access_own_port_inside_instance_rejected.va`, `port_branch_own_port_inside_instance_rejected.va`). Open: the value itself, which needs a per-instance port-flow unknown (codegen's `x[u] − res[p]` row restricted to the instance's units). A hierarchical `I(<u.a>)` read from above is the instance's own.
 - ~~**VAMS 2.9, 3.2.1, 3.4.3, 3.6.3.1: `desc`/`units` metadata** is not exported~~ DONE 2026-10-08 (#15, VD-100): `decl_meta`, asserted by `//! meta`.
+- **VAMS 7.8.5.1: connect modules on the other primitives.** An enable gate (no names in the clause), an unnamed gate, a gate instance array, a pull source and a MOS or pass switch on a mixed net get no connect module; the terminal stays on the net (VD-113).
 - **VAMS 3.2.1: output variable values.** `decl_meta` names a module's output variables, but no hook hands a host their values for an operating-point report ("Verilog-AMS simulators shall provide access to their values").
 - **`--emit-osdi`: display output.** An OSDI 0.4 library never calls the device's `say`, so its `$strobe`/`$display`/`$debug` records are not printed; OSDI has no accept callback to print them at (VD-102).
 - ~~**VAMS 4.5.14, 8.5.3.7: analysis restarts and evaluation counts**, and **8.4: `$monitor` against analog solves**~~ DONE 2026-10-08 (#16). Restarts and counts needed no new runner: under `//! time` each `//! sweep` point is its own analysis (`ch04_expressions/dynamic_constant_argument_resampled_per_analysis.va`), and `//! checks` counts the mixed runner's accepted solutions, one CHECK each (`ch08_scheduling/macro_process_one_solve_for_coincident_events.va`). A digital `$monitor` of an analog probe crashed the engine; it is now checked at every digital time step after its region-3b solve (`ch08_scheduling/monitor_after_macro_process.va`) and at every analog solution at a tick no digital event reached, reporting when a probe moved (VD-111, `ch08_scheduling/monitor_at_analog_only_solutions.va`).
