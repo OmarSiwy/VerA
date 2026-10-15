@@ -282,6 +282,10 @@ pub const Gen = struct {
     /// where the conditionally-emitted helper blocks are already decided.
     prelude: []const u8 = "",
     helpers: []const u8 = "",
+    /// `cg_strcap`'s memo: the capacity of each string Value asked about.
+    str_caps: std.AutoHashMapUnmanaged(Mir.Value, u64) = .empty,
+    /// `cg_strcap.heldCap` per `Lowered.held_vars` row, solved on first use.
+    held_caps: ?[]u64 = null,
 
     // ---- the declaration being written: reset per unit --------------------
 

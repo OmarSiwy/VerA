@@ -18,6 +18,7 @@ const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
+const cg_strcap = @import("../cg_strcap.zig");
 const kt = @import("kernel_text.zig");
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
@@ -29,10 +30,11 @@ const none_u32 = codegen.none_u32;
 /// constant `maxdelay`.
 // ponytail: a fixed 1024 samples with linear interpolation. SPICE's
 // maxstep = min(tstep, span/50) already allows td/dt = 100 steps per delay,
-// and ch04_expressions/a04_05 needs 515. A query older than the ring ends the
-// run with E1012 in `zHistAt` rather than clamping: §4.5.7 bounds no lookback,
-// so a clamp would silently shorten the delay. Upgrade path: host-owned
-// growable history.
+// and ch04_expressions/a04_05 needs 515. A ring that fills while its oldest
+// sample is still inside the window is thinned (`hist_kernels.zHistThin`),
+// never cut: §4.5.7 bounds no lookback, so dropping a sample the window needs
+// would silently shorten the delay. The ring stays inline in `Instance` so
+// value copies, `stateCtl` twins and batch lanes keep working on a GPU too.
 const hist_len: usize = 1024;
 /// The step a `maxdelay` site's ring is sized for: `ceil(maxdelay /
 /// hist_min_step) + 2` samples, within [`hist_len`, `hist_max`]. 1 ps is
@@ -45,7 +47,7 @@ const hist_max: usize = 16384;
 /// The ring length of absdelay unit `i`: `hist_len`, or, for a
 /// §4.5.7 `maxdelay` that folds (its declared default when a parameter), enough
 /// samples to hold that delay at `hist_min_step`, up to
-/// `hist_max`. A longer lookback still ends the run with E1012.
+/// `hist_max`. A longer window is kept by thinning (W1051).
 fn histLen(self: *const Gen, i: usize) usize {
     const args = self.names.opArgs(self.mir, i);
     if (args.len < 3) return hist_len;
@@ -164,8 +166,9 @@ pub fn emitInstance(self: *Gen) Error!void {
                 try self.w(
                     "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
                         "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
-                        "    {s}__head: u64 = 0,\n",
-                    .{ n, histLen(self, i), n, histLen(self, i), n },
+                        "    {s}__head: u64 = 0,\n" ++
+                        "    {s}__w: f64 = 0.0, // §4.5.7 the window the ring keeps (`zHistThin`)\n",
+                    .{ n, histLen(self, i), n, histLen(self, i), n, n },
                 );
                 // The ring itself is not copied: `stateCtl` keeps the one
                 // sample the next push overwrites (`emitStateCtl`).
@@ -261,7 +264,12 @@ pub fn emitInstance(self: *Gen) Error!void {
                 .str_const => |s| s,
                 else => "", // else: a non-literal initializer starts from §3.3's empty string, as a real starts from its spec default
             };
-            try self.w("    {s}: ZStrHeld = zStrHeld(\"{f}\"), // §5.10 held across evaluations\n", .{ self.names.held_names[i], std.zig.fmtString(s) });
+            // Sized for the longest text the model can hold there (`cg_strcap`).
+            try self.w("    {s}: ", .{self.names.held_names[i]});
+            try cg_strcap.emitHeldType(self, i);
+            try self.w(" = ", .{});
+            try cg_strcap.emitHeldCopy(self, i);
+            try self.w("\"{f}\"), // §5.10 held across evaluations\n", .{std.zig.fmtString(s)});
             continue;
         }
         const init = self.an.foldConst(self.an.rv(h.init), true);
@@ -559,7 +567,7 @@ pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
         try self.w("    table_kept: [{d}]bool = @splat(false),\n", .{self.lowered.table_samples.items.len});
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay)
-            try self.w("    {0s}__t__acc: f64 = 0.0,\n    {0s}__v__acc: f64 = 0.0,\n", .{self.names.unit_names[i]});
+            try self.w("    {0s}__t__acc: f64 = 0.0,\n    {0s}__v__acc: f64 = 0.0,\n    {0s}__t__acc2: f64 = 0.0,\n    {0s}__v__acc2: f64 = 0.0,\n", .{self.names.unit_names[i]});
     }
 }
 
@@ -637,12 +645,19 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     }
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
-            "        state.{0s}__t__acc = inst.{0s}__t[@intCast(inst.{0s}__head % {1d})];\n        state.{0s}__v__acc = inst.{0s}__v[@intCast(inst.{0s}__head % {1d})];\n",
+            "        state.{0s}__t__acc = inst.{0s}__t[@intCast(inst.{0s}__head % {1d})];\n        state.{0s}__v__acc = inst.{0s}__v[@intCast(inst.{0s}__head % {1d})];\n" ++
+                // The sample a thinning push overwrites (`zHistRevert`).
+                "        state.{0s}__t__acc2 = inst.{0s}__t[@intCast((inst.{0s}__head + 1) % {1d})];\n        state.{0s}__v__acc2 = inst.{0s}__v[@intCast((inst.{0s}__head + 1) % {1d})];\n",
             .{ self.names.unit_names[i], histLen(self, i) },
         );
     }
     if (t_prev) try self.w("        state.t_prev__acc = state.t_prev;\n", .{});
     try self.w("    }} else {{\n{s}{s}", .{ tp_drop, tbl_revert });
+    // The count the rejected push left, before `__head` is restored.
+    for (self.names.units, 0..) |u, i| {
+        if (u.role == .analog_op and u.op == .absdelay)
+            try self.w("        const zh{d} = inst.{s}__head;\n", .{ i, self.names.unit_names[i] });
+    }
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},
@@ -654,11 +669,12 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         };
         try self.w("        inst.{s} = state.{s};\n", .{ h, h });
     }
-    // After `__head` is back: the slot the rejected push overwrote.
+    // After `__head` is back: the slot the rejected push overwrote, and a
+    // thinning it did undone (`zHistRevert`).
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
-            "        inst.{0s}__t[@intCast(inst.{0s}__head % {1d})] = state.{0s}__t__acc;\n        inst.{0s}__v[@intCast(inst.{0s}__head % {1d})] = state.{0s}__v__acc;\n",
-            .{ self.names.unit_names[i], histLen(self, i) },
+            "        zHistRevert(&inst.{0s}__t, &inst.{0s}__v, inst.{0s}__head, zh{1d}, state.{0s}__t__acc, state.{0s}__v__acc, state.{0s}__t__acc2, state.{0s}__v__acc2);\n",
+            .{ self.names.unit_names[i], i },
         );
     }
     if (t_prev) try self.w("        state.t_prev = state.t_prev__acc;\n", .{});

@@ -1,7 +1,6 @@
 // §3.3 Table 3-3: a replication of a string repeats it count times. VerA folds
-// a constant one when the model compiles, up to E1011's 4096 bytes
-// (specification/Vague_Decisions.md; string_replication_over_4096_bytes_rejected.va is
-// the byte past it).
+// a constant one when the model compiles, at any length (4096 bytes was its
+// old limit; string_replication_past_4096_bytes.va goes past it).
 //
 // HAND DERIVATION. {4096{"x"}} is 4096 copies of "x". Compared with the same
 // text built as {64{s}} where s is {64{"x"}}, 64 * 64 = 4096 copies: equal.

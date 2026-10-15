@@ -31,11 +31,27 @@
 // formatting question, answered before `zFPut`), $fread, $readmemb/$readmemh
 // and $sdf_annotate.
 
+// MEMORY. The table, the remembered write paths and each channel's line grow
+// on demand, from `zf_gpa`: `std.heap.page_allocator`, which every target a
+// device builds for has (the kernels already need an OS for every call here),
+// behind geometric growth, so a run that opens n channels or reads an n-byte
+// line asks the OS O(log n) times. Nothing else in a device allocates, and the
+// contract has no allocator: these kernels run only in the per-point side
+// effect phase of a `--display=emit` device (above), never in `eval`. An
+// allocation that fails is §9.5.1's failed open (`$fopen` 0, `$ferror` 12) or,
+// for a line or `$fscanf` window that cannot grow, E1011 (`zfOver`). What a
+// channel reads stays allocated until the run ends (`zFFreeAll`), because a
+// string variable may still view a line after the next read or a `$fclose`.
+
 // `std` is spelled `zfstd` HERE for the reason `str_kernels.zig` spells it
 // `zstd`: this text is embedded verbatim into device.zig, which already declares
 // `const std` — and a DIFFERENT alias from the string kernels', because a device
 // that scans a file carries both blocks in the same file scope.
 const zfstd = @import("std");
+
+/// Where the table, the write-path rows and the lines come from. A `var` so a
+/// test can run the kernels over a checking or failing allocator.
+pub var zf_gpa: zfstd.mem.Allocator = zfstd.heap.page_allocator;
 
 /// One open channel. `pos` is §9.5.5's own quantity — "the offset from the
 /// beginning of the file of the current byte of the file fd, which shall be read
@@ -64,11 +80,11 @@ const ZFSlot = struct {
     /// happens once however many destinations there are.
     /// §9.5.4.1 puts no length limit on a line ("until a newline character is
     /// read and transferred to str, or an EOF condition is encountered") and
-    /// §3.3's `string` is not a fixed-width type, so a longer line, or a
-    /// `$fscanf` that needs more than this window, ends the run with E1011
-    /// (`zfOver`) rather than splitting the record. 4096 is `str_kernels.zSBuf`'s
-    /// row.
-    line: [4096]u8 = undefined,
+    /// §3.3's `string` is not a fixed-width type, so the line grows to hold
+    /// the longest one read (`zfGrow`), and so does a `$fscanf` window that a
+    /// scan reads to its end (`zFMore`). Only a line memory cannot hold ends
+    /// the run (E1011, `zfOver`); a record is never split.
+    line: []u8 = &.{},
     line_len: usize = 0,
     /// IEEE 1364-2005 §17.2.4.1 the characters `$ungetc` pushed back, the
     /// last pushed first. Every read (`zFGetc`, `zFGets`, `zFWindow`) takes
@@ -76,26 +92,26 @@ const ZFSlot = struct {
     // ponytail: a fixed stack; C promises one pushback and this holds 16.
     back: [16]u8 = undefined,
     nback: u8 = 0,
-
-    // Budget: the 4096-byte `line` plus at most 64 bytes of bookkeeping per
-    // channel (4152 on 64-bit targets); `zf_slots` holds `zf_max` of them in
-    // every device image that calls §9.5.
-    comptime {
-        zfstd.debug.assert(@sizeOf(ZFSlot) <= 4096 + 64);
-    }
 };
 
 /// §9.5.1: "limiting an implementation to at most 31 files opened for output via
 /// multichannel descriptors" — bit 0 is standard output and bit 31 is reserved
-/// clear, so 30 is the mcd shape's own ceiling and the fd shape shares the table.
+/// clear, so 30 is the mcd shape's own ceiling. Rows 0..29 of `zf_slots` are
+/// those channels (bit k+1 is row k); a file descriptor is not an mcd and has
+/// no such limit, so fd channel c (c >= 3) is row `zf_max + c - 3`, as many as
+/// memory holds, up to the 2^31 - 3 numbers bit 31 leaves an fd.
 const zf_max = 30;
 
 // ponytail: file scope, one table per device image, for the reason `zSBuf` is
-// file scope — a descriptor outlives the expression that produced it and a
-// `[]const u8` line has to point somewhere stable. Two instances of the same
-// module therefore SHARE the table; per-instance channels are the upgrade the
-// day the harness runs more than one instance of a model that opens files.
-var zf_slots: [zf_max]ZFSlot = @splat(.{});
+// file scope — a descriptor outlives the expression that produced it. Two
+// instances of the same module therefore SHARE the table; per-instance
+// channels are the upgrade the day the harness runs more than one instance of
+// a model that opens files.
+var zf_slots: zfstd.ArrayList(ZFSlot) = .empty;
+
+/// Line buffers a channel grew out of. A string variable may still view one,
+/// so they are freed with everything else at the end of the run.
+var zf_retired: zfstd.ArrayList([]u8) = .empty;
 
 /// §9.5.1: "Applications can call $ferror to determine the cause of the most
 /// recent error" — after a FAILED open there is no descriptor to hang that on,
@@ -111,12 +127,11 @@ var zf_last_err: i64 = 0;
 /// `zf_analysis` at the first point of every analysis after the first
 /// (`zFNewAnalysis`); a host that never calls it runs one analysis, and then
 /// `base` is 0 and "w" is C's truncate, exactly as before.
-// ponytail: 64 remembered paths, by hash. Forgetting one would truncate it on
-// a later analysis, so a 65th distinct path opened for writing fails the open
-// instead (`zFOpen`: 0, `$ferror` 24), like a 31st channel.
+// ponytail: paths remembered by hash, one row each for the run. Forgetting one
+// would truncate it on a later analysis, so a row that cannot be added fails
+// the open instead (`zFOpen`: 0, `$ferror` 12).
 const ZFWritten = struct { hash: u64, analysis: u32, base: u64 };
-var zf_written: [64]ZFWritten = @splat(.{ .hash = 0, .analysis = 0, .base = 0 });
-var zf_nwritten: usize = 0;
+var zf_written: zfstd.ArrayList(ZFWritten) = .empty;
 var zf_analysis: u32 = 0;
 
 /// §9.5.1.1 a new analysis of the same simulation process begins.
@@ -126,27 +141,54 @@ pub fn zFNewAnalysis() void {
 
 /// The length a write-mode open of `path` truncates to: 0 the first time, the
 /// earlier analyses' content after that (§9.5.1.1). Null when the path is new
-/// and all 64 rows are taken.
+/// and no memory is left to remember it.
 fn zfWriteBase(io: zfstd.Io, path: []const u8) ?u64 {
     const h = zfstd.hash.Wyhash.hash(0, path);
-    for (zf_written[0..zf_nwritten]) |*w| if (w.hash == h) {
+    for (zf_written.items) |*w| if (w.hash == h) {
         if (w.analysis != zf_analysis) {
             const st = zfstd.Io.Dir.cwd().statFile(io, path, .{}) catch return 0;
             w.* = .{ .hash = h, .analysis = zf_analysis, .base = st.size };
         }
         return w.base;
     };
-    if (zf_nwritten == zf_written.len) return null;
-    zf_written[zf_nwritten] = .{ .hash = h, .analysis = zf_analysis, .base = 0 };
-    zf_nwritten += 1;
+    zf_written.append(zf_gpa, .{ .hash = h, .analysis = zf_analysis, .base = 0 }) catch return null;
     return 0;
 }
 
-/// E1011: a line or scan outgrew `ZFSlot.line`. Fatal: the clause has no
-/// shorter answer to give.
+/// E1011: a line or scan needs more memory than is left. Fatal: the clause
+/// has no shorter answer to give.
 fn zfOver() noreturn {
-    zfstd.debug.print("error[E1011]: a line read from a file exceeds the 4096-byte buffer of one call; see `vera --explain E1011`\n", .{});
+    zfstd.debug.print("error[E1011]: a line read from a file does not fit in the memory left; see `vera --explain E1011`\n", .{});
     zfstd.process.exit(1);
+}
+
+/// Grows `s.line` to hold at least `want` bytes, doubling, keeping its
+/// content. The old buffer is retired, not freed (see MEMORY). E1011 when
+/// memory runs out.
+fn zfGrow(s: *ZFSlot, want: usize) void {
+    if (s.line.len >= want) return;
+    var cap: usize = @max(s.line.len, 4096);
+    while (cap < want) cap = zfstd.math.mul(usize, cap, 2) catch zfOver();
+    zf_retired.ensureUnusedCapacity(zf_gpa, 1) catch zfOver();
+    const nb = zf_gpa.alloc(u8, cap) catch zfOver();
+    @memcpy(nb[0..s.line_len], s.line[0..s.line_len]);
+    if (s.line.len != 0) zf_retired.appendAssumeCapacity(s.line);
+    s.line = nb;
+}
+
+/// Closes every channel and frees everything the table owns: the run is over.
+/// A host that runs one simulation per process may skip it.
+pub fn zFFreeAll() void {
+    for (zf_slots.items) |*s| {
+        if (s.open) s.f.close(zfIo());
+        zf_gpa.free(s.line);
+    }
+    zf_slots.clearAndFree(zf_gpa);
+    for (zf_retired.items) |b| zf_gpa.free(b);
+    zf_retired.clearAndFree(zf_gpa);
+    zf_written.clearAndFree(zf_gpa);
+    zf_analysis = 0;
+    zf_last_err = 0;
 }
 
 fn zfIo() zfstd.Io {
@@ -164,13 +206,27 @@ fn zfIo() zfstd.Io {
 /// STDERR, so a fresh channel starts at 3.
 pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
     // "The $fopen function shall reuse channels that have been closed" — a
-    // linear scan for the first free slot is that rule.
-    var k: usize = 0;
-    while (k < zf_max and zf_slots[k].open) k += 1;
-    if (k == zf_max) {
-        zf_last_err = 24; // EMFILE
+    // linear scan for the first free slot is that rule. The mcd rows exist
+    // from the first open; an fd row is added when every one is taken.
+    if (zf_slots.items.len < zf_max) zf_slots.appendNTimes(zf_gpa, .{}, zf_max - zf_slots.items.len) catch {
+        zf_last_err = 12; // ENOMEM
+        return 0;
+    };
+    var k: usize = if (mcd) 0 else zf_max;
+    const end = if (mcd) zf_max else zf_slots.items.len;
+    while (k < end and zf_slots.items[k].open) k += 1;
+    if (k == zf_max and mcd) {
+        zf_last_err = 24; // EMFILE: §9.5.1's 30 mcd channels
         return 0;
     }
+    if (!mcd and k - zf_max >= (1 << 31) - 3) {
+        zf_last_err = 24; // EMFILE: bit 31 leaves an fd 31 bits
+        return 0;
+    }
+    if (k == zf_slots.items.len) zf_slots.ensureUnusedCapacity(zf_gpa, 1) catch {
+        zf_last_err = 12; // ENOMEM
+        return 0;
+    };
     const io = zfIo();
     // §9.5.1 Table 9-24: "b" only distinguishes hosts that translate line
     // endings; nothing here translates. Omitted type defaults to writing.
@@ -188,7 +244,7 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
         'w' => w: {
             // §9.5.1.1: truncate to what the earlier analyses wrote, not to 0.
             const base = zfWriteBase(io, path) orelse {
-                zf_last_err = 24; // EMFILE
+                zf_last_err = 12; // ENOMEM
                 return 0;
             };
             const f = cwd.createFile(io, path, .{ .read = plus, .truncate = base == 0 }) catch |e| {
@@ -207,21 +263,25 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
             return 0;
         },
     };
-    zf_slots[k] = .{
+    if (k == zf_slots.items.len) zf_slots.appendAssumeCapacity(.{});
+    // A reused row keeps its line buffer: a string may still view it.
+    const line = zf_slots.items[k].line;
+    zf_slots.items[k] = .{
         .open = true,
         .f = f,
         .can_read = mode == 'r' or plus,
         .can_write = mode != 'r' or plus,
         .append = mode == 'a',
+        .line = line,
     };
     // "at end of file" is a POSITION, and the position is ours to keep. A "w"
     // open's end is 0, or §9.5.1.1's earlier-analysis content (`zfWriteBase`).
-    if (mode != 'r') zf_slots[k].pos = f.length(io) catch 0;
+    if (mode != 'r') zf_slots.items[k].pos = f.length(io) catch 0;
     zf_last_err = 0;
     return if (mcd)
         @as(i64, 1) << @intCast(k + 1) // bit 0 is standard output
     else
-        (@as(i64, 1) << 31) | @as(i64, @intCast(k + 3)); // 0..2 are the std streams
+        (@as(i64, 1) << 31) | @as(i64, @intCast(k - zf_max + 3)); // 0..2 are the std streams
 }
 
 /// A nonzero errno for §9.5.7. The numeric value is deliberately the C one where
@@ -245,8 +305,8 @@ fn zfSlot(d: i64) ?usize {
     if (d & (@as(i64, 1) << 31) != 0) { // an fd: bit 31 set
         const ch = d & 0x7fff_ffff;
         if (ch < 3) return null; // STDIN/STDOUT/STDERR
-        const k: usize = @intCast(ch - 3);
-        return if (k < zf_max and zf_slots[k].open) k else null;
+        const k: usize = zf_max + @as(usize, @intCast(ch - 3));
+        return if (k < zf_slots.items.len and zf_slots.items[k].open) k else null;
     }
     // An mcd: the LOWEST set bit above bit 0 names the channel a single-channel
     // operation acts on. §9.5.1 lets several bits be OR'd together, which is a
@@ -255,7 +315,7 @@ fn zfSlot(d: i64) ?usize {
     while (b <= zf_max) : (b += 1) {
         if (d & (@as(i64, 1) << b) == 0) continue;
         const k: usize = b - 1;
-        return if (zf_slots[k].open) k else null;
+        return if (k < zf_slots.items.len and zf_slots.items[k].open) k else null;
     }
     return null;
 }
@@ -289,14 +349,14 @@ pub fn zFPut(d: i64, text: []const u8) i64 {
     var b: u6 = 1;
     while (b <= zf_max) : (b += 1) {
         if (d & (@as(i64, 1) << b) == 0) continue;
-        if (!zf_slots[b - 1].open) continue;
+        if (b > zf_slots.items.len or !zf_slots.items[b - 1].open) continue;
         n = zfPut1(b - 1, text);
     }
     return n;
 }
 
 fn zfPut1(k: usize, text: []const u8) i64 {
-    const s = &zf_slots[k];
+    const s = &zf_slots.items[k];
     if (!s.can_write) {
         s.err = 9; // EBADF — opened "r"
         zf_last_err = 9;
@@ -332,7 +392,7 @@ pub fn zFGets(d: i64) i64 {
         zf_last_err = 9;
         return 0;
     };
-    const s = &zf_slots[k];
+    const s = &zf_slots.items[k];
     if (!s.can_read) {
         s.err = 9;
         zf_last_err = 9;
@@ -341,7 +401,9 @@ pub fn zFGets(d: i64) i64 {
     const io = zfIo();
     var n: usize = 0;
     var b: [1]u8 = undefined;
-    while (n < s.line.len) {
+    s.line_len = 0;
+    while (true) {
+        if (n == s.line.len) zfGrow(s, n + 1);
         // §17.2.4.1's pushback first; the file is read only once it is
         // empty, so `pos + n` is then the file's position.
         if (s.nback != 0) {
@@ -362,13 +424,8 @@ pub fn zFGets(d: i64) i64 {
         }
         s.line[n] = b[0];
         n += 1;
+        s.line_len = n;
         if (b[0] == '\n') break;
-    }
-    // A full buffer with no newline: the line goes on unless the file ends.
-    if (n == s.line.len and s.line[n - 1] != '\n') {
-        const more = if (s.nback != 0) 1 else s.f.readPositionalAll(io, &b, s.pos + n) catch 0;
-        if (more != 0) zfOver();
-        s.eof = true;
     }
     s.pos += n;
     s.line_len = n;
@@ -387,7 +444,7 @@ pub fn zFGets(d: i64) i64 {
 pub fn zFLine(n: i64, d: i64) []const u8 {
     if (n <= 0) return "";
     const k = zfSlot(d) orelse return "";
-    return zf_slots[k].line[0..zf_slots[k].line_len];
+    return zf_slots.items[k].line[0..zf_slots.items[k].line_len];
 }
 
 /// §9.5.4.2's INPUT: the unread remainder of the file, up to one buffer, read
@@ -410,21 +467,22 @@ pub fn zFLine(n: i64, d: i64) []const u8 {
 /// returns -1 when nothing was tried, which is "if the input ends before the
 /// first matching failure or conversion, EOF is returned".
 //
-// ponytail: the window is one buffer, so a scan that needs more than
-// `ZFSlot.line` bytes ahead ends the run with E1011 (`zFTake`). A streaming
-// window is the upgrade, the day a model scans a file with megabytes of it.
+// The window is the channel's line buffer; a scan that reads to the end of a
+// full one asks for a wider window (`zFMore`) and runs again.
 pub fn zFWindow(d: i64) []const u8 {
     const k = zfSlot(d) orelse {
         zf_last_err = 9;
         return "";
     };
-    const s = &zf_slots[k];
+    const s = &zf_slots.items[k];
     if (!s.can_read) {
         s.err = 9;
         zf_last_err = 9;
         return "";
     }
     // §17.2.4.1's pushback leads the window, the last pushed first.
+    s.line_len = 0;
+    zfGrow(s, 4096);
     const m: usize = s.nback;
     for (0..m) |i| s.line[i] = s.back[m - 1 - i];
     s.line_len = m + (s.f.readPositionalAll(zfIo(), s.line[m..], s.pos + m) catch |e| {
@@ -450,10 +508,7 @@ pub fn zFWindow(d: i64) []const u8 {
 /// on a conflicting character, has reached the end of nothing.
 pub fn zFTake(d: i64, n: i64, used: i64) i64 {
     const k = zfSlot(d) orelse return n;
-    const s = &zf_slots[k];
-    // A scan that ran to the end of a FULL window may have needed the bytes
-    // after it; its answer is not the file's.
-    if (s.line_len == s.line.len and used >= s.line_len) zfOver();
+    const s = &zf_slots.items[k];
     if (used > 0) {
         s.pos += @intCast(used);
         s.nback -= @intCast(@min(s.nback, used));
@@ -462,12 +517,24 @@ pub fn zFTake(d: i64, n: i64, used: i64) i64 {
     return n;
 }
 
+/// Whether the scan over `zFWindow`'s window must run again over a wider one:
+/// it read `used` bytes, to the end of a FULL window, so it may have needed
+/// the bytes after it and its answer is not yet the file's. The window is
+/// doubled first (`zfGrow`; E1011 when memory runs out).
+pub fn zFMore(d: i64, used: usize) bool {
+    const k = zfSlot(d) orelse return false;
+    const s = &zf_slots.items[k];
+    if (s.line_len < s.line.len or used < s.line_len) return false;
+    zfGrow(s, s.line.len + 1);
+    return true;
+}
+
 /// §9.5.5 `pos = $ftell( fd )` — "the offset from the beginning of the file of
 /// the current byte". "If an error occurs, EOF is returned"; EOF's value is
 /// IEEE 1364's, i.e. -1.
 pub fn zFTell(d: i64) i64 {
     const k = zfSlot(d) orelse return -1;
-    return @intCast(zf_slots[k].pos);
+    return @intCast(zf_slots.items[k].pos);
 }
 
 /// §9.5.5 `code = $fseek( fd, offset, operation )` — "0 sets position equal to
@@ -479,7 +546,7 @@ pub fn zFTell(d: i64) i64 {
 /// `$rewind` is the same kernel: "$rewind is equivalent to $fseek (fd,0,0)".
 pub fn zFSeek(d: i64, off: i64, op: i64) i64 {
     const k = zfSlot(d) orelse return -1;
-    const s = &zf_slots[k];
+    const s = &zf_slots.items[k];
     const base: i64 = switch (op) {
         1 => @intCast(s.pos),
         2 => @intCast(s.f.length(zfIo()) catch {
@@ -510,7 +577,7 @@ pub fn zFSeek(d: i64, off: i64, op: i64) i64 {
 /// none is left, which is also what sets §17.2.8's end-of-file indicator.
 pub fn zFGetc(d: i64) i64 {
     const k = zfSlot(d) orelse return -1;
-    const s = &zf_slots[k];
+    const s = &zf_slots.items[k];
     if (s.nback != 0) {
         s.nback -= 1;
         s.pos += 1;
@@ -532,7 +599,7 @@ pub fn zFGetc(d: i64) i64 {
 /// cannot. It moves the position back one, as C's does, and so needs one.
 pub fn zFUngetc(c: i64, d: i64) i64 {
     const k = zfSlot(d) orelse return -1;
-    const s = &zf_slots[k];
+    const s = &zf_slots.items[k];
     if (s.pos == 0 or s.nback == s.back.len) return -1;
     s.back[s.nback] = @truncate(@as(u64, @bitCast(c)));
     s.nback += 1;
@@ -545,7 +612,7 @@ pub fn zFUngetc(c: i64, d: i64) i64 {
 /// previously been detected reading fd; returns zero otherwise."
 pub fn zFEof(d: i64) i64 {
     const k = zfSlot(d) orelse return 0;
-    return @intFromBool(zf_slots[k].eof);
+    return @intFromBool(zf_slots.items[k].eof);
 }
 
 /// §9.5.7 `errno = $ferror( fd, str )` — "the integral value of the error code
@@ -557,7 +624,7 @@ pub fn zFEof(d: i64) i64 {
 /// determine the cause of the most recent error."
 pub fn zFError(d: i64) i64 {
     const k = zfSlot(d) orelse return zf_last_err;
-    return zf_slots[k].err;
+    return zf_slots.items[k].err;
 }
 
 /// The description half. "A string description of type of error encountered by
@@ -568,6 +635,7 @@ pub fn zFErrorStr(e: i64, _: i64) []const u8 {
         0 => "",
         2 => "no such file or directory",
         9 => "bad file descriptor",
+        12 => "out of memory",
         13 => "permission denied",
         21 => "is a directory",
         22 => "invalid argument",
@@ -597,14 +665,14 @@ pub fn zFClose(d: i64) i64 {
     var b: u6 = 1;
     while (b <= zf_max) : (b += 1) {
         if (d & (@as(i64, 1) << b) == 0) continue;
-        if (zf_slots[b - 1].open) zfClose1(b - 1);
+        if (b <= zf_slots.items.len and zf_slots.items[b - 1].open) zfClose1(b - 1);
     }
     return 0;
 }
 
 fn zfClose1(k: usize) void {
-    zf_slots[k].f.close(zfIo());
-    zf_slots[k].open = false;
+    zf_slots.items[k].f.close(zfIo());
+    zf_slots.items[k].open = false;
 }
 
 /// §9.5 one call site's RESULT, carried out of the display unit. The call is
