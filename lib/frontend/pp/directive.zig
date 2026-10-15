@@ -424,7 +424,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     if (precision > unit) {
         var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
         b.msg("the time precision is coarser than the time unit", .{});
-        b.note("§19.9: \"The time precision shall be at least as precise as the time unit\"", .{});
+        b.note("§19.8: \"The time precision shall be at least as precise as the time unit\"", .{});
         try b.emit();
         return error.PreprocessFailed;
     }
@@ -443,7 +443,7 @@ fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
     } else {
         b.msg("`{s}` is not a `timescale", .{wrote});
     }
-    b.note("§19.9 is `timescale <time_unit>/<time_precision>; here it wanted {s}", .{wanted});
+    b.note("§19.8 is `timescale <time_unit>/<time_precision>; here it wanted {s}", .{wanted});
     b.note("each operand is 1, 10 or 100 glued to one of s ms us ns ps fs", .{});
     b.emit() catch |e| return e;
     return error.PreprocessFailed;
@@ -551,11 +551,25 @@ fn timeLiteral(r: *Rest) ?f64 {
 /// stripped before directives are read, so a strip mark on the line is one.
 pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     if (pp.expand_site == null) {
-        const text = pp.opts.bag.fileText(pp.cur_file_id);
+        const bag = pp.opts.bag;
+        const id = pp.cur_file_id;
+        const text = bag.fileText(id);
+        const end = off + rest.len;
         const line_start = if (std.mem.findScalarLast(u8, text[0..at], '\n')) |nl| nl + 1 else 0;
+        // "only white space may appear on the same line as the `line
+        // directive", before it as much as after it.
+        for (text[line_start..at]) |c| if (!isSpace(c))
+            return pp.fail(pp.spanAt(line_start, at), .E0128, "text before the directive on its line", .{});
+        // A comment that ends on the line leaves a strip mark on it; one whose
+        // `*/` ends in column 0 marks `line_start` itself.
         // ponytail: linear in the file's comments; a `line is rare.
-        for (pp.opts.bag.fileMarks(pp.cur_file_id)) |m| if (m.out > line_start and m.out <= off + rest.len)
-            return pp.fail(pp.spanAt(at, off + rest.len), .E0128, "a comment on the directive's line", .{});
+        for (bag.fileMarks(id)) |m| if (m.out >= line_start and m.out <= end)
+            return pp.fail(pp.spanAt(at, end), .E0128, "a comment on the directive's line", .{});
+        // One that opens on the line and ends on a later one leaves its first
+        // newline where the line ends, and the original text has the comment's
+        // `/` there instead of the line's newline.
+        if (end < text.len and bag.sourceText(id)[bag.toSourceOffset(id, @intCast(end))] != '\n')
+            return pp.fail(pp.spanAt(at, end), .E0128, "a comment on the directive's line", .{});
     }
     var r: Rest = .{ .s = rest };
     r.skipSpace();

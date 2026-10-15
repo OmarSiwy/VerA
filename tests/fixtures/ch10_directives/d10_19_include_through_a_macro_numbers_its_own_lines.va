@@ -10,13 +10,12 @@
 // §19.3.1 makes an expansion part of the text stream like any other text, so
 // the clause applies unchanged. d10_19_line_probe.vh's `__LINE__ sits on that
 // file's line 3, so probe_line is 3. The `__LINE__ on the line after `PROBE
-// is that line's number in this file, 28, counted by hand from the top.
+// is that line's number in this file, 27, counted by hand from the top.
 //
 // VerA used to read the probe's line through the macro's invocation offset,
 // which indexes this file and not the probe, and reported 4.
 //
 //! lrm 10.7
-//! xfail an `include reached through a macro expansion numbers its lines from the invocation site
 `include "check.vh"
 `define PROBE `include "d10_19_line_probe.vh"
 module d10_19_include_through_a_macro_numbers_its_own_lines(p, n);
@@ -27,7 +26,7 @@ module d10_19_include_through_a_macro_numbers_its_own_lines(p, n);
     `PROBE
     after_line = `__LINE__;
     `CHECKI("`__LINE__ in a file included through a macro is that file's line", probe_line, 3);
-    `CHECKI("after it, this file's own line again", after_line, 28);
+    `CHECKI("after it, this file's own line again", after_line, 27);
     I(p, n) <+ V(p, n);
   end
 endmodule
