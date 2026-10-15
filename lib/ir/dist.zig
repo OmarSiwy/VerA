@@ -30,7 +30,7 @@ pub const Dist = struct {
     ordered: bool = false,
 };
 
-/// Table 9-10, all 17 names. `$simprobe` is §9.16 and stays out.
+/// Table 9-10, all 16 names. `$simprobe` is §9.16 and stays out.
 const dists = [_]Dist{
     // §9.13.1. `kernel` is the same for both: "$arandom is upwardly compatible
     // with $random ... and has the same behavior."
@@ -54,7 +54,7 @@ const dists = [_]Dist{
     .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11, .count = true },
 };
 
-/// The Table 9-10 row `name` spells, or null. A linear scan of 17 rows.
+/// The Table 9-10 row `name` spells, or null. A linear scan of 16 rows.
 pub fn of(name: []const u8) ?*const Dist {
     for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
     return null;
@@ -68,4 +68,86 @@ pub fn paramName(d: *const Dist, i: usize) []const u8 {
     if (std.mem.endsWith(u8, d.name, "erlang")) return if (i == 0) "k_stage" else "mean";
     if (std.mem.endsWith(u8, d.name, "normal")) return if (i == 0) "mean" else "standard_deviation";
     return "mean";
+}
+
+test of {
+    // Table 9-10's sixteen names, each found under its own spelling.
+    const names = [_][]const u8{
+        "$dist_chi_square",
+        "$dist_exponential",
+        "$dist_poisson",
+        "$dist_uniform",
+        "$dist_erlang",
+        "$dist_normal",
+        "$dist_t",
+        "$random",
+        "$arandom",
+        "$rdist_chi_square",
+        "$rdist_exponential",
+        "$rdist_poisson",
+        "$rdist_uniform",
+        "$rdist_erlang",
+        "$rdist_normal",
+        "$rdist_t",
+    };
+    try std.testing.expectEqual(names.len, dists.len);
+    for (names) |name| try std.testing.expectEqualStrings(name, of(name).?.name);
+    // §9.16's `$simprobe` is not a distribution; names are case-sensitive and
+    // keep their `$`.
+    for ([_][]const u8{ "$simprobe", "$dist", "random", "$RANDOM", "$rdist_t2", "" }) |name|
+        try std.testing.expect(of(name) == null);
+}
+
+test "dist: §9.13 argument rules, and the integer twins match (IEEE 1364 §17.9.2)" {
+    const Callee = @import("callee.zig").Callee;
+    // §9.13.2 Syntax: parameters after the seed, and which "shall be greater
+    // than zero": mean, degree_of_freedom and k_stage.
+    const want = [_]struct { []const u8, u8, u8, bool, bool }{
+        // name, nparam, positive, count, ordered
+        .{ "uniform", 2, 0b00, false, true },
+        .{ "normal", 2, 0b00, false, false },
+        .{ "exponential", 1, 0b01, false, false },
+        .{ "poisson", 1, 0b01, false, false },
+        .{ "chi_square", 1, 0b01, true, false },
+        .{ "t", 1, 0b01, true, false },
+        .{ "erlang", 2, 0b11, true, false },
+    };
+    var buf: [32]u8 = undefined;
+    for (want) |w| {
+        for ([_][]const u8{ "$rdist_", "$dist_" }, [_]@FieldType(Dist, "ty"){ .real, .integer }) |prefix, ty| {
+            const name = try std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, w[0] });
+            const d = of(name).?;
+            errdefer std.debug.print("`{s}`\n", .{name});
+            try std.testing.expectEqual(w[1], d.nparam);
+            try std.testing.expectEqual(w[2], d.positive);
+            try std.testing.expectEqual(w[3], d.count);
+            try std.testing.expectEqual(w[4], d.ordered);
+            try std.testing.expectEqual(ty, d.ty);
+        }
+    }
+    // §9.13.1: `$arandom` "has the same behavior" as `$random`.
+    try std.testing.expectEqualStrings(of("$random").?.kernel, of("$arandom").?.kernel);
+    try std.testing.expectEqual(@as(u8, 0), of("$random").?.nparam);
+    // Every kernel is one of lowering's own reserved callees.
+    for (&dists) |*d| {
+        const c = Callee.fromName(d.kernel);
+        try std.testing.expect(c != .systf and c.synthetic());
+    }
+}
+
+test paramName {
+    // The argument names §9.13.2's syntax prints.
+    const cases = [_]struct { []const u8, usize, []const u8 }{
+        .{ "$rdist_uniform", 0, "start" },
+        .{ "$dist_uniform", 1, "end" },
+        .{ "$rdist_normal", 0, "mean" },
+        .{ "$dist_normal", 1, "standard_deviation" },
+        .{ "$rdist_exponential", 0, "mean" },
+        .{ "$dist_poisson", 0, "mean" },
+        .{ "$rdist_chi_square", 0, "degree_of_freedom" },
+        .{ "$dist_t", 0, "degree_of_freedom" },
+        .{ "$rdist_erlang", 0, "k_stage" },
+        .{ "$dist_erlang", 1, "mean" },
+    };
+    for (cases) |c| try std.testing.expectEqualStrings(c[2], paramName(of(c[0]).?, c[1]));
 }
