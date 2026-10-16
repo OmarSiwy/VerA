@@ -52,7 +52,7 @@ The [tutorial](https://omarsiwy.github.io/VerA/learn/getting-started.html) conti
 | How | Command |
 |---|---|
 | Nix (from source) | `nix profile add github:OmarSiwy/VerA` |
-| Nix (release binary) | `nix profile add 'github:OmarSiwy/VerA#"1.0.0"'` |
+| Nix (release binary) | `nix profile add 'github:OmarSiwy/VerA#latest'` (once v0.9.0 is published) |
 | Release tarball | [GitHub releases](https://github.com/OmarSiwy/VerA/releases): x86_64/aarch64 Linux, x86_64/aarch64 macOS, x86_64 Windows, with `SHA256SUMS` |
 | From source | `git clone https://github.com/OmarSiwy/VerA && cd VerA && zig build -Doptimize=ReleaseFast` |
 

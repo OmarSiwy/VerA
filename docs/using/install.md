@@ -11,14 +11,14 @@ nothing but `vera`.
 ```sh
 nix run github:OmarSiwy/VerA -- model.va --lint     # build from source and run
 nix profile add github:OmarSiwy/VerA                # install it (`nix profile install` on older Nix)
-nix profile add 'github:OmarSiwy/VerA#"1.0.0"'      # a release binary, pinned
+nix profile add 'github:OmarSiwy/VerA#"0.9.0"'      # a release binary, pinned
 ```
 
 The packaged `vera` is wrapped with the Zig 0.17.0 it generates code for, so
 `--run` and `--emit-so` work with no Zig of your own, and it installs the
 device contract of its own version as `share/vera/contract.zig`. As a flake
 input, take `vera.packages.${system}.default` (built from source) or
-`."1.0.0"` and `latest` (release binaries, listed in the repository's
+`."0.9.0"` and `latest` (release binaries, listed in the repository's
 `sources.json`), or apply `vera.overlays.default` to get `pkgs.vera` and
 `pkgs.veraPackages.<version>`. The flake covers x86_64 and aarch64 Linux and
 macOS.
@@ -35,13 +35,13 @@ Each GitHub release attaches a `vera` for `x86_64-linux-gnu`,
 with a `SHA256SUMS` file:
 
 ```sh
-curl -LO https://github.com/OmarSiwy/VerA/releases/download/v1.0.0/vera-v1.0.0-x86_64-linux-gnu.tar.gz
-tar xzf vera-v1.0.0-x86_64-linux-gnu.tar.gz      # one file: vera
+curl -LO https://github.com/OmarSiwy/VerA/releases/download/v0.9.0/vera-v0.9.0-x86_64-linux-gnu.tar.gz
+tar xzf vera-v0.9.0-x86_64-linux-gnu.tar.gz      # one file: vera
 ./vera --help
 ```
 
 Install the Zig that release targets beside it, from
-<https://ziglang.org/download/>: 0.17.0 for v1.0.0 (the repository's
+<https://ziglang.org/download/>: 0.17.0 for v0.9.0 (the repository's
 `sources.json` records each release's). The release's device contract is
 `tools/contract.zig` at its tag.
 

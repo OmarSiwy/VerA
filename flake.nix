@@ -27,7 +27,17 @@
       # The release binaries, by version (tools/update-sources.py writes it;
       # publish.yaml reruns it after every release).
       sources = lib.importJSON ./sources.json;
-      latest = lib.last (lib.sort lib.versionOlder (lib.attrNames sources));
+      # The newest release, or null before the first (sources.json is `{}`).
+      latest =
+        if sources == { } then null else lib.last (lib.sort lib.versionOlder (lib.attrNames sources));
+      # The tree's own version (build.zig.zon), which the from-source package carries.
+      treeVersion =
+        let
+          line = lib.findFirst (lib.hasInfix ".version = ") "" (
+            lib.splitString "\n" (builtins.readFile ./build.zig.zon)
+          );
+        in
+        builtins.head (builtins.match ".*\"([^\"]+)\".*" line);
 
       # `vera` builds every device by spawning `zig` on code it generated for
       # one Zig release, so it is wrapped with that Zig first on PATH. It reads
@@ -53,7 +63,7 @@
         stdenv.mkDerivation (
           {
             pname = "vera";
-            version = "${latest}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
+            version = "${treeVersion}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
             # Only what `zig build install` reads: docs/ and tests/ are 33 MB
             # that would rebuild the package on every fixture edit.
             src = lib.fileset.toSource {
@@ -161,7 +171,8 @@
         {
           vera = pkgs.callPackage fromSource { zig = zigs."0.17.0"; };
           veraPackages =
-            releases // lib.optionalAttrs (releases ? ${latest}) { latest = releases.${latest}; };
+            releases
+            // lib.optionalAttrs (latest != null && releases ? ${latest}) { latest = releases.${latest}; };
         };
 
       # `vera --help` runs, and a resistor goes through codegen and through

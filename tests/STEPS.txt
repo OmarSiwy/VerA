@@ -14,6 +14,7 @@ test-ams
 test-backend
 test-beh-verilog
 test-canary
+test-cli
 test-contract
 test-devices
 test-diag
@@ -29,6 +30,7 @@ test-sim
 test-spice
 test-suite
 test-timers
+test-tools
 test-vera
 test-vpi
 test-vpi-fixtures

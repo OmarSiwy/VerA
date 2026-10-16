@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regenerates sources.json, the release binaries the flake's versioned
-packages install (`nix build '.#"1.0.0"'`), from the GitHub releases.
+packages install (`nix build '.#"0.9.0"'`), from the GitHub releases.
 
 Shape, after mitchellh/zig-overlay's sources.json:
 
@@ -76,7 +76,8 @@ def main():
                 entry[system] = {"url": assets[name], "sha256": sums[name]}
         sources[tag[1:]] = entry
     if not sources:
-        sys.exit("update-sources: no release with SHA256SUMS found")
+        # No release since FIRST yet: the flake then has no versioned package.
+        print("update-sources: no release with SHA256SUMS since v0.9.0", file=sys.stderr)
     with open(out, "w") as f:
         json.dump(sources, f, indent=2, sort_keys=True)
         f.write("\n")
