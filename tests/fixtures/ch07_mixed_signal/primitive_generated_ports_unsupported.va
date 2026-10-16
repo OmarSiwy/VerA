@@ -23,10 +23,11 @@
 // tests/fixtures/ch07_mixed_signal/COVERAGE.md at 8b1514d4, not written as fixtures.
 //
 // THE VERDICT RESTS ON THE GENERATED NAME. `a__gate_instance__in1` names no
-// parameter of the elaborated design — E0907 — because there is no auto-
-// insertion to generate it in the first place (C.9: "Clause 7 only applies to
-// Verilog-AMS HDL"). The `defparam` reaches elaboration, elaboration walks the
-// instance tree, and the §7.8.5 name is not in it.
+// parameter of the elaborated design — E0907 — because nothing here is
+// mixed: `a`, `b` and `y` have no discipline and there is no `connectrules`,
+// so §7.8.4 selects no connection and inserts nothing to bear the name. The
+// `defparam` reaches elaboration, elaboration walks the instance tree, and the
+// §7.8.5 name is not in it.
 //
 // THIS FILE HAS NOW TWICE OUTLIVED THE REASON IT WAS RED, and both times the
 // line moved rather than the claim. It used to pin `//! reject defparam`, on
@@ -46,8 +47,9 @@
 // thing this fixture records, and E0907 is the diagnostic that says the text
 // resolves to nothing. `y__gate_instance__in1` — the name the scheme cannot
 // generate — would get the same E0907 today, so the verdict no longer tells the
-// two identifiers apart. It will on the day insertion exists, which is the day
-// this row is a positive fixture instead of a rejection.
+// two identifiers apart. The positive half, where a gate's port IS mixed and
+// `a__g1__in1` is the inserted bridge a defparam retunes, is
+// b5_gate_generated_connect_name_defparam.va.
 //
 //! lrm 7.8.5.1
 //! lrm 7.8.5
