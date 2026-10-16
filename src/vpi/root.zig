@@ -652,9 +652,19 @@ pub const Design = struct {
     iters: std.AutoHashMapUnmanaged(usize, *Iter),
     /// iterate.zig's reverse indexes, built on first use; owned (`gpa`).
     relations: ?iterate.Relations = null,
+    /// §12.32.2 the partials each analog call's derivtf declared, by call
+    /// object index (`systf.buildCalls`); the slices are owned (`gpa`).
+    partials: std.AutoHashMapUnmanaged(u32, []const systf.Pair) = .empty,
+    /// IEEE 1364-2005 §27.31 user data, by call object index and the host
+    /// instance whose calltf was running (`systf.active_inst`).
+    userdata: std.AutoHashMapUnmanaged(systf.UserKey, ?*anyopaque) = .empty,
 
     /// Frees the model and every live iterator; all handles become invalid.
     pub fn deinit(self: *Design) void {
+        var pit = self.partials.valueIterator();
+        while (pit.next()) |p| self.gpa.free(p.*);
+        self.partials.deinit(self.gpa);
+        self.userdata.deinit(self.gpa);
         var it = self.iters.valueIterator();
         while (it.next()) |p| {
             if (p.*.handles) |hs| self.gpa.free(hs);
@@ -674,11 +684,11 @@ pub const Design = struct {
 // ---------------------------------------------------------------------------
 // The global design
 //
-// ponytail: one design per process, in a global, and not thread-safe. No
-// Clause 12 routine takes a context or thread argument, so a per-design
-// context is a parameter no conforming application could pass. Upgrade path
-// for two designs at once: name `Design`s in a registry and select with a
-// VerA-specific entry point the standard routines read.
+// ponytail: one installed design per process, in a global, and not
+// thread-safe. No Clause 12 routine takes a context or thread argument, so a
+// per-design context is a parameter no conforming application could pass. A
+// second device library brings its own design (`buildDesign`), which its
+// `analog_run.Binding` swaps in while its calls run (VerA #84).
 // ---------------------------------------------------------------------------
 
 /// The installed model; null until `open`/`openDigital`, and after `close`.
@@ -693,7 +703,15 @@ pub var design: ?Design = null;
 /// copied, so the caller may free the `CompileResult` the moment this returns.
 pub fn open(gpa: std.mem.Allocator, res: *const @import("vera").CompileResult) !void {
     if (design != null) close();
-    design = try analog_model.build(gpa, res);
+    design = try buildDesign(gpa, res);
+}
+
+/// The object model `open` installs, built and returned instead: the design
+/// of a second device library, which `analog_run.Binding.attach` takes and
+/// makes the installed one while that library's calls run (VerA #84). The
+/// caller owns it until it hands it to `attach`.
+pub fn buildDesign(gpa: std.mem.Allocator, res: *const @import("vera").CompileResult) !Design {
+    return analog_model.build(gpa, res);
 }
 
 /// Frees the installed model and resets every sibling registry (run,

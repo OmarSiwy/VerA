@@ -183,6 +183,12 @@ pub var misuse: ?[]const u8 = null;
 /// `vpi_handle(vpiSysTfCall, NULL)`. Null outside one.
 pub var active: ?u32 = null;
 
+/// The host instance whose analog calltf is running (`analog_run.Binding.call`,
+/// VerA #84): the key, beside the call, of the state an application keeps
+/// per call (`Design.userdata`). 0 outside one, and for every digital call:
+/// the only instance VerA's own walk has.
+pub var active_inst: usize = 0;
+
 /// Runs the build-time callbacks: for each call site of a registered name, in
 /// source order, compiletf, then derivtf (analog, §12.32.2), each with the
 /// registration's user_data; and each sized function's sizetf, if the
@@ -222,32 +228,34 @@ pub fn buildCalls() void {
 }
 
 /// §12.32.2's declared partials, per call object: (derivative_of,
-/// derivative_wrt), "0 = returned value, 1 = 1st arg, etc.".
+/// derivative_wrt), "0 = returned value, 1 = 1st arg, etc.". Kept in the
+/// installed design (`Design.partials`), whose object index `call` is.
 pub const Pair = struct { of: c_int, wrt: c_int };
-var declared: std.AutoHashMapUnmanaged(u32, []const Pair) = .empty;
 
 fn declarePartials(call: u32, p: *const Partials) void {
+    const d = &(root.design orelse return);
     const n: usize = @intCast(@max(p.count, 0));
-    const pairs = gpa.alloc(Pair, n) catch return;
+    const pairs = d.gpa.alloc(Pair, n) catch return;
     for (pairs, 0..) |*q, k| q.* = .{ .of = p.derivative_of[k], .wrt = p.derivative_wrt[k] };
-    declared.put(gpa, call, pairs) catch gpa.free(pairs);
+    const g = d.partials.getOrPut(d.gpa, call) catch return d.gpa.free(pairs);
+    if (g.found_existing) d.gpa.free(g.value_ptr.*);
+    g.value_ptr.* = pairs;
 }
 
-/// The partials derivtf declared for `call`.
+/// The partials derivtf declared for `call` in the installed design.
 pub fn partialsOf(call: u32) []const Pair {
-    return declared.get(call) orelse &.{};
+    const d = &(root.design orelse return &.{});
+    return d.partials.get(call) orelse &.{};
 }
 
-/// Frees every registration and declared partial; handles become invalid.
+/// Frees every registration; handles become invalid. The declared partials
+/// and user data are the design's, freed with it (`Design.deinit`).
 pub fn reset() void {
     active = null;
     result = null;
     misuse = null;
+    active_inst = 0;
     sites.clearAndFree(gpa);
-    userdata.clearAndFree(gpa);
-    var dit = declared.valueIterator();
-    while (dit.next()) |v| gpa.free(v.*);
-    declared.clearAndFree(gpa);
     for (regs.items) |s| {
         gpa.free(s.name);
         gpa.destroy(s);
@@ -393,8 +401,10 @@ pub export fn vpi_get_analog_systf_info(obj: vpiHandle, systf_data_p: ?*AnalogSy
     out.* = s.analog;
 }
 
-/// IEEE 1364-2005 §27.31/§27.13 user data, by the call's object index.
-var userdata: std.AutoHashMapUnmanaged(u32, ?*anyopaque) = .empty;
+/// IEEE 1364-2005 §27.31/§27.13 user data's key (`Design.userdata`): the
+/// call's object index and the host instance whose calltf was running
+/// (`active_inst`), so two instances of one device keep their own.
+pub const UserKey = struct { call: u32, inst: usize };
 
 /// `obj` as a system task or function call's object index, or null with the
 /// error recorded.
@@ -415,11 +425,13 @@ fn callIndex(comptime who: []const u8, obj: vpiHandle) ?u32 {
 }
 
 /// IEEE 1364-2005 §27.31: "The routine will return a value of 1 on success or
-/// a 0 if it fails."
+/// a 0 if it fails." Kept for the instance whose calltf is running
+/// (`active_inst`; 0 outside one).
 pub export fn vpi_put_userdata(obj: vpiHandle, data: ?*anyopaque) c_int {
     if (root.refused("vpi_put_userdata")) return 0;
     const i = callIndex("vpi_put_userdata", obj) orelse return 0;
-    userdata.put(gpa, i, data) catch {
+    const d = &root.design.?;
+    d.userdata.put(d.gpa, .{ .call = i, .inst = active_inst }, data) catch {
         root.fail("NOMEM", "vpi_put_userdata: out of memory", .{});
         return 0;
     };
@@ -428,10 +440,11 @@ pub export fn vpi_put_userdata(obj: vpiHandle, data: ?*anyopaque) c_int {
 
 /// IEEE 1364-2005 §27.13: "If no user data had been previously associated
 /// with the object or if the routine fails, the return value shall be NULL."
+/// The data of the instance whose calltf is running (`active_inst`).
 pub export fn vpi_get_userdata(obj: vpiHandle) ?*anyopaque {
     if (root.refused("vpi_get_userdata")) return null;
     const i = callIndex("vpi_get_userdata", obj) orelse return null;
-    return userdata.get(i) orelse null;
+    return root.design.?.userdata.get(.{ .call = i, .inst = active_inst }) orelse null;
 }
 
 /// §12.22 / §12.22.1. `vpiDerivative` names the partial of `ref1` — the
@@ -645,9 +658,20 @@ test "§12.32/§12.33: registrations refused, and vpi_handle_multi's refusals" {
     try std.testing.expectEqualStrings("NOTRAVERSE", std.mem.span(info.code));
 }
 
+/// A design of `objects` alone, for the tests that need one installed;
+/// `root.close` frees it (and `objects`, from `std.testing.allocator`).
+fn testDesign(objects: []root.Obj) root.Design {
+    const a = std.testing.allocator;
+    return .{ .gpa = a, .arena = .init(a), .objects = objects, .scopes = &.{}, .top_modules = &.{}, .by_name = .empty, .iters = .empty };
+}
+
 test "§12.32.2: declared partials are copied, and a negative count declares none" {
     reset();
     defer reset();
+    root.close();
+    root.design = testDesign(&.{});
+    // The design owns them: closing it frees them (the leak check).
+    defer root.close();
     var of = [_]c_int{ 0, 1 };
     var wrt = [_]c_int{ 1, 2 };
     declarePartials(3, &.{ .count = 2, .derivative_of = &of, .derivative_wrt = &wrt });
@@ -657,6 +681,26 @@ test "§12.32.2: declared partials are copied, and a negative count declares non
     declarePartials(4, &.{ .count = -1, .derivative_of = null, .derivative_wrt = null });
     try std.testing.expectEqual(@as(usize, 0), partialsOf(4).len);
     try std.testing.expectEqual(@as(usize, 0), partialsOf(5).len);
+}
+
+test "IEEE 1364-2005 §27.31/§27.13: user data is per instance of the running call (VerA #84)" {
+    root.close();
+    const objs = try std.testing.allocator.alloc(root.Obj, 1);
+    objs[0] = .{ .kind = .code, .owner = .none, .name = "$c", .full = "$c", .vtype = code.vpiSysFuncCall, .in_analog = true };
+    root.design = testDesign(objs);
+    defer root.close();
+    const call: vpiHandle = @ptrCast(&objs[0]);
+    var zero: u8 = 0;
+    var one: u8 = 1;
+    // Instance 0 (outside any calltf), then instance 1's calltf running.
+    try std.testing.expectEqual(@as(c_int, 1), vpi_put_userdata(call, &zero));
+    active_inst = 1;
+    defer active_inst = 0;
+    try std.testing.expect(vpi_get_userdata(call) == null);
+    try std.testing.expectEqual(@as(c_int, 1), vpi_put_userdata(call, &one));
+    try std.testing.expect(vpi_get_userdata(call) == @as(?*anyopaque, &one));
+    active_inst = 0;
+    try std.testing.expect(vpi_get_userdata(call) == @as(?*anyopaque, &zero));
 }
 
 test "IEEE 1364-2005 §27.13/§27.31: user data needs an open design" {
