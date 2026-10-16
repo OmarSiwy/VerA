@@ -209,15 +209,27 @@ pub fn detach() void {
     gpa.free(prev_react);
     gpa.free(ac_x);
     ac_x = &.{};
-    freq = 0;
     rows = &.{};
     now_vals = &.{};
     prev_react = &.{};
-    current = null;
-    t_now = 0;
+    setPoint(null, 0, 0, 0);
     t_accepted = 0;
-    delta = 0;
     have_solution = false;
+}
+
+/// Sets the point §12.7-§12.9 and §12.18 answer for: the analysis `a` (null
+/// between analyses), the time `t` of the solution attempted, the step `dt`
+/// that reaches it, and the small-signal frequency `f` (0 outside an AC
+/// sweep's small-signal points). `run` calls it at every point it walks; a
+/// host that walks its own analysis and binds VerA only for the calls
+/// calls it before each `contract.SystfHost.call`, so a calltf reads the
+/// host's point. `a.kind` decides which values the routines report (§12.9:
+/// zero time outside a transient); its bounds are §12.18's.
+pub fn setPoint(a: ?Analysis, t: f64, dt: f64, f: f64) void {
+    current = a;
+    t_now = t;
+    delta = dt;
+    freq = f;
 }
 
 /// The device library `attach` installed, until `detach`.
@@ -273,8 +285,8 @@ pub fn run(a: Analysis) Error!void {
     var run_a = a;
     // §12.18 vpiTransientMaxStep is the step this walk takes.
     if (run_a.kind == .tran and run_a.max_step <= 0) run_a.max_step = (a.stop - a.start) / 50.0;
-    current = run_a;
-    defer current = null;
+    setPoint(run_a, a.start, 0, 0);
+    defer setPoint(null, t_now, delta, 0);
     t_accepted = a.start;
     const last0 = a.kind == .op or (a.kind == .tran and a.stop <= a.start);
     // The first solution has no earlier time to back up to; §12.31.3's
@@ -320,21 +332,20 @@ pub fn run(a: Analysis) Error!void {
 /// vpi_get_analog_freq() tells an application which kind of solution it is
 /// standing on.
 fn sweep(l: Lib, a: Analysis) Error!void {
-    defer freq = 0;
+    defer setPoint(current, t_now, delta, 0);
     const n = @max(a.points, 1);
     for (0..n) |k| {
         const f = if (n == 1) a.fstart else a.fstart + (a.fstop - a.fstart) * @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(n - 1));
         const u = ac_x.len / 2;
         if (!l.ac(2 * std.math.pi * f, ac_x.ptr, ac_x[u..].ptr)) return error.Singular;
-        freq = f;
+        setPoint(current, t_now, delta, f);
         callback.fireAnalog(callback.acbAcceptedPoint);
         if (k == n - 1) callback.fireAnalog(callback.acbFinalStep);
     }
 }
 
 fn attempt(l: Lib, t: f64, dt: f64, first: bool, last: bool) Error!void {
-    t_now = t;
-    delta = dt;
+    setPoint(current, t, dt, 0);
     have_solution = true;
     open_step = !first;
     awaiting = true;
@@ -1027,4 +1038,25 @@ test "§12.7-§12.9, §12.36 with no library: nothing to run, reject or re-solve
     try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_time());
     const q: root.Obj = .{ .kind = .quantity, .owner = .none, .name = "", .full = "" };
     try std.testing.expectError(error.NoAnalysis, quantityValue(&q));
+}
+
+test "§12.7-§12.9, §12.18 setPoint: the routines answer the point a host set, by its kind" {
+    detach();
+    defer detach();
+    // A transient point at 2 ms reached by a 1 us step: §12.9 the time, §12.7
+    // the step, §12.8 zero outside a small-signal analysis.
+    setPoint(.{ .kind = .tran, .stop = 5e-3 }, 2e-3, 1e-6, 0);
+    try std.testing.expectEqual(@as(f64, 2e-3), vpi_get_analog_time());
+    try std.testing.expectEqual(@as(f64, 1e-6), vpi_get_analog_delta());
+    try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_freq());
+    try std.testing.expectEqual(@as(f64, 5e-3), analysis().?.stop);
+    // An AC point at 1 kHz: time and step are zero there (§12.7, §12.9
+    // "during DC"; the sweep stands on a DC operating point), freq is it.
+    setPoint(.{ .kind = .ac }, 2e-3, 1e-6, 1e3);
+    try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_time());
+    try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_delta());
+    try std.testing.expectEqual(@as(f64, 1e3), vpi_get_analog_freq());
+    // Null: between analyses, no bounds to read.
+    setPoint(null, 0, 0, 0);
+    try std.testing.expect(analysis() == null);
 }
