@@ -47,9 +47,9 @@
 //! lrm 12.22:1
 //! lrm 12.11:11
 //! lrm 12.29:11
-//! lrm-reject 12.22:1
-//! lrm-reject 12.11:11
-//! lrm-reject 12.29:11
+//! lrm-reject 12.22
+//! lrm-reject 12.11
+//! lrm-reject 12.29
 
 #include "../ch11_vpi/p02_check.h"
 
