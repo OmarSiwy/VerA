@@ -318,6 +318,7 @@ pub fn typeName(t: c_int) []const u8 {
         value.vpiSchedEvent => "vpiSchedEvent",
         systf.vpiUserSystf => "vpiUserSystf",
         run.vpiTimeQueue => "vpiTimeQueue",
+        systf.vpiInterModPath => "vpiInterModPath",
         // else: `t` is always vpi_get(vpiType)'s answer, and every value it
         // can return has a prong above; this arm is unreachable, not a default.
         else => "vpiUndefined",
@@ -796,6 +797,85 @@ pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
 }
 
 // ---------------------------------------------------------------------------
+// Annex G names VerA does not answer (vpi_user.h's block of that name)
+// ---------------------------------------------------------------------------
+
+/// An Annex G constant vpi_user.h defines (IEEE 1364-2005 §1.7 makes the
+/// listing normative) that no routine here answers: its name and why, so
+/// the refusal says which question it was (§12.2's error, read through
+/// vpi_chk_error as IEEE 1364-2005 §27.1 has it).
+pub const Unanswered = struct { name: []const u8, why: []const u8 };
+
+/// Records the refusal of `u`, asked of routine `who`.
+pub fn failUnanswered(comptime who: []const u8, u: Unanswered) void {
+    fail("NOTSUPPORTED", who ++ ": {s} is not answered: {s}", .{ u.name, u.why });
+}
+
+const no_sdf = "VerA reads no SDF, so the model holds no delay device or terminal (IEEE 1364-2005 §26.6.21)";
+const no_frame = "the model holds no task or function frame (IEEE 1364-2005 §26.6.20)";
+const no_prim_array = "the model holds an arrayed primitive's instances, not the array";
+const no_bits = "the model expands no port or continuous assignment into bits";
+const no_directive = "the model does not record the compiler directives in force where a module was defined";
+const no_save = "VerA has no save or restart (IEEE 1364-2005 C.8)";
+
+/// The object types and relationships of Annex G no vpi_handle() or
+/// vpi_iterate() answers.
+pub fn unansweredType(t: c_int) ?Unanswered {
+    return switch (t) {
+        10 => .{ .name = "vpiDefParam", .why = "the model keeps no defparam: elaboration applied it" },
+        45 => .{ .name = "vpiPortBit", .why = no_bits },
+        54 => .{ .name = "vpiSpecParam", .why = "the model keeps no specparam object" },
+        80 => .{ .name = "vpiLowConn", .why = "the model holds a port's upper connection (vpiHighConn), not its lower one" },
+        98 => .{ .name = "vpiPortInst", .why = "the model does not record the ports of lower instances a net connects to" },
+        106 => .{ .name = "vpiBitSelect", .why = "the model types a bit-select as a vpiNetBit or vpiRegBit" },
+        108 => .{ .name = "vpiDelayTerm", .why = no_sdf },
+        109 => .{ .name = "vpiDelayDevice", .why = no_sdf },
+        110 => .{ .name = "vpiFrame", .why = no_frame },
+        111 => .{ .name = "vpiGateArray", .why = no_prim_array },
+        113 => .{ .name = "vpiPrimitiveArray", .why = no_prim_array },
+        117 => .{ .name = "vpiSwitchArray", .why = no_prim_array },
+        118 => .{ .name = "vpiUdpArray", .why = no_prim_array },
+        120 => .{ .name = "vpiInTerm", .why = no_sdf },
+        121 => .{ .name = "vpiInstanceArray", .why = "the model reaches an instance array as vpiModuleArray" },
+        124 => .{ .name = "vpiOutTerm", .why = no_sdf },
+        125 => .{ .name = "vpiPorts", .why = no_bits },
+        126 => .{ .name = "vpiSimNet", .why = "the model does not record the net a port connection collapsed into" },
+        127 => .{ .name = "vpiTaskFunc", .why = "iterate vpiTask and vpiFunction instead" },
+        128 => .{ .name = "vpiContAssignBit", .why = no_bits },
+        135 => .{ .name = "vpiGenVar", .why = "a genvar is no object the model holds" },
+        else => null, // else: every other number is answered, or is no Annex G type and gets the routine's own refusal
+    };
+}
+
+/// The properties of Annex G no vpi_get() or vpi_get_str() answers.
+pub fn unansweredProp(p: c_int) ?Unanswered {
+    return switch (p) {
+        8 => .{ .name = "vpiCellInstance", .why = no_directive },
+        13 => .{ .name = "vpiDefNetType", .why = no_directive },
+        14 => .{ .name = "vpiUnconnDrive", .why = no_directive },
+        15 => .{ .name = "vpiDefFile", .why = "the model does not record where a module was defined" },
+        16 => .{ .name = "vpiDefLineNo", .why = "the model does not record where a module was defined" },
+        19 => .{ .name = "vpiExplicitName", .why = "the model does not record how a port was named" },
+        23 => .{ .name = "vpiExplicitScalared", .why = "the model does not record a net's scalared or vectored keyword" },
+        24 => .{ .name = "vpiExplicitVectored", .why = "the model does not record a net's scalared or vectored keyword" },
+        25 => .{ .name = "vpiExpanded", .why = "the model does not record whether a vector is expanded" },
+        27 => .{ .name = "vpiChargeStrength", .why = "the model does not record a trireg's charge strength" },
+        47 => .{ .name = "vpiDefDelayMode", .why = no_directive },
+        48 => .{ .name = "vpiDefDecayTime", .why = no_directive },
+        49 => .{ .name = "vpiActive", .why = no_frame },
+        53 => .{ .name = "vpiConstantSelect", .why = "the model does not record whether a select's index is constant" },
+        56 => .{ .name = "vpiDelayType", .why = no_sdf },
+        59 => .{ .name = "vpiMultiArray", .why = "the model does not record an array's dimension count" },
+        60 => .{ .name = "vpiOffset", .why = "the model does not record this property" },
+        61 => .{ .name = "vpiResolvedNetType", .why = "the model keeps each net's declared vpiNetType, not the type a port connection resolved" },
+        62 => .{ .name = "vpiSaveRestartID", .why = no_save },
+        63 => .{ .name = "vpiSaveRestartLocation", .why = no_save },
+        64 => .{ .name = "vpiValid", .why = no_frame },
+        else => null, // else: every other number is answered, or is no Annex G property and gets the routine's own refusal
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Handle validation — the trust boundary
 //
 // Every `vpiHandle` arrived from C and is not dereferenced until shown to be
@@ -937,6 +1017,7 @@ pub fn issued(h: vpiHandle) ?*anyopaque {
     if (run.asQueue(h)) |q| return @ptrCast(q);
     if (value.asEvent(h)) |e| return @ptrCast(e);
     if (systf.asSystf(h)) |s| return @ptrCast(s);
+    if (delays.asPath(h)) |m| return @ptrCast(m);
     return null;
 }
 
@@ -955,7 +1036,7 @@ pub export fn vpi_free_object(obj: vpiHandle) c_int {
     }
     // A callback handle is freed by vpi_remove_cb (§12.34), not here; freeing
     // the handle leaves the callback registered, as an object's does.
-    if (asObj(obj) != null or callback.asCb(obj) != null or run.asQueue(obj) != null or systf.asSystf(obj) != null) return 1;
+    if (asObj(obj) != null or callback.asCb(obj) != null or run.asQueue(obj) != null or systf.asSystf(obj) != null or delays.asPath(obj) != null) return 1;
     // §12.30 "Calling vpi_free_object() on the handle shall free the handle
     // but shall not effect the event."
     if (value.asEvent(obj)) |e| {

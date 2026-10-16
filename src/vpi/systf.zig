@@ -438,26 +438,17 @@ pub export fn vpi_get_userdata(obj: vpiHandle) ?*anyopaque {
 /// returned value (the call itself, §12.32.2's 0) or an argument — with
 /// respect to `ref2`, an argument, of the analog call whose calltf is
 /// running, and "can only be called for those derivatives allocated during
-/// the derivtf phase of execution". Anything else is refused — as is
-/// vpiInterModPath, whose module paths (specify blocks) the model does not
-/// hold.
+/// the derivtf phase of execution". `vpiInterModPath` names the
+/// interconnect from an output port to an input port (delays.zig). Anything
+/// else is refused.
 pub export fn vpi_handle_multi(obj_type: c_int, ref1: vpiHandle, ref2: vpiHandle, ...) callconv(.c) vpiHandle {
     if (root.refused("vpi_handle_multi")) return null;
     switch (obj_type) {
         vpiDerivative => return @import("analog.zig").derivative(ref1, ref2),
-        // §11.6.15's inter-module path joins two PORTS, and exists where a
-        // delay was annotated on the interconnect between them (an SDF
-        // INTERCONNECT, IEEE 1364 Clause 16) — nothing in Verilog-AMS source
-        // declares one, and VerA reads no SDF. So two ports have none between
-        // them, and a handle that is not a port is refused as such.
-        vpiInterModPath => {
-            const a = root.asObj(ref1);
-            const b = root.asObj(ref2);
-            if (a == null or b == null or a.?.kind != .port or b.?.kind != .port)
-                root.fail("BADHANDLE", "vpi_handle_multi(vpiInterModPath): an inter-module path joins two port handles", .{})
-            else
-                root.fail("NOPATH", "vpi_handle_multi(vpiInterModPath): no delay is annotated between those ports", .{});
-        },
+        // §11.6.15's inter-module path joins two PORTS. Its handle exists
+        // before any delay does: vpi_put_delays() on it is how an
+        // interconnect delay is written (IEEE 1364-2005 §26.6.16).
+        vpiInterModPath => return @import("delays.zig").interModPath(ref1, ref2),
         else => root.fail("NOTRAVERSE", "vpi_handle_multi: {d} is not a many-to-one relationship", .{obj_type}),
     }
     return null;

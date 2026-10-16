@@ -67,6 +67,16 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return handleOf(&root.design.?.objects[at]);
     }
     const d = enter("vpi_handle") orelse return null;
+    if (root.unansweredType(obj_type)) |u| {
+        root.failUnanswered("vpi_handle", u);
+        return null;
+    }
+    // IEEE 1364-2005 §26.6.16 draws an inter-module path's ports as a
+    // double arrow only.
+    if (@import("delays.zig").asPath(ref) != null) {
+        fail("NOTRAVERSE", "vpi_handle: an inter-module path has no one-to-one relationship {d}; vpi_iterate(vpiPort) reaches its ports", .{obj_type});
+        return null;
+    }
     // IEEE 1364-2005 §26.6.43: an iterator's one edge, NULL when it was made
     // from a NULL reference (Details b).
     if (asIter(ref)) |it| {

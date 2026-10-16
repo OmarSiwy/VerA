@@ -1169,3 +1169,129 @@ test "§12.30/IEEE 1364 §19.8: a scaled time is in the unit of the object's own
     const two: callback.Time = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 2 };
     try std.testing.expectEqual(@as(?u64, 2000), run.ticksOf(two, a));
 }
+
+/// The message of the error the previous call recorded; "" for none.
+fn lastMessage() []const u8 {
+    var info: ErrorInfo = undefined;
+    if (vpi_chk_error(&info) == 0) return "";
+    return std.mem.span(info.message);
+}
+
+/// The port of instance `inst` named `name`, or null.
+fn portNamed(inst: vpiHandle, name: []const u8) vpiHandle {
+    const itr = vpi_iterate(vpiPort, inst);
+    var found: vpiHandle = null;
+    while (vpi_scan(itr)) |p| {
+        if (found == null and std.mem.eql(u8, std.mem.span(vpi_get_str(vpiName, p)), name)) found = p;
+    }
+    return found;
+}
+
+test "IEEE 1364-2005 §1.7 Annex G: a name VerA does not answer is refused by that name" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module m(a);
+        \\  input a;
+        \\  wire w;
+        \\endmodule
+    );
+    defer h.deinit();
+    const m = vpi_handle_by_name("m", null) orelse return error.TestUnexpectedResult;
+    const a = portNamed(m, "a") orelse return error.TestUnexpectedResult;
+    // A property (vpi_get and vpi_get_str), an object or relationship
+    // (vpi_handle and vpi_iterate) and a callback reason, each Annex G's.
+    try std.testing.expectEqual(vpiUndefined, vpi_get(8, m));
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiCellInstance") != null);
+    try std.testing.expect(vpi_get_str(15, m) == null);
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiDefFile") != null);
+    try std.testing.expect(vpi_handle(80, a) == null);
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiLowConn") != null);
+    try std.testing.expect(vpi_iterate(127, m) == null);
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiTaskFunc") != null);
+    const save: callback.CbData = .{ .reason = 15, .cb_rtn = noCb, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&save) == null);
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "cbStartOfSave") != null);
+    // The legal neighbours on the same objects answer, with no error.
+    try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiTopModule, m));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    try std.testing.expect(vpi_iterate(code.vpiTask, m) == null);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+}
+
+fn noCb(_: *callback.CbData) callconv(.c) c_int {
+    return 0;
+}
+
+test "§12.22: vpi_handle_multi(vpiInterModPath) is one path per port pair, holding its delays" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\`timescale 1ns/1ns
+        \\module gate(a, y, w);
+        \\  input a; output y; input [1:0] w;
+        \\  buf (y, a);
+        \\endmodule
+        \\module top;
+        \\  reg r; wire n, z; wire [1:0] v;
+        \\  gate u1(r, n, v);
+        \\  gate u2(n, z, v);
+        \\endmodule
+    );
+    defer h.deinit();
+    const y1 = portNamed(vpi_handle_by_name("top.u1", null), "y") orelse return error.TestUnexpectedResult;
+    const a2 = portNamed(vpi_handle_by_name("top.u2", null), "a") orelse return error.TestUnexpectedResult;
+    const w2 = portNamed(vpi_handle_by_name("top.u2", null), "w") orelse return error.TestUnexpectedResult;
+    const multi = @import("systf.zig").vpi_handle_multi;
+    const imp = @import("systf.zig").vpiInterModPath;
+
+    const p = multi(imp, y1, a2) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    try std.testing.expectEqual(imp, vpi_get(vpiType, p));
+    try std.testing.expectEqualStrings("vpiInterModPath", std.mem.span(vpi_get_str(vpiType, p)));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(p, multi(imp, y1, a2)));
+    // IEEE 1364-2005 §26.6.16: ->> its ports, the output first.
+    const itr = vpi_iterate(vpiPort, p);
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_scan(itr), y1));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_scan(itr), a2));
+    try std.testing.expect(vpi_scan(itr) == null);
+    try std.testing.expect(vpi_handle(vpiModule, p) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+
+    // No put yet: no delay. Then two, turn-off §7.14's min(rise, fall).
+    var da: [9]callback.Time = undefined;
+    var dl: delays.Delay = .{ .da = &da, .no_of_delays = 3, .time_type = callback.vpiScaledRealTime, .mtm_flag = 0, .append_flag = 0, .pulsere_flag = 0 };
+    delays.vpi_get_delays(p, &dl);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    for (da[0..3]) |t| try std.testing.expectEqual(@as(f64, 0), t.real);
+    const before = h.bag.count();
+    da[0] = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 4 };
+    da[1] = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 2 };
+    dl.no_of_delays = 2;
+    delays.vpi_put_delays(p, &dl);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    dl.no_of_delays = 3;
+    delays.vpi_get_delays(p, &dl);
+    for (da[0..3], [_]f64{ 4, 2, 2 }) |t, want| try std.testing.expectEqual(want, t.real);
+    // The put is not silent: the run's diagnostics say no simulation applies it.
+    try std.testing.expectEqual(before + 1, h.bag.count());
+    try std.testing.expectEqual(@import("vera").diag.Code.W0251, h.bag.at(before).code);
+    // Read in ticks: 4 ns is 4 ticks of the 1 ns precision.
+    dl.time_type = callback.vpiSimTime;
+    delays.vpi_get_delays(p, &dl);
+    try std.testing.expectEqual(@as(c_uint, 4), da[0].low);
+    // Pulse limits other than the delay are refused, not dropped.
+    dl.time_type = callback.vpiScaledRealTime;
+    dl.pulsere_flag = 1;
+    for (&da, 0..) |*t, k| t.* = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = @floatFromInt(k) };
+    delays.vpi_put_delays(p, &dl);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+
+    // Not a path: an input first, one port twice, two sizes, a non-port.
+    try std.testing.expect(multi(imp, a2, y1) == null);
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "not an output or inout port") != null);
+    try std.testing.expect(multi(imp, y1, y1) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    try std.testing.expect(multi(imp, y1, w2) == null);
+    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "same size") != null);
+    try std.testing.expect(multi(imp, vpi_handle_by_name("top.n", null), a2) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}

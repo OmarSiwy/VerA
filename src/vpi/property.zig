@@ -11,6 +11,7 @@ const analog_run = @import("analog.zig");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
 const decompile = @import("decompile.zig");
+const delays = @import("delays.zig");
 const root = @import("root.zig");
 const coldOf = root.coldOf;
 const run = @import("run.zig");
@@ -87,7 +88,11 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // (E0146).
     if (prop == vpiProtected and (asIter(obj) != null or callback.asCb(obj) != null or
         value.asEvent(obj) != null or systf.asSystf(obj) != null or
-        run.asQueue(obj) != null or asObj(obj) != null)) return 0;
+        run.asQueue(obj) != null or delays.asPath(obj) != null or asObj(obj) != null)) return 0;
+    if (root.unansweredProp(prop)) |u| {
+        root.failUnanswered("vpi_get", u);
+        return vpiUndefined;
+    }
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
     // property.
@@ -113,6 +118,12 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     if (systf.asSystf(obj)) |_| {
         if (prop == vpiType) return systf.vpiUserSystf;
         fail("NOPROP", "vpi_get: a vpiUserSystf has no property {d}; vpi_get_systf_info reads it", .{prop});
+        return vpiUndefined;
+    }
+    // IEEE 1364-2005 §26.6.16 draws an inter-module path with no property.
+    if (delays.asPath(obj)) |_| {
+        if (prop == vpiType) return systf.vpiInterModPath;
+        fail("NOPROP", "vpi_get: an inter-module path has no property {d}", .{prop});
         return vpiUndefined;
     }
     if (run.asQueue(obj)) |_| {
@@ -383,6 +394,10 @@ fn propFail(prop: c_int, o: *const Obj) c_int {
 /// returns NULL, the one value an application would not go on to print.
 pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
     const d = enter("vpi_get_str") orelse return null;
+    if (root.unansweredProp(prop)) |u| {
+        root.failUnanswered("vpi_get_str", u);
+        return null;
+    }
     // IEEE 1364-2005 §26.3.2: every object has a type, and its name, the
     // handles that are not design objects (an iterator, a callback) included.
     if (prop == vpiType and asObj(obj) == null and issued(obj) != null) return copyStr(typeName(vpi_get(vpiType, obj)));

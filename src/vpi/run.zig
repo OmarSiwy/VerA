@@ -90,6 +90,7 @@ pub fn simulate() digital.Error!void {
         // §12.36 vpiReset, "upon return of user VPI function".
         const go = reset_request orelse break;
         reset_request = null;
+        callback.startOfReset();
         r.reset() catch |e| {
             callback.runError();
             return e;
@@ -97,6 +98,7 @@ pub fn simulate() digital.Error!void {
         value.dropScheduled();
         clock = 0;
         started = false;
+        callback.endOfReset();
         // C.7: "A value of 0 or no argument causes interactive mode to be
         // entered after resetting the tool", which a batch run has not, so
         // it ends there as $stop does (VD-070, VD-106).
@@ -296,7 +298,8 @@ pub const vpiTransientFailConverge: c_int = 731;
 /// statement, every scheduled event gone) and goes on from time 0 when
 /// stop_value is nonzero, else ends the run (C.7's interactive mode, which a
 /// batch run reads as $stop). Registered callbacks stand; cbStartOfSimulation
-/// does not fire again (VD-106).
+/// does not fire again (VD-106). IEEE 1364-2005 §27.33.3's cbStartOfReset
+/// fires just before the reset and cbEndOfReset just after it.
 ///
 /// vpiRejectTransientStep (one double: the current timestep) rejects the
 /// analog solution being attempted (`analog.rejectStep`), and fails when none
@@ -698,6 +701,45 @@ test "§12.36/IEEE 1364-2005 C.7: vpiReset runs the design again from time 0, ev
     try std.testing.expectEqual(@as(u64, 0), finish_seen);
     try std.testing.expectEqualStrings("start s=x\nstart s=x\nend s=1\n", h.out.written());
     try std.testing.expectEqual(@as(u64, 10), now());
+}
+
+/// What each reset callback saw: the clock, in firing order.
+var reset_log: [4]u64 = undefined;
+var reset_n: usize = 0;
+
+fn onReset(d: *callback.CbData) callconv(.c) c_int {
+    // Start of reset logs the time it was asked at; end of reset, 1000 + the
+    // time after it.
+    if (reset_n < reset_log.len) reset_log[reset_n] = now() + @as(u64, if (d.reason == callback.cbEndOfReset) 1000 else 0);
+    reset_n += 1;
+    return 0;
+}
+
+test "IEEE 1364-2005 §27.33.3: cbStartOfReset fires before a vpiReset, cbEndOfReset after it, once each" {
+    var h: Harness = undefined;
+    try h.init(restart_source);
+    defer h.deinit();
+    reset_n = 0;
+    for ([_]c_int{ callback.cbEndOfReset, callback.cbStartOfReset }) |reason| {
+        const d: callback.CbData = .{ .reason = reason, .cb_rtn = onReset, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+        try std.testing.expect(callback.vpi_register_cb(&d) != null);
+    }
+    try resetAt(1);
+    try simulate();
+    // Asked at 5; back at 0 after. The registration order does not decide.
+    try std.testing.expectEqual(@as(usize, 2), reset_n);
+    try std.testing.expectEqualSlices(u64, &.{ 5, 1000 }, reset_log[0..2]);
+}
+
+test "IEEE 1364-2005 §27.33.3: a run with no reset delivers neither reset callback" {
+    var h: Harness = undefined;
+    try h.init(restart_source);
+    defer h.deinit();
+    reset_n = 0;
+    const d: callback.CbData = .{ .reason = callback.cbStartOfReset, .cb_rtn = onReset, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&d) != null);
+    try simulate();
+    try std.testing.expectEqual(@as(usize, 0), reset_n);
 }
 
 test "§12.36/IEEE 1364-2005 C.7: a reset with stop_value 0 ends a batch run at time 0" {
