@@ -41,6 +41,24 @@ const NoiseKind = Lower.NoiseKind;
 const NoiseSrc = Lower.NoiseSrc;
 const Accum = Lower.Accum;
 
+/// This file's private state on `Lower` (`Lower.contrib_state`): the lookups
+/// `contribIndex` makes per `<+`, hashed so a module of n contributions
+/// lowers in O(n) (a generate loop or a flattened instance array of 10^5).
+pub const State = struct {
+    /// The first `.direct` entry of each (access, pair, branch).
+    direct: std.AutoHashMapUnmanaged(Key, u32) = .empty,
+    /// The `contrib_sharers` rows already recorded.
+    sharers: std.AutoHashMapUnmanaged(struct { row: u32, unit: u32 }, void) = .empty,
+
+    pub const Key = struct { access: Access, hi: u32, lo: u32, br: u32 };
+};
+
+/// The `.direct` contribution entry of a (access, pair, branch), if a `<+`
+/// has made one: `contribIndex`'s lookup, without creating it.
+pub fn directRow(self: *const Lower, key: State.Key) ?u32 {
+    return self.contrib_state.direct.get(key);
+}
+
 /// Lowers one `<+`: resolves the branch, splits the rhs into its resistive and
 /// reactive halves (§5.6.1.2) and accumulates both into the target (§5.6.1.3).
 /// The reference direction (§1.3.1.2) is carried by the (hi, lo) order alone:
@@ -513,21 +531,37 @@ pub fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprI
 /// if nothing is ever contributed to it (§1.3.1). A source branch is exempt:
 /// §5.4.2.2 makes both of its quantities accessible.
 pub fn checkProbeBranches(self: *Lower) Oom!void {
-    // ponytail: O(reads²) over one module's access functions. A pair map keyed
-    // on the unordered node pair if a model ever makes this measurable.
-    for (self.branch_reads.items, 0..) |a, i| {
-        for (self.branch_reads.items[i + 1 ..]) |b| {
-            if (a.access == b.access or !samePair(a.hi, a.lo, b.hi, b.lo)) continue;
-            if (contributedOn(self, a.hi, a.lo)) continue;
-            var d = self.errWith(b.tok, .E0423);
-            d.msg("both quantities of the probe branch (`{s}`, `{s}`) are read", .{
-                lower_node.nodeName(self, a.hi), lower_node.nodeName(self, a.lo),
-            });
-            d.note("nothing is contributed to that branch, so §1.3.1 makes it a probe; contribute to it to make it a source, or read only one quantity", .{});
-            try d.emit();
-            return; // one report per module: the second pair is the same defect
-        }
+    // The first read of each quantity per unordered node pair: linear in the
+    // reads (a generate loop of 10^5 blocks reads 10^5 times). The report is
+    // the earliest read `a` with a later read `b` of the other quantity, at the
+    // first such `b`: per pair that is the first reads of the two quantities.
+    const reads = self.branch_reads.items;
+    var first: std.AutoHashMapUnmanaged(u64, [2]u32) = .empty;
+    defer first.deinit(self.arena);
+    const none = std.math.maxInt(u32);
+    for (reads, 0..) |r, i| {
+        const g = try first.getOrPut(self.arena, pairKey(r.hi, r.lo));
+        if (!g.found_existing) g.value_ptr.* = .{ none, none };
+        const slot = &g.value_ptr[@backingInt(r.access)];
+        if (slot.* == none) slot.* = @intCast(i);
     }
+    for (reads, 0..) |a, i| {
+        const f = first.get(pairKey(a.hi, a.lo)).?;
+        if (f[0] == none or f[1] == none or @min(f[0], f[1]) != i) continue;
+        if (contributedOn(self, a.hi, a.lo)) continue;
+        var d = self.errWith(reads[@max(f[0], f[1])].tok, .E0423);
+        d.msg("both quantities of the probe branch (`{s}`, `{s}`) are read", .{
+            lower_node.nodeName(self, a.hi), lower_node.nodeName(self, a.lo),
+        });
+        d.note("nothing is contributed to that branch, so §1.3.1 makes it a probe; contribute to it to make it a source, or read only one quantity", .{});
+        try d.emit();
+        return; // one report per module: the second pair is the same defect
+    }
+}
+
+/// `samePair`'s unordered pair as one map key.
+fn pairKey(hi: u32, lo: u32) u64 {
+    return @as(u64, @min(hi, lo)) << 32 | @max(hi, lo);
 }
 
 /// §5.6.8.1 one potential `<+` written through hierarchical net references.
@@ -966,27 +1000,26 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
 /// contribution (in different arms) is the §5.6.5 switch branch: two entries,
 /// one per access.
 pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
-    for (self.out.contributions.items, 0..) |c, i| {
-        // §5.6.7.2 an indirectly-assigned branch is never an accumulation
-        // target, so its entry can never absorb a `<+` (which `lowerIndirect`
-        // rejects outright anyway).
-        if (c.kind != .direct) continue;
-        // §5.4.1: the pair does not identify the branch, so `br` is part of the
-        // key. Two named branches over one pair get one accumulator each; every
-        // spelling of the pair's UNNAMED branch shares the one §5.4.1 Example 2
-        // allows it.
-        if (c.access == t.access and c.hi == t.hi and c.lo == t.lo and c.br == t.br) {
-            if (c.unit != self.cur_unit) {
-                self.out.contributions.items[i].shared = true;
-                const row: u32 = @intCast(i);
-                for (self.out.contrib_sharers.items) |sh| {
-                    if (sh.row == row and sh.unit == self.cur_unit) break;
-                } else try self.out.contrib_sharers.append(self.arena, .{ .row = row, .unit = self.cur_unit });
-            }
-            return @intCast(i);
+    // §5.6.7.2 an indirectly-assigned branch is never an accumulation target,
+    // so its entry can never absorb a `<+` (which `lowerIndirect` rejects
+    // outright anyway): only `.direct` entries are keyed. §5.4.1: the pair
+    // does not identify the branch, so `br` is part of the key. Two named
+    // branches over one pair get one accumulator each; every spelling of the
+    // pair's UNNAMED branch shares the one §5.4.1 Example 2 allows it.
+    const st = &self.contrib_state;
+    const key: State.Key = .{ .access = t.access, .hi = t.hi, .lo = t.lo, .br = t.br };
+    if (st.direct.get(key)) |row| {
+        const c = &self.out.contributions.items[row];
+        if (c.unit != self.cur_unit) {
+            c.shared = true;
+            const gop = try st.sharers.getOrPut(self.arena, .{ .row = row, .unit = self.cur_unit });
+            if (!gop.found_existing) try self.out.contrib_sharers.append(self.arena, .{ .row = row, .unit = self.cur_unit });
         }
+        return row;
     }
-    return newContrib(self, .direct, t, tok);
+    const row = try newContrib(self, .direct, t, tok);
+    try st.direct.put(self.arena, key, row);
+    return row;
 }
 
 /// §5.4.1/§5.6.8.1 one instance's share of an unnamed-branch row. Flattening
