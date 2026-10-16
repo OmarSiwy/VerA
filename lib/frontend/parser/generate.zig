@@ -236,6 +236,9 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
         blk.gen = items;
     } else {
         for (gb.discrete.items) |*d| d.generated = true;
+        for (gb.gates.items) |*g| g.generated = true;
+        for (gb.pulls.items) |*g| g.generated = true;
+        for (gb.switches.items) |*g| g.generated = true;
         try b.events.appendSlice(self.arena, gb.events.items);
         try b.discrete.appendSlice(self.arena, gb.discrete.items);
         try b.assigns.appendSlice(self.arena, gb.assigns.items);

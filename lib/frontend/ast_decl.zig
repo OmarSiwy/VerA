@@ -437,35 +437,10 @@ pub const GateInst = struct {
     strength1: Strength = .strong,
     delay: Delay3 = .{},
     main_tok: u32 = 0,
-
-    /// VAMS §7.8.5.1 "built-in digital primitives ports will be provided with
-    /// predictable names", for naming the connect modules §7.8.4 inserts:
-    /// terminal `t` (0 `out`, k the k'th of `ins`) of row `gi` of one
-    /// module's `gates`, written into `buf`. "For N-input gates (and, nand,
-    /// nor, or, xnor, xor) the output will be named out, and the inputs
-    /// reading from left to right will be named in1, in2, in3, and so forth.
-    /// For N-output gates (buf, not) The input will be named in, and the
-    /// outputs reading from left to right will be named out1, out2, out3":
-    /// such a gate is one row per output, so an output's number is its row's
-    /// place among its instance's rows (one `main_tok`).
-    ///
-    /// Null for the four enable gates, which the clause names no ports for,
-    /// and for a §7.1.5 instance array, whose lanes would each need a name.
-    pub fn connectPortName(gates: []const GateInst, gi: usize, t: usize, buf: *[24]u8) ?[]const u8 {
-        const g = gates[gi];
-        if (g.range != null) return null;
-        return switch (g.kind) {
-            .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => if (t == 0) "out" else std.fmt.bufPrint(buf, "in{d}", .{t}) catch unreachable,
-            .g_buf, .g_not => if (t != 0) "in" else out: {
-                var k: usize = 1;
-                for (gates[0..gi]) |o| if (o.main_tok == g.main_tok) {
-                    k += 1;
-                };
-                break :out std.fmt.bufPrint(buf, "out{d}", .{k}) catch unreachable;
-            },
-            .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => null,
-        };
-    }
+    /// Hoisted out of a generate block by an analog parse, which keeps no
+    /// generate scope (`parser/generate.zig`); a digital parse leaves such a
+    /// gate on its block, so it is not in the module's list there.
+    generated: bool = false,
 };
 
 /// A.7.4 `edge_identifier` / A.7.5.3 `timing_check_event_control`.
@@ -557,7 +532,11 @@ pub const PullInst = struct {
     /// `pullup` drives 1, `pulldown` drives 0.
     one: bool,
     strength: Strength = .pull,
+    /// A.3.1 `name_of_gate_instance`, `.none` when not written.
+    name: StrId = .none,
     main_tok: u32 = 0,
+    /// As `GateInst.generated`.
+    generated: bool = false,
 };
 
 /// A.3.4's switch types (IEEE 1364-2005 §7.6/§7.7): the MOS and CMOS switches
@@ -567,13 +546,149 @@ pub const SwitchKind = enum(u8) { cmos, rcmos, nmos, pmos, rnmos, rpmos, tran, r
 
 /// A.3.1 one switch instance: its terminals in source order (output, input,
 /// control(s) for a MOS/CMOS switch; the two inout terminals, then the
-/// enable, for a pass switch). Only a digital parse records one.
+/// enable, for a pass switch).
 pub const SwitchInst = struct {
     kind: SwitchKind,
     terms: []const ExprId,
     delay: Delay3 = .{},
+    /// A.3.1 `name_of_gate_instance`, `.none` when not written, and its
+    /// §7.1.5 instance-array range.
+    name: StrId = .none,
+    range: ?Dim = null,
     main_tok: u32 = 0,
+    /// As `GateInst.generated`.
+    generated: bool = false,
 };
+
+/// One terminal of a built-in primitive as VAMS §7.8.5.1 names it "for the
+/// purpose of naming the connect modules" §7.8.4 inserts on it (§7.8.5's
+/// `SigName__InstName__PortName`).
+pub const PrimTerm = struct {
+    /// The module list that holds the primitive, and its row there.
+    list: enum { gate, pull, switch_ },
+    row: u32,
+    /// 0 a gate's `out`, k its `ins[k - 1]`; a pull's terminal; a switch's
+    /// `terms[k]`.
+    term: u32,
+    /// §7.8.5's InstName, before an instance array's `[k]` (`range`).
+    inst: []const u8,
+    range: ?Dim,
+    port: []const u8,
+    /// IEEE 1364-2005 A.3.3's direction of the terminal, which §7.8.4's
+    /// matching reads as a port's.
+    dir: Direction,
+    expr: ExprId,
+    generated: bool,
+    main_tok: u32,
+};
+
+/// Every terminal of `m`'s primitives, named by VAMS §7.8.5.1, in source
+/// order. The one naming rule for the analog compile's insertion
+/// (`elaborate/insert.zig`) and the mixed runner's (`src/sim/digital/elab.zig`
+/// `bridged`), which meet only through these strings.
+///
+/// - "For N-input gates (and, nand, nor, or, xnor, xor) the output will be
+///   named out, and the inputs reading from left to right will be in1, in2,
+///   in3". "For N-output gates (buf, not) The input will be named in, and the
+///   outputs reading from left to right will be named out1, out2, out3": such
+///   a gate is one row per output, so an output's number is its row's place
+///   among its instance's rows (one `main_tok`), and `in` is listed once, on
+///   the first row.
+/// - "3 port MOS switches (nmos, pmos, rnmos, rpmos) ... source, drain, gate";
+///   "4 port MOS switches (cmos, rcmos) ... source, drain, ngate, pgate";
+///   "bidirectional pass switches (tran, tranif1, tranif0, rtran, rtranif1,
+///   rtranif) ... source, drain, gate"; "single port primitives (pullup,
+///   pulldown) ... out". Left to right is the A.3.1 terminal order.
+/// - The enable gates (bufif0, bufif1, notif0, notif1), which the clause does
+///   not name: `out`, `in`, `enable`, left to right (VerA's choice, after the
+///   N-input names; Vague_Decisions VD-115).
+///
+/// InstName is the instance's name. IEEE 1364-2005 A.3.1 makes it optional
+/// and neither standard names an unnamed instance (VerA's VPI gives it none),
+/// so one is `<gatetype>$<n>`, n counting from 1 the module's unnamed
+/// instances of that type in source order (VD-115). A primitive an analog
+/// parse hoisted out of a generate block is not counted, so the numbers match
+/// a digital parse's, which keeps it on its block; it is listed with its
+/// type name alone.
+pub fn primTerms(a: std.mem.Allocator, file: *const SourceFile, m: *const ModuleDecl) std.mem.Allocator.Error![]PrimTerm {
+    var out: std.ArrayList(PrimTerm) = .empty;
+    // Unnamed instances seen per type name, for `<gatetype>$<n>`.
+    var unnamed: std.StringHashMapUnmanaged(u32) = .empty;
+    const Name = struct {
+        fn of(al: std.mem.Allocator, f: *const SourceFile, seen: *std.StringHashMapUnmanaged(u32), name: StrId, ty: []const u8, generated: bool) ![]const u8 {
+            if (name != .none) return f.str(name);
+            if (generated) return ty;
+            const n = try seen.getOrPutValue(al, ty, 0);
+            n.value_ptr.* += 1;
+            return std.fmt.allocPrint(al, "{s}${d}", .{ ty, n.value_ptr.* });
+        }
+    };
+    var inst: []const u8 = "";
+    var k: u32 = 0; // the row's place among its instance's rows
+    for (m.gates, 0..) |g, gi| {
+        const first = gi == 0 or m.gates[gi - 1].main_tok != g.main_tok;
+        k = if (first) 1 else k + 1;
+        if (first) inst = try Name.of(a, file, &unnamed, g.name, @tagName(g.kind)[2..], g.generated);
+        for (0..1 + g.ins.len) |t| {
+            const port: []const u8, const dir: Direction = switch (g.kind) {
+                .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => if (t == 0) .{ "out", .output } else .{ try std.fmt.allocPrint(a, "in{d}", .{t}), .input },
+                .g_buf, .g_not => if (t == 0) .{ try std.fmt.allocPrint(a, "out{d}", .{k}), .output } else if (first) .{ "in", .input } else continue,
+                .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => .{ ([_][]const u8{ "out", "in", "enable" })[t], if (t == 0) .output else .input },
+            };
+            try out.append(a, .{ .list = .gate, .row = @intCast(gi), .term = @intCast(t), .inst = inst, .range = g.range, .port = port, .dir = dir, .expr = if (t == 0) g.out else g.ins[t - 1], .generated = g.generated, .main_tok = g.main_tok });
+        }
+    }
+    for (m.pulls, 0..) |p, pi| try out.append(a, .{
+        .list = .pull,
+        .row = @intCast(pi),
+        .term = 0,
+        .inst = try Name.of(a, file, &unnamed, p.name, if (p.one) "pullup" else "pulldown", p.generated),
+        .range = null,
+        .port = "out",
+        .dir = .output,
+        .expr = p.out,
+        .generated = p.generated,
+        .main_tok = p.main_tok,
+    });
+    for (m.switches, 0..) |sw, si| {
+        const name = try Name.of(a, file, &unnamed, sw.name, @tagName(sw.kind), sw.generated);
+        const ports: []const []const u8, const dirs: []const Direction = switch (sw.kind) {
+            .nmos, .pmos, .rnmos, .rpmos => .{ &.{ "source", "drain", "gate" }, &.{ .output, .input, .input } },
+            .cmos, .rcmos => .{ &.{ "source", "drain", "ngate", "pgate" }, &.{ .output, .input, .input, .input } },
+            .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => .{ &.{ "source", "drain", "gate" }, &.{ .inout, .inout, .input } },
+        };
+        for (sw.terms, 0..) |x, t| try out.append(a, .{ .list = .switch_, .row = @intCast(si), .term = @intCast(t), .inst = name, .range = sw.range, .port = ports[t], .dir = dirs[t], .expr = x, .generated = sw.generated, .main_tok = sw.main_tok });
+    }
+    return out.items;
+}
+
+/// Points terminal `t.term` of the primitive `t` names at `x`, in rows laid
+/// out like the module's lists `primTerms` read (`row` is `t.row`, or the
+/// same row of a flattened list). A `buf`/`not` input re-points every output
+/// row of its instance (one `main_tok`), since `primTerms` lists it once.
+pub fn setPrimTerm(a: std.mem.Allocator, gates: []GateInst, pulls: []PullInst, switches: []SwitchInst, t: PrimTerm, row: usize, x: ExprId) std.mem.Allocator.Error!void {
+    switch (t.list) {
+        .gate => {
+            var i = row;
+            while (i < gates.len and gates[i].main_tok == gates[row].main_tok) : (i += 1) {
+                const g = &gates[i];
+                if (t.term == 0) {
+                    g.out = x;
+                    return;
+                }
+                const ins = try a.dupe(ExprId, g.ins);
+                ins[t.term - 1] = x;
+                g.ins = ins;
+            }
+        },
+        .pull => pulls[row].out = x,
+        .switch_ => {
+            const terms = try a.dupe(ExprId, switches[row].terms);
+            terms[t.term] = x;
+            switches[row].terms = terms;
+        },
+    }
+}
 
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).

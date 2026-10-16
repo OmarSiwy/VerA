@@ -346,10 +346,14 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
     while (true) {
         // A.3.1 makes `name_of_gate_instance` optional here too; `(` after
         // the name tells the two apart, as in `parseGates`.
-        if (self.identLike(self.pos)) self.pos += 1;
+        var name: Ast.StrId = .none;
+        if (self.identLike(self.pos)) {
+            name = try self.internTok(self.pos);
+            self.pos += 1;
+        }
         _ = try self.expect(.lparen);
         const out = try parse_expr.parseNetLvalue(self); // A.3.3 output_terminal ::= net_lvalue
-        try b.pulls.append(self.arena, .{ .out = out, .one = side == 1, .strength = strength, .main_tok = main_tok });
+        try b.pulls.append(self.arena, .{ .out = out, .one = side == 1, .strength = strength, .name = name, .main_tok = main_tok });
         _ = try self.expect(.rparen);
         if (!self.eat(.comma)) break;
     }
@@ -425,9 +429,12 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
         const inst_tok = self.pos;
         // A.3.1 makes `name_of_gate_instance ::= gate_instance_identifier
         // [ range ]` optional (`tran (a, b);`); `(` tells the two apart.
+        var name: Ast.StrId = .none;
+        var range: ?Ast.Dim = null;
         if (self.identLike(self.pos)) {
+            name = try self.internTok(self.pos);
             self.pos += 1;
-            _ = try parse_decl.optDim(self);
+            range = try parse_decl.optDim(self);
         }
         _ = try self.expect(.lparen);
         const terms = try self.arena.alloc(Ast.ExprId, arm.terminals);
@@ -444,7 +451,7 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
             t.* = if (i < arm.lvalues) try parse_expr.parseNetLvalue(self) else try parse_expr.parseExpr(self);
         }
         _ = try self.expect(.rparen);
-        try b.switches.append(self.arena, .{ .kind = kind, .terms = terms, .delay = delay, .main_tok = inst_tok });
+        try b.switches.append(self.arena, .{ .kind = kind, .terms = terms, .delay = delay, .name = name, .range = range, .main_tok = inst_tok });
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);

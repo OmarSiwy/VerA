@@ -351,9 +351,10 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // A tree of one goes to lowering by pointer, untouched. A `defparam` with
     // no instance still takes the flatten: §6.3.1's path then names nothing,
     // and the flatten is where that E0907 is reported.
-    // A gate with connect rules takes it too: §7.8.4 may bridge its ports.
+    // A primitive with connect rules takes it too: §7.8.4 may bridge its
+    // terminals (§7.8.5.1).
     if (top.instances.len == 0 and top.defparams.len == 0 and f.genInstancesOf(top).len == 0 and
-        (top.gates.len == 0 or ctx.file.connectrules.len == 0))
+        (top.gates.len + top.pulls.len + top.switches.len == 0 or ctx.file.connectrules.len == 0))
     {
         if (f.had_error) return error.DiagnosticsReported;
         try elab_alias.checkFlat(ctx, top, top.aliasparams);
@@ -811,6 +812,7 @@ pub const Flatten = struct {
         try self.assigns.appendSlice(self.ctx.arena, top.assigns);
         try self.gates.appendSlice(self.ctx.arena, top.gates);
         try self.pulls.appendSlice(self.ctx.arena, top.pulls);
+        try self.switches.appendSlice(self.ctx.arena, top.switches);
 
         // Unit 0 is the top itself, and §9.15's example makes a top-level
         // module's instance name its module name ("testbench").
