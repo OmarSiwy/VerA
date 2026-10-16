@@ -83,8 +83,12 @@ pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.S
     // expression", and a parameter is a `constant_primary` (A.8.4). The arm
     // decides the circuit's topology, so its parameters become shape
     // parameters a card cannot move (`shapeEval`), as a generate scheme's do.
-    if ((try hasIndirect(self, then_s) or try hasIndirect(self, else_s)) and
-        lower_constfold.foldExpr(self, cond, true) != null)
+    // The fold first: it reads only `cond`, where `hasIndirect` walks both
+    // arms, so a chain of n runtime `if`s stays O(n) (#29).
+    // ponytail: n nested `if`s on parameters still walk O(n^2); memoize
+    // `hasIndirect` per statement if a model nests those deep.
+    if (lower_constfold.foldExpr(self, cond, true) != null and
+        (try hasIndirect(self, then_s) or try hasIndirect(self, else_s)))
     {
         const c = lower_constfold.shapeEval(self, cond).?;
         return lower_stmt.lowerStmt(self, if (c.isTrue()) then_s else else_s);

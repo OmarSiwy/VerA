@@ -1507,6 +1507,7 @@ test "nesting has no parser bound: each construct at the old 1024 cap and far pa
         try std.testing.expect(try parseNested(arena, m ++ "r = ", "(", "1.0", ")", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m ++ "r = ", "-", "1.0", "", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m ++ "r = ", "V(p) > 1 ? 1 : ", "0", "", ";" ++ e, n) >= deep);
+        try std.testing.expect(try parseNested(arena, m ++ "r = ", "V(p) > 1 ? ", "1", " : 0", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m ++ "r = 1.0", " + 1.0", "", "", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m, "begin ", "r = 1;", " end", e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m, "if (V(p) > 1) r = 1; else ", "r = 0;", "", e, n) >= deep);

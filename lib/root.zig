@@ -711,19 +711,19 @@ fn deepSource(gpa: Allocator, n: usize, c: DeepCase) ![]u8 {
     return src.toOwnedSlice(gpa);
 }
 
-const DeepCase = struct { pre: []const u8 = "", open: []const u8, mid: []const u8, close: []const u8 = "", post: []const u8 = "", lint: usize = 100_000, device: usize = 100_000 };
+/// `device = false`: lint only, because the "100,000-level ?: chain" test
+/// below takes that shape through codegen at the same depth.
+const DeepCase = struct { pre: []const u8 = "", open: []const u8, mid: []const u8, close: []const u8 = "", post: []const u8 = "", device: bool = true };
 
 test "nesting has no bound: 100,000 levels lint and generate a device" {
     // Every stage after the parse recurses per AST level and runs on a
     // `deep_stack` sized from `Parser.deepest`; 100,000 levels is far past
-    // the 8 MiB stack the pipeline had (it overflowed near 3,000). For if
-    // and ?: chains `lint` is the depth linted and `device` the depth taken
-    // through codegen: the prover's per-branch facts make a lint quadratic
-    // in their depth, in time and memory (Debug, 2026-10-15: 5,000 else-ifs
-    // 10 s and 2.6 GB, 10,000 `?:` 18 s and 7.2 GB), so they run at 5,000
-    // and 2,000, past the old 1,024 cap and inside a 4 GB test budget; the
-    // next test takes them through codegen at 5,000. The parser takes all
-    // three at 100,000 (`parser/test.zig`).
+    // the 8 MiB stack the pipeline had (it overflowed near 3,000). The if
+    // and ?: chains are the worst case of the per-branch walks: every level
+    // pushes a prover guard fact on one congruence class (`V(p) > 1`), climbs
+    // the SSA arms above it and the setup plan's dominators, each quadratic
+    // in the depth until #29 (Debug, 2026-10-15: about 20 s and 0.6-2.2 GB a
+    // lint here).
     const gpa = std.testing.allocator;
     for ([_]DeepCase{
         .{ .pre = "r = 1.0", .open = "", .mid = "", .close = " + 1.0", .post = ";" },
@@ -731,12 +731,13 @@ test "nesting has no bound: 100,000 levels lint and generate a device" {
         .{ .pre = "r = ", .open = "-", .mid = "1.0", .post = ";" },
         .{ .pre = "k = ", .open = "{", .mid = "1'b1", .close = "}", .post = "; r = k;" },
         .{ .open = "begin ", .mid = "r = 1.0;", .close = " end" },
-        .{ .pre = "r = ", .open = "V(p) > 1 ? 1 : ", .mid = "0", .post = ";", .lint = 5_000, .device = 2_000 },
-        .{ .open = "if (V(p) > 1) r = 1; else ", .mid = "r = 0;", .lint = 5_000, .device = 2_000 },
-        .{ .pre = "r = 0; ", .open = "if (V(p) > 1) ", .mid = "r = 1;", .lint = 5_000, .device = 2_000 },
+        .{ .pre = "r = ", .open = "V(p) > 1 ? 1 : ", .mid = "0", .post = ";", .device = false },
+        .{ .open = "if (V(p) > 1) r = 1; else ", .mid = "r = 0;", .device = false },
+        .{ .pre = "r = 0; ", .open = "if (V(p) > 1) ", .mid = "r = 1;", .device = false },
     }) |c| {
-        for ([_]usize{ c.lint, c.device }, [_]Target{ .lint, .build }) |n, target| {
-            const src = try deepSource(gpa, n, c);
+        for ([_]Target{ .lint, .build }) |target| {
+            if (target == .build and !c.device) continue;
+            const src = try deepSource(gpa, 100_000, c);
             defer gpa.free(src);
             var res = try compileSource(gpa, src, target);
             defer res.deinit();
@@ -789,14 +790,12 @@ test "10,000 sequential ifs compile: SSA, the prover and codegen walk them on no
     }
 }
 
-test "5,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
+test "100,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
     // The parser and lowering run on a `deep_stack`, codegen on heap stacks
-    // (`cfg.emitTree`, `Gen.max_indent`), so none of them bounds the depth.
-    // The prover does not either, but its facts are quadratic in an if/?:
-    // chain's depth (the test above): 100,000 levels would need terabytes,
-    // 5,000 fits a 4 GB test budget and is past the old 1,024 cap.
+    // (`cfg.emitTree`, `Gen.max_indent`), and the prover, the SSA reads and
+    // the setup plan are linear in it (#29), so none of them bounds the depth.
     const gpa = std.testing.allocator;
-    const n = 5_000;
+    const n = 100_000;
     for ([_]enum { ternary, else_if, nested }{ .ternary, .else_if, .nested }) |shape| {
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(gpa);
