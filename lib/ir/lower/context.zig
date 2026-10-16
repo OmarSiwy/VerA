@@ -367,7 +367,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
             const m = lower_constfold.constEval(self, range.msb) orelse break;
             const l = lower_constfold.constEval(self, range.lsb) orelse break;
             const right = l.asIntExact() orelse 0;
-            try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right, .width = width });
+            try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right, .width = width, .signed = v.is_signed });
             if (width <= 32) break;
             const n_words: u32 = (width + 31) / 32;
             try self.out.discrete_words.put(self.arena, name, n_words);

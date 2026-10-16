@@ -1794,7 +1794,7 @@ pass	ch07_mixed_signal/discrete_bus_over31_rejected.va
 pass	ch07_mixed_signal/discrete_bus_part_select_31.va
 pass	ch07_mixed_signal/discrete_bus_part_select_32_rejected.va
 pass	ch07_mixed_signal/discrete_bus_part_select_above_31.va
-pass	ch07_mixed_signal/discrete_bus_part_select_above_31_unsupported.va
+pass	ch07_mixed_signal/discrete_bus_part_select_above_31_analog_assigned.va
 pass	ch07_mixed_signal/discrete_discipline.va
 pass	ch07_mixed_signal/discrete_real_from_analog.va
 pass	ch07_mixed_signal/display_binary_operand_analog.va
@@ -1896,6 +1896,10 @@ pass	ch07_mixed_signal/timer_runtime_controls.va
 pass	ch07_mixed_signal/timer_runtime_drift.va
 pass	ch07_mixed_signal/timer_runtime_enable.va
 pass	ch07_mixed_signal/undeclared_interconnect_resolves_continuous.va
+pass	ch07_mixed_signal/wide_reg_held_across_evaluations.va
+pass	ch07_mixed_signal/wide_reg_matches_digital_300.va
+pass	ch07_mixed_signal/wide_reg_matches_digital_65600.va
+pass	ch07_mixed_signal/wide_reg_matches_digital_72.va
 pass	ch07_mixed_signal/wreal_port_joined_to_wand_rejected.va
 pass	ch07_mixed_signal/x_case_equality_compared.va
 pass	ch07_mixed_signal/x_case_equality_input_net.va

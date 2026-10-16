@@ -37,10 +37,14 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
 }
 
 /// Returns the bytes of `lowered`'s §3.2.2 memory-backed arrays
-/// (`Directives.mem_bytes`): eight per element, real or integer.
+/// (`Directives.mem_bytes`): eight per element, real or integer. Plus the
+/// IEEE 1364 §5.4 wide temporaries (`wide_kernels.zig`): one value per node
+/// of every sized tree and the division's scratch, three values' bytes per
+/// node (specification/Vague_Decisions.md §7, "wide `reg` temporaries").
 pub fn memBytes(lowered: *const Lowered) u64 {
     var n: u64 = 0;
     for (lowered.mem_arrays.items) |m| n += 8 * @as(u64, m.len);
+    for (lowered.wide_nodes.items) |w| n += 3 * 4 * ((@as(u64, w.width) + 31) / 32);
     return n;
 }
 
@@ -395,6 +399,8 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\    /// parameters to the device, so its parameter-only prep is redone.
         \\    pub fn setInputs(a: *Analog, dig: *sim.digital.Run, fired: u64) !void {
         \\        a.flush();
+        \\        // A `reg` past 32 bits is one port per word (`Lowered.discrete_words`).
+        \\        @setEvalBranchQuota(1000 + 100 * input_ports.len);
         \\        inline for (input_ports, 0..) |p, i| if (p.xz) |xz| {
         \\            // §7.3.2 read four-state: both planes, and x or z is a value.
         \\            const v = dig.values[a.slots[i]];

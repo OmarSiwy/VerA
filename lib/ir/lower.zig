@@ -119,11 +119,13 @@ pub const VarSlot = struct {
     /// §7.3.1: retained declaration width, checked and zero-extended when
     /// analog code reads it. A register used only by digital code may be wider.
     reg_width: ?u32 = null,
+    /// IEEE 1364-2005 §5.5.1: the `reg` was declared `signed`.
+    reg_signed: bool = false,
 };
 /// A `reg`'s packed range as a select reads it (§7.3.1): the right-hand
 /// bound (its LSB in either direction, IEEE 1364-2005 §4.2.1), the direction,
 /// and the width.
-pub const RegRange = struct { right: i64, asc: bool, width: u32 };
+pub const RegRange = struct { right: i64, asc: bool, width: u32, signed: bool = false };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
@@ -272,6 +274,10 @@ reg_ranges: std.StringHashMapUnmanaged(RegRange) = .empty,
 /// literal (`lower_expr.lowerRegSelect`); any other such `reg` holds only
 /// what a §3.2 integer computes.
 reg_consts: std.StringHashMapUnmanaged(Ast.ExprId) = .empty,
+/// §7.2.2 the names the module's analog blocks write (`lower_var.analogWrites`),
+/// known before any variable is declared: a `reg` wider than 32 bits in it is
+/// `Ty.wide`.
+analog_writes: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
 scope_log: std.ArrayList(lower_var.ScopeEntry) = .empty,
 /// §3.4 parameters and §3.5 genvars visible to constant evaluation.
@@ -556,7 +562,9 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     // The current backend only executes two-state analog equations. Preserve
     // full source literals in the AST, but never silently coerce them here.
     // A mixed module's discrete half is exempt: it runs on the four-state
-    // kernel (`markDiscreteExprs`).
+    // kernel (`markDiscreteExprs`). A two-state literal wider than an i64 is
+    // judged where it is lowered: whole in a wide `reg`'s right-hand side
+    // (`lower_wide`), E0130 as an analog integer (`lower_expr.lowerExpr`).
     const tags = self.file.exprs.nodes.items(.tag);
     const discrete = try self.arena.alloc(bool, tags.len);
     @memset(discrete, false);
@@ -565,7 +573,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         if (tag != .logic_literal or in_discrete) continue;
         const e: Ast.ExprId = @fromBackingInt(@intCast(i));
         const literal = self.file.exprs.logicValue(e);
-        if (literal.asExactInt() != null) continue; // `lower_expr` lowers it as an integer
+        if (!literal.hasUnknown()) continue; // two-state: `lower_expr` or `lower_wide` lowers it
         const span = self.tokenSpan(self.file.exprs.mainTok(e));
         try self.err(self.file.exprs.mainTok(e), .E0130, "`{s}`: the analog backend cannot execute this {d}-bit {s} literal", .{ self.src[span.start..span.end], literal.width, if (literal.hasUnknown()) "four-state" else "wide" });
     }
@@ -696,6 +704,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the whole of the difference.
     try lower_context.collectInitialState(self, module);
     const analog_writes = try lower_var.analogWrites(self, module);
+    self.analog_writes = analog_writes;
     for (module.vars) |*v| {
         if (self.out.discrete_inputs.contains(self.file.str(v.name))) continue;
         var d = v.*;
@@ -713,11 +722,8 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // §7.3.1: a wide `reg` the analog context only reads holds its
         // literal for the whole analysis, so every bit of it is known.
         const name = self.file.str(d.name);
-        if (self.reg_ranges.get(name)) |rr| if (rr.width > 32 and !analog_writes.contains(d.name) and
-            (d.init == .none or switch (self.file.exprs.tag(d.init)) {
-                .int_literal, .logic_literal => true,
-                else => false, // else: anything else is computed in §3.2's 32-bit integer
-            })) try self.reg_consts.put(self.arena, name, d.init);
+        if (self.reg_ranges.get(name)) |rr| if (rr.width > 32 and lower_var.literalReg(self, &d, .module))
+            try self.reg_consts.put(self.arena, name, d.init);
     }
     // §6.8: an `initial` block that assigns a name this module never declared.
     // Reported here because it is only knowable once every declaration is in,
@@ -1006,6 +1012,7 @@ pub fn toReal(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
         .real => tv.v,
         .integer => self.emit(.if_cast, &.{tv.v}),
         .string => tv.v, // already diagnosed at the use site
+        .wide => unreachable, // `lowerExpr` types no value `.wide`: a whole wide `reg` read is E0222
     };
 }
 
@@ -1016,6 +1023,7 @@ pub fn toInt(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
         .integer => tv.v,
         .real => self.emit(.fi_cast, &.{tv.v}),
         .string => tv.v,
+        .wide => unreachable, // `lowerExpr` types no value `.wide`: a whole wide `reg` read is E0222
     };
 }
 
@@ -1048,6 +1056,7 @@ pub fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Val
         .real => self.toReal(tv),
         .integer => self.toInt(tv),
         .string => tv.v,
+        .wide => unreachable, // `resolveLvalue` types a wide `reg` `.integer`, and nothing else coerces to one
     };
 }
 
@@ -1091,6 +1100,7 @@ pub fn toBool(self: *Lower, tv: TypedValue) Oom!Mir.Value {
         .integer => self.emit(.ine, &.{ tv.v, .zero }),
         .real => self.emit(.fne, &.{ tv.v, .f_zero }),
         .string => .zero,
+        .wide => unreachable, // `lowerExpr` types no value `.wide`: a whole wide `reg` read is E0222
     };
 }
 

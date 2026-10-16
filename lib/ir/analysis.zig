@@ -94,6 +94,8 @@ def_block: []u32 = &.{},
 nv: u32 = 0,
 /// Emitted type per Value.
 vty: []VTy = &.{},
+/// Per Value, the bits of a `.wide` one (`wideWidth`); 0 for every other.
+wide_w: []u32 = &.{},
 /// `mir.resolveAlias` evaluated once for every Value, so `rv` is one load and
 /// readers never write through `resolveAlias`'s path compression.
 /// Invariant: nothing calls `Mir.setAlias` after `build`/`buildStructure`.
@@ -602,6 +604,57 @@ fn buildValueTypes(self: *Analysis) Error!void {
             changed = true;
         }
     }
+    try self.buildWideWidths();
+}
+
+/// IEEE 1364-2005 §5.4: the bits of every `.wide` value, from its defining
+/// call (`$wide`'s root node, a held variable's or a timepoint slot's
+/// width) or, for a `select` or `phi`, from the operand `vty` copied.
+fn buildWideWidths(self: *Analysis) Error!void {
+    self.wide_w = try self.arena.alloc(u32, self.nv);
+    @memset(self.wide_w, 0);
+    if (self.lowered.wide_nodes.items.len == 0) return;
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (Mir.Value.first_dynamic..self.nv) |v| {
+            if (self.vty[v] != .wide or self.wide_w[v] != 0) continue;
+            const def = self.mir.valueDef(@fromBackingInt(@intCast(v)));
+            if (def != .inst_result) continue;
+            const inst = def.inst_result;
+            const w: u32 = switch (Mir.opClass(self.mir.instOp(inst))) {
+                .ternary => self.wide_w[@backingInt(self.rv(self.mir.instData(inst).ternary.then_val))],
+                .phi => self.wide_w[@backingInt(self.rv(self.mir.phiPair(inst, 0).value))],
+                .call => blk: {
+                    const d = self.mir.instData(inst).call;
+                    const k: usize = @intCast(self.intArg(d.args, 0) orelse break :blk 0);
+                    break :blk switch (d.callee) {
+                        .@"$wide" => self.lowered.wide_nodes.items[k].width,
+                        .@"$held_wide" => self.lowered.held_vars.items[k].width,
+                        .@"$tp_wide" => self.lowered.timepoints.items[k].slots[@intCast(self.intArg(d.args, 1) orelse break :blk 0)].width,
+                        else => 0, // else: `Callee.table` types only these three `.wide`
+                    };
+                },
+                .unary, .binary, .branch, .jump, .anew, .load, .store => 0,
+            };
+            if (w == 0) continue;
+            self.wide_w[v] = w;
+            changed = true;
+        }
+    }
+}
+
+fn intArg(self: *const Analysis, args: []const Mir.Value, i: usize) ?i64 {
+    if (i >= args.len) return null;
+    return switch (self.mir.valueDef(self.rv(args[i]))) {
+        .int_const => |x| x,
+        else => null, // else: lowering passes every index a `$wide`-family call reads as a literal
+    };
+}
+
+/// The bits of `.wide` value `v`. Requires `build`.
+pub fn wideWidth(self: *const Analysis, v: Mir.Value) u32 {
+    return self.wide_w[@backingInt(v)];
 }
 
 /// Fill `arr_of`. An `anew` names its array and a `store` inherits its
@@ -765,7 +818,7 @@ const DepCol = enum { deriv, value, ac_dyn, point };
 /// Whether `inst` reads a per-instance value (`pdeps`' seeds).
 fn readsInstance(self: *const Analysis, inst: Mir.Inst) bool {
     return switch (self.mir.instData(inst)) {
-        .call => |c| c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$held_str" or c.callee == .@"$mfactor",
+        .call => |c| c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$held_str" or c.callee == .@"$held_wide" or c.callee == .@"$mfactor",
         .unary => |u| u.op == .path_prev or u.op == .path_acc,
         else => false, // else: only a call or a latch reads the instance as a value
     };

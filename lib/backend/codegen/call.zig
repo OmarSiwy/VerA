@@ -17,6 +17,7 @@ const gen_render = @import("render.zig");
 const gen_host = @import("host_expr.zig");
 const family = @import("family.zig");
 const gen_unit = @import("unit.zig");
+const gen_wide = @import("wide.zig");
 const Mir = @import("ir").Mir;
 const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
@@ -257,10 +258,12 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$held_real",
         .@"$held_int",
         .@"$held_str",
+        .@"$held_wide",
         // VerA's `vera_timepoint`: the per-timepoint cache (`Lower.TpBlock`).
         .@"$tp_hit",
         .@"$tp_int",
         .@"$tp_real",
+        .@"$tp_wide",
         => true,
         // §9.15 `$simparam("iteration")`, `$simparam("dt")`: the SimState.
         .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
@@ -363,6 +366,9 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$idx",
         .@"$idx$int",
         .@"$idx$str",
+        // IEEE 1364 §5.4 a function of its operands alone.
+        .@"$wide",
+        .@"$wide$int",
         .@"$display$width",
         .@"$monitor$arm",
         .@"$fgets$str",
@@ -630,6 +636,15 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             float_lanes.instPin(self);
             return self.b("inst.{s}.get()", .{self.names.held_names[heldIdx(self, args)]});
         },
+        // IEEE 1364 §5.4 a held wide `reg`: its `ZW(n)` field, read from the
+        // one instance `inst` is, as a held string is.
+        .@"$held_wide" => {
+            self.uses.inst = true;
+            float_lanes.instPin(self);
+            return self.b("inst.{s}", .{self.names.held_names[heldIdx(self, args)]});
+        },
+        .@"$wide" => return gen_wide.emitWide(self, args, false),
+        .@"$wide$int" => return gen_wide.emitWide(self, args, true),
         // VerA's `vera_timepoint` (§2.9): is statement b's cache current, and
         // its slot k (`Lower.TpBlock`, the fields `emitInstance` declares).
         .@"$tp_hit" => {
@@ -638,11 +653,11 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const b = litArg(self, args, 0);
             return self.b("@as(i64, @intFromBool(zTpHit(inst.tp{d}_t, inst.tp{d}_k, sim)))", .{ b, b });
         },
-        .@"$tp_int", .@"$tp_real" => {
+        .@"$tp_int", .@"$tp_real", .@"$tp_wide" => {
             self.uses.inst = true;
             const b = litArg(self, args, 0);
             const slot = litArg(self, args, 1);
-            return if (c == .@"$tp_int")
+            return if (c != .@"$tp_real")
                 self.b("inst.tp{d}_s{d}", .{ b, slot })
             else
                 self.b("S.con(inst.tp{d}_s{d})", .{ b, slot });
@@ -1126,6 +1141,7 @@ pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, s
         .real => "S.con(0.0)",
         .int => "@as(i64, 0)",
         .str => "\"\"",
+        .wide => unreachable, // `Callee.table` types no file call wide
     }});
 }
 

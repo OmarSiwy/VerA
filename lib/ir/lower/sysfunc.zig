@@ -384,7 +384,8 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 pub fn lowerClog2(self: *Lower, tok: u32, arg: Ast.ExprId) Oom!TypedValue {
     const tv = try lower_expr.lowerClog2Arg(self, arg, null);
     if (tv.ty != .integer or arg == .none) {
-        try self.err(tok, .E0892, "got {s}", .{@tagName(tv.ty)});
+        // A poisoned argument was reported where it failed (E0130).
+        if (tv.v != .undef or arg == .none) try self.err(tok, .E0892, "got {s}", .{@tagName(tv.ty)});
         return poison;
     }
     const width = lower_constfold.clog2Width(self, arg) orelse 64;
@@ -500,6 +501,7 @@ pub fn checkDescriptor(self: *Lower, name: []const u8, i: usize, arg: Ast.ExprId
             .real => "a real",
             .string => "a string",
             .integer => unreachable,
+            .wide => unreachable, // `lowerExpr` types no value `.wide`: a whole wide `reg` read is E0222
         },
     });
     return true;
@@ -674,6 +676,7 @@ fn sysFuncTy(name: []const u8) Ty {
         .real => .real,
         .int => .integer,
         .str => .string,
+        .wide => .wide,
     };
 }
 
