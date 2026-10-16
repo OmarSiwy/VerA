@@ -104,8 +104,9 @@ jobs:
           name: measured
           path: measured.md
 
-  # Measure B, the IEEE 1364-2005 suite, the digital transcripts, and the
-  # VPI .c fixtures (every one compiles; `vpi_runs` run under `test`).
+  # Measure B, the IEEE 1364-2005 suite and the digital transcripts (each
+  # also through the native executable, `-- --native`), and the VPI .c
+  # fixtures (every one compiles; `vpi_runs` run under `test`).
   ieee1364:
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -128,6 +129,18 @@ jobs:
         run: |
           zig build test-devices 2>&1 | tee /tmp/devices.txt
           exit "${PIPESTATUS[0]}"
+      # The same cases through `vera --emit-exe` (src/sim/rt): the native
+      # executable and the interpreter must print the same transcript (#30).
+      - name: IEEE 1364-2005 suite, native
+        if: always()
+        run: |
+          zig build test-1364 -- --native 2>&1 | tee /tmp/ieee1364-native.txt
+          exit "${PIPESTATUS[0]}"
+      - name: Digital transcripts, native
+        if: always()
+        run: |
+          zig build test-devices -- --native 2>&1 | tee /tmp/devices-native.txt
+          exit "${PIPESTATUS[0]}"
       - name: VPI .c fixtures compile
         if: always()
         run: zig build test-vpi-fixtures
@@ -141,6 +154,8 @@ jobs:
             echo '```'; tail -20 /tmp/ieee1364.txt; echo '```'
             echo '## Digital transcripts'
             echo '```'; tail -20 /tmp/devices.txt; echo '```'
+            echo '## Native (vera --emit-exe)'
+            echo '```'; tail -3 /tmp/ieee1364-native.txt /tmp/devices-native.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -150,6 +165,8 @@ jobs:
             /tmp/coverage1364.txt
             /tmp/ieee1364.txt
             /tmp/devices.txt
+            /tmp/ieee1364-native.txt
+            /tmp/devices-native.txt
 
   # --emit-verilog's modules: verilator -Wall lint and an iverilog testbench
   # each. Ubuntu's verilator (5.020) has no rise/fall delays (RISEFALLDLY)
