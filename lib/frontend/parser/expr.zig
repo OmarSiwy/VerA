@@ -43,7 +43,10 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
             self.nest();
             self.pos += 1;
             try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
-            const then_e = try parseExpr(self);
+            // Both arms nest a native level `parseUnary` has already left, so
+            // both count as frames (#29): `a ? b ? c ? ... : z : y` is as deep
+            // as `a ? b : c ? ...`.
+            const then_e = try self.descend(parseExprPrec, .{ self, prec_ternary });
             _ = try self.expect(.colon);
             const else_e = try self.descend(parseExprPrec, .{ self, prec_ternary });
             lhs = try self.file.exprs.add(self.arena, .{

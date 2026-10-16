@@ -16,6 +16,8 @@ const plan_args = @import("args.zig");
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
+/// `Scan.home`'s "not asked yet"; `none_u32` is an answer there.
+const unknown_home: u32 = none_u32 - 1;
 const assert = std.debug.assert;
 
 /// The answer, per value, per block and per loop header.
@@ -256,6 +258,9 @@ const Scan = struct {
     plc: []bool,
     varying: []bool,
     init_else: []bool,
+    /// `homeOf`'s answers for the current `plc` (`unknown_home` = not asked
+    /// yet); whoever changes `plc` refills it with `unknown_home`.
+    home: []u32,
 
     fn sv(s: *const Scan, v0: Mir.Value) bool {
         const v = s.in.an.rv(v0);
@@ -330,15 +335,27 @@ const Scan = struct {
         return s.val[@backingInt(v)] and b != none_u32 and s.in.an.loop_of[b] == none_u32;
     }
 
-    /// The nearest placeable dominator of `b`, or `none_u32`.
+    /// The nearest placeable dominator of `b`, or `none_u32`. Memoized along
+    /// the dominator path it climbs, which every block on it shares: n nested
+    /// unplaceable `if`s would otherwise climb O(n) each (#29).
     fn homeOf(s: *const Scan, b0: u32) u32 {
         var b = b0;
-        while (!s.plc[b]) {
+        const h = while (true) {
+            if (s.home[b] != unknown_home) break s.home[b];
+            if (s.plc[b]) break b;
             const up = s.in.an.idom[b];
-            if (up == none_u32 or up == b) return none_u32;
+            if (up == none_u32 or up == b) break none_u32;
+            b = up;
+        };
+        b = b0;
+        while (s.home[b] == unknown_home) {
+            s.home[b] = h;
+            if (b == h) break;
+            const up = s.in.an.idom[b];
+            if (up == none_u32 or up == b) break;
             b = up;
         }
-        return b;
+        return h;
     }
 
     fn rule(s: *const Scan, v: Mir.Value) bool {
@@ -416,7 +433,8 @@ const Scan = struct {
 pub fn plan(in: Input) Error!Sinv {
     var r = try solve(in, true);
     const a = in.arena;
-    const s: Scan = .{ .in = in, .val = r.val, .plc = r.blk, .varying = r.loop_varying, .init_else = &.{} };
+    const s: Scan = .{ .in = in, .val = r.val, .plc = r.blk, .varying = r.loop_varying, .init_else = &.{}, .home = try a.alloc(u32, in.an.nb) };
+    @memset(s.home, unknown_home);
     r.home = try a.alloc(u32, in.an.nv);
     @memset(r.home, none_u32);
     r.moved_off = try a.alloc(u32, in.an.nb + 1);
@@ -461,6 +479,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
         .plc = try a.alloc(bool, nb),
         .varying = try a.alloc(bool, nb),
         .init_else = try a.alloc(bool, nb),
+        .home = try a.alloc(u32, nb),
     };
     @memset(s.val, true);
     @memset(s.plc, true);
@@ -506,6 +525,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
                 changed = true;
             }
         }
+        @memset(s.home, unknown_home); // `plc` may have fallen above
         for (Mir.Value.first_dynamic..nv) |i| {
             if (!s.val[i]) continue;
             const v: Mir.Value = @fromBackingInt(@intCast(i));
