@@ -16,6 +16,7 @@ const lower_param = @import("param.zig");
 const lower_systask = @import("systask.zig");
 const lower_shape = @import("shape.zig");
 const lower_var = @import("var.zig");
+const lower_wide = @import("wide.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -329,7 +330,12 @@ fn lowerTimepoint(self: *Lower, id: Ast.StmtId) Oom!void {
         const v = if (s.array != Lower.none_u32)
             try self.mir.emitAnewCached(self.arena, self.cur, s.array, b, kv)
         else
-            try self.call(if (s.ty == .integer) "$tp_int" else "$tp_real", &.{ bv, try self.mir.addIntConst(self.arena, kv) });
+            try self.call(switch (s.ty) {
+                .integer => "$tp_int",
+                .real => "$tp_real",
+                .wide => "$tp_wide",
+                .string => unreachable, // `timepointScalar` refuses a string (E0530)
+            }, &.{ bv, try self.mir.addIntConst(self.arena, kv) });
         try self.builder.writeVariable(p, self.cur, v);
     }
     try self.gotoBlock(join);
@@ -400,7 +406,7 @@ const TpWrites = struct {
 
 fn timepointScalar(self: *Lower, w: Ast.ExprId, name: []const u8, v: Lower.VarSlot, slots: *std.ArrayList(Lower.TpSlot), places: *std.ArrayList(Ssa.Place)) Oom!void {
     if (v.ty == .string) return self.err(self.file.exprs.mainTok(w), .E0530, "an assignment to string `{s}`", .{name});
-    try slots.append(self.arena, .{ .name = name, .ty = v.ty });
+    try slots.append(self.arena, .{ .name = name, .ty = v.ty, .width = if (v.ty == .wide) v.reg_width.? else 0 });
     try places.append(self.arena, v.place);
 }
 
@@ -473,6 +479,13 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     if (ex.tag(target) == .index) {
         if (try assignRuntimeIndex(self, target, value)) return;
     }
+    // IEEE 1364-2005 §5.5.3 a `reg` wider than 32 bits takes the right-hand
+    // side at the width §5.4.1 sizes it to (`lower_wide`).
+    if (ex.tag(target) == .ident) if (self.vars.get(self.file.str(ex.strOf(target)))) |s| if (s.ty == .wide) {
+        try self.builder.writeVariable(s.place, self.cur, try lower_wide.rhs(self, s.reg_width.?, value));
+        try lower_var.countAssign(self, s.place);
+        return;
+    };
     const lv = try resolveLvalue(self, target) orelse {
         _ = try lower_expr.lowerExpr(self, value); // keep collecting errors from the rhs
         return;
@@ -769,6 +782,7 @@ pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const
         .real => "$idx",
         .integer => "$idx$int",
         .string => "$idx$str",
+        .wide => unreachable, // an array element is never `.wide` (`lower_var.declareVarDecl`)
     };
     for (out, 0..) |*v, k| {
         var args: std.ArrayList(Mir.Value) = .empty;
@@ -853,6 +867,9 @@ pub const Lvalue = struct {
     at: union(enum) {
         place: Ssa.Place,
         elem: struct { place: Ssa.Place, index: Mir.Value },
+        /// A `reg` wider than 32 bits (`Ty.wide`), written a §3.2 integer:
+        /// IEEE 1364-2005 §5.5.3 sign-extends it (`lower_wide.fromInt`).
+        wide: struct { place: Ssa.Place, width: u32 },
     },
 };
 
@@ -861,6 +878,12 @@ pub fn readLvalue(self: *Lower, lv: Lvalue) Oom!Mir.Value {
     return switch (lv.at) {
         .place => |p| self.builder.readVariable(p, self.cur),
         .elem => |el| self.emit(if (lv.ty == .integer) .iload else .fload, &.{ try self.builder.readVariable(el.place, self.cur), el.index }),
+        // A conditional write (a scan task's target) would keep the old
+        // bits as an integer, which has 32 of them.
+        .wide => blk: {
+            try self.err(self.mir.cur_tok, .E0329, "a conditional write into a `reg` wider than 32 bits", .{});
+            break :blk .zero;
+        },
     };
 }
 
@@ -872,6 +895,10 @@ pub fn writeLvalue(self: *Lower, lv: Lvalue, v: Mir.Value) Oom!void {
             try lower_var.countAssign(self, p);
         },
         .elem => |el| try lower_var.storeElem(self, el.place, el.index, v),
+        .wide => |w| {
+            try self.builder.writeVariable(w.place, self.cur, try lower_wide.fromInt(self, w.width, v));
+            try lower_var.countAssign(self, w.place);
+        },
     }
 }
 
@@ -882,7 +909,10 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?Lvalue {
     switch (ex.tag(e)) {
         .ident => {
             const name = self.file.str(ex.strOf(e));
-            if (self.vars.get(name)) |s| return .{ .ty = s.ty, .at = .{ .place = s.place } };
+            if (self.vars.get(name)) |s| {
+                if (s.ty == .wide) return .{ .ty = .integer, .at = .{ .wide = .{ .place = s.place, .width = s.reg_width.? } } };
+                return .{ .ty = s.ty, .at = .{ .place = s.place } };
+            }
             if (self.param_index.contains(name)) {
                 var b = self.errWith(self.file.exprs.mainTok(e), .E0312);
                 b.msg("`{s}`", .{name});

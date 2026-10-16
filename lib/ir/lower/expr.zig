@@ -20,6 +20,7 @@ const lower_sysfunc = @import("sysfunc.zig");
 const lower_systask = @import("systask.zig");
 const lower_shape = @import("shape.zig");
 const lower_var = @import("var.zig");
+const lower_wide = @import("wide.zig");
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 const Const = constfold.Const;
@@ -108,8 +109,13 @@ fn lowerExprInner(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: 
         .logic_literal => {
             // §2.6.1 sets no size limit: a wide two-state literal whose value
             // an i64 holds exactly is that integer.
-            if (ex.logicValue(e).asExactInt()) |value| return .{ .v = try self.mir.addIntConst(self.arena, value), .ty = .integer };
-            try self.err(ex.mainTok(e), .E0130, "digital literal requires a four-state execution backend", .{});
+            const lit = ex.logicValue(e);
+            if (lit.asExactInt()) |value| return .{ .v = try self.mir.addIntConst(self.arena, value), .ty = .integer };
+            // A wider two-state value is whole only where IEEE 1364 §5.4 sizes
+            // it: the right-hand side of a wide `reg` (`lower_wide`). An x or z
+            // literal never reaches here (`Lower.lowerFile`).
+            const span = self.tokenSpan(ex.mainTok(e));
+            try self.err(ex.mainTok(e), .E0130, "`{s}`: the analog backend cannot execute this {d}-bit wide literal", .{ self.src[span.start..span.end], lit.width });
             return poison;
         },
         .real_literal => return .{ .v = try self.mir.addFloatConst(self.arena, ex.realValue(e)), .ty = .real }, // §2.6.2
@@ -284,6 +290,7 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         .real => "$idx",
         .integer => "$idx$int",
         .string => "$idx$str",
+        .wide => unreachable, // an array element is never `.wide` (`lower_var.declareVarDecl`)
     };
     return .{ .v = try self.call(callee, vals.items), .ty = ty };
 }
@@ -299,60 +306,50 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// The `reg` is a variable (`slot`) or a mixed module's discrete input
 /// (`input`, the `Model` field the host writes). Bits 0 to 31 are its §3.2
 /// integer's. Above them: a discrete input's further 32-bit words
-/// (`Lowered.discrete_words`), or the literal a variable holds for the whole
-/// analysis (`Lower.reg_consts`). A variable the analog context assigns is
-/// computed in 32 bits and has no bits above 31 to read (E0329).
+/// (`Lowered.discrete_words`), the literal a variable holds for the whole
+/// analysis (`Lower.reg_consts`), or every bit of a wide `reg` the analog
+/// context computes (`Ty.wide`, `lower_wide.select`).
 fn lowerRegSelect(self: *Lower, e: Ast.ExprId, name: []const u8, src: union(enum) { slot: VarSlot, input }, rr: Lower.RegRange, sub: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const ranged = ex.tag(sub) == .range;
     const hi_e, const lo_e = if (ranged) .{ ex.lhs(sub), ex.rhs(sub) } else .{ sub, sub };
-    const bound = struct {
-        fn f(l: *Lower, s: Ast.ExprId) ?i64 {
-            const c = lower_constfold.foldExpr(l, s, false) orelse return null;
-            return c.asIntExact();
-        }
-    }.f;
     if (ex.tag(sub) == .indexed_range) {
         try self.err(ex.mainTok(sub), .E0329, "an indexed part-select of `{s}` read from the analog context", .{name});
         return poison;
     }
-    const a = bound(self, hi_e) orelse {
+    const a = selectBound(self, hi_e) orelse {
         try self.err(ex.mainTok(sub), .E0329, "a select of `{s}` read from the analog context needs constant bounds", .{name});
         return poison;
     };
-    const b = bound(self, lo_e) orelse {
+    const b = selectBound(self, lo_e) orelse {
         try self.err(ex.mainTok(sub), .E0329, "a select of `{s}` read from the analog context needs constant bounds", .{name});
         return poison;
     };
     const w = rr.width;
-    const pos = struct {
-        fn f(r: Lower.RegRange, width: u32, k: i64) ?u32 {
-            const d = if (r.asc) r.right - k else k - r.right;
-            if (d < 0 or d >= width) return null;
-            return @intCast(d);
-        }
-    };
-    const pa = pos.f(rr, w, a) orelse return outside(self, sub, name, a, w);
-    const pb = pos.f(rr, w, b) orelse return outside(self, sub, name, b, w);
+    const pa = selectPos(rr, a) orelse return outsideRange(self, sub, name, a, w);
+    const pb = selectPos(rr, b) orelse return outsideRange(self, sub, name, b, w);
     const lo = @min(pa, pb);
     const width = @max(pa, pb) - lo + 1;
-    // Bits 0 to 31, or a grouping Table 7-1 refuses (E0222, `analogRead`).
-    if (@max(pa, pb) < 32 or width > 31) {
+    // Table 7-1's limit on the grouping (E0222, `analogRead`).
+    if (width > 31) return .{ .v = try lower_var.analogRead(self, .undef, width), .ty = .integer };
+    switch (src) {
+        .slot => |slot| if (slot.ty == .wide) return .{ .v = try lower_wide.select(self, slot, lo, width), .ty = .integer },
+        .input => {},
+    }
+    // Bits 0 to 31.
+    if (@max(pa, pb) < 32) {
         const raw = switch (src) {
             .slot => |slot| try self.builder.readVariable(slot.place, self.cur),
             .input => (try lookupName(self, e, name)).v,
         };
-        const shifted = if (lo == 0 or width > 31) raw else try self.emit(.shr, &.{ raw, try self.mir.addIntConst(self.arena, lo) });
+        const shifted = if (lo == 0) raw else try self.emit(.shr, &.{ raw, try self.mir.addIntConst(self.arena, lo) });
         return .{ .v = try lower_var.analogRead(self, shifted, width), .ty = .integer };
     }
     switch (src) {
         // The literal's bits, zero- or sign-extended to the `reg`'s width as
         // an assignment extends it (IEEE 1364-2005 §5.5.1).
         .slot => {
-            const lit = self.reg_consts.get(name) orelse {
-                try self.err(ex.mainTok(sub), .E0329, "`{s}[{d}:{d}]` reaches above bit 31 of a `reg` whose value the analog context computes, as its 32-bit integer; only a literal it is given or a digital process's copy carries the higher bits", .{ name, a, b });
-                return poison;
-            };
+            const lit = self.reg_consts.get(name) orelse unreachable; // every other `reg` past 32 bits is `.wide` (`lower_var.declareVarDecl`)
             var v: i64 = 0;
             for (0..width) |i| if (literalBit(self, lit, lo + @as(u32, @intCast(i)))) {
                 v |= @as(i64, 1) << @intCast(i);
@@ -369,19 +366,32 @@ fn lowerRegSelect(self: *Lower, e: Ast.ExprId, name: []const u8, src: union(enum
             const k0 = lo / 32;
             const k1 = (lo + width - 1) / 32;
             const s = lo % 32;
-            const w0 = try regWord(self, e, name, k0);
+            const w0 = regWordValue(self, name, k0);
             var v = if (s == 0) w0 else try self.emit(.shr, &.{ w0, try self.mir.addIntConst(self.arena, s) });
-            if (k1 != k0) v = try self.emit(.bitor, &.{ v, try self.emit(.shl, &.{ try regWord(self, e, name, k1), try self.mir.addIntConst(self.arena, 32 - s) }) });
+            if (k1 != k0) v = try self.emit(.bitor, &.{ v, try self.emit(.shl, &.{ regWordValue(self, name, k1), try self.mir.addIntConst(self.arena, 32 - s) }) });
             return .{ .v = try lower_var.analogRead(self, v, width), .ty = .integer };
         },
     }
 }
 
+/// A select bound: a constant the folder can make an integer of, or null.
+pub fn selectBound(self: *Lower, e: Ast.ExprId) ?i64 {
+    const c = lower_constfold.foldExpr(self, e, false) orelse return null;
+    return c.asIntExact();
+}
+
+/// Where bit `k` of a `reg` with range `r` sits above its LSB (IEEE 1364
+/// §4.2.1), or null outside the range.
+pub fn selectPos(r: Lower.RegRange, k: i64) ?u32 {
+    const d = if (r.asc) r.right - k else k - r.right;
+    if (d < 0 or d >= r.width) return null;
+    return @intCast(d);
+}
+
 /// Word `k` of a discrete `reg` input: the `Model` field the host writes it in.
-fn regWord(self: *Lower, e: Ast.ExprId, name: []const u8, k: u32) Oom!Mir.Value {
-    if (k == 0) return (try lookupName(self, e, name)).v;
-    const idx = self.param_index.get(try self.arena.print("{s}__w{d}", .{ name, k })).?;
-    return self.param_values.items[idx];
+pub fn regWordValue(self: *Lower, name: []const u8, k: u32) Mir.Value {
+    const key = if (k == 0) name else std.fmt.allocPrint(self.arena, "{s}__w{d}", .{ name, k }) catch return .undef;
+    return self.param_values.items[self.param_index.get(key).?];
 }
 
 /// Bit `k` of the literal initializer `lit` (`.none`: zero) of a `reg`.
@@ -397,7 +407,8 @@ fn literalBit(self: *Lower, lit: Ast.ExprId, k: u32) bool {
     return l.signed and l.bit(l.width - 1) == .one;
 }
 
-fn outside(self: *Lower, sub: Ast.ExprId, name: []const u8, k: i64, w: u32) Oom!TypedValue {
+/// E0310: bit `k` lies outside `name`'s `w`-bit range.
+pub fn outsideRange(self: *Lower, sub: Ast.ExprId, name: []const u8, k: i64, w: u32) Oom!TypedValue {
     try self.err(self.file.exprs.mainTok(sub), .E0310, "bit {d} lies outside `{s}`'s {d}-bit range", .{ k, name, w });
     return poison;
 }
@@ -633,7 +644,8 @@ fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.out.params.items[idx].ty) };
     }
     if (self.vars.get(name)) |slot|
-        return .{ .v = try lower_var.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.reg_width), .ty = slot.ty };
+        // A wide `reg` read whole is a Table 7-1 grouping past 31 bits (E0222).
+        return .{ .v = try lower_var.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.reg_width), .ty = if (slot.ty == .wide) .integer else slot.ty };
     // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the
     // same name shadows the module's, so `param_index` is masked and the local
     // value is found in `consts` (where `inlineUserFuncPre` folded it).

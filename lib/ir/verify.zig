@@ -389,7 +389,7 @@ fn held(mir: *const Mir, lowered: *const Lowered, an: *const Analysis) ?Violatio
             continue;
         }
         const ok = switch (mir.instData(inst)) {
-            .call => |c| (c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$held_str") and c.args.len == 1 and (intConst(mir, an, c.args[0]) orelse -1) == @as(i64, @intCast(i)),
+            .call => |c| (c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$held_str" or c.callee == .@"$held_wide") and c.args.len == 1 and (intConst(mir, an, c.args[0]) orelse -1) == @as(i64, @intCast(i)),
             .unary, .binary, .ternary, .phi, .branch, .jump, .anew, .load, .store => false,
         };
         if (!ok) return bad(.table, mir.instBlock(inst), inst, "a `held_vars` seed is not the `$held_*` call reading its row");

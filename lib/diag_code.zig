@@ -2759,14 +2759,22 @@ fn infoOf(c: Code) Info {
             \\not of integral type is E0327. The number is not reused.
         ),
         .E0329 => .{
-            .title = "part selects are not supported",
-            .lrm = "4.2.13",
+            .title = "a select or operand the analog context cannot size",
+            .lrm = "7.3.1",
             .explain =
-            \\A part select `x[msb:lsb]` slices a vector. 3.6.3 vector nets do
-            \\elaborate — one node per element — but only a single-element BIT
-            \\select names one of them, so there is nothing a slice could
-            \\evaluate to. Write the elements out, or index them from a 5.9.3
-            \\analog `for`.
+            \\7.3.1 Table 7-1 lets the analog context read a bit grouping of a
+            \\`reg` as an integer, and a `reg` wider than 32 bits that the
+            \\analog context assigns holds every bit IEEE 1364-2005 5.4 gives
+            \\it. Each form refused here has no width VerA can compute in the
+            \\analog context: an indexed part-select `x[i +: w]`, a select whose
+            \\bounds are not constant, a part-select used as a value on its own,
+            \\a concatenation or a string in the right-hand side of a wide
+            \\`reg`, an unsized constant past 32 bits, a parameter past the
+            \\64 bits its `Model` field holds, a conditional write (a scan task's
+            \\target) or a digital read of a wide `reg` the analog context
+            \\computes, and a select past bit 31 under an explicit D2A event,
+            \\whose region-1b copy holds bits 0 to 31. Write a constant select,
+            \\or size the operand.
             ,
         },
         .E0330 => .{

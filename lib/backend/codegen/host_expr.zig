@@ -118,6 +118,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .int => try self.arena.print("model.{s}", .{self.names.p_names[p]}),
                 .real => try self.arena.print("std.math.lossyCast(i64, @round(model.{s}))", .{self.names.p_names[p]}),
                 .str => unreachable,
+                .wide => unreachable, // `tyOfParam` types no parameter wide
             };
         },
         .inst_result => |inst| {
@@ -321,6 +322,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 .real => try self.arena.print("model.{s}", .{self.names.p_names[p]}),
                 .int => try self.arena.print("@as(f64, @floatFromInt(model.{s}))", .{self.names.p_names[p]}),
                 .str => "0.0",
+                .wide => unreachable, // `tyOfParam` types no parameter wide
             };
         },
         .inst_result => |inst| {
