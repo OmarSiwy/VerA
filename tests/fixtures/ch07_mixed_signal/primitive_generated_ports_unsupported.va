@@ -15,12 +15,12 @@
 // cannot generate — which would matter, since the identifier text is the only
 // thing this fixture records.
 //
-// Only the N-input family is written here. The other five families (N-output
-// gates, 3- and 4-port MOS switches, bidirectional pass switches, single-port
-// primitives) would be the same test with a different identifier, because the
-// convention lives entirely in identifier TEXT that no parser interprets — the
-// same reason connect_generated_split_name was deleted. They are recorded in
-// tests/fixtures/ch07_mixed_signal/COVERAGE.md at 8b1514d4, not written as fixtures.
+// Only the N-input family is written here: the identifier TEXT alone pins
+// nothing more for the other five families (N-output gates, 3- and 4-port
+// MOS switches, bidirectional pass switches, single-port primitives). Where
+// the names DO reach a bridge, each family has a positive fixture beside
+// this one, a defparam through the generated name moving an analog value:
+// b5_prim_connect_{noutput_gate,mos_switch,pass_switch,pull}.va.
 //
 // THE VERDICT RESTS ON THE GENERATED NAME. `a__gate_instance__in1` names no
 // parameter of the elaborated design — E0907 — because nothing here is
