@@ -983,7 +983,7 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
     );
     // A systf crosses to the host through concrete f64s, so it pins.
     float_lanes.pinCrossing(self);
-    return emitSystfCall(self, name, args);
+    return emitSystfCall(self, name, args, self.lowered.systf_tasks.contains(inst));
 }
 
 /// Reports `code` at the call being rendered (`Gen.call_tok`), marks the
@@ -1050,8 +1050,8 @@ fn acStimMatch(self: *Gen, args: []const Mir.Value) Error!void {
 /// takes f64 values and returns the value plus partials, and this rebuilds
 /// S: `arg.addC(-arg.val()).scale(p)` adds p·d(arg) to the derivative and
 /// zero to the value (§12.22.1's `derivtf`).
-fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
-    const k = try systfIndex(self, name, self.call_tok);
+fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value, task: bool) Error!void {
+    const k = try systfIndex(self, name, self.call_tok, task);
     return emitHostCall(self, null, args, try self.arena.print("zsh.call(zsh.ctx, {d}, &zsv, &zsp)", .{k}));
 }
 
@@ -1062,7 +1062,8 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
 fn emitSystfOut(self: *Gen, args: []const Mir.Value) Error!void {
     const call = systfOutCall(self, args) orelse
         return abort(self, .E1020, "VerA: `$systf$out` does not read a user system task call", .{});
-    const k = try systfIndex(self, call.name, call.tok);
+    // Only a task has output arguments (`lower/systask.zig`).
+    const k = try systfIndex(self, call.name, call.tok, true);
     // Crosses to the host through concrete f64s, as the call does.
     float_lanes.pinCrossing(self);
     return emitHostCall(self, args[0], args[2..], try self.arena.print("zsh.output({d}, {d}, &zsv, &zsp)", .{ k, call.j }));
@@ -1082,12 +1083,12 @@ fn systfOutCall(self: *const Gen, args: []const Mir.Value) ?struct { name: []con
 }
 
 /// The `systf_calls` index of the call `name` at `tok`, added at the end
-/// when it is new.
-fn systfIndex(self: *Gen, name: []const u8, tok: u32) Error!usize {
+/// (a task when `task`) when it is new.
+fn systfIndex(self: *Gen, name: []const u8, tok: u32, task: bool) Error!usize {
     for (self.systf_names.items, 0..) |n, i| {
         if (n.tok == tok and std.mem.eql(u8, n.name, name)) return i;
     }
-    try self.systf_names.append(self.arena, .{ .name = name, .tok = tok });
+    try self.systf_names.append(self.arena, .{ .name = name, .tok = tok, .task = task });
     return self.systf_names.items.len - 1;
 }
 
@@ -1162,6 +1163,7 @@ pub fn emitSystfTable(self: *Gen) Error!void {
     for (self.systf_names.items, outs) |n, o| {
         try self.w("    .{{ .name = \"{s}\", .tok = {d}", .{ n.name, n.tok });
         if (o != 0) try self.w(", .outs = 0x{x}", .{o});
+        if (n.task) try self.w(", .task = true", .{});
         try self.w(" }},\n", .{});
     }
     try self.w("}};\n\n", .{});

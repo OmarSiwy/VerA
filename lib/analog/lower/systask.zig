@@ -248,7 +248,10 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // are diagnosed there, and an inlined function's locals end with the body.
     if (mon) |k| try vals.insert(self.arena, 0, k);
     const v = try self.call(name, vals.items);
-    if (c == .systf) try systfOutputs(self, v, live.items, vals.items);
+    if (c == .systf) {
+        try self.out.systf_tasks.put(self.arena, self.mir.valueDef(v).inst_result, {});
+        try systfOutputs(self, v, live.items, vals.items);
+    }
     // ponytail: printing and simulation control share one display-chain append.
     if (formats or family == .simctl) {
         // §9.7.1/§9.7.2 simulation control joins the per-accepted-point

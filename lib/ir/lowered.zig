@@ -833,6 +833,10 @@ held_vars: std.ArrayList(HeldVar) = .empty,
 /// which decided whether to execute the event body. Only changed controls
 /// have a row; codegen reads these for the following breakpoint.
 timer_controls: std.AutoHashMapUnmanaged(Mir.Inst, [2]Mir.Value) = .empty,
+/// §2.8.3/§12.32 the user system TASK calls: each `$name(...)` statement's
+/// `.systf` call. A `.systf` call not in it is a function call in an
+/// expression. Codegen publishes the difference (`contract.Systf.task`).
+systf_tasks: std.AutoHashMapUnmanaged(Mir.Inst, void) = .empty,
 /// §3.2.2 the arrays some subscript indexes at run time. Each is ONE storage
 /// of `len` elements (dimensions flattened in declaration order), reached
 /// through `Mir.Opcode.anew`/`fload`/`iload`/`store` instead of one SSA place

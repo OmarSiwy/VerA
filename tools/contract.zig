@@ -2338,6 +2338,13 @@ pub const Systf = struct {
     /// j - 1 for argument j: each is a variable, and its new value is what
     /// `SystfHost.output` answers. Additive: no `abi_version` change.
     outs: u64 = 0,
+    /// The call is a system task (§2.8.3 `$name(...);`, a statement), not a
+    /// function in an expression, so the device discards what `call`
+    /// returns. A host refuses by this a registration whose type does not
+    /// match (§12.32.1 `vpiAnalogSysTask` / `vpiAnalogSysFunc`) without
+    /// re-parsing the source. Only a task has `outs`. Additive: no
+    /// `abi_version` change.
+    task: bool = false,
 };
 
 /// The VPI application as the device sees it. The host owns it and writes a
@@ -2374,6 +2381,20 @@ pub const SystfHost = struct {
         return args[j - 1];
     }
 };
+
+/// Why `D.systf_calls` breaks §2.8.3/§12.32, or null: every name starts
+/// with `$` (§12.32 "first character shall be `$`"), and only a task has
+/// output arguments (§12.22.2 reads back a task's variables; a function's
+/// value is its result).
+fn systfError(comptime D: type) ?[]const u8 {
+    if (!@hasDecl(D, "systf_calls")) return null;
+    const name = @typeName(D);
+    for (D.systf_calls) |c| {
+        if (c.name.len < 2 or c.name[0] != '$') return name ++ ".systf_calls: `" ++ c.name ++ "` does not start with `$` (§12.32)";
+        if (!c.task and c.outs != 0) return name ++ ".systf_calls: `" ++ c.name ++ "` is a function call with output arguments; only a task has them (§12.22.2)";
+    }
+    return null;
+}
 
 /// The device's §9.5 descriptor table, for a host whose second context (a
 /// mixed simulation's digital half) must share it (§9.5.1.2). The host routes
@@ -4042,6 +4063,7 @@ pub fn validate(comptime D: type) void {
     // §2.8.3/§12.32 unresolved `$name`s: the device must have the
     // `Instance.systf` slot the host binds; `validateHost` checks the host.
     expectArray(D, "systf_calls", Systf);
+    if (systfError(D)) |m| @compileError(m);
     if (@hasDecl(D, "systf_calls") and D.systf_calls.len != 0) {
         if (!@hasField(D.Instance, "systf"))
             @compileError(name ++ ": declares systf_calls but Instance has no `systf` field " ++
@@ -5832,6 +5854,29 @@ test "hostString: an empty table answers every index with the fallback" {
     defer host_strings = saved;
     host_strings = &.{};
     try testing.expectEqualStrings("fb", hostString(1, "fb"));
+}
+
+test "systf_calls: a task may have outputs, a function may not, and every name has its `$`" {
+    const Of = struct {
+        fn dev(comptime calls: []const Systf) type {
+            return struct {
+                pub const systf_calls = calls[0..calls.len].*;
+            };
+        }
+    };
+    try testing.expect(comptime (systfError(MockAll) == null));
+    // `$resistor(curr, V(p, n), r);` (§12.22.2) is a task reading back
+    // argument 1; `$get(V(p))` in an expression is a function.
+    try testing.expect(comptime (systfError(Of.dev(&.{
+        .{ .name = "$resistor", .outs = 0b1, .task = true },
+        .{ .name = "$get" },
+    })) == null));
+    try testing.expect(comptime (systfError(Of.dev(&.{.{ .name = "$get", .outs = 0b1 }})) != null));
+    try testing.expect(comptime (systfError(Of.dev(&.{.{ .name = "get", .task = true }})) != null));
+    try testing.expect(comptime (systfError(Of.dev(&.{.{ .name = "$" }})) != null));
+    // The default is a function: a device built before the flag existed
+    // reads as one.
+    try testing.expect(!(Systf{ .name = "$x" }).task);
 }
 
 test "SystfHost.output: without `out` an argument keeps its value, partial 1 on itself" {

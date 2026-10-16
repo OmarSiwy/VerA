@@ -166,8 +166,9 @@ const F64Context = struct {
 // The generator
 // ===========================================================================
 
-/// One `systf_calls` entry: a `$name` call and the token it was lowered from.
-const SystfSite = struct { name: []const u8, tok: u32 };
+/// One `systf_calls` entry: a `$name` call, the token it was lowered from,
+/// and whether it is a task (a statement) rather than a function.
+const SystfSite = struct { name: []const u8, tok: u32, task: bool };
 
 /// The emitter's state for one device. Built and driven by `generate`.
 ///

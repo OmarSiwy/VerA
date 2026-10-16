@@ -2476,6 +2476,34 @@ test "codegen: a systf call reassembles the host's value and partials into one S
     try std.testing.expect(std.mem.find(u8, src, ".addC(-zsv[0]).scale(zsp[0])") != null);
 }
 
+test "codegen: systf_calls marks a task call and leaves a function call unmarked" {
+    // §2.8.3: `$put(c, V(p, n));` is a statement, so a task, whose output
+    // argument c is read back (§12.22.2); `$get(V(p, n))` sits in an
+    // expression, so a function. `contract.Systf.task` tells a host which,
+    // and `contract.validate` refuses outputs on a function.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module both(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  real c;
+        \\  analog begin
+        \\    $put(c, V(p,n));
+        \\    I(p,n) <+ c + $get(V(p,n));
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const tbl = src[std.mem.find(u8, src, "pub const systf_calls").?..];
+    const rows = tbl[0..std.mem.find(u8, tbl, "};").?];
+    const put = rows[std.mem.find(u8, rows, "\"$put\"").?..];
+    try std.testing.expect(std.mem.startsWith(u8, put[std.mem.find(u8, put, ".outs").?..], ".outs = 0x1, .task = true }"));
+    const get = rows[std.mem.find(u8, rows, "\"$get\"").?..];
+    try std.testing.expect(std.mem.find(u8, get[0..std.mem.find(u8, get, "}").?], ".task") == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rows, ".task = true"));
+}
+
 test "codegen: host parameter derivation reconstructs unconverted pure conditional phis" {
     // Harness intentionally skips if-conversion. The public driver also tests
     // the converted selects through the 90_dependent_control execution fixtures.
