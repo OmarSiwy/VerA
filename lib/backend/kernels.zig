@@ -17,6 +17,7 @@
 //!   limit_kernels  §4.5.15 SPICE limiters; pure
 //!   timer_kernels  §5.10.3.3 timer deadlines; the controls live in `Instance`
 //!   hist_kernels   §4.5.7 absdelay ring and its thinning; the samples live in `Instance`
+//!   wide_kernels   IEEE 1364 §5.4 integers past 32 bits; pure, stack only
 //! The `Instance`/`Model` fields that hold filter, timer and rng state are
 //! codegen's: these files only read and write the slots they are passed.
 //!
@@ -54,6 +55,8 @@ pub const limit_kernels = @import("kernels/limit_kernels.zig");
 pub const timer_kernels = @import("kernels/timer_kernels.zig");
 /// §4.5.7 the absdelay ring and its thinning.
 pub const hist_kernels = @import("kernels/hist_kernels.zig");
+/// IEEE 1364 §5.4 integers of any width (`lower/wide.zig`'s trees).
+pub const wide_kernels = @import("kernels/wide_kernels.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
