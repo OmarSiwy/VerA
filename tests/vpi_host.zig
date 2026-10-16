@@ -1,7 +1,8 @@
 //! The simulator half of `zig build test-vpi`: a design plus a C application
 //! (its `vlog_startup_routines`, LRM §12.33.2) -> the application's exit code.
 //! No argument elaborates tests/fixtures/ch11_vpi/vpi_design.va; `<design.va> <app>` runs the
-//! analog analyses the app's banner asks for; `<design.v>` runs the digital
+//! analog analyses the app's banner asks for (or, for `*! external` lines, runs
+//! its calls at host-set points with no solution: `External`); `<design.v>` runs the digital
 //! engine with time and value-change callbacks. Applications are real C against
 //! src/vpi/vpi_user.h, so the ABI itself is under test.
 
@@ -87,12 +88,14 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const analyses = if (app) |c| try readAnalyses(arena, io, c) else &.{};
+    const points = if (app) |c| try readPoints(arena, io, c) else &.{};
+    if (analyses.len != 0 and points.len != 0) return error.BadAnalysis;
     // §12.33.2 the registrations come before the device is built: a call's
     // type is its function's sysfunctype (§12.32.1), which compiling needs.
     vpi.runStartupRoutines();
     var loaded: ?DynLib = null;
     defer if (loaded) |*l| l.close();
-    if (analyses.len != 0) {
+    if (analyses.len != 0 or points.len != 0) {
         // Building the library spawns `zig`, which the global single-threaded
         // Io cannot do (no allocator, no environment): a real one, over this
         // process's own environment.
@@ -110,11 +113,13 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
             return 1;
         };
         loaded = try DynLib.open(lib_path);
-        try vpi.analog_run.attach(try bindLib(&loaded.?));
+        const real = try bindLib(&loaded.?);
+        try vpi.analog_run.attach(if (points.len != 0) External.lib(real) else real);
     }
     defer if (loaded != null) vpi.analog_run.detach();
 
     vpi.callback.endOfCompile();
+    if (points.len != 0) return External.run(points);
     if (analyses.len == 0) return 0;
     vpi.callback.startOfSimulation();
     for (analyses) |a| vpi.analog_run.run(a) catch |e| {
@@ -155,6 +160,68 @@ fn readAnalyses(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const v
     }
     return out.items;
 }
+
+/// The banner's `*! external <op | tran | ac> <t> <dt> <freq>` lines: the
+/// points `External.run` stands a calltf on, in order.
+fn readPoints(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const External.Point {
+    const text = try Io.Dir.cwd().readFileAlloc(io, c_path, arena, .limited(1 << 20));
+    var out: std.ArrayList(External.Point) = .empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, "*! external")) continue;
+        var words = std.mem.tokenizeAny(u8, line["*! external".len..], " \t");
+        const kind = std.meta.stringToEnum(vpi.analog_run.Kind, words.next() orelse return error.BadAnalysis) orelse return error.UnsupportedAnalysis;
+        var v: [3]f64 = undefined;
+        for (&v) |*x| x.* = try spiceNumber(words.next() orelse return error.BadAnalysis);
+        try out.append(arena, .{ .kind = kind, .t = v[0], .dt = v[1], .freq = v[2] });
+    }
+    return out.items;
+}
+
+/// ESPice's shape (VerA #83): a host that solves the circuit itself and binds
+/// VerA only to run the application's calltf. Its `Lib` is the built
+/// library's call table with no solution (`n_u = n_rows = n_shares = 0`), so
+/// `vpi_get_analog_value` refuses NOSOLUTION; it sets each point with
+/// `analog_run.setPoint` and calls every call once through the
+/// `contract.SystfHost.call` hook `attach` handed it, with no arguments.
+const External = struct {
+    const Point = struct { kind: vpi.analog_run.Kind, t: f64, dt: f64, freq: f64 };
+    var call: ?vpi.analog_run.HostCall = null;
+    var n_calls: usize = 0;
+    const none = [0]f64{};
+    var no_partials: [0]f64 = .{};
+
+    fn zero() callconv(.c) usize {
+        return 0;
+    }
+    fn x() callconv(.c) [*]const f64 {
+        return &none;
+    }
+    fn systf(c: ?vpi.analog_run.HostCall, _: ?vpi.analog_run.HostOut) callconv(.c) void {
+        call = c;
+    }
+    fn lib(real: vpi.analog_run.Lib) vpi.analog_run.Lib {
+        n_calls = real.n_systf();
+        var l = real;
+        l.n_u = zero;
+        l.n_rows = zero;
+        l.n_shares = zero;
+        l.x = x;
+        l.systf = systf;
+        return l;
+    }
+    fn run(points: []const Point) u8 {
+        vpi.callback.startOfSimulation();
+        for (points) |p| {
+            vpi.analog_run.setPoint(.{ .kind = p.kind }, p.t, p.dt, p.freq);
+            for (0..n_calls) |k| _ = call.?(k, &none, 0, &no_partials);
+        }
+        vpi.analog_run.setPoint(null, 0, 0, 0);
+        vpi.callback.endOfSimulation();
+        return 0;
+    }
+};
 
 fn spiceNumber(w: []const u8) !f64 {
     const scales = [_]struct { s: []const u8, v: f64 }{

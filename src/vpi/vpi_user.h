@@ -900,7 +900,8 @@ typedef struct t_vpi_analog_value {
 } s_vpi_analog_value, *p_vpi_analog_value;
 /* §12.10 the value of a vpiFlow or vpiPotential quantity (§11.6.7), from the
  * solution the running analysis attempted or last accepted. Anything else is
- * refused, as is a value before any analysis solved (NOANALYSIS) and the flow
+ * refused, as is a value before any analysis solved (NOANALYSIS), one the
+ * attached library holds no solution for (NOSOLUTION), and the flow
  * of a branch the model cannot tell from a parallel branch's (SHARED). The
  * flow of an instance's unnamed branch over a node pair other instances also
  * drive is that instance's own share. The imaginary part is 0 except at a

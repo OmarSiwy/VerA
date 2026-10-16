@@ -78,6 +78,9 @@ const Row = struct { flow: bool, hi: i32, lo: i32, flow_u: i32 };
 
 var lib: ?Lib = null;
 var rows: []Row = &.{};
+/// How many unknowns `Lib.x` holds (`Lib.n_u`): 0 for a host that binds
+/// VerA only for the calls and keeps its solution to itself.
+var n_x: usize = 0;
 /// Each row's (resistive, reactive) value at the current x, then each
 /// instance's share of a shared row (`Lib.shares`), the same way.
 var now_vals: []f64 = &.{};
@@ -180,7 +183,8 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
     const n_vals = n + l.n_shares();
     now_vals = try gpa.alloc(f64, 2 * n_vals);
     prev_react = try gpa.alloc(f64, n_vals);
-    ac_x = try gpa.alloc(f64, 2 * l.n_u());
+    n_x = l.n_u();
+    ac_x = try gpa.alloc(f64, 2 * n_x);
     for (rows, 0..) |*r, k| {
         var m: [4]i32 = undefined;
         l.row(k, &m);
@@ -210,6 +214,7 @@ pub fn detach() void {
     gpa.free(ac_x);
     ac_x = &.{};
     rows = &.{};
+    n_x = 0;
     now_vals = &.{};
     prev_react = &.{};
     setPoint(null, 0, 0, 0);
@@ -221,7 +226,8 @@ pub fn detach() void {
 /// between analyses), the time `t` of the solution attempted, the step `dt`
 /// that reaches it, and the small-signal frequency `f` (0 outside an AC
 /// sweep's small-signal points). `run` calls it at every point it walks; a
-/// host that walks its own analysis and binds VerA only for the calls
+/// host that walks its own analysis and binds VerA only for the calls (a
+/// `Lib` with no solution, `vpi_get_analog_value` then refuses NOSOLUTION)
 /// calls it before each `contract.SystfHost.call`, so a calltf reads the
 /// host's point. `a.kind` decides which values the routines report (§12.9:
 /// zero time outside a transient); its bounds are §12.18's.
@@ -389,10 +395,17 @@ fn unknownAt(x: [*]const f64, row: u32) f64 {
     return if (row == @import("ir").Lowered.ground) 0 else x[row];
 }
 
-/// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the
-/// device does not publish. `SmallSignal`: a flow source's flow at an AC
-/// point, which this host does not linearise per row.
-pub const ValueError = error{ NoAnalysis, Unknowable, SmallSignal };
+/// `NoAnalysis`: no library or no solution yet. `NoSolution`: the library
+/// holds no value of this quantity (an unknown or row past what it
+/// publishes: a calls-only `Lib`). `Unknowable`: a flow the device does not
+/// publish. `SmallSignal`: a flow source's flow at an AC point, which this
+/// host does not linearise per row.
+pub const ValueError = error{ NoAnalysis, NoSolution, Unknowable, SmallSignal };
+
+/// Whether `Lib.x` holds `row`: ground reads 0 and needs no slot.
+fn holds(row: u32) bool {
+    return row == @import("ir").Lowered.ground or row < n_x;
+}
 
 /// §11.6.7 a quantity's "real value" and "imaginary value".
 pub const Value = struct { re: f64, im: f64 = 0 };
@@ -407,9 +420,14 @@ pub const Value = struct { re: f64, im: f64 = 0 };
 /// (`vpiShares`, §5.4.1), the same way.
 fn quantityValue(q: *const root.Obj) ValueError!Value {
     const l = lib orelse return error.NoAnalysis;
-    if (!have_solution) return error.NoAnalysis;
     const d = &root.design.?;
     const b = root.coldOf(&d.objects[root.coldOf(q).branch orelse return error.NoAnalysis]);
+    // The library is outside data: every slot read below is checked against
+    // what it published, before the solution is.
+    if (!holds(b.hi_row) or !holds(b.lo_row)) return error.NoSolution;
+    if (b.contrib_pot) |k| if (k >= rows.len or (rows[k].flow_u >= 0 and @as(usize, @intCast(rows[k].flow_u)) >= n_x)) return error.NoSolution;
+    if (b.contrib_flow != null and rows.len == 0) return error.NoSolution;
+    if (!have_solution) return error.NoAnalysis;
     const ac = freq != 0;
     const x = if (ac) ac_x.ptr else l.x();
     const xi = ac_x[ac_x.len / 2 ..].ptr;
@@ -476,6 +494,7 @@ pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void 
     const val = quantityValue(o) catch |e| {
         switch (e) {
             error.NoAnalysis => root.fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{}),
+            error.NoSolution => root.fail("NOSOLUTION", "vpi_get_analog_value: no solution is attached: the host's analog library publishes no value of this quantity", .{}),
             // Two named branches over one pair, or an instance that drives
             // the pair only through another's branch (§5.6.8.2): the model
             // has no row of this branch's own to read.
@@ -1059,4 +1078,14 @@ test "§12.7-§12.9, §12.18 setPoint: the routines answer the point a host set,
     // Null: between analyses, no bounds to read.
     setPoint(null, 0, 0, 0);
     try std.testing.expect(analysis() == null);
+}
+
+test "holds: a calls-only library holds no unknown, ground needs none" {
+    detach();
+    try std.testing.expect(holds(@import("ir").Lowered.ground));
+    try std.testing.expect(!holds(0));
+    n_x = 2;
+    defer n_x = 0;
+    try std.testing.expect(holds(1));
+    try std.testing.expect(!holds(2));
 }

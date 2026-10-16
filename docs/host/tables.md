@@ -124,3 +124,14 @@ the table on the CPU only. The `Model`'s other `__` fields are on
 | `display(S, &x, ...)` | the display phase of an artifact built with `--display=emit`, which prints from inside the device instead of recording; per accepted point, and a `$finish` inside it exits the process |
 | `file_io: FileIo` | the device's LRM §9.5 descriptor table, for a mixed simulation whose digital half must share descriptors (§9.5.1.2) |
 | `systf_calls` | `$name`s the compiler left to a VPI application (LRM §2.8.3, §12.32), one entry per call site; an entry's `task` is true for a system task (a statement), false for a function in an expression, so a host can refuse a registration of the wrong type (LRM §12.32.1) without the source, and only a task has `outs`. Point `inst.systf` at a `SystfHost`, whose `call(ctx, k, args, partials)` returns call `k`'s value and its partials (and whose optional `out` answers the arguments the application wrote, LRM §12.22.2); `validateHost` requires your host to declare `systf`, a `fn (*const Model) ?*const contract.SystfHost` |
+
+To run a C VPI application's calltf through VerA's own VPI layer (the `vpi`
+module) while your host does the solving, `vpi.analog_run.attach` a `Lib`
+whose call table is the device library's and whose `n_u`, `n_rows` and
+`n_shares` answer 0, and call
+`vpi.analog_run.setPoint(.{ .kind = .tran }, t, dt, 0)` (or `.ac` with the
+frequency, `.op`) before each `SystfHost.call`: `vpi_get_analog_time`,
+`vpi_get_analog_delta`, `vpi_get_analog_freq` and `vpi_get_real`'s analysis
+bounds then read your point. Such a library holds no solution, so
+`vpi_get_analog_value` refuses every quantity that needs one with error code
+`NOSOLUTION`; `tests/vpi_host.zig`'s `External` is this host in miniature.
