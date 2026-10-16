@@ -41,6 +41,9 @@ pub const Uses = struct {
     /// A `.record` display unit wrote a record into its `out`
     /// (`contract.Say`, `cg_display.emitSay`).
     out: bool = false,
+    /// A printing display unit gated a call on its `pass`
+    /// (`contract.SayPass`, `Gen.passes`).
+    pass: bool = false,
 };
 
 /// The dry run `probeBody` makes of a body, and what it learned (`Gen.probe`).
@@ -347,9 +350,10 @@ fn tableReset(self: *Gen, body_start: usize) Error!void {
     try self.out.insertSlice(self.gpa, body_start, "    inst.table_ready = inst.table_kept;\n");
 }
 
-/// Offsets of a unit signature's four uniform parameter names, and of a
-/// `.record` display unit's `out` (0 for any other unit).
-const Slots = struct { x: usize, model: usize, inst: usize, sim: usize, out: usize = 0 };
+/// Offsets of a unit signature's four uniform parameter names, of a
+/// `.record` display unit's `out` and of a printing display unit's `pass`
+/// (0 for any other unit).
+const Slots = struct { x: usize, model: usize, inst: usize, sim: usize, out: usize = 0, pass: usize = 0 };
 
 /// Writes `fn <name>(comptime S: type, x, model, inst, sim` up to the closing
 /// parenthesis, reserving each parameter's slot for `closeSig`.
@@ -374,6 +378,14 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.table_samples.items.len == 0 and eval_writes) "*const Instance" else "InstancePtr"});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});
+    // §9.4.1/§9.5.9 a printing display unit with a per-iteration task runs
+    // once per pass (`Gen.passes`).
+    if (self.emitting_display and self.display == .emit and self.passes) {
+        try self.w(", comptime ", .{});
+        const pass = self.out.items.len;
+        try self.w("pass: contract.SayPass", .{});
+        return .{ .x = x, .model = model, .inst = inst, .sim = sim, .pass = pass };
+    }
     // §9.4 a device's display unit records into the host's buffer (`say`).
     if (!self.emitting_display or self.display != .record) return .{ .x = x, .model = model, .inst = inst, .sim = sim };
     try self.w(", ", .{});
@@ -396,6 +408,7 @@ fn closeSig(self: *Gen, s: Slots, body_start: usize) Error!void {
     if (!self.uses.inst) patchParam(self, s.inst, "inst".len);
     if (!self.uses.sim) patchParam(self, s.sim, "sim".len);
     if (s.out != 0 and !self.uses.out) patchParam(self, s.out, "out".len);
+    if (s.pass != 0 and !self.uses.pass) patchParam(self, s.pass, "pass".len);
 }
 
 /// Overwrites a reserved parameter-name slot with `_`, space-padded to the
