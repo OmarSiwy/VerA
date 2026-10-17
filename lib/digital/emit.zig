@@ -149,8 +149,8 @@ fn deviceRoot(self: *Emitter) Error!void {
     const members = if (n == 0) " _," else names.written();
     const tag_bits = @max(8, std.math.log2_int_ceil(u32, @max(n, 1)));
     try self.print(
-        \\/// The contract ABI this device was generated for (`contract.abi_version`).
-        \\pub const contract_abi: u32 = {d};
+        \\/// The VerA release that generated this device (`contract.vera_version`).
+        \\pub const vera_version = "{s}";
         \\pub const U = enum(u{d}) {{{s} }};
         \\pub const num_ports: usize = {d};
         \\const Dev = rt.Device(.{{ .U = U, .design = &design, .dispatch = Code(false).dispatch, .units = {d}, .pins = &.{{{s}
@@ -172,7 +172,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\    @import("contract").validate(@This());
         \\}}
         \\
-    , .{ @import("contract").abi_version, tag_bits, members, n, r.finest, pins.written() });
+    , .{ @import("contract").vera_version, tag_bits, members, n, r.finest, pins.written() });
 }
 
 fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.Allocator.Error![]const u8 {

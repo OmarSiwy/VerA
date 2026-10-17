@@ -477,10 +477,10 @@ test "v_say: a step's transcript is printed when it is accepted, never when reje
     try expectEqual(@as(u32, 0), c.st.say_len);
 }
 
-test "every .v device is stamped with the contract's abi_version" {
-    // `lib/digital/emit.zig` (then in src/sim) once wrote a literal 5 after the contract
-    // moved to 6, so every `.v` device failed a host's ABI check (ESPice,
-    // 2026-10-02). The stamp now reads `contract.abi_version`.
+test "every .v device is stamped with the contract's vera_version" {
+    // `lib/digital/emit.zig` (then in src/sim) once wrote a literal ABI 5 after the
+    // contract moved to 6, so every `.v` device failed a host's ABI check (ESPice,
+    // 2026-10-02). The stamp, now the VerA release, reads `contract.vera_version`.
     inline for (.{ @import("v_inv"), @import("v_buf"), @import("v_count"), @import("v_a2d"), @import("v_edge"), @import("v_any"), @import("v_huge") }) |D|
-        try std.testing.expectEqual(contract.abi_version, D.contract_abi);
+        try std.testing.expectEqualStrings(contract.vera_version, D.vera_version);
 }

@@ -1111,12 +1111,9 @@ pub fn setInvocation(argc: c_int, argv: [*c][*c]u8) void {
     inv_argv = argv;
 }
 
-/// Figure 12-12's `version`.
-///
-/// ponytail: written here rather than read from build.zig.zon, which a module
-/// under src/ cannot import. Upgrade path: pass the manifest's version to this
-/// module as a build option, as `suite_options` passes the fixture root.
-var version_str = "0.9.0".*;
+/// Figure 12-12's `version`: the VerA release (`contract.vera_version`), a
+/// mutable copy because `VlogInfo.version` is a `[*c]u8`.
+var version_str = @import("vera").version.*;
 
 /// "shall obtain the following information about Verilog-AMS product
 /// execution: The number of invocation options (argc), Invocation option

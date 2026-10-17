@@ -26,9 +26,9 @@ const Lower = @import("ir").Lowered;
 const assert = std.debug.assert;
 const Error = codegen.Error;
 
-/// `tools/contract.zig`'s `abi_version`, through `kernels` (which may import
+/// `tools/contract.zig`'s `vera_version`, through `kernels` (which may import
 /// `contract`), so the stamp cannot drift from the contract.
-const contract_abi = @import("kernels").abi_version;
+const vera_version = @import("kernels").vera_version;
 const VTy = codegen.VTy;
 const OpKind = @import("ir").op.OpKind;
 
@@ -384,7 +384,7 @@ fn emitTopology(self: *Gen) Error!void {
         \\
         \\
     , .{self.lowered.num_ports});
-    try self.w("/// The contract ABI this device was generated for (`contract.abi_version`).\npub const contract_abi: u32 = {d};\n\n", .{contract_abi});
+    try self.w("/// The VerA release that generated this device (`contract.vera_version`).\npub const vera_version = \"{s}\";\n\n", .{vera_version});
 
     if (self.float.jac != .off) try self.w(
         \\/// This device permits a single-precision DERIVATIVE half in the

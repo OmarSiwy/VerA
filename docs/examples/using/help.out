@@ -3,6 +3,7 @@ usage: vera [options] FILE.va
        vera --run|--emit-exe [options] FILE.v [MORE.v ...]
        vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
        vera --explain CODE
+       vera --version
        vera --lsp [options]
 
   --lint                  frontend only (parse, lower, prove); no codegen
@@ -58,8 +59,8 @@ usage: vera [options] FILE.va
                           --emit-exe/--run testbench; off by default. A host
                           gets them only by opting in: `pub const
                           vera_validate_contract = true` in its root module
-                          (--emit-so: in the --dyn module). The ABI check is
-                          always on
+                          (--emit-so: in the --dyn module). The version check
+                          (`vera_version`) is always on
   --contract PATH         root of the `contract` module (default: this vera's
                           own, written under the work directory)
   --dyn PATH              root of the `dyn` module (--emit-so)

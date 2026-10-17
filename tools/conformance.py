@@ -2,8 +2,8 @@
 """How conformant VerA is to the specification, measured — never typed.
 
     tools/conformance.py                      # print the measures block (A, B, C)
-    tools/conformance.py --changelog v0.1.0   # prepend it to CHANGELOG.md
-    tools/conformance.py --check v0.1.0       # re-measure and diff vs CHANGELOG.md
+    tools/conformance.py --changelog v0.1.0   # set the version literals, prepend it to CHANGELOG.md
+    tools/conformance.py --check v0.1.0       # check them, re-measure and diff vs CHANGELOG.md
     tools/conformance.py <subcommand> [...]   # one of the signals below
 
 Every number comes from a command in this file. There is no second place a
@@ -214,8 +214,34 @@ def section(text, version):
     return out
 
 
+VERSION_LITERALS = (
+    (ROOT / "build.zig.zon", re.compile(r'(\.version = ")([^"]*)(")')),
+    (ROOT / "tools" / "contract.zig", re.compile(r'(^pub const vera_version = ")([^"]*)(";)', re.M)),
+)
+
+
+def release_version(mode, version):
+    """`build.zig.zon`'s `.version` and `contract.vera_version` (which every
+    device carries) name the release together; the CLI's test holds them
+    equal. `--changelog vX.Y.Z` sets both to X.Y.Z before it measures;
+    `--check vX.Y.Z` refuses a tree where either is another version."""
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        die(f"{version}: not a vX.Y.Z release")
+    for path, pat in VERSION_LITERALS:
+        text = path.read_text()
+        m = pat.search(text)
+        if not m:
+            die(f"{path.name}: no version literal")
+        if mode == "--changelog":
+            path.write_text(text[:m.start(2)] + version[1:] + text[m.end(2):])
+        elif m[2] != version[1:]:
+            die(f"{path.name} says {m[2]}, not {version[1:]}. Run: tools/conformance.py --changelog {version}")
+
+
 def measures(mode, version):
     changelog = ROOT / "CHANGELOG.md"
+    if mode:
+        release_version(mode, version)
     block, summary = measure()
     if not mode:
         print(block)
@@ -1534,6 +1560,28 @@ SUBCOMMANDS["verilator"] = verilator
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
+
+
+class ReleaseVersionTests(unittest.TestCase):
+    """`--changelog` sets both version literals; `--check` refuses a stale one."""
+
+    def test_changelog_sets_both_and_check_reads_them(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            zon, con = Path(d) / "build.zig.zon", Path(d) / "contract.zig"
+            zon.write_text('.{\n    .version = "0.9.0",\n    .minimum_zig_version = "0.17.0",\n}\n')
+            con.write_text('/// a\npub const vera_version = "0.9.0";\n')
+            lits = ((zon, VERSION_LITERALS[0][1]), (con, VERSION_LITERALS[1][1]))
+            with patch(__name__ + ".VERSION_LITERALS", lits), patch("sys.stderr"):
+                release_version("--check", "v0.9.0")
+                with self.assertRaises(SystemExit):
+                    release_version("--check", "v0.10.0")
+                with self.assertRaises(SystemExit):
+                    release_version("--changelog", "0.10.0")
+                release_version("--changelog", "v0.10.0")
+                release_version("--check", "v0.10.0")
+            self.assertIn('.minimum_zig_version = "0.17.0"', zon.read_text())
+            self.assertIn('pub const vera_version = "0.10.0";', con.read_text())
 
 
 class WorklistTests(unittest.TestCase):

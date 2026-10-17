@@ -1157,7 +1157,7 @@ const testing = std.testing;
 const Rc = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { r: f64 = 1e3, c: f64 = 1e-12, temperature__: f64 = 300.15 };
     pub const Instance = struct { mfactor: f64 = 1 };
 
@@ -1184,7 +1184,7 @@ const Rc = struct {
 const Gn = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { r: f64 = 1e3, temperature__: f64 = 300.15 };
     pub const Instance = struct {};
     pub const noise_gens = [_]contract.NoiseGen(@This()){.{ .row = 0, .col = 1, .kind = .thermal, .name = "Zth" }};
@@ -1205,7 +1205,7 @@ const Gn = struct {
 const Ev = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct { next: f64 = 5, settled: bool = false };
     pub const State = struct {};
@@ -1353,7 +1353,7 @@ test "setup, eval and every load: the stamps of a linear RC, and $mfactor over i
 const NoParam = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { temperature__: f64 = 300.15 };
     pub const Instance = struct { mfactor: f64 = 1 };
 

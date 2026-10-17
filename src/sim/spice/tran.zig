@@ -402,7 +402,7 @@ test predict {
 const MockRamp = struct {
     pub const U = enum(u8) { in, br };
     pub const num_ports: usize = 0;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const u_kinds = [_]contract.UnknownKind{ .voltage, .current };
     pub const Model = struct { slope: f64 = 1e3 };
     pub const Instance = struct {};
@@ -419,7 +419,7 @@ const MockRamp = struct {
 const MockRc = struct {
     pub const U = enum(u8) { in, out, br };
     pub const num_ports: usize = 0;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const u_kinds = [_]contract.UnknownKind{ .voltage, .voltage, .current };
     pub const Model = struct { r: f64 = 1e3, c: f64 = 1e-6, slope: f64 = 1e3 };
     /// §9.17.2: 0 is "no bound".

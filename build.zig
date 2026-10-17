@@ -790,6 +790,15 @@ fn hostTests(b: *std.Build) []const HostTest {
     return found.items;
 }
 
+/// `build.zig.zon`'s `.version`, read as text, as flake.nix reads it.
+fn manifestVersion(b: *std.Build) []const u8 {
+    const text = b.root.root_dir.handle.readFileAlloc(b.graph.io, "build.zig.zon", b.allocator, .unlimited) catch |e| std.debug.panic("build.zig.zon: {t}", .{e});
+    const key = ".version = \"";
+    const at = (std.mem.find(u8, text, key) orelse @panic("build.zig.zon: no .version")) + key.len;
+    const len = std.mem.findScalar(u8, text[at..], '"') orelse @panic("build.zig.zon: unterminated .version");
+    return text[at..][0..len];
+}
+
 /// The `vera` CLI. It imports the engine as modules; an `@import` by path
 /// would compile the engine a second time into its file set.
 fn cliExe(
@@ -802,6 +811,8 @@ fn cliExe(
 ) *std.Build.Step.Compile {
     const o = b.addOptions();
     o.addOption(bool, "ams", ams);
+    // Read only by the CLI's test that `contract.vera_version` is this.
+    o.addOption([]const u8, "version", manifestVersion(b));
     // Every module but `vpi`: the CLI is not a VPI host, and the module's
     // `varargs.c` would link against exports nothing here analyses.
     var imports: std.ArrayList(std.Build.Module.Import) = .empty;

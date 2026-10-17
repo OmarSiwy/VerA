@@ -9,7 +9,7 @@
 //! Hosts compile against this one file (installed as `share/vera/contract.zig`
 //! and passed to `vera --contract`), so it imports no file, only std, builtin
 //! and the program's root (`validating`), and is never split.
-//! Sections, in order: the ABI stamp and opt-in checks; `gm`; the per-call
+//! Sections, in order: the version stamp and opt-in checks; `gm`; the per-call
 //! values (`UpdateResult`, `SimState`, the state classes); the per-device
 //! tables (noise, AC, VPI, files, limiting and Jacobian masks); §5.6.1.2 charge
 //! sites; scalar families (the lead protocol, `RefFamily`, `Rows`/`Sites`);
@@ -23,17 +23,23 @@
 
 const std = @import("std");
 
-/// The ABI version this file specifies. A generated device mirrors it as
-/// `pub const contract_abi`, and `validateHost` refuses a device whose value
-/// differs. Bumped by every change a linked host could observe.
+/// The VerA release that generated a device, and that this file ships with
+/// (semver; `build.zig.zon`'s `.version`, which a test in `zig build test`
+/// holds it equal to). A generated device declares
+/// `pub const vera_version = "<this>";` and `validateHost` refuses, with a
+/// compile error naming both versions, a device whose value is not exactly
+/// this one: regenerate it with this VerA. A host that pins a VerA release
+/// checks the device it links, `pinned` being the release it supports:
 ///
-/// 6: the temperature is the `Model` row's (`Model.temperature__`, kelvin),
-/// not the instance's (`Instance.temperature` is gone); the solve-invariant
-/// cache moved from `Instance.su` to `Model.su`, and `setup(V, *Model)` fills
-/// it once per row; an instance's own card-derived caches are dropped by the
-/// optional `setupInstance(*const Model, *Instance)`. `Vague_Decisions.md`
-/// ("Device ABI 6") is the host migration note.
-pub const abi_version: u32 = 6;
+///     if (comptime !std.mem.eql(u8, D.vera_version, pinned)) @compileError("regenerate " ++ @typeName(D) ++ " with VerA " ++ pinned);
+///
+/// A contract change of any kind (an entry point, a published table, a
+/// field, a default) ships in a VerA release, and the version a device
+/// carries names it: `CHANGELOG.md` under that version says what changed.
+/// An additive optional declaration stays optional for a host that checks
+/// it with `@hasDecl`. Replaces the integer `abi_version` (last 6) and the
+/// device's `contract_abi`, 2026-10-18.
+pub const vera_version = "0.9.0";
 
 /// Whether this program asked for the contract's conformance checks: its root
 /// module declares `pub const vera_validate_contract = true`. Off by default:
@@ -41,8 +47,8 @@ pub const abi_version: u32 = 6;
 /// for developing VerA. `zig build test` turns them on (`tools/zrunner.zig`),
 /// the fixture suite in every testbench, `vera --validate-contract` in one,
 /// and `vera --check` always. Gates `validate`, `validateHost`'s obligations,
-/// `checkFamily` and a Debug device's `su_ok` assert; `validateHost`'s ABI
-/// check runs regardless. Measured (2026-10-01, one cold build, -j1): the
+/// `checkFamily` and a Debug device's `su_ok` assert; `validateHost`'s
+/// version check runs regardless. Measured (2026-10-01, one cold build, -j1): the
 /// checks are 0.4-1.8% of a device build's instructions (mos1 2.454 -> 2.417
 /// Gi, bsim4va eval 8.100 -> 7.958, psp103 eval 14.183 -> 14.125).
 pub const validating: bool = blk: {
@@ -65,7 +71,7 @@ pub const validating: bool = blk: {
 /// `pub fn SetupValue(comptime D: type) type`, the `V` it passes `D.setup`,
 /// gets each chunk compiled in an object of its own, in parallel. Calling
 /// `setup` with another `V` then fails to link. Without it the chunks stay
-/// in the object that calls `setup`. Additive: no `abi_version` change.
+/// in the object that calls `setup`.
 pub const DevicePart = enum { setup, state, eval };
 
 /// §9.7.3 one `$fatal`/`$error` call of a device (`D.status_sites`, in source
@@ -76,7 +82,7 @@ pub const DevicePart = enum { setup, state, eval };
 /// return all-zero rows and charges (value and every derivative lane) and
 /// `updateState` changes nothing, so a host polls the field after a solve
 /// and renders it with `formatStatus`. Optional: a device without it has no
-/// such site. Additive: no `abi_version` change.
+/// such site.
 pub const StatusSite = struct {
     severity: enum { fatal, @"error" },
     /// The call's format string, "" when it has none.
@@ -133,7 +139,7 @@ pub fn formatStatus(comptime D: type, inst: *const D.Instance, w: *std.Io.Writer
 /// `$monitor` (it needs change detection a device does not keep) and a task
 /// with a string argument that is not a constant are not recorded (W0850).
 /// Optional: a host that never calls `say` is unaffected, and a GPU host
-/// does not compile it. Additive: no `abi_version` change.
+/// does not compile it.
 pub const SaySite = struct {
     /// The task's text as one C-style format: its constant strings are in
     /// it, and each conversion (`%d %i %c %h %x %o %b %e %f %g %r`, with
@@ -2148,7 +2154,7 @@ const sim_state_fields = [_]SimStateField{
 /// else the `Instance` field (`hostString`). Each is 0 ("not written") by
 /// default, so a host that writes neither gets what it got before. `setup`
 /// does not read them, so a host may rewrite one between evaluations (a new
-/// analysis) without calling `setup` again. Additive: no `abi_version` change.
+/// analysis) without calling `setup` again.
 const host_model_index_fields = [_][]const u8{
     "cwd_idx__", // $simparam$str("cwd")
     "analysis_name_idx__", // $simparam$str("analysis_name"); also §4.6.3 (`acStimActive`)
@@ -2336,14 +2342,13 @@ pub const Systf = struct {
     tok: u32 = std.math.maxInt(u32),
     /// §12.22.2 the arguments the device reads back after the call, bit
     /// j - 1 for argument j: each is a variable, and its new value is what
-    /// `SystfHost.output` answers. Additive: no `abi_version` change.
+    /// `SystfHost.output` answers.
     outs: u64 = 0,
     /// The call is a system task (§2.8.3 `$name(...);`, a statement), not a
     /// function in an expression, so the device discards what `call`
     /// returns. A host refuses by this a registration whose type does not
     /// match (§12.32.1 `vpiAnalogSysTask` / `vpiAnalogSysFunc`) without
-    /// re-parsing the source. Only a task has `outs`. Additive: no
-    /// `abi_version` change.
+    /// re-parsing the source. Only a task has `outs`.
     task: bool = false,
 };
 
@@ -2368,8 +2373,7 @@ pub const SystfHost = struct {
     /// latest `call`, for an argument in that entry's `outs`: the value
     /// calltf put on it, with d(it)/d(args[i]) in `partials[i]` (§12.32.2,
     /// zero where none was put). `args` are that call's. Null: the
-    /// application puts no argument. Read it through `output`. Additive: no
-    /// `abi_version` change.
+    /// application puts no argument. Read it through `output`.
     out: ?*const fn (ctx: *anyopaque, k: usize, j: usize, args: []const f64, partials: []f64) f64 = null,
 
     /// `out`, or, when it is null, argument j unchanged: the value an
@@ -2487,8 +2491,7 @@ comptime {
 /// or beside an output variable in an operating-point report (§3.2.1). Rows
 /// of the optional `decl_meta` table, parameters, then variables, then nets,
 /// each in declaration order. Comptime data, read by no entry point; a host
-/// that does not read it needs nothing, so the table is additive and changes
-/// no `abi_version`.
+/// that does not read it needs nothing.
 ///
 /// What is a row, by the clauses:
 ///   `.parameter`  a module-scope parameter, `name` as the card spells it;
@@ -3964,8 +3967,7 @@ pub fn validate(comptime D: type) void {
     // Optional per-unknown metadata tables.
     if (@hasDecl(D, "u_kinds") and @TypeOf(D.u_kinds) != [n]UnknownKind)
         @compileError(name ++ ".u_kinds must be [|U|]UnknownKind");
-    // §2.9.2 descriptions and units. Optional, and additive: no
-    // `abi_version` change.
+    // §2.9.2 descriptions and units. Optional.
     expectArray(D, "decl_meta", DeclMeta);
     if (@hasDecl(D, "decl_meta")) if (declMetaError(&D.decl_meta)) |m| @compileError(name ++ ".decl_meta: " ++ m);
 
@@ -4048,8 +4050,7 @@ pub fn validate(comptime D: type) void {
             for (tables) |t| total += t.points.len;
             expectFn(D, "noiseTablePoints", fn (*const D.Model) [total][2]f64);
             // The row's own sorted copy of those knots, which `derive` writes
-            // and `noiseTable` reads. Optional, for a device from an earlier
-            // VerA; additive, so no `abi_version` change.
+            // and `noiseTable` reads. Optional.
             if (@hasField(D.Model, "noise_table_points__") and @FieldType(D.Model, "noise_table_points__") != [total][2]f64)
                 @compileError(name ++ ".Model.noise_table_points__ must be [" ++
                     std.fmt.comptimePrint("{d}", .{total}) ++ "][2]f64, the knots of every table in `noise_tables` order");
@@ -4092,12 +4093,11 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "checkShape"))
         expectFn(D, "checkShape", fn (*const D.Model) ?[]const u8);
     // §9.18 Table 9-29's allowed values of a card-dependent system parameter.
-    // Optional, and additive: no `abi_version` change.
+    // Optional.
     if (@hasDecl(D, "checkCard"))
         expectFn(D, "checkCard", fn (*const D.Model) ?[]const u8);
     // §3.4.2 a parameter's declared `from`/`exclude` ranges, for a value
-    // the host wrote on the card (#80). Optional, and additive: no
-    // `abi_version` change.
+    // the host wrote on the card (#80). Optional.
     if (@hasDecl(D, "checkRange"))
         expectFn(D, "checkRange", fn (*const D.Model) ?[]const u8);
 
@@ -4128,9 +4128,9 @@ pub fn validate(comptime D: type) void {
 
 /// Checks host `H` against what device `D` needs from it; a host calls it once
 /// per device it links, beside `validate(D)`. A missing obligation is a compile
-/// error, checked only when `validating`; the ABI check always runs. `H`
+/// error, checked only when `validating`; the version check always runs. `H`
 /// declares each obligation it meets as a `true` bool:
-///   `D.contract_abi` must equal `abi_version` (no declaration; regenerate D);
+///   `D.vera_version` must equal `vera_version` (no declaration; regenerate D);
 ///   `calls_setup` when D has `setup` or `setupInstance`: the host calls
 ///     `setup` once per Model row after `derive` and after every card,
 ///     `temperature__` or `setup_simparams` write, then `setupInstance` for
@@ -4150,10 +4150,12 @@ pub fn validate(comptime D: type) void {
 ///   `systf: fn (*const Model) ?*const SystfHost` when D declares
 ///     `systf_calls`: §12.32 fixes no default value for an unbound `$name`.
 pub fn validateHost(comptime H: type, comptime D: type) void {
-    if (!@hasDecl(D, "contract_abi") or D.contract_abi != abi_version)
-        @compileError(@typeName(D) ++ " was generated for a different device ABI than this contract's " ++
-            std.fmt.comptimePrint("abi_version = {d}", .{abi_version}) ++
-            "; regenerate it with the VerA this contract came from.");
+    if (!@hasDecl(D, "vera_version"))
+        @compileError(@typeName(D) ++ " declares no `vera_version`: it was not generated by VerA " ++
+            vera_version ++ ", whose contract this is; regenerate it with VerA " ++ vera_version ++ ".");
+    if (!std.mem.eql(u8, D.vera_version, vera_version))
+        @compileError(@typeName(D) ++ " was generated by VerA " ++ D.vera_version ++ ", and this contract is VerA " ++
+            vera_version ++ "'s; regenerate it with VerA " ++ vera_version ++ ".");
     if (!validating) return;
     // A host that skips `setup` evaluates at `model.su`'s NaN initializers.
     if (@hasDecl(D, "setup") or @hasDecl(D, "setupInstance")) {
@@ -4221,7 +4223,7 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
 const AllowedPubDecl = enum {
     U,
     num_ports,
-    contract_abi,
+    vera_version,
     Model,
     Instance,
     eval,
@@ -4543,10 +4545,13 @@ test "§2.9.2 a decl_meta row says something, and a net row has no units" {
     try testing.expect(comptime declMetaError(&.{.{ .kind = .net, .name = "d", .desc = "drain", .units = "V" }}) != null);
 }
 
+/// The mocks' `vera_version`: inside a mock the name is its own declaration.
+const contract_version = vera_version;
+
 const MockR = struct {
     pub const U = enum(u8) { p, n };
     pub const num_ports: usize = 2;
-    pub const contract_abi = abi_version;
+    pub const vera_version = contract_version;
     const n_u = nU(@This());
 
     pub const Model = struct {
@@ -4720,7 +4725,7 @@ const MockAll = struct {
 
     pub const U = enum(u8) { p, n };
     pub const num_ports: usize = 2;
-    pub const contract_abi = abi_version;
+    pub const vera_version = contract_version;
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
     pub const jac_f32_host = true;

@@ -482,7 +482,7 @@ const r7_rows = [_]Row{
     .{ .path = "lib/zigbuild/exe.zig", .n = 1 },
     .{ .path = "lib/zigbuild/orchestrator.zig", .n = 3 },
     .{ .path = "lib/zigbuild/server.zig", .n = 1 },
-    .{ .path = "src/cli/args.zig", .n = 39 },
+    .{ .path = "src/cli/args.zig", .n = 40 }, // +1: `--version` (2026-10-18)
     .{ .path = "src/cli/digital.zig", .n = 1 },
     .{ .path = "src/cli/lsp.zig", .n = 4 },
     .{ .path = "src/main.zig", .n = 3 },

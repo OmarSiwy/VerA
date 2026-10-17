@@ -1,5 +1,5 @@
 //! `vera`'s argv -> one `Cli` value: what the user typed, flag by flag, in
-//! order. `--help` and `--explain` answer here; a malformed flag is refused
+//! order. `--help`, `--version` and `--explain` answer here; a malformed flag is refused
 //! here with exit status 2. Conflicts between well-formed flags are refused
 //! after the whole line is read, by `resolve`, whatever their order.
 //!
@@ -15,6 +15,9 @@ const vera = @import("vera");
 const digital = @import("sim").digital;
 /// The native emitter (lib/digital/): `--schedule=` and `--state=`.
 const native = @import("digital");
+/// The VerA release: what `--version` prints and every device it generates
+/// carries (`contract.vera_version`).
+const vera_version = @import("contract").vera_version;
 const diag = vera.diag;
 const Io = std.Io;
 
@@ -33,6 +36,7 @@ pub const usage_text =
     \\       vera --run|--emit-exe [options] FILE.v [MORE.v ...]
     \\       vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
     \\       vera --explain CODE
+    \\       vera --version
     \\       vera --lsp [options]
     \\
     \\  --lint                  frontend only (parse, lower, prove); no codegen
@@ -88,8 +92,8 @@ pub const usage_text =
     \\                          --emit-exe/--run testbench; off by default. A host
     \\                          gets them only by opting in: `pub const
     \\                          vera_validate_contract = true` in its root module
-    \\                          (--emit-so: in the --dyn module). The ABI check is
-    \\                          always on
+    \\                          (--emit-so: in the --dyn module). The version check
+    \\                          (`vera_version`) is always on
     \\  --contract PATH         root of the `contract` module (default: this vera's
     \\                          own, written under the work directory)
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
@@ -214,7 +218,8 @@ pub const Cli = struct {
 
 /// Reads every argument after argv[0] into `cli`, in order. Returns null to
 /// go on, or the process exit code when the line is answered here: 0 after
-/// `--help` (usage on `out`) or `--explain CODE` (the explanation on `out`),
+/// `--help` (usage on `out`), `--version` (`vera <contract.vera_version>` on
+/// `out`) or `--explain CODE` (the explanation on `out`),
 /// 2 after a malformed flag (the reason on `err`). Stops at the first such
 /// flag, so the rest of the line is never read.
 /// `args` points at any iterator whose `next()` returns each argument as a
@@ -226,6 +231,9 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try out.writeAll(usage_text);
+            return 0;
+        } else if (std.mem.eql(u8, arg, "--version")) {
+            try out.writeAll("vera " ++ vera_version ++ "\n");
             return 0;
         } else if (std.mem.eql(u8, arg, "--explain")) {
             const name = args.next() orelse return try missing(err, "--explain", "a code, e.g. --explain W0650");
@@ -573,6 +581,18 @@ test "parse: --help and -h print the usage on stdout, exit 0, and read no furthe
         try testing.expectEqualStrings(usage_text, l.out.written());
         try testing.expectEqualStrings("", l.err.written());
     }
+}
+
+test "parse: --version prints contract.vera_version, which is build.zig.zon's .version" {
+    // build.zig reads the manifest into `build_options.version`; contract.zig
+    // ships alone to hosts, so it keeps the literal and this test holds the
+    // two equal (AGENTS.md §3 bumps both).
+    try testing.expectEqualStrings(@import("build_options").version, vera_version);
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, 0), try l.read(&.{ "--version", "--no-such-flag" }));
+    try testing.expectEqualStrings("vera " ++ vera_version ++ "\n", l.out.written());
+    try testing.expectEqualStrings("", l.err.written());
 }
 
 test "parse: --explain needs a known code, and prints it on stdout" {

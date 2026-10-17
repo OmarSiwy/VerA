@@ -196,7 +196,7 @@ fn twoNode(comptime D: type, comptime S: type, x: *const [2]S.V) contract.Rows(D
 const MockNoise = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { rho: f64 = 0 };
     pub const Instance = struct {};
 
@@ -254,7 +254,7 @@ test sourcePsd {
 const MockQuiet = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
 
@@ -273,7 +273,7 @@ test "a device without generators has zero output noise" {
 const MockShared = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { coeff_b: f64 = 1 };
     pub const Instance = struct {};
 
@@ -306,7 +306,7 @@ test "§4.6.4.6 rows sharing a source add as phasors, signed by coeff" {
 const MockBadLink = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { link: u8 = 2 };
     pub const Instance = struct {};
 
@@ -337,7 +337,7 @@ test "a corr_with inside its own generator, or past the last row, is refused" {
 const MockTwiceLinked = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
 
@@ -366,7 +366,7 @@ test "a pair linked from both ends is one cross term, at the first statement's r
 const MockRcNoise = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
 
@@ -399,7 +399,7 @@ test "the charge plane enters as jwC: an RC's density halves at its corner" {
 const MockTable = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
 
@@ -431,7 +431,7 @@ test "§4.6.4.3 a table generator's PSD is its table, clamped at both ends" {
 const MockAcDyn = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { g: f64 = 1e-3 };
     pub const Instance = struct {};
     pub const ac_dyn_slots = [_]u32{0};

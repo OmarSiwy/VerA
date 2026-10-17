@@ -312,7 +312,7 @@ const testing = std.testing;
 const MockState = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { bp: f64 = std.math.inf(f64) };
     pub const Instance = struct { level: u32 = 0, bound_step: f64 = 0, pending: f64 = std.math.inf(f64) };
     pub const State = struct { updates: u32 = 0 };
@@ -402,7 +402,7 @@ test "Circuit.nextBreakpoint" {
 const MockKnobs = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { gmin__: f64 = 1e-12, source_scale__: f64 = 1, setups: u32 = 0 };
     pub const Instance = struct { setups: u32 = 0 };
     pub const setup_simparams = [_][]const u8{"sourceScaleFactor"};
@@ -440,7 +440,7 @@ test "Circuit.setHomotopy" {
 const MockHooks = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct { step: f64 = 0.5, converged: bool = true };
     pub const Instance = struct { prev: f64 = -1 };
 
@@ -501,7 +501,7 @@ test "Circuit.applyLimits" {
 const MockJac = struct {
     pub const U = enum(u8) { a, b };
     pub const num_ports: usize = 2;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
     pub const jac_const = [_]contract.JacConst(U){.{ .row = .a, .col = .b, .g = 11, .c = 13 }};
@@ -536,7 +536,7 @@ test "eval fills all four planes, jac_const included, and combineGC adds them" {
 const MockWide = struct {
     pub const U = enum(u8) { a, b, c, d, e };
     pub const num_ports: usize = 5;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
 

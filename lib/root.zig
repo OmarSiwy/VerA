@@ -26,6 +26,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// The VerA release (`contract.vera_version`), which every generated device
+/// carries and `vera --version` prints.
+pub const version = @import("kernels").vera_version;
 /// The compilation arena (`CompileResult.arena`); `src/main.zig` also keeps a
 /// `.v` design's tables in one.
 pub const BigArena = @import("base").BigArena;

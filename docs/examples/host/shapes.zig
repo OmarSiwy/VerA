@@ -25,18 +25,18 @@ const Dev = struct {
 
 test "every contract declaration the pages name exists" {
     inline for (.{
-        "abi_version", "validating",   "validate",     "validateHost",    "nU",
-        "RefFamily",   "RefOptions",   "no_lane",      "family_fns",      "family_primitives",
-        "checkFamily", "expectFamily", "derivReads",   "ddxReads",        "Mask",
-        "MaskOf",      "rowMask",      "jacConst",     "jacConstApplies", "JacConst",
-        "LaneUse",     "Constant",     "Rows",         "Sites",           "InstancePtr",
-        "SimState",    "AnalysisKind", "UpdateResult", "StateClass",      "stateClass",
-        "StateCtlOp",  "LimitResult",  "QStamp",       "nQ",              "qStamps",
-        "qLte",        "qRowMask",     "qRows",        "NoiseGen",        "PsdTerm",
-        "NoiseTable",  "noiseTableAt", "AcGen",        "AcPhasor",        "UnknownKind",
-        "SystfHost",   "FileIo",       "DeclMeta",     "Say",             "SayPass",
-        "formatSay",   "StatusSite",   "formatStatus", "LeadState",       "leadMergeInto",
-        "leads",       "instLanes",    "region",       "DevicePart",      "gm",
+        "vera_version", "validating",   "validate",     "validateHost",    "nU",
+        "RefFamily",    "RefOptions",   "no_lane",      "family_fns",      "family_primitives",
+        "checkFamily",  "expectFamily", "derivReads",   "ddxReads",        "Mask",
+        "MaskOf",       "rowMask",      "jacConst",     "jacConstApplies", "JacConst",
+        "LaneUse",      "Constant",     "Rows",         "Sites",           "InstancePtr",
+        "SimState",     "AnalysisKind", "UpdateResult", "StateClass",      "stateClass",
+        "StateCtlOp",   "LimitResult",  "QStamp",       "nQ",              "qStamps",
+        "qLte",         "qRowMask",     "qRows",        "NoiseGen",        "PsdTerm",
+        "NoiseTable",   "noiseTableAt", "AcGen",        "AcPhasor",        "UnknownKind",
+        "SystfHost",    "FileIo",       "DeclMeta",     "Say",             "SayPass",
+        "formatSay",    "StatusSite",   "formatStatus", "LeadState",       "leadMergeInto",
+        "leads",        "instLanes",    "region",       "DevicePart",      "gm",
     }) |name| {
         if (!@hasDecl(contract, name)) {
             std.debug.print("contract.zig has no `{s}`\n", .{name});

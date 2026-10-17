@@ -210,7 +210,7 @@ const Circuit = @import("circuit.zig").Circuit;
 const MockCubic = struct {
     pub const U = enum(u8) { in, mid, br };
     pub const num_ports: usize = 0;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const u_kinds = [_]contract.UnknownKind{ .voltage, .voltage, .current };
     pub const Model = struct { k: f64 = 1e-3, gmin__: f64 = 1e-12, source_scale__: f64 = 1.0 };
     pub const Instance = struct {};
@@ -233,7 +233,7 @@ const MockCubic = struct {
 const MockDiode = struct {
     pub const U = enum(u8) { in, a, br };
     pub const num_ports: usize = 0;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const u_kinds = [_]contract.UnknownKind{ .voltage, .voltage, .current };
     pub const Model = struct { gmin__: f64 = 1e-12, source_scale__: f64 = 1.0 };
     pub const Instance = struct {};
@@ -278,7 +278,7 @@ test "a singular cold start is gmin stepping's, a slow one source stepping's, an
 const MockLinear = struct {
     pub const U = enum(u8) { in, br };
     pub const num_ports: usize = 0;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const u_kinds = [_]contract.UnknownKind{ .voltage, .current };
     pub const Model = struct {};
     pub const Instance = struct {};
@@ -326,7 +326,7 @@ fn MockBistable(comptime ns: ?f64) type {
     return struct {
         pub const U = enum(u8) { a };
         pub const num_ports: usize = 1;
-        pub const contract_abi = contract.abi_version;
+        pub const vera_version = contract.vera_version;
         pub const Model = struct {};
         pub const Instance = struct {};
         pub const u_nodeset = [1]?f64{ns};
@@ -360,7 +360,7 @@ test "a nodeset picks which root the operating point's Newton finds, and is neve
 const MockSeededNodeset = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
     pub const u_nodeset = [1]?f64{1.5};
@@ -390,7 +390,7 @@ test "coldStart: a nodeset overrides the seed on its unknown" {
 const MockNoRoot = struct {
     pub const U = enum(u8) { a };
     pub const num_ports: usize = 1;
-    pub const contract_abi = contract.abi_version;
+    pub const vera_version = contract.vera_version;
     pub const Model = struct {};
     pub const Instance = struct {};
 
