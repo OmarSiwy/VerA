@@ -97,10 +97,10 @@ Be clear about these before choosing the contract:
   functions it wants ([linking](linking.md)), and so a Zig toolchain in its
   build.
 - **A stable binary format.** An `.osdi` built once loads into any simulator
-  that speaks that OSDI version. A VerA device is regenerated whenever the
-  contract's `abi_version` changes (the generated file mirrors it as
-  `contract_abi`, which [the device page](device.md) shows), and is compiled
-  by the Zig release VerA targets (0.17.0).
+  that speaks that OSDI version. A VerA device is regenerated with each VerA
+  release (the generated file carries the release as `vera_version`, which
+  [the device page](device.md) shows, and a contract from another release
+  refuses it), and is compiled by the Zig release VerA targets (0.17.0).
 - **Simulators that already support it.** ngspice loads OSDI libraries with
   its `pre_osdi` command. A simulator that speaks OSDI gets VerA's models
   through `vera --emit-osdi` without code changes ([OSDI

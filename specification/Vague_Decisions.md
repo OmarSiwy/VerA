@@ -1594,8 +1594,9 @@ run only in a program whose root module declares
 `pub const vera_validate_contract = true` (`contract.validating`). VerA turns
 them on in `zig build test` (`tools/zrunner.zig`), in every fixture-suite
 testbench, in `vera --emit-exe`/`--run` with `--validate-contract`, and always
-in `vera --check`. `validateHost`'s ABI check (`contract_abi == abi_version`)
-always runs: it is what refuses a stale device. A host that wants the
+in `vera --check`. `validateHost`'s version check (`D.vera_version` equals
+`contract.vera_version`, which replaced `contract_abi == abi_version` on
+2026-10-18) always runs: it is what refuses a stale device. A host that wants the
 obligation checks must opt in: the decl in its program's root module, or, for
 `vera --emit-so`/`orchestrator.compileRelease`, in its `dyn` module, which the
 generated shim (the build's root) forwards. Off, a device build spends

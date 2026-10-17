@@ -126,12 +126,22 @@ must give each evaluation exclusive access; `InstancePtr(D)`).
 
 ## Version stamp
 
-`contract.abi_version` is the ABI version the contract file specifies. Every
-generated device mirrors it as `pub const contract_abi` (the `contract_abi`
-line of the listing above), and `validateHost` refuses, always, a device
-whose value differs: regenerate it with the VerA your contract came from.
-The comment above `abi_version` in `contract.zig` says what the current
-version changed.
+`contract.vera_version` is the VerA release the contract file ships with
+(semver, `vera --version`). Every generated device carries the release that
+generated it as `pub const vera_version` (the `vera_version` line of the
+listing above), and `validateHost` refuses, always, a device whose value is
+not exactly the contract's, naming both: regenerate it with the VerA your
+contract came from. Any contract change ships in a VerA release, and the
+changelog under that version says what changed. A host that supports one
+release pins it at compile time:
+
+```zig
+if (comptime !std.mem.eql(u8, D.vera_version, "0.9.0"))
+    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.9.0");
+```
+
+An optional declaration a later release adds stays optional: a host that
+uses one checks it with `@hasDecl`.
 
 ## The optional declarations, by job
 

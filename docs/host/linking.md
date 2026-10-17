@@ -121,8 +121,8 @@ With the checks on:
 | `systf` | a non-empty `systf_calls` | `fn (*const Model) ?*const SystfHost`, binding the VPI application |
 
 One check runs whether or not you opt in: `validateHost` refuses a device
-whose `contract_abi` differs from `contract.abi_version`, with "regenerate
-it with the VerA this contract came from". `--contract PATH` builds against
+whose `vera_version` is not `contract.vera_version`, naming both releases
+and saying to regenerate it with this contract's VerA. `--contract PATH` builds against
 another contract file; by default VerA uses the copy built into it, so the
 contract always matches the compiler.
 

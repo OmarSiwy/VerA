@@ -164,15 +164,24 @@ zig build test                       # must pass. This is the gate.
 zig build benchmark -- --strict      # must exit 0 (it has since ae9633f1): read the names
 
 # 2. Write the entry. This RUNS the suites; it does not ask you for numbers.
+#    It first sets build.zig.zon's .version and tools/contract.zig's
+#    vera_version to 0.1.0, together: every device carries that version.
 tools/conformance.py --changelog v0.1.0
 
 # 3. Fill in D by hand: the one row the script marks `hand-entered`.
 #    Name the document and the date you read. Do not guess.
 
 # 4. Commit, tag, push the tag. CI does the rest.
-git add CHANGELOG.md && git commit -m "release: v0.1.0"
+git add CHANGELOG.md build.zig.zon tools/contract.zig && git commit -m "release: v0.1.0"
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+The release version lives in two literals that move together:
+`build.zig.zon`'s `.version` and `contract.vera_version`, which every
+generated device carries as `vera_version` and a host checks (the contract
+ships alone, so it cannot read the manifest). `zig build test` fails when they
+differ (`src/cli/args.zig`'s `--version` test); `--check` refuses a tag
+neither names. Never bump one by hand.
 
 `publish.yaml` then re-runs `tools/conformance.py --check v0.1.0` on a clean
 runner. **If the tree measures something different from what you committed, the
