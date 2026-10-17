@@ -2354,6 +2354,10 @@ pub const Systf = struct {
 /// function pointer cannot be generic over the family.
 pub const SystfHost = struct {
     /// The application's own state (`s_vpi_analog_systf_data.user_data`).
+    /// One `SystfHost` per instance when the application keeps state per
+    /// call, so `ctx` can name the instance: VerA's `vpi` module keys a
+    /// calltf's user data and outputs by the instance a host passes to
+    /// `vpi.analog_run.Binding.call` (VerA #84).
     ctx: *anyopaque,
     /// §12.32 `calltf` and §12.22.1 `derivtf` in one call: returns the value
     /// of `systf_calls[k]` at `args` and writes d(value)/d(args[j]) into

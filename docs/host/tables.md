@@ -126,12 +126,23 @@ the table on the CPU only. The `Model`'s other `__` fields are on
 | `systf_calls` | `$name`s the compiler left to a VPI application (LRM §2.8.3, §12.32), one entry per call site; an entry's `task` is true for a system task (a statement), false for a function in an expression, so a host can refuse a registration of the wrong type (LRM §12.32.1) without the source, and only a task has `outs`. Point `inst.systf` at a `SystfHost`, whose `call(ctx, k, args, partials)` returns call `k`'s value and its partials (and whose optional `out` answers the arguments the application wrote, LRM §12.22.2); `validateHost` requires your host to declare `systf`, a `fn (*const Model) ?*const contract.SystfHost` |
 
 To run a C VPI application's calltf through VerA's own VPI layer (the `vpi`
-module) while your host does the solving, `vpi.analog_run.attach` a `Lib`
-whose call table is the device library's and whose `n_u`, `n_rows` and
-`n_shares` answer 0, and call
+module) while your host does the solving, attach each device library through
+a `vpi.analog_run.Binding` you own (`var b: Binding = .{}`, at a fixed address
+until `b.detach()`): `b.attach(lib, design)`, where `lib` is a `Lib` whose
+call table is the device library's and whose `n_u`, `n_rows` and `n_shares`
+answer 0, and `design` is null for the library whose design `vpi.open`
+installed, or `try vpi.buildDesign(gpa, &res)` for each further library,
+which then keeps its own design (the binding frees it). Point each device
+instance's `inst.systf` at a `SystfHost` of its own whose `call` forwards to
+`b.call(i, k, args, partials)` and whose `out` forwards to
+`b.output(i, k, j, args, partials)`, `i` the instance's index (any value
+unique per instance): a calltf's user data (IEEE 1364-2005 §27.31) and the
+arguments it puts (LRM §12.22.2) are then kept per instance. Call
 `vpi.analog_run.setPoint(.{ .kind = .tran }, t, dt, 0)` (or `.ac` with the
-frequency, `.op`) before each `SystfHost.call`: `vpi_get_analog_time`,
-`vpi_get_analog_delta`, `vpi_get_analog_freq` and `vpi_get_real`'s analysis
-bounds then read your point. Such a library holds no solution, so
-`vpi_get_analog_value` refuses every quantity that needs one with error code
-`NOSOLUTION`; `tests/vpi_host.zig`'s `External` is this host in miniature.
+frequency, `.op`) once per point, before the calls, for every library:
+`vpi_get_analog_time`, `vpi_get_analog_delta`, `vpi_get_analog_freq` and
+`vpi_get_real`'s analysis bounds then read your point. Such a library holds
+no solution, so `vpi_get_analog_value` refuses every quantity that needs one
+with error code `NOSOLUTION`; `tests/vpi_host.zig`'s `External` is this host
+in miniature, with two libraries and two instances in
+`tests/fixtures/ch12_vpi_routines/p03_15_two_libraries_two_instances.c`.
