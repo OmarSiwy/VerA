@@ -438,10 +438,18 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 .inst_result => |di| self.mir.instOp(di) == .store,
                 else => false, // else: an array version is an instruction result
             };
+            // VerA's `vera_timepoint` (§2.9): inside a statement that caches
+            // the array, the copy goes to its slot (`zArrWT`), always through
+            // the pointer check: a store before the statement may have
+            // copied it into `a<id>` already.
+            const tp = gen_instance.tpSlotAt(self, @backingInt(self.mir.instBlock(inst)), id);
+            if (tp != null) self.uses.inst = true;
             if (inPlace(self, id) and gen_instance.dirtyTracked(self, id))
                 try self.b("zArrStD({s}, p{d}, &inst.{s}__dirty, ", .{ ty, id, self.names.held_names[m.held] })
             else if (inPlace(self, id))
                 try self.b("zArrSt({s}, p{d}, ", .{ ty, id })
+            else if (tp) |s|
+                try self.b("zArrSt({s}, zArrWT({s}, {d}, &inst.tp{d}_s{d}, &a{d}, &p{d}), ", .{ ty, ty, m.len, s.b, s.k, id, id })
             else if (cow(self, id) and !after_store)
                 try self.b("zArrSt({s}, zArrW({s}, {d}, &a{d}, &p{d}), ", .{ ty, ty, m.len, id, id })
             else

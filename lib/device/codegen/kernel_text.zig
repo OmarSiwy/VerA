@@ -592,6 +592,46 @@ pub const tp_txt =
     \\
 ;
 
+/// VerA's `vera_timepoint` (§2.9) arrays cached in place
+/// (`instance.tpInPlace`). `slot` is `&inst.tp<b>_s<k>`: `*[n]T` when the
+/// core was handed a mutable `Instance` (`eval`, `evalQ`), `*const` from every
+/// other caller, which keeps the local copy `a` and never fills the cache.
+pub const tp_arr_txt =
+    \\// ---- VerA's `vera_timepoint` arrays cached in place ----
+    \\
+    \\/// The storage a store inside a `vera_timepoint` statement writes: the
+    \\/// cache slot itself, holding what `p` read until now, when `slot` is
+    \\/// writable; else `zArrW`'s local `a`.
+    \\fn zArrWT(comptime T: type, comptime n: usize, slot: anytype, a: *[n]T, p: **const [n]T) *[n]T {
+    \\    if (comptime @typeInfo(@TypeOf(slot)).pointer.attrs.@"const") return zArrW(T, n, a, p);
+    \\    return zArrW(T, n, slot, p);
+    \\}
+    \\
+    \\/// At the statement's join: point `p` at a writable `slot`, copying the
+    \\/// version in when the statement stored none, so the slot holds what the
+    \\/// statement left whichever arm ran.
+    \\fn zTpFill(comptime T: type, comptime n: usize, slot: anytype, p: **const [n]T) void {
+    \\    if (comptime @typeInfo(@TypeOf(slot)).pointer.attrs.@"const") return;
+    \\    if (p.* != slot) {
+    \\        slot.* = p.*.*;
+    \\        p.* = slot;
+    \\    }
+    \\}
+    \\
+    \\/// `updateState`'s join, for an array it stores in place: point `p` at
+    \\/// the held field, copying a cached version in and widening its dirty
+    \\/// range `d` (or `null`) to the whole array.
+    \\fn zTpHeld(comptime T: type, comptime n: usize, held: *[n]T, p: **[n]T, d: anytype) void {
+    \\    if (p.* != held) {
+    \\        held.* = p.*.*;
+    \\        p.* = held;
+    \\        if (@TypeOf(d) != @TypeOf(null)) d.* = .{ 0, n - 1 };
+    \\    }
+    \\}
+    \\
+    \\
+;
+
 /// §5.10.3.3 timer scheduling, shared with the mixed coordinator.
 pub const timer_txt = "// ---- §5.10.3.3 timer schedule ----\n\n" ++
     timer_src[std.mem.find(u8, timer_src, "\n\n").? + 2 ..];
@@ -1163,12 +1203,13 @@ pub const deprecated_std = [_][]const u8{ "std.fmt.bufPrint", "std.fmt.allocPrin
 
 test "no fixed device text names a std decl Zig 0.17 deprecates" {
     const texts = [_][]const u8{
-        header_txt,    math_txt,         domain_quiet_txt, domain_report_txt,
-        family_txt,    family_dev_txt,   ops_txt,          tp_txt,
-        timer_txt,     str_txt,          rng_txt,          table_txt,
-        file_txt,      wide_txt,         limit_txt,        filt_txt,
-        ac_txt,        ac_fam_txt,       arr_txt,          hist_txt,
-        hist_quad_txt, helpers_head_txt, prelude_head_txt, display_txt,
+        header_txt,  math_txt,       domain_quiet_txt, domain_report_txt,
+        family_txt,  family_dev_txt, ops_txt,          tp_txt,
+        tp_arr_txt,  timer_txt,      str_txt,          rng_txt,
+        table_txt,   file_txt,       wide_txt,         limit_txt,
+        filt_txt,    ac_txt,         ac_fam_txt,       arr_txt,
+        hist_txt,    hist_quad_txt,  helpers_head_txt, prelude_head_txt,
+        display_txt,
     };
     for (texts) |src| for (deprecated_std) |name| {
         if (std.mem.find(u8, src, name)) |at| {

@@ -14,6 +14,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
+const gen_render = @import("render.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
 const gen_wide = @import("wide.zig");
@@ -428,6 +429,121 @@ fn emitTpFields(self: *Gen) Error!void {
     }
 }
 
+/// VerA's `vera_timepoint` (§2.9): whether slot `sl`'s cache is a §5.10
+/// copy-on-write held array (`render.cow`) that the statement's stores write
+/// in place, in its `tp<b>_s<k>` field, when the core is handed a mutable
+/// `Instance` (`eval`, `evalQ`). A local copy of a held history and its copy
+/// in the core's result are what put txl's 2048-deep history at 165 KB of
+/// GPU stack, and the coupled lines' at 307-612 KB (#82).
+pub fn tpInPlace(self: *const Gen, sl: Lower.TpSlot) bool {
+    if (sl.array == none_u32 or !gen_render.cow(self, sl.array)) return false;
+    // The slot's field exists only when the full core carries the final
+    // version (`emitTpFields`); a slice's `plan.lo_idx` is its own.
+    const v = self.an.rv(sl.final);
+    return v != .f_zero and self.tp_lo_idx[@backingInt(v)] != none_u32;
+}
+
+/// Whether some `vera_timepoint` slot is stored in place (`tpInPlace`).
+pub fn anyTpInPlace(self: *const Gen) bool {
+    for (self.lowered.timepoints.items) |t| for (t.slots) |sl| if (tpInPlace(self, sl)) return true;
+    return false;
+}
+
+/// Returns `Gen.tp_of_block`: per MIR block, the innermost `vera_timepoint`
+/// statement whose miss arm holds it (the blocks its miss block reaches
+/// before the join, as `plan_setup.timepointVarying` walks them), or
+/// `none_u32`. Empty when no slot is stored in place.
+pub fn tpBlocks(self: *Gen) Error![]const u32 {
+    if (!anyTpInPlace(self)) return &.{};
+    const nb = self.an.nb;
+    const of = try self.arena.alloc(u32, nb);
+    @memset(of, none_u32);
+    const seen = try self.arena.alloc(bool, nb);
+    var stack: std.ArrayList(u32) = try .initCapacity(self.arena, nb);
+    // Source order: a statement nested in another comes after it, so its
+    // blocks end up naming the inner one.
+    for (self.lowered.timepoints.items, 0..) |t, b| {
+        @memset(seen, false);
+        const miss: u32 = @backingInt(t.miss);
+        const join: u32 = @backingInt(t.join);
+        seen[miss] = true;
+        stack.appendAssumeCapacity(miss);
+        // Each block is pushed at most once (its flag is set first).
+        while (stack.pop()) |x| {
+            of[x] = @intCast(b);
+            for (self.an.succs[x]) |y| {
+                if (y == join or seen[y]) continue;
+                seen[y] = true;
+                stack.appendAssumeCapacity(y);
+            }
+        }
+    }
+    return of;
+}
+
+/// The `tp<b>_s<k>` slot a store to array `id` in MIR block `bi` writes in
+/// place (`tpInPlace`), or null when the store is outside every statement or
+/// its statement does not cache `id` in place.
+pub fn tpSlotAt(self: *const Gen, bi: u32, id: u32) ?struct { b: u32, k: u32 } {
+    if (self.tp_of_block.len == 0) return null;
+    const b = self.tp_of_block[bi];
+    if (b == none_u32) return null;
+    for (self.lowered.timepoints.items[b].slots, 0..) |sl, k| {
+        if (sl.array == id and tpInPlace(self, sl)) return .{ .b = b, .k = @intCast(k) };
+    }
+    return null;
+}
+
+/// VerA's `vera_timepoint` (§2.9): at statement join `bi`, for every
+/// in-place array slot whose hit arm this body emits, points `p<id>` at the
+/// slot, copying the version in when the statement stored none (`zTpFill`):
+/// then the slot holds what the statement left whichever arm ran, and
+/// `zTpStore` has nothing to copy. In `updateState`'s slice, which stores the
+/// array in its field, the field takes that role instead (`zTpHeld`).
+pub fn emitTpFills(self: *Gen, bi: u32, depth: u32) Error!void {
+    if (self.tp_of_block.len == 0) return;
+    for (self.lowered.timepoints.items, 0..) |t, b| {
+        if (@backingInt(t.join) != bi) continue;
+        for (t.slots, 0..) |sl, k| {
+            if (!tpInPlace(self, sl)) continue;
+            // Whenever the hit arm re-points `p<id>` in this body: something
+            // after the join reads that version, so the miss arm's version
+            // (which `p<id>` holds there) is computed too.
+            if (!hitEmitted(self, @intCast(b), @intCast(k))) continue;
+            const m = self.lowered.mem_arrays.items[sl.array];
+            const ty = if (m.ty == .integer) "i64" else "f64";
+            self.uses.inst = true;
+            try self.ind(depth);
+            // `updateState`'s slice stores the array in its field
+            // (`render.inPlace`): a hit's cached version is copied there.
+            if (gen_render.inPlace(self, sl.array)) {
+                const f = self.names.held_names[m.held];
+                if (dirtyTracked(self, sl.array))
+                    try self.b("zTpHeld({s}, {d}, &inst.{s}, &p{d}, &inst.{s}__dirty);\n", .{ ty, m.len, f, sl.array, f })
+                else
+                    try self.b("zTpHeld({s}, {d}, &inst.{s}, &p{d}, null);\n", .{ ty, m.len, f, sl.array });
+                continue;
+            }
+            try self.b("zTpFill({s}, {d}, &inst.tp{d}_s{d}, &p{d});\n", .{ ty, m.len, b, k, sl.array });
+        }
+    }
+}
+
+/// Whether the body being emitted computes the `anew` that reads slot
+/// `k` of statement `b` (the hit arm's `p<id> = &inst.tp<b>_s<k>`).
+fn hitEmitted(self: *const Gen, b: u32, k: u32) bool {
+    for (self.an.i_op, 0..) |op, ii| {
+        if (op != .anew) continue;
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
+        const tp = self.mir.instData(inst).anew.tp orelse continue;
+        if (tp.block != b or tp.slot != k) continue;
+        // As `cfg.emitStmt` decides it emits the statement.
+        const v = self.an.i_res[ii];
+        if (self.plan.needed.isSet(@backingInt(v)) and !self.plan.cached(v)) return true;
+    }
+    return false;
+}
+
 /// VerA's `vera_timepoint` (§2.9): `zTpDrop`, which every entry point that
 /// moves what a cached statement reads calls (`initState`, `setup`,
 /// `updateState`, `stateCtl`), and `zTpStore`, which `eval` and `evalQ`
@@ -446,6 +562,8 @@ fn emitTpHelpers(self: *Gen) Error!void {
         try self.w("!zTpHit(inst.tp{d}_t, inst.tp{d}_k, sim)) {{\n", .{ b, b });
         for (t.slots, 0..) |sl, k| {
             const fk = gen_dispatch.coreIdx(self, self.an.rv(sl.final)) orelse continue;
+            // The core already left it in its slot (`emitTpFills`).
+            if (tpInPlace(self, sl)) continue;
             const val = sl.array == none_u32 and sl.ty == .real;
             try self.w("        inst.tp{d}_s{d} = m.f{d}{s};\n", .{ b, k, fk, if (val) ".val()" else "" });
         }

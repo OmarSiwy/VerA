@@ -338,6 +338,15 @@ pub const Gen = struct {
     /// stores in place and whose `<field>__dirty` range `stateCtl` copies
     /// (`state.inPlaceArrays`). Set by `emitInstance`; empty when none.
     held_in_place: []const bool = &.{},
+    /// VerA's `vera_timepoint` (§2.9) per MIR block: the innermost statement
+    /// whose miss arm holds it (`Lowered.TpBlock`), or `none_u32`. Its stores
+    /// to an array the statement caches write the cache slot in place
+    /// (`instance.tpInPlace`). Set by `prepare`; empty when no slot is in place.
+    tp_of_block: []const u32 = &.{},
+    /// The full core's value → field map (`plan_core.Core.lo_idx`), which
+    /// `instance.tpInPlace` reads while a slice's plan is in force. Set by
+    /// `prepare`.
+    tp_lo_idx: []const u32 = &.{},
     /// Value → field of `limit`'s slice of the core, or `none_u32`
     /// (`cg_limit.emitCore`); empty when `limit` reads nothing off the core.
     lim_idx: []u32 = &.{},
@@ -513,6 +522,9 @@ pub const Gen = struct {
         self.plan.lo_idx = self.core.lo_idx;
         self.plan.lo_vals = self.core.lo_vals;
         self.plan.arr_lanes = self.arr_s;
+        // Reads the full core's `lo_idx` and the final `arr_s`.
+        self.tp_lo_idx = self.core.lo_idx;
+        self.tp_of_block = try gen_instance.tpBlocks(self);
         // Last, and before any emission: the roots are what the core's slice
         // reaches, and `emitInstance` sizes `Setup` from them.
         try gen_setup.planSetup(self);

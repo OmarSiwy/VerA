@@ -11,6 +11,7 @@ const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_setup = @import("setup.zig");
+const gen_instance = @import("instance.zig");
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const family = @import("family.zig");
@@ -56,6 +57,8 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
     assert(bi < self.an.term.len);
     assert(self.an.stmt_off[bi] <= self.an.stmt_off[bi + 1]);
     const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
+    // `setup` runs no `vera_timepoint` statement: it reads the time.
+    if (!self.su.mode) try gen_instance.emitTpFills(self, bi, depth);
     for (stmts) |inst| {
         // `setup` computes a speculable value at its home instead.
         if (self.su.mode and self.sinv.home[@backingInt(self.an.i_res[@backingInt(inst)])] != none_u32) continue;

@@ -1472,6 +1472,7 @@ pass	ch05_analog_behavior/vector_access.va
 pass	ch05_analog_behavior/vector_net_index_not_constant_rejected.va
 pass	ch05_analog_behavior/vera_reject_step_retry.va
 pass	ch05_analog_behavior/vera_timepoint_cache.va
+pass	ch05_analog_behavior/vera_timepoint_held_history.va
 pass	ch05_analog_behavior/voltage_controlled_current.va
 pass	ch05_analog_behavior/while_false.va
 pass	ch05_analog_behavior/while_loop.va

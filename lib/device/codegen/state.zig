@@ -124,8 +124,11 @@ pub fn emitCore(self: *Gen) Error!void {
 /// `p<id>`, and a load never reads a version past a later store
 /// (`plan/unit.zig`), so every load sees the same value either way. Not when
 /// the slice runs on a §9.21.1 `table_probe` copy of the instance
-/// (`setup.probeInstance`), nor for an array a `vera_timepoint` cache may
-/// re-point at its `tp` slot. Empty when no array qualifies.
+/// (`setup.probeInstance`). An array a `vera_timepoint` cache re-points at
+/// its `tp` slot qualifies only when the slot is in place
+/// (`instance.tpInPlace`): the statement's join then copies a cached version
+/// back into the field (`zTpHeld`), so later stores write the field (#82).
+/// Empty when no array qualifies.
 pub fn inPlaceArrays(self: *Gen) Error![]const bool {
     if (self.lowered.table_samples.items.len != 0) return &.{};
     const n = self.lowered.mem_arrays.items.len;
@@ -135,7 +138,8 @@ pub fn inPlaceArrays(self: *Gen) Error![]const bool {
         const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
         if (self.mir.instOp(inst) != .anew) continue;
         const d = self.mir.instData(inst).anew;
-        if (d.tp != null) flags[d.array] = false;
+        const tp = d.tp orelse continue;
+        if (!gen_instance.tpInPlace(self, self.lowered.timepoints.items[tp.block].slots[tp.slot])) flags[d.array] = false;
     }
     if (std.mem.findScalar(bool, flags, true) == null) return &.{};
     return flags;

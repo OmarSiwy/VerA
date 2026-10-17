@@ -376,8 +376,17 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     // (`plan.Core.in_place`) is stored through it.
     // Spelled `InstancePtr` where that already is `*const Instance` (a device
     // that is not `mutable_eval`), so those devices' text is unchanged.
+    // A `vera_timepoint` array cached in place (`instance.tpInPlace`) is
+    // the exception: `anytype`, so `eval`'s mutable `Instance` reaches the
+    // statement's stores and every `*const` caller keeps the local copy.
     const eval_writes = self.lowered.timepoints.items.len != 0 or gen_instance.hasStatus(self);
-    try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.table_samples.items.len == 0 and eval_writes) "*const Instance" else "InstancePtr"});
+    const inst_ty = if (self.core.in_place.len != 0)
+        "*Instance"
+    else if (self.lowered.table_samples.items.len == 0 and eval_writes)
+        (if (self.tp_of_block.len != 0) "anytype" else "*const Instance")
+    else
+        "InstancePtr";
+    try self.w("inst: {s}, ", .{inst_ty});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});
     // §9.4.1/§9.5.9 a printing display unit with a per-iteration task runs

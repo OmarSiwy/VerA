@@ -54,6 +54,8 @@ const Features = struct {
     arrs: bool,
     /// `tp_txt`: a VerA `vera_timepoint` statement.
     tp: bool,
+    /// `tp_arr_txt`: one caches an array in place (`instance.tpInPlace`).
+    tp_arr: bool,
 };
 
 /// Writes the whole device.zig into `self.out` and builds `self.prelude` and
@@ -87,6 +89,7 @@ pub fn emitFile(self: *Gen) Error!void {
         // §3.2.2 set in lowering: a runtime-indexed array is one storage.
         .arrs = self.lowered.mem_arrays.items.len != 0,
         .tp = self.lowered.timepoints.items.len != 0,
+        .tp_arr = self.tp_of_block.len != 0,
     };
     try buildPrelude(self, f);
     try self.out.appendSlice(self.gpa, kt.header_txt);
@@ -100,6 +103,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (f.hist_quad) try self.out.appendSlice(self.gpa, kt.hist_quad_txt);
     if (f.arrs) try self.out.appendSlice(self.gpa, kt.arr_txt);
     if (f.tp) try self.out.appendSlice(self.gpa, kt.tp_txt);
+    if (f.tp_arr) try self.out.appendSlice(self.gpa, kt.tp_arr_txt);
     // The embedded kernel files arrive already `pub`, which is right for
     // `h.zig` and wrong here: `contract.rejectStrayPubDecls` allows only
     // contract-recognized public names. So they are depublished; every other
@@ -218,6 +222,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.hist_quad) try alias(&p, self.arena, kt.hist_quad_txt);
     if (f.arrs) try alias(&p, self.arena, kt.arr_txt);
     if (f.tp) try alias(&p, self.arena, kt.tp_txt);
+    if (f.tp_arr) try alias(&p, self.arena, kt.tp_arr_txt);
     if (f.filt) try alias(&p, self.arena, kt.filt_txt);
     if (f.ac) try alias(&p, self.arena, kt.ac_txt);
     if (self.display == .emit or f.strs) try alias(&p, self.arena, kt.display_txt);
@@ -252,6 +257,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.hist_quad) try publish(self.arena, &hz, kt.hist_quad_txt);
     if (f.arrs) try publish(self.arena, &hz, kt.arr_txt);
     if (f.tp) try publish(self.arena, &hz, kt.tp_txt);
+    if (f.tp_arr) try publish(self.arena, &hz, kt.tp_arr_txt);
     if (f.filt) try publish(self.arena, &hz, kt.filt_txt);
     if (f.ac) try publish(self.arena, &hz, kt.ac_txt);
     if (self.display == .emit or f.strs) try publish(self.arena, &hz, kt.display_txt);

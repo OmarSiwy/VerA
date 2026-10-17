@@ -488,6 +488,10 @@ pub fn build(b: *std.Build) void {
                 }) },
             },
         });
+        // A host that imports `ptx` reads its `<x>_gpu.zig`'s NVPTX assembly
+        // (`ptx.path`), which is then emitted as assembly, not LLVM IR.
+        const ptx_opts: ?*std.Build.Step.Options = if (std.mem.find(u8, configText(b, h.host), "@import(\"ptx\")") != null) b.addOptions() else null;
+        if (ptx_opts) |po| host.addOptions("ptx", po);
         const run_host = testRun(b, std.fs.path.stem(h.host), host, runner);
         test_step.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(run_host);
@@ -525,7 +529,9 @@ pub fn build(b: *std.Build) void {
                     }) },
                 },
             }) });
-            const out = if (gt.result.cpu.arch == .nvptx64) (if (wide_gpu) obj.getEmittedAsm() else obj.getEmittedLlvmIr()) else obj.getEmittedBin();
+            const nvptx = gt.result.cpu.arch == .nvptx64;
+            const out = if (nvptx) (if (wide_gpu or ptx_opts != null) obj.getEmittedAsm() else obj.getEmittedLlvmIr()) else obj.getEmittedBin();
+            if (nvptx) if (ptx_opts) |po| po.addOptionPath("path", out);
             const kernel = b.fmt("{s}_ops_kernel", .{std.fs.path.basename(stem)});
             test_step.dependOn(&b.addCheckFile(out, .{ .expected_matches = &.{kernel} }).step);
         };
