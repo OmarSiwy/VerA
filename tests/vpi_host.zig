@@ -2,7 +2,9 @@
 //! (its `vlog_startup_routines`, LRM §12.33.2) -> the application's exit code.
 //! No argument elaborates tests/fixtures/ch11_vpi/vpi_design.va; `<design.va> <app>` runs the
 //! analog analyses the app's banner asks for (or, for `*! external` lines, runs
-//! its calls at host-set points with no solution: `External`); `<design.v>` runs the digital
+//! its calls at host-set points with no solution: `External`, which a
+//! `*! library <design.va>` line gives a second device library with its own
+//! design and a `*! instances <n>` line n instances of each); `<design.v>` runs the digital
 //! engine with time and value-change callbacks. Applications are real C against
 //! src/vpi/vpi_user.h, so the ABI itself is under test.
 
@@ -90,11 +92,24 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     const analyses = if (app) |c| try readAnalyses(arena, io, c) else &.{};
     const points = if (app) |c| try readPoints(arena, io, c) else &.{};
     if (analyses.len != 0 and points.len != 0) return error.BadAnalysis;
+    const second = if (app) |c| try bannerWord(arena, io, c, "*! library") else null;
+    const instances = if (app) |c| (if (try bannerWord(arena, io, c, "*! instances")) |w| try std.fmt.parseInt(usize, w, 10) else 1) else 1;
+    // A second library and several instances are the external host's shape.
+    if ((second != null or instances != 1) and points.len == 0) return error.BadAnalysis;
     // §12.33.2 the registrations come before the device is built: a call's
     // type is its function's sysfunctype (§12.32.1), which compiling needs.
     vpi.runStartupRoutines();
     var loaded: ?DynLib = null;
     defer if (loaded) |*l| l.close();
+    var loaded2: ?DynLib = null;
+    defer if (loaded2) |*l| l.close();
+    // The design's own library, on the installed design; a second one with
+    // its own (VerA #84). Detached before the libraries close and the
+    // design does: these defers run first.
+    var binding: vpi.analog_run.Binding = .{};
+    defer binding.detach();
+    var binding2: vpi.analog_run.Binding = .{};
+    defer binding2.detach();
     if (analyses.len != 0 or points.len != 0) {
         // Building the library spawns `zig`, which the global single-threaded
         // Io cannot do (no allocator, no environment): a real one, over this
@@ -114,15 +129,35 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
         };
         loaded = try DynLib.open(lib_path);
         const real = try bindLib(&loaded.?);
-        try vpi.analog_run.attach(if (points.len != 0) External.lib(real) else real);
+        try binding.attach(if (points.len != 0) External.lib(real) else real, null);
+        if (second) |name| {
+            const path2 = try std.fs.path.join(arena, &.{ dir, name });
+            const source2 = try Io.Dir.cwd().readFileAlloc(io, path2, arena, .limited(16 * 1024 * 1024));
+            var res2 = vera.compileSourceOpts(gpa, source2, .lint, .{ .file_name = path2, .include_dirs = &.{ dir, up } }) catch |e| {
+                std.debug.print("vpi_host: `{s}` did not compile: {t}\n", .{ path2, e });
+                return 1;
+            };
+            defer res2.deinit();
+            // Its own work directory: two libraries built into one race.
+            const stem2 = try arena.print("{s}-library", .{std.fs.path.stem(app.?)});
+            const lib2_path = buildAnalogLib(gpa, arena, threaded.io(), path2, stem2, source2, &.{ dir, up }, try vpi.systf.intAnalogNames(arena)) catch |e| {
+                std.debug.print("vpi_host: `{s}` has no analog library: {t}\n", .{ path2, e });
+                return 1;
+            };
+            loaded2 = try DynLib.open(lib2_path);
+            const lib2 = External.lib(try bindLib(&loaded2.?));
+            try binding2.attach(lib2, try vpi.buildDesign(gpa, &res2));
+        }
     }
-    defer if (loaded != null) vpi.analog_run.detach();
 
     vpi.callback.endOfCompile();
-    if (points.len != 0) return External.run(points);
+    if (points.len != 0) {
+        const all = [_]*vpi.analog_run.Binding{ &binding, &binding2 };
+        return External.run(points, all[0..if (second != null) 2 else 1], instances);
+    }
     if (analyses.len == 0) return 0;
     vpi.callback.startOfSimulation();
-    for (analyses) |a| vpi.analog_run.run(a) catch |e| {
+    for (analyses) |a| binding.run(a) catch |e| {
         std.debug.print("vpi_host: the {t} analysis of `{s}` failed: {t}\n", .{ a.kind, path, e });
         return 1;
     };
@@ -161,6 +196,20 @@ fn readAnalyses(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const v
     return out.items;
 }
 
+/// The first word after `key` on the banner's first line opening with it,
+/// or null when no line does (`*! library <file.va>`, `*! instances <n>`).
+fn bannerWord(arena: std.mem.Allocator, io: Io, c_path: []const u8, key: []const u8) !?[]const u8 {
+    const text = try Io.Dir.cwd().readFileAlloc(io, c_path, arena, .limited(1 << 20));
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        var words = std.mem.tokenizeAny(u8, line[key.len..], " \t");
+        return words.next() orelse error.BadAnalysis;
+    }
+    return null;
+}
+
 /// The banner's `*! external <op | tran | ac> <t> <dt> <freq>` lines: the
 /// points `External.run` stands a calltf on, in order.
 fn readPoints(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const External.Point {
@@ -179,18 +228,16 @@ fn readPoints(arena: std.mem.Allocator, io: Io, c_path: []const u8) ![]const Ext
     return out.items;
 }
 
-/// ESPice's shape (VerA #83): a host that solves the circuit itself and binds
-/// VerA only to run the application's calltf. Its `Lib` is the built
+/// ESPice's shape (VerA #83, #84): a host that solves the circuit itself and
+/// binds VerA only to run the application's calltf. Each `Lib` is a built
 /// library's call table with no solution (`n_u = n_rows = n_shares = 0`), so
-/// `vpi_get_analog_value` refuses NOSOLUTION; it sets each point with
-/// `analog_run.setPoint` and calls every call once through the
-/// `contract.SystfHost.call` hook `attach` handed it, with no arguments.
+/// `vpi_get_analog_value` refuses NOSOLUTION; its hop is unused, since this
+/// host calls `Binding.call` directly, as its `contract.SystfHost.call`
+/// would. It sets each point with `analog_run.setPoint`, then, per library
+/// and per instance, calls every call once with no arguments.
 const External = struct {
     const Point = struct { kind: vpi.analog_run.Kind, t: f64, dt: f64, freq: f64 };
-    var call: ?vpi.analog_run.HostCall = null;
-    var n_calls: usize = 0;
     const none = [0]f64{};
-    var no_partials: [0]f64 = .{};
 
     fn zero() callconv(.c) usize {
         return 0;
@@ -198,24 +245,23 @@ const External = struct {
     fn x() callconv(.c) [*]const f64 {
         return &none;
     }
-    fn systf(c: ?vpi.analog_run.HostCall, _: ?vpi.analog_run.HostOut) callconv(.c) void {
-        call = c;
-    }
+    fn ignore(_: ?*anyopaque, _: ?vpi.analog_run.HostCall, _: ?vpi.analog_run.HostOut) callconv(.c) void {}
     fn lib(real: vpi.analog_run.Lib) vpi.analog_run.Lib {
-        n_calls = real.n_systf();
         var l = real;
         l.n_u = zero;
         l.n_rows = zero;
         l.n_shares = zero;
         l.x = x;
-        l.systf = systf;
+        l.systf = ignore;
         return l;
     }
-    fn run(points: []const Point) u8 {
+    fn run(points: []const Point, bindings: []const *vpi.analog_run.Binding, instances: usize) u8 {
         vpi.callback.startOfSimulation();
         for (points) |p| {
             vpi.analog_run.setPoint(.{ .kind = p.kind }, p.t, p.dt, p.freq);
-            for (0..n_calls) |k| _ = call.?(k, &none, 0, &no_partials);
+            for (bindings) |b| for (0..instances) |i| for (0..b.lib.?.n_systf()) |k| {
+                _ = b.call(i, k, &.{}, &.{});
+            };
         }
         vpi.analog_run.setPoint(null, 0, 0, 0);
         vpi.callback.endOfSimulation();

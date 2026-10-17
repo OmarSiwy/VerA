@@ -864,7 +864,7 @@ test "§12.15 ticksOf: vpiSimTime is ticks, a scaled time rounds, and what is no
 
 test "§12.36 with no run: every operation fails and says why" {
     root.close();
-    analog.detach();
+    analog.setPoint(null, 0, 0, 0);
     try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiFinish, @as(c_int, 0)));
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
     try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiStop, @as(c_int, 0)));

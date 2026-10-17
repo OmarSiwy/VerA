@@ -28,7 +28,9 @@ pub const Lib = struct {
     rows: *const fn ([*]f64) callconv(.c) void,
     n_shares: *const fn () callconv(.c) usize,
     shares: *const fn ([*]f64) callconv(.c) void,
-    systf: *const fn (?HostCall, ?HostOut) callconv(.c) void,
+    /// Hands the library the hop its `contract.SystfHost` forwards through,
+    /// and the `ctx` (the `Binding`) to pass back first.
+    systf: *const fn (?*anyopaque, ?HostCall, ?HostOut) callconv(.c) void,
     n_systf: *const fn () callconv(.c) usize,
     systf_name: *const fn (usize, *usize) callconv(.c) [*]const u8,
     systf_tok: *const fn (usize) callconv(.c) u32,
@@ -36,10 +38,14 @@ pub const Lib = struct {
     ac: *const fn (f64, [*]f64, [*]f64) callconv(.c) bool,
 };
 
-/// The C function the library forwards `contract.SystfHost.call` to.
-pub const HostCall = *const fn (usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
-/// The C function the library forwards `contract.SystfHost.out` to.
-pub const HostOut = *const fn (usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+/// The C function the library forwards `contract.SystfHost.call` to:
+/// `(ctx, inst, k, args, n, partials)`, `Binding.call` across a C ABI. `ctx`
+/// is the one `Lib.systf` handed over; `inst` the host's instance of the
+/// device (any value unique per instance, a key and nothing else).
+pub const HostCall = *const fn (?*anyopaque, usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+/// The C function the library forwards `contract.SystfHost.out` to:
+/// `(ctx, inst, k, j, args, n, partials)`, `Binding.output` across a C ABI.
+pub const HostOut = *const fn (?*anyopaque, usize, usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
 
 /// The analyses a host can run: a DC operating point, a transient, or a
 /// small-signal AC sweep around an operating point.
@@ -76,53 +82,407 @@ fn kindOrdinal(k: Kind) u8 {
 
 const Row = struct { flow: bool, hi: i32, lo: i32, flow_u: i32 };
 
-var lib: ?Lib = null;
-var rows: []Row = &.{};
-/// How many unknowns `Lib.x` holds (`Lib.n_u`): 0 for a host that binds
-/// VerA only for the calls and keeps its solution to itself.
-var n_x: usize = 0;
-/// Each row's (resistive, reactive) value at the current x, then each
-/// instance's share of a shared row (`Lib.shares`), the same way.
-var now_vals: []f64 = &.{};
-/// The same rows' and shares' reactive value at the last ACCEPTED solution:
-/// the other operand of the backward-Euler difference.
-var prev_react: []f64 = &.{};
-var vals_fresh = false;
+/// One attached device library (VerA #84): its call table mapped onto the
+/// call objects of its design, the §12.22.2 outputs its calls put, the
+/// solution it holds and the walk `run` takes over it. The host owns it, at
+/// an address that does not move from `attach` to `detach`; two attached at
+/// once keep all of it apart. The routines answer for the binding whose
+/// call or walk is running, else for the one attached to the installed
+/// design (`installed`).
+pub const Binding = struct {
+    lib: ?Lib = null,
+    /// The design this library's calls are objects of, when the binding
+    /// owns one (`owns`, `attach`'s `own`); while it is entered (`enter`),
+    /// the installed design it stands in for.
+    design: ?root.Design = null,
+    owns: bool = false,
+    rows: []Row = &.{},
+    /// How many unknowns `Lib.x` holds (`Lib.n_u`): 0 for a host that binds
+    /// VerA only for the calls and keeps its solution to itself.
+    n_x: usize = 0,
+    /// Each row's (resistive, reactive) value at the current x, then each
+    /// instance's share of a shared row (`Lib.shares`), the same way.
+    now_vals: []f64 = &.{},
+    /// The same rows' and shares' reactive value at the last ACCEPTED
+    /// solution: the other operand of the backward-Euler difference.
+    prev_react: []f64 = &.{},
+    vals_fresh: bool = false,
+    /// §12.8's small-signal solution, every unknown's real part then every
+    /// imaginary part (`Lib.ac`); meaningful while `freq != 0`.
+    ac_x: []f64 = &.{},
+    /// The latest converged and accepted solution's time.
+    t_accepted: f64 = 0,
+    /// A solution has been attempted, so x means something.
+    have_solution: bool = false,
+    /// A later-than-first solution is attempted and not yet accepted: the
+    /// one §12.36 vpiRejectTransientStep can reject.
+    open_step: bool = false,
+    /// §12.36 vpiRejectTransientStep was called on the open step.
+    reject_step: bool = false,
+    /// A solution is attempted and not yet accepted, first one included:
+    /// the one §12.36 vpiTransientFailConverge keeps iterating.
+    awaiting: bool = false,
+    /// §12.36 vpiTransientFailConverge was called on the awaiting solution.
+    fail_converge: bool = false,
+    /// Per device call index: the VPI call object, or null when there is
+    /// none or more than one.
+    call_obj: []?u32 = &.{},
+    /// Per device call index: the arguments the device reads back after the
+    /// call (`contract.Systf.outs`, bit j - 1 for argument j).
+    call_outs: []u64 = &.{},
+    /// Per (call, host instance): its latest calltf's output arguments.
+    outs: std.AutoHashMapUnmanaged(OutKey, Out) = .empty,
+    /// Each call argument's value at the latest evaluation, by object index
+    /// — what `vpi_get_value` answers for an argument with no value of its
+    /// own (an access function, an operation), inside calltf and after it:
+    /// the §12.32.3 sampler reads its expression from an acbAbsTime
+    /// callback. Per call, not per instance: "the latest evaluation" is one.
+    arg_values: std.AutoHashMapUnmanaged(u32, f64) = .empty,
+    /// The §12.22.1 derivative handles handed out for this library's calls.
+    derivs: std.ArrayList(*Deriv) = .empty,
+
+    /// Binds the loaded library and reads its row table and system-function
+    /// call names. `own` is the library's own design (`root.buildDesign`),
+    /// which the binding takes, frees at `detach`, and makes the installed
+    /// one while its calls and walk run; null binds the calls to the
+    /// installed design (`root.design`, which must be open) and makes this
+    /// the binding the routines answer for outside any call. An owned
+    /// design's compiletf/derivtf run here (`systf.buildCalls`); the
+    /// installed one's run at cbEndOfCompile. Precondition: `b` is not
+    /// attached (`.{}` or `detach`ed).
+    pub fn attach(b: *Binding, l: Lib, own: ?root.Design) error{OutOfMemory}!void {
+        std.debug.assert(b.lib == null);
+        b.* = .{ .lib = l, .design = own, .owns = own != null };
+        errdefer b.detach();
+        const prev = enter(b);
+        defer leave(b, prev);
+        // The library names each call by its name and source token, and the
+        // model's call objects carry the token they were built from (both
+        // parsed the same source). A pair two objects share (one call in a
+        // module instantiated twice) binds to none and is refused when
+        // called rather than handed to the wrong one.
+        const n_calls = l.n_systf();
+        b.call_obj = try gpa.alloc(?u32, n_calls);
+        b.call_outs = try gpa.alloc(u64, n_calls);
+        const Site = struct { name: []const u8, tok: u32 };
+        const SiteCtx = struct {
+            pub fn hash(_: @This(), s: Site) u64 {
+                return std.hash.Wyhash.hash(s.tok, s.name);
+            }
+            pub fn eql(_: @This(), x: Site, y: Site) bool {
+                return x.tok == y.tok and std.mem.eql(u8, x.name, y.name);
+            }
+        };
+        // Each analog call site's object, or null when two objects share
+        // it: one pass over the rows, not one per call.
+        var by_site: std.HashMapUnmanaged(Site, ?u32, SiteCtx, std.hash_map.default_max_load_percentage) = .empty;
+        defer by_site.deinit(gpa);
+        for (root.design.?.objects, 0..) |o, i| {
+            if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
+            const g = try by_site.getOrPut(gpa, .{ .name = o.name, .tok = o.src_tok });
+            g.value_ptr.* = if (g.found_existing) null else @intCast(i);
+        }
+        for (b.call_obj, b.call_outs, 0..) |*c, *m, k| {
+            var len: usize = 0;
+            const name = l.systf_name(k, &len)[0..len];
+            c.* = by_site.get(.{ .name = name, .tok = l.systf_tok(k) }) orelse null;
+            m.* = l.systf_outs(k);
+        }
+        if (b.owns) systf.buildCalls();
+        if (n_calls != 0) l.systf(b, deviceCall, deviceOut);
+        const n = l.n_rows();
+        b.rows = try gpa.alloc(Row, n);
+        const n_vals = n + l.n_shares();
+        b.now_vals = try gpa.alloc(f64, 2 * n_vals);
+        b.prev_react = try gpa.alloc(f64, n_vals);
+        b.n_x = l.n_u();
+        b.ac_x = try gpa.alloc(f64, 2 * b.n_x);
+        for (b.rows, 0..) |*r, k| {
+            var m: [4]i32 = undefined;
+            l.row(k, &m);
+            r.* = .{ .flow = m[0] == 1, .hi = m[1], .lo = m[2], .flow_u = m[3] };
+        }
+        if (!b.owns) installed = b;
+    }
+
+    /// Unbinds the library and frees everything `attach` and the analyses
+    /// built, the design it owns included, and clears the point
+    /// (`setPoint`). Safe on a binding never attached. Precondition: none of
+    /// its calls or walks is running.
+    pub fn detach(b: *Binding) void {
+        std.debug.assert(active != b);
+        gpa.free(b.call_obj);
+        gpa.free(b.call_outs);
+        var it = b.outs.valueIterator();
+        while (it.next()) |o| {
+            gpa.free(o.buf);
+            gpa.free(o.put);
+        }
+        b.outs.deinit(gpa);
+        b.arg_values.deinit(gpa);
+        for (b.derivs.items) |dv| gpa.destroy(dv);
+        b.derivs.deinit(gpa);
+        gpa.free(b.rows);
+        gpa.free(b.now_vals);
+        gpa.free(b.prev_react);
+        gpa.free(b.ac_x);
+        if (b.owns) if (b.design) |*d| d.deinit();
+        if (installed == b) installed = null;
+        b.* = .{};
+        setPoint(null, 0, 0, 0);
+    }
+
+    /// Runs one analysis to its end, delivering every §12.31.3 callback.
+    ///
+    /// `tran` walks a grid of `max_step` (default (stop - start)/50) plus
+    /// every forced time; each tentative solution passes acbConvergenceTest
+    /// before it is accepted, and a rejection (or §12.36
+    /// vpiRejectTransientStep) halves the step from the last accepted point.
+    /// `op` is one DC solution, first and last at once. `ac` is that
+    /// solution (acbInitialStep, at frequency 0), then one small-signal
+    /// solution per frequency, each an acbAcceptedPoint and the last also
+    /// acbFinalStep (`Vague_Decisions.md` VD-098). A rejected solution
+    /// leaves no history. §12.36 vpiTransientFailConverge solves the same
+    /// time again. `BackupExhausted`: 60 rejections or re-solves of one step.
+    pub fn run(b: *Binding, a: Analysis) Error!void {
+        const l = b.lib orelse return error.NoLibrary;
+        const prev = enter(b);
+        defer leave(b, prev);
+        l.open(kindOrdinal(a.kind));
+        @memset(b.prev_react, 0);
+        var run_a = a;
+        // §12.18 vpiTransientMaxStep is the step this walk takes.
+        if (run_a.kind == .tran and run_a.max_step <= 0) run_a.max_step = (a.stop - a.start) / 50.0;
+        setPoint(run_a, a.start, 0, 0);
+        defer setPoint(null, t_now, delta, 0);
+        b.t_accepted = a.start;
+        const last0 = a.kind == .op or (a.kind == .tran and a.stop <= a.start);
+        // The first solution has no earlier time to back up to; §12.31.3's
+        // rejection is honoured from the next one on. §12.36's
+        // vpiTransientFailConverge needs none, so it is honoured here too.
+        var first_tries: u32 = 0;
+        while (true) : (first_tries += 1) {
+            if (first_tries == 60) return error.BackupExhausted;
+            try b.attempt(l, a.start, 0, true, last0);
+            _ = callback.convergenceRejected();
+            if (!b.fail_converge) break;
+        }
+        b.accept(l, true, last0);
+        if (last0) return;
+        if (a.kind == .ac) return b.sweep(l, a);
+
+        const h = run_a.max_step;
+        while (!sameTime(b.t_accepted, a.stop) and b.t_accepted < a.stop) {
+            // The next grid point strictly after t, by index rather than by
+            // accumulation, so a thousand steps do not drift off `stop`.
+            const k = @floor((b.t_accepted - a.start) / h + 1e-9) + 1;
+            var target = @min(a.start + k * h, a.stop);
+            if (callback.nextForced(b.t_accepted, target)) |f| target = f;
+            if (a.stop - target < h * 1e-6) target = a.stop;
+            var tries: u32 = 0;
+            while (true) : (tries += 1) {
+                if (tries == 60) return error.BackupExhausted;
+                try b.attempt(l, target, target - b.t_accepted, false, sameTime(target, a.stop));
+                const rejected = callback.convergenceRejected() or b.reject_step;
+                if (!(rejected or b.fail_converge)) break;
+                // "backup to an earlier time": half the step, from the same
+                // accepted solution. A vpiTransientFailConverge alone keeps
+                // the time and iterates again.
+                if (rejected) target = b.t_accepted + (target - b.t_accepted) / 2;
+            }
+            b.accept(l, false, sameTime(target, a.stop));
+        }
+    }
+
+    /// The AC half of `run`: `a.points` small-signal solutions around the
+    /// accepted operating point. §12.31.3 names no per-frequency reason, so
+    /// each is an acbAcceptedPoint, the last also acbFinalStep; §12.8's
+    /// vpi_get_analog_freq() tells an application which kind of solution it
+    /// is standing on.
+    fn sweep(b: *Binding, l: Lib, a: Analysis) Error!void {
+        defer setPoint(current, t_now, delta, 0);
+        const n = @max(a.points, 1);
+        for (0..n) |k| {
+            const f = if (n == 1) a.fstart else a.fstart + (a.fstop - a.fstart) * @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(n - 1));
+            const u = b.ac_x.len / 2;
+            if (!l.ac(2 * std.math.pi * f, b.ac_x.ptr, b.ac_x[u..].ptr)) return error.Singular;
+            setPoint(current, t_now, delta, f);
+            callback.fireAnalog(callback.acbAcceptedPoint);
+            if (k == n - 1) callback.fireAnalog(callback.acbFinalStep);
+        }
+    }
+
+    fn attempt(b: *Binding, l: Lib, t: f64, dt: f64, first: bool, last: bool) Error!void {
+        setPoint(current, t, dt, 0);
+        b.have_solution = true;
+        b.open_step = !first;
+        b.awaiting = true;
+        b.reject_step = false;
+        b.fail_converge = false;
+        b.vals_fresh = false;
+        _ = l.solve(t, dt, first, last);
+    }
+
+    fn accept(b: *Binding, l: Lib, first: bool, last: bool) void {
+        b.open_step = false;
+        b.awaiting = false;
+        // Row values are the accepted solution's, read before history moves.
+        b.refreshRows(l);
+        l.accept();
+        b.t_accepted = t_now;
+        // §12.31.3 does not say whether the first solution (acbInitialStep)
+        // is also an acbAcceptedPoint. VerA says no, so accepted points
+        // strictly advance (p03_02 pins this reading); the final one is an
+        // accepted point, then acbFinalStep.
+        if (first) callback.fireAnalog(callback.acbInitialStep);
+        callback.fireTimed(b.t_accepted);
+        if (!first) callback.fireAnalog(callback.acbAcceptedPoint);
+        if (last) callback.fireAnalog(callback.acbFinalStep);
+        // Only now does this solution's charge become the next step's history.
+        for (b.prev_react, 0..) |*q, k| q.* = b.now_vals[2 * k + 1];
+    }
+
+    fn refreshRows(b: *Binding, l: Lib) void {
+        if (b.vals_fresh or b.rows.len == 0) return;
+        l.rows(b.now_vals.ptr);
+        if (b.now_vals.len > 2 * b.rows.len) l.shares(b.now_vals[2 * b.rows.len ..].ptr);
+        b.vals_fresh = true;
+    }
+
+    /// `contract.SystfHost.call` for host instance `inst` of the device:
+    /// runs the registration's calltf "each time the system task or function
+    /// is invoked during simulation execution" (§12.32.1), with
+    /// `vpi_handle(vpiSysTfCall, NULL)` naming call `k` and the per-call
+    /// state (§12.22.2 outputs, IEEE 1364-2005 §27.31 user data) that
+    /// instance's. Returns what calltf put on the call (§12.30); `partials`
+    /// receives what it put on §12.22.1 derivative objects, 0 elsewhere.
+    /// A call that is no one call object of the design is refused
+    /// (AMBIGUOUS) and returns 0. Asserts `partials.len == args.len`.
+    pub fn call(b: *Binding, inst: usize, k: usize, args: []const f64, partials: []f64) f64 {
+        std.debug.assert(partials.len == args.len);
+        @memset(partials, 0);
+        const at = if (k < b.call_obj.len) b.call_obj[k] else null;
+        const obj = at orelse {
+            root.fail("AMBIGUOUS", "this analog system function call is not one call object of the design (a module instantiated twice shares its calls' source)", .{});
+            return 0;
+        };
+        const prev = enter(b);
+        defer leave(b, prev);
+        const n = args.len;
+        const o = &root.design.?.objects[obj];
+        const reg = systf.find(o.name, .analog) orelse return 0;
+        for (o.lists) |li| if (li.tag == code.vpiArgument) {
+            for (li.items[0..@min(n, li.items.len)], 0..) |a, j| b.arg_values.put(gpa, a, args[j]) catch {};
+        };
+        const f = reg.analog.calltf orelse return 0;
+        // This call's outputs start over: an argument calltf does not put
+        // keeps its value (`output`).
+        if (b.call_outs[k] != 0) {
+            const g = b.outs.getOrPut(gpa, .{ .k = k, .inst = inst }) catch return oom();
+            if (!g.found_existing) {
+                const buf = gpa.alloc(f64, n * (n + 1)) catch {
+                    b.outs.removeByPtr(g.key_ptr);
+                    return oom();
+                };
+                const put = gpa.alloc(bool, n) catch {
+                    gpa.free(buf);
+                    b.outs.removeByPtr(g.key_ptr);
+                    return oom();
+                };
+                g.value_ptr.* = .{ .buf = buf, .put = put, .n = n };
+            }
+            const rec = g.value_ptr.*;
+            // One call site always passes the same arguments.
+            std.debug.assert(rec.n == n);
+            @memcpy(rec.val(), args);
+            @memset(rec.put, false);
+            @memset(rec.part(), 0);
+        }
+        var st: Active = .{ .b = b, .obj = obj, .k = k, .inst = inst, .result = 0, .partials = partials };
+        const outer = .{ active_call, systf.active, systf.active_inst };
+        active_call = &st;
+        systf.active = obj;
+        systf.active_inst = inst;
+        defer {
+            active_call, systf.active, systf.active_inst = outer;
+        }
+        var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(o), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
+        _ = f(&cb);
+        return st.result;
+    }
+
+    /// `contract.SystfHost.out` for host instance `inst`: argument j
+    /// (1-based) of call k as that instance's latest calltf left it
+    /// (§12.22.2), with its partials; an argument calltf put nothing on is
+    /// unchanged (partial 1 on itself). Writes every slot of `partials`;
+    /// j outside 1..`args.len` returns 0. Asserts `partials.len == args.len`.
+    pub fn output(b: *const Binding, inst: usize, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
+        std.debug.assert(partials.len == args.len);
+        const n = args.len;
+        @memset(partials, 0);
+        if (j == 0 or j > n) return 0;
+        const o = b.outs.get(.{ .k = k, .inst = inst }) orelse {
+            partials[j - 1] = 1;
+            return args[j - 1];
+        };
+        if (o.n != n or !o.put[j - 1]) {
+            partials[j - 1] = 1;
+            return args[j - 1];
+        }
+        @memcpy(partials, o.part()[(j - 1) * n ..][0..n]);
+        return o.val()[j - 1];
+    }
+};
+
+/// The binding whose call or walk is running (`enter`), else null.
+var active: ?*Binding = null;
+/// The binding attached to the installed design, which the routines answer
+/// for outside any call or walk (a cbEndOfSimulation reading a value after
+/// VerA's walk); null when none is.
+var installed: ?*Binding = null;
+
+/// The binding the routines answer for now.
+fn bound() ?*Binding {
+    return active orelse installed;
+}
+
+/// Makes `b` the binding the routines answer for and, when it owns a
+/// design, that design the installed one, until `leave(b, <the result>)`.
+/// Entering the binding already entered changes nothing; entries nest LIFO.
+fn enter(b: *Binding) ?*Binding {
+    const prev = active;
+    if (prev == b) return prev;
+    if (b.owns) std.mem.swap(?root.Design, &root.design, &b.design);
+    active = b;
+    return prev;
+}
+
+/// Undoes the `enter(b)` that returned `prev`.
+fn leave(b: *Binding, prev: ?*Binding) void {
+    if (prev == b) return;
+    std.debug.assert(active == b);
+    if (b.owns) std.mem.swap(?root.Design, &root.design, &b.design);
+    active = prev;
+}
 
 /// The analysis running, or null between analyses.
 var current: ?Analysis = null;
 /// The time of the solution being attempted, or of the latest accepted one.
 var t_now: f64 = 0;
-/// The latest converged and accepted solution's time.
-var t_accepted: f64 = 0;
 /// The step being attempted, or the one the accepted solution was reached by.
 var delta: f64 = 0;
-/// A solution has been attempted in this process, so x means something.
-var have_solution = false;
-/// A later-than-first solution is attempted and not yet accepted: the one
-/// §12.36 vpiRejectTransientStep can reject.
-var open_step = false;
-/// §12.36 vpiRejectTransientStep was called on the open step.
-var reject_step = false;
-/// A solution is attempted and not yet accepted, first one included: the one
-/// §12.36 vpiTransientFailConverge keeps iterating.
-var awaiting = false;
-/// §12.36 vpiTransientFailConverge was called on the awaiting solution.
-var fail_converge = false;
 /// §12.8 the frequency of the small-signal solution an AC sweep stands on,
 /// 0 elsewhere (its operating point included).
 var freq: f64 = 0;
-/// That solution, every unknown's real part then every imaginary part
-/// (`Lib.ac`); meaningful while `freq != 0`.
-var ac_x: []f64 = &.{};
 
 /// §12.36 vpiRejectTransientStep: "cause the current analog simulation time
 /// point to be rejected". The walk backs up as for an acbConvergenceTest
 /// rejection. False when no rejectable solution is open: outside an analysis,
 /// on the first solution (no earlier time to back up to), or once accepted.
 pub fn rejectStep() bool {
-    if (current == null or !open_step) return false;
-    reject_step = true;
+    const b = bound() orelse return false;
+    if (current == null or !b.open_step) return false;
+    b.reject_step = true;
     return true;
 }
 
@@ -131,96 +491,13 @@ pub fn rejectStep() bool {
 /// again from the solution it has, with no backup and no acceptance between.
 /// False when no solution is awaiting acceptance.
 pub fn failConverge() bool {
-    if (current == null or !awaiting) return false;
-    fail_converge = true;
+    const b = bound() orelse return false;
+    if (current == null or !b.awaiting) return false;
+    b.fail_converge = true;
     return true;
 }
 
 const gpa = std.heap.smp_allocator;
-
-/// Binds the loaded library and reads its row table and system-function call
-/// names. Precondition: a design is open (`root.design`), and any earlier
-/// library was `detach`ed, whose tables this overwrites.
-pub fn attach(l: Lib) error{OutOfMemory}!void {
-    lib = l;
-    // The library names each call by its name and source token, and the
-    // model's call objects carry the token they were built from (both parsed
-    // the same source). A pair two objects share (one call in a module
-    // instantiated twice) binds to none and is refused when called rather
-    // than handed to the wrong one.
-    const n_calls = l.n_systf();
-    call_obj = try gpa.alloc(?u32, n_calls);
-    call_outs = try gpa.alloc(u64, n_calls);
-    outs = try gpa.alloc(?Out, n_calls);
-    @memset(outs, null);
-    const Site = struct { name: []const u8, tok: u32 };
-    const SiteCtx = struct {
-        pub fn hash(_: @This(), s: Site) u64 {
-            return std.hash.Wyhash.hash(s.tok, s.name);
-        }
-        pub fn eql(_: @This(), a: Site, b: Site) bool {
-            return a.tok == b.tok and std.mem.eql(u8, a.name, b.name);
-        }
-    };
-    // Each analog call site's object, or null when two objects share it: one
-    // pass over the rows, not one per call.
-    var by_site: std.HashMapUnmanaged(Site, ?u32, SiteCtx, std.hash_map.default_max_load_percentage) = .empty;
-    defer by_site.deinit(gpa);
-    for (root.design.?.objects, 0..) |o, i| {
-        if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
-        const g = try by_site.getOrPut(gpa, .{ .name = o.name, .tok = o.src_tok });
-        g.value_ptr.* = if (g.found_existing) null else @intCast(i);
-    }
-    for (call_obj, call_outs, 0..) |*c, *m, k| {
-        var len: usize = 0;
-        const name = l.systf_name(k, &len)[0..len];
-        c.* = by_site.get(.{ .name = name, .tok = l.systf_tok(k) }) orelse null;
-        m.* = l.systf_outs(k);
-    }
-    if (n_calls != 0) l.systf(deviceCall, deviceOut);
-    const n = l.n_rows();
-    rows = try gpa.alloc(Row, n);
-    const n_vals = n + l.n_shares();
-    now_vals = try gpa.alloc(f64, 2 * n_vals);
-    prev_react = try gpa.alloc(f64, n_vals);
-    n_x = l.n_u();
-    ac_x = try gpa.alloc(f64, 2 * n_x);
-    for (rows, 0..) |*r, k| {
-        var m: [4]i32 = undefined;
-        l.row(k, &m);
-        r.* = .{ .flow = m[0] == 1, .hi = m[1], .lo = m[2], .flow_u = m[3] };
-    }
-}
-
-/// Unbinds the library and frees everything `attach` and the analyses built.
-pub fn detach() void {
-    lib = null;
-    gpa.free(call_obj);
-    call_obj = &.{};
-    gpa.free(call_outs);
-    call_outs = &.{};
-    for (outs) |o| if (o) |r| {
-        gpa.free(r.buf);
-        gpa.free(r.put);
-    };
-    gpa.free(outs);
-    outs = &.{};
-    arg_values.clearAndFree(gpa);
-    active_call = null;
-    freeDerivs();
-    gpa.free(rows);
-    gpa.free(now_vals);
-    gpa.free(prev_react);
-    gpa.free(ac_x);
-    ac_x = &.{};
-    rows = &.{};
-    n_x = 0;
-    now_vals = &.{};
-    prev_react = &.{};
-    setPoint(null, 0, 0, 0);
-    t_accepted = 0;
-    have_solution = false;
-}
 
 /// Sets the point §12.7-§12.9 and §12.18 answer for: the analysis `a` (null
 /// between analyses), the time `t` of the solution attempted, the step `dt`
@@ -229,18 +506,14 @@ pub fn detach() void {
 /// host that walks its own analysis and binds VerA only for the calls (a
 /// `Lib` with no solution, `vpi_get_analog_value` then refuses NOSOLUTION)
 /// calls it before each `contract.SystfHost.call`, so a calltf reads the
-/// host's point. `a.kind` decides which values the routines report (§12.9:
+/// host's point. One point per process, for every binding: §12.7-§12.9 take
+/// no argument. `a.kind` decides which values the routines report (§12.9:
 /// zero time outside a transient); its bounds are §12.18's.
 pub fn setPoint(a: ?Analysis, t: f64, dt: f64, f: f64) void {
     current = a;
     t_now = t;
     delta = dt;
     freq = f;
-}
-
-/// The device library `attach` installed, until `detach`.
-pub fn attached() ?Lib {
-    return lib;
 }
 
 /// The analysis `run` is walking, its default `max_step` filled in; null
@@ -256,7 +529,8 @@ pub fn time() f64 {
 
 /// Where acbElapsedTime counts from: "the current solution".
 pub fn acceptedTime() f64 {
-    return if (current != null) t_accepted else 0;
+    const b = bound() orelse return 0;
+    return if (current != null) b.t_accepted else 0;
 }
 
 /// Two analog instants are one when they differ by rounding only: a forced
@@ -267,125 +541,11 @@ pub fn sameTime(a: f64, b: f64) bool {
     return @abs(a - b) <= 1e-12 * @max(1.0, @max(@abs(a), @abs(b))) or @abs(a - b) <= 1e-21;
 }
 
-/// `run`'s failures: `NoLibrary`, no `attach` yet; `BackupExhausted`, see
-/// `run`; `Singular`, an AC point whose small-signal system has no solution.
-/// `DidNotConverge` is never returned today: `attempt` discards
+/// `Binding.run`'s failures: `NoLibrary`, not attached; `BackupExhausted`,
+/// see `run`; `Singular`, an AC point whose small-signal system has no
+/// solution. `DidNotConverge` is never returned today: `attempt` discards
 /// `Lib.solve`'s result.
 pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted, Singular };
-
-/// Runs one analysis to its end, delivering every §12.31.3 callback.
-///
-/// `tran` walks a grid of `max_step` (default (stop - start)/50) plus every
-/// forced time; each tentative solution passes acbConvergenceTest before it is
-/// accepted, and a rejection (or §12.36 vpiRejectTransientStep) halves the step from the last accepted point.
-/// `op` is one DC solution, first and last at once. `ac` is that solution
-/// (acbInitialStep, at frequency 0), then one small-signal solution per
-/// frequency, each an acbAcceptedPoint and the last also acbFinalStep
-/// (`Vague_Decisions.md` VD-098). A rejected solution
-/// leaves no history. §12.36 vpiTransientFailConverge solves the same time
-/// again. `BackupExhausted`: 60 rejections or re-solves of one step.
-pub fn run(a: Analysis) Error!void {
-    const l = lib orelse return error.NoLibrary;
-    l.open(kindOrdinal(a.kind));
-    @memset(prev_react, 0);
-    var run_a = a;
-    // §12.18 vpiTransientMaxStep is the step this walk takes.
-    if (run_a.kind == .tran and run_a.max_step <= 0) run_a.max_step = (a.stop - a.start) / 50.0;
-    setPoint(run_a, a.start, 0, 0);
-    defer setPoint(null, t_now, delta, 0);
-    t_accepted = a.start;
-    const last0 = a.kind == .op or (a.kind == .tran and a.stop <= a.start);
-    // The first solution has no earlier time to back up to; §12.31.3's
-    // rejection is honoured from the next one on. §12.36's
-    // vpiTransientFailConverge needs none, so it is honoured here too.
-    var first_tries: u32 = 0;
-    while (true) : (first_tries += 1) {
-        if (first_tries == 60) return error.BackupExhausted;
-        try attempt(l, a.start, 0, true, last0);
-        _ = callback.convergenceRejected();
-        if (!fail_converge) break;
-    }
-    accept(l, true, last0);
-    if (last0) return;
-    if (a.kind == .ac) return sweep(l, a);
-
-    const h = run_a.max_step;
-    while (!sameTime(t_accepted, a.stop) and t_accepted < a.stop) {
-        // The next grid point strictly after t, by index rather than by
-        // accumulation, so a thousand steps do not drift off `stop`.
-        const k = @floor((t_accepted - a.start) / h + 1e-9) + 1;
-        var target = @min(a.start + k * h, a.stop);
-        if (callback.nextForced(t_accepted, target)) |f| target = f;
-        if (a.stop - target < h * 1e-6) target = a.stop;
-        var tries: u32 = 0;
-        while (true) : (tries += 1) {
-            if (tries == 60) return error.BackupExhausted;
-            try attempt(l, target, target - t_accepted, false, sameTime(target, a.stop));
-            const rejected = callback.convergenceRejected() or reject_step;
-            if (!(rejected or fail_converge)) break;
-            // "backup to an earlier time": half the step, from the same
-            // accepted solution. A vpiTransientFailConverge alone keeps
-            // the time and iterates again.
-            if (rejected) target = t_accepted + (target - t_accepted) / 2;
-        }
-        accept(l, false, sameTime(target, a.stop));
-    }
-}
-
-/// The AC half of `run`: `a.points` small-signal solutions around the
-/// accepted operating point. §12.31.3 names no per-frequency reason, so each
-/// is an acbAcceptedPoint, the last also acbFinalStep; §12.8's
-/// vpi_get_analog_freq() tells an application which kind of solution it is
-/// standing on.
-fn sweep(l: Lib, a: Analysis) Error!void {
-    defer setPoint(current, t_now, delta, 0);
-    const n = @max(a.points, 1);
-    for (0..n) |k| {
-        const f = if (n == 1) a.fstart else a.fstart + (a.fstop - a.fstart) * @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(n - 1));
-        const u = ac_x.len / 2;
-        if (!l.ac(2 * std.math.pi * f, ac_x.ptr, ac_x[u..].ptr)) return error.Singular;
-        setPoint(current, t_now, delta, f);
-        callback.fireAnalog(callback.acbAcceptedPoint);
-        if (k == n - 1) callback.fireAnalog(callback.acbFinalStep);
-    }
-}
-
-fn attempt(l: Lib, t: f64, dt: f64, first: bool, last: bool) Error!void {
-    setPoint(current, t, dt, 0);
-    have_solution = true;
-    open_step = !first;
-    awaiting = true;
-    reject_step = false;
-    fail_converge = false;
-    vals_fresh = false;
-    _ = l.solve(t, dt, first, last);
-}
-
-fn accept(l: Lib, first: bool, last: bool) void {
-    open_step = false;
-    awaiting = false;
-    // Row values are the accepted solution's, read before history moves.
-    refreshRows(l);
-    l.accept();
-    t_accepted = t_now;
-    // §12.31.3 does not say whether the first solution (acbInitialStep) is
-    // also an acbAcceptedPoint. VerA says no, so accepted points strictly
-    // advance (p03_02 pins this reading); the final one is an accepted point,
-    // then acbFinalStep.
-    if (first) callback.fireAnalog(callback.acbInitialStep);
-    callback.fireTimed(t_accepted);
-    if (!first) callback.fireAnalog(callback.acbAcceptedPoint);
-    if (last) callback.fireAnalog(callback.acbFinalStep);
-    // Only now does this solution's charge become the next step's history.
-    for (prev_react, 0..) |*q, k| q.* = now_vals[2 * k + 1];
-}
-
-fn refreshRows(l: Lib) void {
-    if (vals_fresh or rows.len == 0) return;
-    l.rows(now_vals.ptr);
-    if (now_vals.len > 2 * rows.len) l.shares(now_vals[2 * rows.len ..].ptr);
-    vals_fresh = true;
-}
 
 // ---------------------------------------------------------------------------
 // §12.10 values
@@ -402,9 +562,9 @@ fn unknownAt(x: [*]const f64, row: u32) f64 {
 /// host does not linearise per row.
 pub const ValueError = error{ NoAnalysis, NoSolution, Unknowable, SmallSignal };
 
-/// Whether `Lib.x` holds `row`: ground reads 0 and needs no slot.
-fn holds(row: u32) bool {
-    return row == @import("ir").Lowered.ground or row < n_x;
+/// Whether `bi`'s `Lib.x` holds `row`: ground reads 0 and needs no slot.
+fn holds(bi: *const Binding, row: u32) bool {
+    return row == @import("ir").Lowered.ground or row < bi.n_x;
 }
 
 /// §11.6.7 a quantity's "real value" and "imaginary value".
@@ -419,18 +579,20 @@ pub const Value = struct { re: f64, im: f64 = 0 };
 /// instances' unnamed branches share the row, it is this instance's own share
 /// (`vpiShares`, §5.4.1), the same way.
 fn quantityValue(q: *const root.Obj) ValueError!Value {
-    const l = lib orelse return error.NoAnalysis;
+    const bi = bound() orelse return error.NoAnalysis;
+    const l = bi.lib orelse return error.NoAnalysis;
     const d = &root.design.?;
+    const rows = bi.rows;
     const b = root.coldOf(&d.objects[root.coldOf(q).branch orelse return error.NoAnalysis]);
     // The library is outside data: every slot read below is checked against
     // what it published, before the solution is.
-    if (!holds(b.hi_row) or !holds(b.lo_row)) return error.NoSolution;
-    if (b.contrib_pot) |k| if (k >= rows.len or (rows[k].flow_u >= 0 and @as(usize, @intCast(rows[k].flow_u)) >= n_x)) return error.NoSolution;
+    if (!holds(bi, b.hi_row) or !holds(bi, b.lo_row)) return error.NoSolution;
+    if (b.contrib_pot) |k| if (k >= rows.len or (rows[k].flow_u >= 0 and @as(usize, @intCast(rows[k].flow_u)) >= bi.n_x)) return error.NoSolution;
     if (b.contrib_flow != null and rows.len == 0) return error.NoSolution;
-    if (!have_solution) return error.NoAnalysis;
+    if (!bi.have_solution) return error.NoAnalysis;
     const ac = freq != 0;
-    const x = if (ac) ac_x.ptr else l.x();
-    const xi = ac_x[ac_x.len / 2 ..].ptr;
+    const x = if (ac) bi.ac_x.ptr else l.x();
+    const xi = bi.ac_x[bi.ac_x.len / 2 ..].ptr;
     const is_flow = b.flow != null and &d.objects[b.flow.?] == q;
     if (!is_flow) return .{
         .re = unknownAt(x, b.hi_row) - unknownAt(x, b.lo_row),
@@ -446,12 +608,12 @@ fn quantityValue(q: *const root.Obj) ValueError!Value {
     }
     if (b.contrib_flow) |row| {
         if (ac) return error.SmallSignal;
-        refreshRows(l);
+        bi.refreshRows(l);
         // A share's values follow the rows'.
         const k = if (b.contrib_share) |sh| rows.len + sh else row;
-        if (2 * k + 1 >= now_vals.len) return error.Unknowable;
-        var v = now_vals[2 * k];
-        if (delta > 0) v += (now_vals[2 * k + 1] - prev_react[k]) / delta;
+        if (2 * k + 1 >= bi.now_vals.len) return error.Unknowable;
+        var v = bi.now_vals[2 * k];
+        if (delta > 0) v += (bi.now_vals[2 * k + 1] - bi.prev_react[k]) / delta;
         return .{ .re = sign * v };
     }
     // §5.6.1.3: a branch with no source retains nothing, and is an open
@@ -659,18 +821,10 @@ pub export fn vpi_get_analog_freq() f64 {
 // §12.32 analog system function calls, during the analysis
 // ---------------------------------------------------------------------------
 
-/// Per device call index: the VPI call object, or null when there is none
-/// or more than one.
-var call_obj: []?u32 = &.{};
-
-/// Per device call index: the arguments the device reads back after the
-/// call (`contract.Systf.outs`, bit j - 1 for argument j).
-var call_outs: []u64 = &.{};
-
 /// §12.22.2 one call's output arguments, as its latest calltf left them:
 /// `val[j - 1]` and row j - 1 of `part` (d(argument j)/d(argument i)) for each
 /// argument j with `put[j - 1]`, which calltf put a value or a partial on.
-/// `deviceOut` answers from it. One buffer, `buf`, holds all three.
+/// `Binding.output` answers from it. One buffer, `buf`, holds all three.
 const Out = struct {
     buf: []f64,
     put: []bool,
@@ -682,90 +836,31 @@ const Out = struct {
         return o.buf[o.n..];
     }
 };
-var outs: []?Out = &.{};
 
-/// The call whose §12.32 calltf is running.
-const Active = struct { obj: u32, k: usize, result: f64, partials: []f64 };
+/// Which output record: device call k, run for host instance `inst`.
+const OutKey = struct { k: usize, inst: usize };
+
+/// The call whose §12.32 calltf is running: its binding, object, device
+/// call index and host instance.
+const Active = struct { b: *Binding, obj: u32, k: usize, inst: usize, result: f64, partials: []f64 };
 var active_call: ?*Active = null;
 
-/// Each call argument's value at the latest evaluation, by object index —
-/// what `vpi_get_value` answers for an argument with no value of its own
-/// (an access function, an operation), inside calltf and after it: the
-/// §12.32.3 sampler reads its expression from an acbAbsTime callback.
-var arg_values: std.AutoHashMapUnmanaged(u32, f64) = .empty;
+/// `HostCall`: `Binding.call` for a library behind a C ABI. `ctx` is the
+/// binding `attach` handed the library (`Lib.systf`).
+fn deviceCall(ctx: ?*anyopaque, inst: usize, k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
+    const b: *Binding = @ptrCast(@alignCast(ctx.?));
+    return b.call(inst, k, args[0..n], partials[0..n]);
+}
 
-/// `contract.SystfHost.call`, for the library: runs the registration's calltf
-/// "each time the system task or function is invoked during simulation
-/// execution" (§12.32.1), with `vpi_handle(vpiSysTfCall, NULL)` naming this
-/// call. Returns what calltf put on the call (§12.30); `partials` receives
-/// what it put on §12.22.1 derivative objects, 0 elsewhere.
-fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
-    @memset(partials[0..n], 0);
-    const at = if (k < call_obj.len) call_obj[k] else null;
-    const obj = at orelse {
-        root.fail("AMBIGUOUS", "this analog system function call is not one call object of the design (a module instantiated twice shares its calls' source)", .{});
-        return 0;
-    };
-    const d = &root.design.?;
-    const o = &d.objects[obj];
-    const reg = systf.find(o.name, .analog) orelse return 0;
-    for (o.lists) |l| if (l.tag == code.vpiArgument) {
-        for (l.items[0..@min(n, l.items.len)], 0..) |a, j| arg_values.put(gpa, a, args[j]) catch {};
-    };
-    const f = reg.analog.calltf orelse return 0;
-    // This call's outputs start over: an argument calltf does not put keeps
-    // its value (`deviceOut`).
-    if (call_outs[k] != 0) {
-        if (outs[k] == null) {
-            const buf = gpa.alloc(f64, n * (n + 1)) catch return oom();
-            const put = gpa.alloc(bool, n) catch {
-                gpa.free(buf);
-                return oom();
-            };
-            outs[k] = .{ .buf = buf, .put = put, .n = n };
-        }
-        const rec = outs[k].?;
-        // One call site always passes the same arguments.
-        std.debug.assert(rec.n == n);
-        @memcpy(rec.val(), args[0..n]);
-        @memset(rec.put, false);
-        @memset(rec.part(), 0);
-    }
-    var st: Active = .{ .obj = obj, .k = k, .result = 0, .partials = partials[0..n] };
-    const prev_call = active_call;
-    const prev_sys = systf.active;
-    active_call = &st;
-    systf.active = obj;
-    defer {
-        active_call = prev_call;
-        systf.active = prev_sys;
-    }
-    var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(o), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
-    _ = f(&cb);
-    return st.result;
+/// `HostOut`: `Binding.output` for a library behind a C ABI.
+fn deviceOut(ctx: ?*anyopaque, inst: usize, k: usize, j: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
+    const b: *const Binding = @ptrCast(@alignCast(ctx.?));
+    return b.output(inst, k, j, args[0..n], partials[0..n]);
 }
 
 fn oom() f64 {
     root.fail("NOMEM", "out of memory for a call's output arguments", .{});
     return 0;
-}
-
-/// `contract.SystfHost.out`, for the library: argument j of call k as its
-/// latest calltf left it (§12.22.2), with its partials; an argument calltf
-/// put nothing on is unchanged (partial 1 on itself).
-fn deviceOut(k: usize, j: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
-    @memset(partials[0..n], 0);
-    if (j == 0 or j > n) return 0;
-    const o = (if (k < outs.len) outs[k] else null) orelse {
-        partials[j - 1] = 1;
-        return args[j - 1];
-    };
-    if (o.n != n or !o.put[j - 1]) {
-        partials[j - 1] = 1;
-        return args[j - 1];
-    }
-    @memcpy(partials[0..n], o.part()[(j - 1) * n ..][0..n]);
-    return o.val()[j - 1];
 }
 
 /// §12.30 onto argument j of the call calltf is running for: the value the
@@ -784,11 +879,11 @@ pub fn putArg(o: *const root.Obj, v: f64) bool {
 /// The running call's output record when argument j is one the device reads
 /// back, else null with a NOPUT error.
 fn outputOf(st: *const Active, j: usize, routine: []const u8) ?Out {
-    if (j > 64 or (call_outs[st.k] >> @intCast(j - 1)) & 1 == 0) {
+    if (j > 64 or (st.b.call_outs[st.k] >> @intCast(j - 1)) & 1 == 0) {
         root.fail("NOPUT", "{s}: argument {d} of `{s}` is not a variable the design reads back after the call (§12.22.2)", .{ routine, j, root.design.?.objects[st.obj].name });
         return null;
     }
-    return outs[st.k];
+    return st.b.outs.get(.{ .k = st.k, .inst = st.inst });
 }
 
 /// Which argument (1-based) of call `obj` the object `o` is, or null.
@@ -803,9 +898,10 @@ fn argPosition(obj: u32, o: *const root.Obj) ?usize {
 /// §12.16 for an analog call argument that has no value of its own: its
 /// value at the latest evaluation.
 pub fn argValue(o: *const root.Obj) ?f64 {
+    const b = bound() orelse return null;
     const d = &(root.design orelse return null);
     const i = (@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(root.Obj);
-    return arg_values.get(@intCast(i));
+    return b.arg_values.get(@intCast(i));
 }
 
 /// §12.30 onto the call calltf is running for: its returned value. False
@@ -824,26 +920,24 @@ pub fn putResult(o: *const root.Obj, v: f64) bool {
 
 /// One derivative handle: the call, and (of, wrt) in §12.32.2's numbering.
 /// Each is its own allocation, so a handle stays put while more are handed
-/// out; a handle is ours iff `derivs` lists it. There are at most as many as
-/// derivtf declared (call, of, wrt) triples, since a repeated request returns
-/// the first handle.
+/// out; a handle is ours iff its binding's `derivs` lists it. There are at
+/// most as many as derivtf declared (call, of, wrt) triples, since a
+/// repeated request returns the first handle.
 const Deriv = struct { call: u32, of: c_int, wrt: c_int, value: f64 = 0 };
-var derivs: std.ArrayList(*Deriv) = .empty;
 
-/// Returns `h` as a derivative handle, or null unless it is one handed out;
-/// never dereferences a foreign pointer.
-// ponytail: a linear scan over the handed-out handles; a hash set if a
-// design declares thousands of partials and `vpi_get_value` measures hot.
+/// Returns `h` as a derivative handle of the binding the routines answer
+/// for, or null unless it is one handed out; never dereferences a foreign
+/// pointer.
 pub fn asDeriv(h: vpiHandle) ?*Deriv {
-    const p = h orelse return null;
-    for (derivs.items) |dv| if (@as(*anyopaque, @ptrCast(dv)) == p) return dv;
-    return null;
+    return derivOf(bound() orelse return null, h);
 }
 
-/// Frees every derivative handle (`detach`).
-fn freeDerivs() void {
-    for (derivs.items) |dv| gpa.destroy(dv);
-    derivs.clearAndFree(gpa);
+// ponytail: a linear scan over the handed-out handles; a hash set if a
+// design declares thousands of partials and `vpi_get_value` measures hot.
+fn derivOf(b: *const Binding, h: vpiHandle) ?*Deriv {
+    const p = h orelse return null;
+    for (b.derivs.items) |dv| if (@as(*anyopaque, @ptrCast(dv)) == p) return dv;
+    return null;
 }
 
 /// Which §12.32.2 position `h` is on call `obj`: 0 for the call itself (the
@@ -878,6 +972,7 @@ pub fn derivative(ref1: vpiHandle, ref2: vpiHandle) vpiHandle {
     }
     for (systf.partialsOf(st.obj)) |p| {
         if (p.of != of or p.wrt != wrt) continue;
+        const derivs = &st.b.derivs;
         for (derivs.items) |dv| if (dv.call == st.obj and dv.of == of and dv.wrt == wrt) return @ptrCast(dv);
         derivs.ensureUnusedCapacity(gpa, 1) catch return noMem();
         const dv = gpa.create(Deriv) catch return noMem();
@@ -1012,42 +1107,47 @@ test "§12.10 Table 12-2: every finite real spells whole in the value buffer" {
     }
 }
 
-test "asDeriv: a handle is a derivative only when it was handed out" {
+test "asDeriv: a handle is a derivative only when its binding handed it out" {
     try std.testing.expect(asDeriv(null) == null);
-    defer freeDerivs();
+    var b: Binding = .{};
+    defer b.detach();
     // Past the 64 a fixed array once held: every handle stays distinct and
     // valid while more are added.
     var first: ?*Deriv = null;
     for (0..200) |k| {
-        try derivs.ensureUnusedCapacity(gpa, 1);
+        try b.derivs.ensureUnusedCapacity(gpa, 1);
         const dv = try gpa.create(Deriv);
         dv.* = .{ .call = @intCast(k), .of = 0, .wrt = 1 };
-        derivs.appendAssumeCapacity(dv);
+        b.derivs.appendAssumeCapacity(dv);
         if (first == null) first = dv;
     }
-    try std.testing.expect(asDeriv(@ptrCast(first.?)) == first.?);
-    try std.testing.expectEqual(@as(u32, 199), asDeriv(@ptrCast(derivs.items[199])).?.call);
-    try std.testing.expect(asDeriv(@ptrFromInt(@intFromPtr(first.?) + 1)) == null);
+    try std.testing.expect(derivOf(&b, @ptrCast(first.?)) == first.?);
+    try std.testing.expectEqual(@as(u32, 199), derivOf(&b, @ptrCast(b.derivs.items[199])).?.call);
+    try std.testing.expect(derivOf(&b, @ptrFromInt(@intFromPtr(first.?) + 1)) == null);
     var other: Deriv = .{ .call = 0, .of = 0, .wrt = 1 };
-    try std.testing.expect(asDeriv(@ptrCast(&other)) == null);
+    try std.testing.expect(derivOf(&b, @ptrCast(&other)) == null);
+    // Another library's binding handed out none of them.
+    const empty: Binding = .{};
+    try std.testing.expect(derivOf(&empty, @ptrCast(first.?)) == null);
 }
 
-test "§12.22.2 deviceOut: an argument calltf put nothing on reads back unchanged" {
-    detach();
+test "§12.22.2 Binding.output: an argument calltf put nothing on reads back unchanged" {
+    const b: Binding = .{};
     const args = [3]f64{ 1.5, -2, 4 };
     var partials: [3]f64 = undefined;
     // No record for call 7: argument 2 is itself, its partial on itself 1.
-    try std.testing.expectEqual(@as(f64, -2), deviceOut(7, 2, &args, 3, &partials));
+    try std.testing.expectEqual(@as(f64, -2), b.output(0, 7, 2, &args, &partials));
     try std.testing.expectEqualSlices(f64, &.{ 0, 1, 0 }, &partials);
     // Position 0 (the returned value) and one past the end are no argument.
-    try std.testing.expectEqual(@as(f64, 0), deviceOut(7, 0, &args, 3, &partials));
+    try std.testing.expectEqual(@as(f64, 0), b.output(0, 7, 0, &args, &partials));
     try std.testing.expectEqualSlices(f64, &.{ 0, 0, 0 }, &partials);
-    try std.testing.expectEqual(@as(f64, 0), deviceOut(7, 4, &args, 3, &partials));
+    try std.testing.expectEqual(@as(f64, 0), b.output(0, 7, 4, &args, &partials));
 }
 
 test "§12.7-§12.9, §12.36 with no library: nothing to run, reject or re-solve" {
-    detach();
-    try std.testing.expectError(error.NoLibrary, run(.{ .kind = .op }));
+    setPoint(null, 0, 0, 0);
+    var b: Binding = .{};
+    try std.testing.expectError(error.NoLibrary, b.run(.{ .kind = .op }));
     try std.testing.expect(!rejectStep());
     try std.testing.expect(!failConverge());
     try std.testing.expect(analysis() == null);
@@ -1060,8 +1160,8 @@ test "§12.7-§12.9, §12.36 with no library: nothing to run, reject or re-solve
 }
 
 test "§12.7-§12.9, §12.18 setPoint: the routines answer the point a host set, by its kind" {
-    detach();
-    defer detach();
+    setPoint(null, 0, 0, 0);
+    defer setPoint(null, 0, 0, 0);
     // A transient point at 2 ms reached by a 1 us step: §12.9 the time, §12.7
     // the step, §12.8 zero outside a small-signal analysis.
     setPoint(.{ .kind = .tran, .stop = 5e-3 }, 2e-3, 1e-6, 0);
@@ -1081,11 +1181,131 @@ test "§12.7-§12.9, §12.18 setPoint: the routines answer the point a host set,
 }
 
 test "holds: a calls-only library holds no unknown, ground needs none" {
-    detach();
-    try std.testing.expect(holds(@import("ir").Lowered.ground));
-    try std.testing.expect(!holds(0));
-    n_x = 2;
-    defer n_x = 0;
-    try std.testing.expect(holds(1));
-    try std.testing.expect(!holds(2));
+    var b: Binding = .{};
+    try std.testing.expect(holds(&b, @import("ir").Lowered.ground));
+    try std.testing.expect(!holds(&b, 0));
+    b.n_x = 2;
+    try std.testing.expect(holds(&b, 1));
+    try std.testing.expect(!holds(&b, 2));
+}
+
+/// A calls-only library (#83's stub) of one call, `$c` at source token 5,
+/// whose argument 1 the device reads back.
+const OneCall = struct {
+    const none = [0]f64{};
+    fn open(_: u8) callconv(.c) void {}
+    fn solve(_: f64, _: f64, _: bool, _: bool) callconv(.c) bool {
+        return true;
+    }
+    fn accept() callconv(.c) void {}
+    fn x() callconv(.c) [*]const f64 {
+        return &none;
+    }
+    fn zero() callconv(.c) usize {
+        return 0;
+    }
+    fn one() callconv(.c) usize {
+        return 1;
+    }
+    fn row(_: usize, _: *[4]i32) callconv(.c) void {}
+    fn rows(_: [*]f64) callconv(.c) void {}
+    fn hooks(_: ?*anyopaque, _: ?HostCall, _: ?HostOut) callconv(.c) void {}
+    fn name(_: usize, len: *usize) callconv(.c) [*]const u8 {
+        len.* = 2;
+        return "$c";
+    }
+    fn tok(_: usize) callconv(.c) u32 {
+        return 5;
+    }
+    fn readBack(_: usize) callconv(.c) u64 {
+        return 1;
+    }
+    fn ac(_: f64, _: [*]f64, _: [*]f64) callconv(.c) bool {
+        return false;
+    }
+    const lib: Lib = .{
+        .open = open,
+        .solve = solve,
+        .accept = accept,
+        .x = x,
+        .n_u = zero,
+        .n_rows = zero,
+        .row = row,
+        .rows = rows,
+        .n_shares = zero,
+        .shares = rows,
+        .systf = hooks,
+        .n_systf = one,
+        .systf_name = name,
+        .systf_tok = tok,
+        .systf_outs = readBack,
+        .ac = ac,
+    };
+    const arg = [_]code.List{.{ .tag = code.vpiArgument, .items = &.{1} }};
+
+    /// A design holding that call (object 0, full name `full`) and its
+    /// argument (object 1): the same name, token and index in every design
+    /// it builds, so only the binding tells two apart.
+    fn design(full: []const u8) !root.Design {
+        const a = std.testing.allocator;
+        const objs = try a.alloc(root.Obj, 2);
+        objs[0] = .{ .kind = .code, .owner = .none, .name = "$c", .full = full, .vtype = code.vpiSysFuncCall, .in_analog = true, .src_tok = 5, .lists = &arg };
+        objs[1] = .{ .kind = .code, .owner = .none, .name = "x", .full = "x" };
+        return .{ .gpa = a, .arena = .init(a), .objects = objs, .scopes = &.{}, .top_modules = &.{}, .by_name = .empty, .iters = .empty };
+    }
+
+    /// The registration's calltf: records the design it ran in, and puts
+    /// 1 (library "A") or 2 (any other), plus 10 per host instance, on
+    /// argument 1.
+    var seen_full: []const u8 = "";
+    var seen_objects: [*]root.Obj = undefined;
+    fn calltf(cb: *callback.CbData) callconv(.c) c_int {
+        const d = &root.design.?;
+        const o = root.asObj(cb.obj).?;
+        seen_full = o.full;
+        seen_objects = d.objects.ptr;
+        const tag: f64 = if (o.full[0] == 'A') 1 else 2;
+        _ = putArg(&d.objects[1], tag + 10 * @as(f64, @floatFromInt(systf.active_inst)));
+        return 0;
+    }
+};
+
+test "Binding: two libraries at once, each call in its own design, each (library, instance) its own outputs (VerA #84)" {
+    root.close();
+    defer root.close();
+    root.design = try OneCall.design("A.$c");
+    var tf = "$c".*;
+    const reg: systf.AnalogSystfData = .{ .type = systf.vpiAnalogSysFunc, .sysfunctype = systf.vpiRealFunc, .tfname = &tf, .calltf = OneCall.calltf, .compiletf = null, .sizetf = null, .derivtf = null, .user_data = null };
+    try std.testing.expect(systf.vpi_register_analog_systf(&reg) != null);
+    var a: Binding = .{};
+    defer a.detach();
+    var b: Binding = .{};
+    defer b.detach();
+    try a.attach(OneCall.lib, null);
+    try b.attach(OneCall.lib, try OneCall.design("B.$c"));
+
+    const args = [1]f64{0.5};
+    var p: [1]f64 = undefined;
+    // A's call runs in the installed design; B's in its own, swapped in for
+    // the call and back out after it.
+    _ = a.call(0, 0, &args, &p);
+    try std.testing.expectEqualStrings("A.$c", OneCall.seen_full);
+    try std.testing.expect(OneCall.seen_objects == root.design.?.objects.ptr);
+    _ = b.call(0, 0, &args, &p);
+    try std.testing.expectEqualStrings("B.$c", OneCall.seen_full);
+    try std.testing.expect(OneCall.seen_objects != root.design.?.objects.ptr);
+    try std.testing.expectEqualStrings("A.$c", root.design.?.objects[0].full);
+    _ = a.call(1, 0, &args, &p);
+
+    // Each (library, instance) reads back what its own calltf put: a value
+    // with no partial.
+    try std.testing.expectEqual(@as(f64, 1), a.output(0, 0, 1, &args, &p));
+    try std.testing.expectEqual(@as(f64, 0), p[0]);
+    try std.testing.expectEqual(@as(f64, 11), a.output(1, 0, 1, &args, &p));
+    try std.testing.expectEqual(@as(f64, 2), b.output(0, 0, 1, &args, &p));
+    // B's instance 1 never ran: its argument keeps its value, partial 1.
+    try std.testing.expectEqual(@as(f64, 0.5), b.output(1, 0, 1, &args, &p));
+    try std.testing.expectEqual(@as(f64, 1), p[0]);
+    // Outside any call the routines answer for A, on the installed design.
+    try std.testing.expect(bound().? == &a);
 }

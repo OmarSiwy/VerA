@@ -1289,18 +1289,21 @@ const vpi_lib_head =
     \\/// §12.32 the host's analog system function calls, through a C
     \\/// function: `contract.SystfHost.call` is a Zig-ABI pointer taking slices,
     \\/// which may not cross a shared-library boundary. The library keeps the
-    \\/// `SystfHost` the device calls and forwards each call.
-    \\const HostCall = *const fn (usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+    \\/// `SystfHost` the device calls and forwards each call, with the host's
+    \\/// `ctx` (its binding of this library) and the instance: 0, the one
+    \\/// instance this library holds (`vpi.analog_run.HostCall`).
+    \\const HostCall = *const fn (?*anyopaque, usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
     \\var host_call: ?HostCall = null;
+    \\var host_ctx: ?*anyopaque = null;
     \\fn viaHost(_: *anyopaque, k: usize, args: []const f64, partials: []f64) f64 {
-    \\    return host_call.?(k, args.ptr, args.len, partials.ptr);
+    \\    return host_call.?(host_ctx, 0, k, args.ptr, args.len, partials.ptr);
     \\}
     \\/// §12.22.2 an output argument after its call (`contract.SystfHost.out`),
     \\/// forwarded the same way.
-    \\const HostOut = *const fn (usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+    \\const HostOut = *const fn (?*anyopaque, usize, usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
     \\var host_out: ?HostOut = null;
     \\fn viaHostOut(_: *anyopaque, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
-    \\    return host_out.?(k, j, args.ptr, args.len, partials.ptr);
+    \\    return host_out.?(host_ctx, 0, k, j, args.ptr, args.len, partials.ptr);
     \\}
     \\var host_systf: contract.SystfHost = .{ .ctx = undefined, .call = viaHost };
     \\const n_systf = if (@hasDecl(D, "systf_calls")) D.systf_calls.len else 0;
@@ -1326,7 +1329,8 @@ const vpi_lib_head =
 
 const vpi_lib_tail =
     \\
-    \\export fn vera_vpi_systf(h: ?HostCall, o: ?HostOut) callconv(.c) void {
+    \\export fn vera_vpi_systf(ctx: ?*anyopaque, h: ?HostCall, o: ?HostOut) callconv(.c) void {
+    \\    host_ctx = ctx;
     \\    host_call = h;
     \\    host_out = o;
     \\    host_systf.out = if (o != null) viaHostOut else null;
