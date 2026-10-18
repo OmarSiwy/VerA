@@ -13,7 +13,6 @@
 //!   `vpi`        `harness/c_fixtures.zig`
 //!   `spice`      `harness/spice_decks.zig`
 //!   `golden`     `harness/golden.zig`, the before/after snapshot of what vera says
-//!   `archmap`    `harness/archmap.zig`, specification/UNITS.md and the AGENTS.md map
 //!   `canary`     `harness/canary.zig`, the wrong-on-purpose fixtures the judge must FAIL
 //!
 //! `tools/conformance.py` parses the `pass fail unasserted xfail` row this
@@ -29,7 +28,6 @@ const devices = @import("harness/devices.zig");
 const c_fixtures = @import("harness/c_fixtures.zig");
 const spice_decks = @import("harness/spice_decks.zig");
 const golden = @import("harness/golden.zig");
-const archmap = @import("harness/archmap.zig");
 const canary = @import("harness/canary.zig");
 
 const Io = std.Io;
@@ -45,7 +43,6 @@ test {
     _ = c_fixtures;
     _ = spice_decks;
     _ = golden;
-    _ = archmap;
     _ = canary;
     _ = @import("harness/native.zig");
     _ = @import("harness/fuzz.zig");
@@ -56,7 +53,7 @@ const Args = std.process.Args.Iterator;
 
 /// Entry point. argv[1] is the `vera` executable (`run.addArtifactArg2`), which
 /// `devices` spawns. Then either a
-/// mode word (`devices`, `ieee1364`, `vpi`, `spice`, `golden`, `archmap`) or
+/// mode word (`devices`, `ieee1364`, `vpi`, `spice`, `golden`) or
 /// benchmark arguments:
 ///
 ///   zig build benchmark                         # the suite, timed
@@ -83,7 +80,6 @@ pub fn main(init: std.process.Init) !u8 {
         if (std.mem.eql(u8, a, "vpi")) return c_fixtures.run(init, &args);
         if (std.mem.eql(u8, a, "spice")) return spice_decks.run(init, vera_exe, &args);
         if (std.mem.eql(u8, a, "golden")) return golden.run(init, vera_exe, &args);
-        if (std.mem.eql(u8, a, "archmap")) return archmap.run(init, &args);
         if (std.mem.eql(u8, a, "canary")) return canary.run(init);
     }
     return benchmark(init, vera_exe, first, &args);

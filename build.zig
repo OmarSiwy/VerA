@@ -206,7 +206,6 @@ pub fn build(b: *Build) void {
         .{ "test-vpi-fixtures", "vpi", "Compile the .c VPI fixtures against src/vpi/vpi_user.h" },
         .{ "test-spice", "spice", "Run the .sp decks on sim.spice and grade each against its oracle" },
         .{ "golden", "golden", "Snapshot `vera --emit-zig`, the testbench runner, the `--emit-so` tree and the `.v` program text of every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)" },
-        .{ "archmap", "archmap", "Regenerate specification/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)" },
     }) |s| {
         const run = b.addRunArtifact(suite_exe);
         run.addArtifactArg2(exe, .{});

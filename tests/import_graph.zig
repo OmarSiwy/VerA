@@ -5,8 +5,7 @@
 //! root file. `@import`s inside `\\` string literals (generated device text)
 //! and comments are not edges.
 //!
-//! Shared by `harness/archmap.zig` (specification/UNITS.md) and `fitness.zig`
-//! (ARCHITECTURE.md's fitness rules), so both read one graph.
+//! Read by `fitness.zig`.
 
 const std = @import("std");
 
