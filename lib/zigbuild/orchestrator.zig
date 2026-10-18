@@ -16,6 +16,14 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+/// `-lc` for every library VerA builds on a dynamic-linking host: a host
+/// loads it with `dlopen`, and a thread-local in it (Zig 0.18's
+/// `std.debug.print` reads `Io.Threaded.Thread.current`) must then use the
+/// libc dynamic TLS model (`__tls_get_addr`). Without libc, Zig
+/// 0.18.0-dev's shared library reads it at a static offset and faults
+/// (a `--emit-so` device that prints, VPI, OSDI). Windows DLLs do not need it.
+pub const link_libc: []const []const u8 = if (builtin.target.os.tag == .windows) &.{} else &.{"-lc"}; // os: picks a flag for the host build; every target builds, Windows with none
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Cache = std.Build.Cache;
@@ -372,6 +380,7 @@ fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u
         "--cache-dir",
         try std.fs.path.join(arena, &.{ o.work_dir, ".zig-cache" }),
     });
+    try a.appendSlice(arena, link_libc);
 
     switch (o.backend) {
         // The only backend that patches in place, so the only one where
@@ -439,8 +448,9 @@ fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []c
         try std.fs.path.join(arena, &.{ o.work_dir, ".zig-cache" }),
     };
     const stripped = strip(o.optimize, o.debug_info);
-    var a: std.ArrayList([]const u8) = try .initCapacity(arena, head.len + @intFromBool(stripped) + objs.len + @intFromBool(o.engine != null));
+    var a: std.ArrayList([]const u8) = try .initCapacity(arena, head.len + link_libc.len + @intFromBool(stripped) + objs.len + @intFromBool(o.engine != null));
     a.appendSliceAssumeCapacity(&head);
+    a.appendSliceAssumeCapacity(link_libc);
     if (stripped) a.appendAssumeCapacity("-fstrip");
     a.appendSliceAssumeCapacity(objs);
     if (o.engine) |e| a.appendAssumeCapacity(e);
@@ -505,6 +515,7 @@ pub fn buildEngine(gpa: Allocator, io: Io, o: Options, cache_dir: []const u8) !E
         "--cache-dir",
         cache_dir,
     });
+    try a.appendSlice(arena, link_libc);
     try a.appendSlice(arena, switch (o.backend) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
@@ -1214,6 +1225,8 @@ fn expectArgv(want: []const []const u8, got: []const []const u8) !void {
 }
 
 const sep = std.fs.path.sep_str;
+/// `link_libc` as an array, for the expected argvs below.
+const lc: [link_libc.len][]const u8 = link_libc[0..link_libc.len].*;
 
 test buildArgv {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -1236,6 +1249,7 @@ test buildArgv {
         "dev",
         "--cache-dir",
         "w" ++ sep ++ ".zig-cache",
+    } ++ lc ++ [_][]const u8{
         "-fllvm",
         "-fstrip",
         "eng.o",
@@ -1278,6 +1292,7 @@ test buildArgv {
         "dev_setup",
         "--cache-dir",
         "w" ++ sep ++ ".zig-cache",
+    } ++ lc ++ [_][]const u8{
         "-fno-llvm",
         "-fno-lld",
         "-fincremental",
@@ -1311,6 +1326,7 @@ test linkArgv {
         "dev",
         "--cache-dir",
         "w" ++ sep ++ ".zig-cache",
+    } ++ lc ++ [_][]const u8{
         "-fstrip",
         "a.o",
         "b.o",

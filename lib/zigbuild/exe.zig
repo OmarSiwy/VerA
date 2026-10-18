@@ -99,7 +99,11 @@ pub fn buildExe(
 
     // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
     var argv = try argvHead(arena, opts, if (opts.shared_lib) "build-lib" else "build-exe", bin);
-    if (opts.shared_lib) try argv.append(arena, "-dynamic");
+    if (opts.shared_lib) {
+        try argv.append(arena, "-dynamic");
+        // A host `dlopen`s it: libc's dynamic TLS model (`orchestrator.link_libc`).
+        try argv.appendSlice(arena, orchestrator.link_libc);
+    }
     if (device_zig != null) try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
     if (device_zig) |text| {

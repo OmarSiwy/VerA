@@ -38,6 +38,7 @@ The first release. VerA compiles Verilog-AMS models into Zig device code for any
 
 ### Fixed
 
+- A shared library VerA builds (`--emit-so`, `--emit-osdi`, a VPI host) links libc, so a device that prints no longer crashes when a host loads it under Zig 0.18.
 - Model cards:
   - a value written through an `aliasparam` sets the parameter and its `$param_given` (#76);
   - a `$simparam` default answers as the analog block does (#51).
