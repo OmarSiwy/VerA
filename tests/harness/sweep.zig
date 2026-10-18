@@ -105,27 +105,27 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 36949, .defs = 8, .insts = 5 },
-        .{ .device = 37304, .defs = 35, .insts = 26 },
-        .{ .device = 40047, .defs = 258, .insts = 194 },
-        .{ .device = 62450, .defs = 2050, .insts = 1538 },
-        .{ .device = 245030, .defs = 16386, .insts = 12290 },
+        .{ .device = 36950, .defs = 8, .insts = 5 },
+        .{ .device = 37305, .defs = 35, .insts = 26 },
+        .{ .device = 40048, .defs = 258, .insts = 194 },
+        .{ .device = 62451, .defs = 2050, .insts = 1538 },
+        .{ .device = 245031, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 36949, .defs = 8, .insts = 5 },
-        .{ .device = 37131, .defs = 24, .insts = 19 },
-        .{ .device = 38587, .defs = 136, .insts = 131 },
-        .{ .device = 50292, .defs = 1032, .insts = 1027 },
-        .{ .device = 144053, .defs = 8200, .insts = 8195 },
+        .{ .device = 36950, .defs = 8, .insts = 5 },
+        .{ .device = 37132, .defs = 24, .insts = 19 },
+        .{ .device = 38588, .defs = 136, .insts = 131 },
+        .{ .device = 50293, .defs = 1032, .insts = 1027 },
+        .{ .device = 144054, .defs = 8200, .insts = 8195 },
     },
     // Parallel instances share one (p, n) row; the MIR also carries each
     // instance's share of it (`lower_contrib.unitAccum`), dead in the device.
     .inst = .{
-        .{ .device = 36949, .defs = 8, .insts = 5 },
-        .{ .device = 38153, .defs = 57, .insts = 47 },
-        .{ .device = 48001, .defs = 449, .insts = 383 },
-        .{ .device = 128535, .defs = 3585, .insts = 3071 },
-        .{ .device = 786320, .defs = 28673, .insts = 24575 },
+        .{ .device = 36950, .defs = 8, .insts = 5 },
+        .{ .device = 38154, .defs = 57, .insts = 47 },
+        .{ .device = 48002, .defs = 449, .insts = 383 },
+        .{ .device = 128536, .defs = 3585, .insts = 3071 },
+        .{ .device = 786321, .defs = 28673, .insts = 24575 },
     },
 });
 
