@@ -51,7 +51,9 @@ pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
 /// `.strict` unit. True for materialized values, leaves, and trees of ops
 /// total on all of R under IEEE semantics: no call, and
 /// `proof.domainOf == .all` (which excludes ln/sqrt/pow and the trapping
-/// idiv/imod/fmod). "Inline" matches what `renderVal` inlines.
+/// idiv/imod/fmod) or a guarded row (`Mir.guard_of`), which runs on a safe
+/// argument off its guard (`render.renderSubst`). "Inline" matches what
+/// `renderVal` inlines.
 pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
     if (depth > 64) return false;
     const v = self.an.rv(v0);
@@ -61,7 +63,7 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
     const inst = def.inst_result;
     const row = self.mir.instRow(inst);
     if (row.op == .call) return false;
-    if (proof.domainOf(row.op) != .all) return false;
+    if (proof.domainOf(row.op) != .all and self.mir.guardOf(inst) == null) return false;
     return switch (Mir.opClass(row.op)) {
         .phi => true, // function-scope var, assigned on edges before here
         .unary => eagerSafe(self, @fromBackingInt(@intCast(row.a)), depth + 1),

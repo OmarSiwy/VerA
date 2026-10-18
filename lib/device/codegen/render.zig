@@ -72,6 +72,7 @@ pub fn renderToArena(self: *Gen, v: Mir.Value, want: VTy) Error![]const u8 {
 /// the other LRM type.
 pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
     const v = self.an.rv(v0);
+    if (self.subst) |s| if (s.v == v) return renderSubst(self, s, want);
     const def = self.mir.valueDef(v);
     if (def == .undef) {
         // Lowering starts every wide `reg` at its declaration, so no `.wide`
@@ -213,69 +214,172 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // In a `.strict` unit a real select whose inline arms are total
     // (`eagerSafe`) and cheap (`eagerCostly`) runs both arms and picks with
     // `sel`: a dead arm's NaN/inf is discarded, the branch is gone, and a
-    // lane-parallel S gets a per-lane pick.
+    // lane-parallel S gets a per-lane pick. Costly arms on a condition that
+    // varies with the solve run both on a GPU target only (#81: `zSpec`),
+    // where a branch costs the register allocator more than the arm.
     if (op == .select) {
         const want = self.an.vty[@backingInt(self.mir.instResult(inst))];
         if (want == .real and self.float.strict and
-            float_lanes.eagerSafe(self, b2, 0) and float_lanes.eagerSafe(self, c, 0) and
-            !float_lanes.eagerCostly(self, b2, 0) and !float_lanes.eagerCostly(self, c, 0))
+            float_lanes.eagerSafe(self, b2, 0) and float_lanes.eagerSafe(self, c, 0))
         {
-            // Best mask first: an inline real comparison renders as
-            // `lt`/`le`/`eq`, true per lane. gt/ge swap operands; ne swaps
-            // the arms. Otherwise the predicate is a 0/1 i64 (lane-uniform,
-            // so it pins) or a real S tested against zero.
-            var swap_arms = false;
-            if (maskCmp(self, a)) |cmp| {
-                const d = self.mir.instData(cmp).binary;
-                const swap_ops = d.op == .fgt or d.op == .fge;
-                swap_arms = d.op == .fne;
-                const prim: []const u8 = switch (d.op) {
-                    .flt, .fgt => "lt",
-                    .fle, .fge => "le",
-                    .feq, .fne => "eq",
-                    else => unreachable, // else: `maskCmp` returns only the six real comparisons
-                };
-                // A family's `sel` is `S.sel` (`contract.family_fns`).
-                try self.b("S.sel((", .{});
-                try renderVal(self, if (swap_ops) d.rhs else d.lhs, .real);
-                try self.b(").{s}(", .{prim});
-                try renderVal(self, if (swap_ops) d.lhs else d.rhs, .real);
-                try self.b("), ", .{});
-            } else if (self.an.tyOf(self.an.rv(a)) == .int) {
-                // A 0/1 i64 is already one scalar decision, so an `S` mask
-                // buys nothing: pick in f64 when both arms have an f64 form,
-                // else pick the `S` arm.
-                float_lanes.pinLanes(self, a);
-                const fb = try gen_host.f64Const(self, b2, 1, true);
-                const fc = if (fb != null) try gen_host.f64Const(self, c, 1, true) else null;
-                try self.b("{s}(if ((", .{if (fc != null) "S.con" else ""});
-                try renderVal(self, a, .int);
-                try self.b(") != 0) ", .{});
-                if (fc) |f| return self.b("{s} else {s})", .{ fb.?, f });
-                try renderArms(self, b2, c, family.mask(self, res));
-                return;
-            } else {
-                try self.b("S.sel(", .{});
-                try renderVal(self, a, .real);
-                try self.b(", ", .{});
+            if (!float_lanes.eagerCostly(self, b2, 0) and !float_lanes.eagerCostly(self, c, 0))
+                return renderSelEager(self, a, b2, c, res, false);
+            if (float_lanes.perPoint(self, a)) {
+                try self.b("(if (comptime zSpec) ", .{});
+                try renderSelEager(self, a, b2, c, res, true);
+                try self.b(" else ", .{});
+                try renderSelLazy(self, a, b2, c, want, res);
+                return self.b(")", .{});
             }
-            try renderVal(self, if (swap_arms) c else b2, .real);
-            try self.b(", ", .{});
-            try renderVal(self, if (swap_arms) b2 else c, .real);
-            try self.b(")", .{});
-            return;
         }
-        try self.b("(if (", .{});
-        try gen_cfg.renderCond(self, a);
-        try self.b(") ", .{});
-        if (want == .real) return renderArms(self, b2, c, family.mask(self, res));
-        try renderVal(self, b2, want);
-        try self.b(" else ", .{});
-        try renderVal(self, c, want);
-        try self.b(")", .{});
-        return;
+        return renderSelLazy(self, a, b2, c, want, res);
+    }
+    // §4.3.2 a domain-restricted row `ifconv`'s `.speculate` moved out of its
+    // arm runs on its domain's safe argument while its guard is false, so it
+    // neither reports nor leaves the domain where the source never ran it.
+    if (self.mir.guardOf(inst)) |lit| {
+        const dom = Mir.opcode.get(op).domain;
+        const saved = self.subst;
+        defer self.subst = saved;
+        self.subst = .{ .v = self.an.rv(if (dom == .nonzero_divisor) b2 else a), .lit = lit, .safe = safeArg(dom) };
+        return renderOp(self, op, a, b2, self.an.vty[@backingInt(self.mir.instResult(inst))]);
     }
     return renderOp(self, op, a, b2, self.an.vty[@backingInt(self.mir.instResult(inst))]);
+}
+
+/// A real select that runs both arms and picks. `force` (the GPU branch of a
+/// costly select) picks an integer-condition `S` arm with `zPick`, whose
+/// arguments both run, where the cheap form keeps the lazy `if`.
+fn renderSelEager(self: *Gen, a: Mir.Value, b2: Mir.Value, c: Mir.Value, res: Mir.Value, force: bool) Error!void {
+    // Best mask first: an inline real comparison renders as
+    // `lt`/`le`/`eq`, true per lane. gt/ge swap operands; ne swaps
+    // the arms. Otherwise the predicate is a 0/1 i64 (lane-uniform,
+    // so it pins) or a real S tested against zero.
+    var swap_arms = false;
+    if (maskCmp(self, a)) |cmp| {
+        const d = self.mir.instData(cmp).binary;
+        const swap_ops = d.op == .fgt or d.op == .fge;
+        swap_arms = d.op == .fne;
+        const prim: []const u8 = switch (d.op) {
+            .flt, .fgt => "lt",
+            .fle, .fge => "le",
+            .feq, .fne => "eq",
+            else => unreachable, // else: `maskCmp` returns only the six real comparisons
+        };
+        // A family's `sel` is `S.sel` (`contract.family_fns`).
+        try self.b("S.sel((", .{});
+        try renderVal(self, if (swap_ops) d.rhs else d.lhs, .real);
+        try self.b(").{s}(", .{prim});
+        try renderVal(self, if (swap_ops) d.lhs else d.rhs, .real);
+        try self.b("), ", .{});
+    } else if (self.an.tyOf(self.an.rv(a)) == .int) {
+        // A 0/1 i64 is already one scalar decision, so an `S` mask
+        // buys nothing: pick in f64 when both arms have an f64 form,
+        // else pick the `S` arm.
+        float_lanes.pinLanes(self, a);
+        const fb = try gen_host.f64Const(self, b2, 1, true);
+        const fc = if (fb != null) try gen_host.f64Const(self, c, 1, true) else null;
+        if (force and fc == null) {
+            const m = family.mask(self, res);
+            try self.b("zPick((", .{});
+            try renderVal(self, a, .int);
+            try self.b(") != 0, ", .{});
+            for ([_]Mir.Value{ b2, c }, 0..) |v, k| {
+                if (k != 0) try self.b(", ", .{});
+                try family.openTo(self, m);
+                try renderVal(self, v, .real);
+                try self.b(")", .{});
+            }
+            return self.b(")", .{});
+        }
+        try self.b("{s}(if ((", .{if (fc != null) "S.con" else ""});
+        try renderVal(self, a, .int);
+        try self.b(") != 0) ", .{});
+        if (fc) |f| return self.b("{s} else {s})", .{ fb.?, f });
+        return renderArms(self, b2, c, family.mask(self, res));
+    } else {
+        try self.b("S.sel(", .{});
+        try renderVal(self, a, .real);
+        try self.b(", ", .{});
+    }
+    try renderVal(self, if (swap_arms) c else b2, .real);
+    try self.b(", ", .{});
+    try renderVal(self, if (swap_arms) b2 else c, .real);
+    try self.b(")", .{});
+}
+
+/// A select that runs only the arm its condition takes.
+fn renderSelLazy(self: *Gen, a: Mir.Value, b2: Mir.Value, c: Mir.Value, want: VTy, res: Mir.Value) Error!void {
+    try self.b("(if (", .{});
+    try gen_cfg.renderCond(self, a);
+    try self.b(") ", .{});
+    if (want == .real) return renderArms(self, b2, c, family.mask(self, res));
+    try renderVal(self, b2, want);
+    try self.b(" else ", .{});
+    try renderVal(self, c, want);
+    try self.b(")", .{});
+}
+
+/// What `renderVal` writes in place of a guarded row's restricted operand
+/// (`Gen.subst`): `v` while the guard chain from `lit` holds, else `safe`.
+pub const Subst = struct { v: Mir.Value, lit: u32, safe: f64 };
+
+/// A point inside each §4.3.1/§4.3.2 domain (Table 4-14/4-15) with a finite
+/// derivative there, so the discarded result and its lanes stay finite:
+/// ln(1), ln1p(0), sqrt(1), asin(0), atanh(0), acosh(2), x/1, tan(0),
+/// pow(1, y).
+fn safeArg(dom: Mir.opcode.Domain) f64 {
+    return switch (dom) {
+        .positive, .non_negative, .nonzero_divisor, .pow_sign => 1.0,
+        .gt_neg_one, .unit_closed, .unit_open, .tan_poles => 0.0,
+        .ge_one => 2.0,
+        .all => unreachable, // `ifconv` guards only a domain-restricted row
+    };
+}
+
+/// Writes the guard chain from `lit` as one `bool`: each literal's condition,
+/// negated on an else arm, joined by `and`.
+fn renderGuard(self: *Gen, lit0: u32) Error!void {
+    var lit = lit0;
+    var first = true;
+    while (lit != Mir.GuardLit.end) {
+        const l = self.mir.guard_lits.items[lit];
+        if (!first) try self.b(" and ", .{});
+        first = false;
+        try self.b("{s}(", .{if (l.taken) "" else "!"});
+        try gen_cfg.renderCond(self, l.cond);
+        try self.b(")", .{});
+        lit = l.next;
+    }
+}
+
+/// Writes `s.v` behind its guard: the operand while the guard holds, else
+/// the domain's safe value at the operand's type.
+fn renderSubst(self: *Gen, s: Subst, want: VTy) Error!void {
+    self.subst = null;
+    defer self.subst = s;
+    switch (want) {
+        .real => {
+            const m = family.mask(self, s.v);
+            try self.b("zPick(", .{});
+            try renderGuard(self, s.lit);
+            try self.b(", ", .{});
+            try family.openTo(self, m);
+            try renderVal(self, s.v, .real);
+            try self.b("), ", .{});
+            try family.openTo(self, m);
+            try self.b("S.con({s})))", .{try gen_file.fmtF64(self, s.safe)});
+        },
+        .int => {
+            try self.b("(if (", .{});
+            try renderGuard(self, s.lit);
+            try self.b(") ", .{});
+            try renderVal(self, s.v, .int);
+            try self.b(" else @as(i64, {d}))", .{@as(i64, @intFromFloat(s.safe))});
+        },
+        // A domain-restricted operand is a number (`Mir.opcode`).
+        .str, .wide => try renderVal(self, s.v, want),
+    }
 }
 
 /// Writes a lazy real `if`'s `then else otherwise)` after its condition. Both

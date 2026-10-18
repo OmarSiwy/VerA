@@ -190,27 +190,40 @@ pub const math_txt =
     \\    const v = a.val();
     \\    return zGraft(S, a, v, contract.gm.log10(v), 0.4342944819032518 / v);
     \\}
+    \\/// #81: a GPU target gets the branch-free core. A select whose arms are
+    \\/// costly runs both there (`render.zig`), and the checked kernels below
+    \\/// inline, so no outlined call splits the core. A host CPU keeps the
+    \\/// lazy arm and the call.
+    \\const zSpec = switch (@import("builtin").target.cpu.arch) {
+    \\    .nvptx64, .amdgcn => true,
+    \\    else => false, // else: every other target is a host CPU
+    \\};
+    \\const zSpecCc: std.builtin.CallingConvention = if (zSpec) .@"inline" else .auto;
+    \\/// `a` when `c`, else `b`. Both are arguments, so both are evaluated.
+    \\inline fn zPick(c: bool, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    \\    return if (c) a else b;
+    \\}
     \\// §4.3.2 "Input values outside of the valid range for the operator shall
     \\// report an error", for Table 4-14's one-bound domains: each op with its
     \\// check in front (`opcode_zig.Row.checked`; the unchecked spelling is for
     \\// a value `setup` speculates outside its guard). The code is the one the
     \\// prover gives the same argument when it can see it.
-    \\fn zSqrtD(comptime _: type, a: anytype) @TypeOf(a) {
+    \\fn zSqrtD(comptime _: type, a: anytype) callconv(zSpecCc) @TypeOf(a) {
     \\    const v = a.val();
     \\    zDomain("E0604", "sqrt", "x >= 0", v, v >= 0.0);
     \\    return a.sqrt();
     \\}
-    \\fn zLnD(comptime _: type, a: anytype) @TypeOf(a) {
+    \\fn zLnD(comptime _: type, a: anytype) callconv(zSpecCc) @TypeOf(a) {
     \\    const v = a.val();
     \\    zDomain("E0602", "ln", "x > 0", v, v > 0.0);
     \\    return a.log();
     \\}
-    \\fn zLn1pD(comptime _: type, a: anytype) @TypeOf(a) {
+    \\fn zLn1pD(comptime _: type, a: anytype) callconv(zSpecCc) @TypeOf(a) {
     \\    const v = a.val();
     \\    zDomain("E0603", "ln1p", "x > -1", v, v > -1.0);
     \\    return a.log1p();
     \\}
-    \\fn zLog10D(comptime S: type, a: S) S {
+    \\fn zLog10D(comptime S: type, a: S) callconv(zSpecCc) S {
     \\    const v = a.val();
     \\    zDomain("E0602", "log", "x > 0", v, v > 0.0);
     \\    return zLog10(S, a);
@@ -222,7 +235,7 @@ pub const math_txt =
     \\    return x > 0.0 or (x == 0.0 and y >= 0.0) or (x < 0.0 and y == @trunc(y));
     \\}
     \\/// `a.pow(k)` for an exponent that does not move with the solve, checked.
-    \\fn zPowK(comptime _: type, a: anytype, k: f64) @TypeOf(a) {
+    \\fn zPowK(comptime _: type, a: anytype, k: f64) callconv(zSpecCc) @TypeOf(a) {
     \\    const v = a.val();
     \\    zDomain("E0609", "pow", "x > 0, or x = 0 with y >= 0, or x < 0 with integer y", v, zPowOk(v, k));
     \\    return a.pow(k);

@@ -284,6 +284,10 @@ pub const Gen = struct {
     systf_sites: u32 = 0,
     /// The float mode and lane state of the body being written (`codegen/float/`).
     float: float_mode.Float = .{},
+    /// The operand of the guarded row being rendered (`Mir.guard_of`) that
+    /// `renderVal` swaps for its domain's safe value when the guard is false.
+    /// Set and cleared around one `renderOp` (`render.renderInst`).
+    subst: ?gen_render.Subst = null,
     /// Set while the core is emitted. The core slices from every target at
     /// once and computes each value; the §9.4 display unit, the only other
     /// body, slices from one target and reads the rest.

@@ -366,9 +366,10 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // is defined, rather than re-rendering its whole slice at every arm.
         // Eager is sound here: proof.markSelectArms guards only a slice owned
         // through use-count-1 links, so a value with two uses (and whatever it
-        // alone reads) was proved on every path. And ifconv keeps an arm
-        // holding a domain-restricted op as a CFG diamond, so no
-        // ln/sqrt/pow/integer `/` reaches here from under a guard (§4.2.12).
+        // alone reads) was proved on every path. And ifconv's `.pure` pass
+        // keeps an arm holding a domain-restricted op as a CFG diamond; one
+        // its `.speculate` pass moved carries a guard and runs on a safe
+        // argument off it (`render.renderSubst`, §4.2.12/§4.3.2).
         // One arm position stays inlined: laziness that costs nothing.
         if (self.arm_use[v] > 1) continue;
         // A live-out is a FIELD of the returned cache, so it has to exist as

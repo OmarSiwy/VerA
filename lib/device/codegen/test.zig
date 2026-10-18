@@ -1035,6 +1035,42 @@ test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
     try std.testing.expect(std.mem.find(u8, src, "zLnD(") != null);
 }
 
+test "codegen: a speculated domain op runs on its safe argument off its guard (#81)" {
+    // The same shape after `.speculate` (lib/root.zig runs it after a proof
+    // that left the reads `.strict`): the branch is gone, and the checked ln
+    // reads `V` only while `V > 0` holds, else ln's safe argument 1, so the
+    // §4.3.2 report never fires from the arm the source did not run.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ml(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin : body
+        \\    real y;
+        \\    y = 0.0;
+        \\    if (V(p, n) > 0.0) begin : arm
+        \\      real t;
+        \\      t = ln(V(p, n));
+        \\      y = t + 2.0 * t;
+        \\    end
+        \\    I(p, n) <+ y * 1.0e-3;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
+    try std.testing.expectEqual(@as(u32, 1), try ifconv.runMode(h.arena_state.allocator(), &h.mir, .speculate, null));
+    const src = try h.gen(std.testing.allocator);
+    const unit = src[std.mem.find(u8, src, "fn ml__").?..];
+    const body = unit[0..std.mem.find(u8, unit, "\n}\n").?];
+    const lg = std.mem.find(u8, body, "zLnD(S, zPick(").?;
+    // The guard is the branch's condition, and the fallback is `S.con(1.0)`.
+    const guard_end = std.mem.find(u8, body[lg..], "S.con(1.0)").?;
+    try std.testing.expect(std.mem.find(u8, body[lg..][0..guard_end], "zCmp(S, .lt, S.con(0.0)") != null or
+        std.mem.find(u8, body[lg..][0..guard_end], "!= 0") != null);
+    try std.testing.expect(std.mem.find(u8, body, "if (") == null or std.mem.find(u8, body, "} else {") == null);
+}
+
 test "codegen: a §5.6 potential contribution gets its own branch-current unknown" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,

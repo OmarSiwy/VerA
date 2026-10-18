@@ -1,22 +1,45 @@
 //! If-conversion: MIR → the same MIR with each pure CFG diamond or triangle
 //! replaced by straight-line code and one §4.2.12 `select` per join phi, to a
-//! fixpoint. An arm converts only when every instruction is a pure value op
-//! (no call, `opt_barrier`, store or domain-restricted op), so §4.2.3's "side
-//! effects shall not occur" holds by construction. Moved rows are relinked;
-//! orphaned terminators and emptied arm blocks stay behind, unreachable.
+//! fixpoint. Two passes (`Mode`). Before the proof an arm converts only when
+//! every instruction is a pure value op (no call, `opt_barrier`, store or
+//! domain-restricted op), so §4.2.3's "side effects shall not occur" holds by
+//! construction. After a proof that rated every unit `.strict`, `.speculate`
+//! also converts arms of several blocks and arms holding a domain-restricted
+//! op, each such row guarded (`Mir.guard_of`) so it reports and runs out of
+//! its domain only where the source ran it. Moved rows are relinked; orphaned
+//! terminators and emptied arm blocks stay behind, unreachable.
 //!
-//! LRM clauses this file's code cites: §2.9, §4.2.4, §4.2.5, §4.2.8, §5.2.1,
-//! §5.10.2.
+//! LRM clauses this file's code cites: §2.9, §4.2.4, §4.2.5, §4.2.8, §4.3.2,
+//! §5.2.1, §5.10.2.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const proof = @import("proof.zig");
+
+/// Which arms a pass converts.
+pub const Mode = enum {
+    /// Before the proof: pure arms of one block each.
+    pure,
+    /// After a proof that rated every unit `.strict` (`lib/root.zig`), where a
+    /// discarded arm's NaN or inf is IEEE-defined: also arms that run through
+    /// a chain of single-entry blocks (a nested conversion leaves its old
+    /// block and join behind as two) and arms holding a domain-restricted op,
+    /// on a condition that varies with the solve. A condition the model card
+    /// alone decides keeps its branch: every evaluation takes the same arm.
+    speculate,
+};
 
 /// Converts every pure diamond, to a fixpoint, and returns how many converted.
 /// Blocks are visited in index order, so equal MIR converts identically.
 /// `gpa` backs one temporary per-block pred count and the emitted rows.
 /// Invalidates every `Mir.InstIterator` and any `Analysis` built over `mir`.
 pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
+    return runMode(gpa, mir, .pure, null);
+}
+
+/// `run` under `mode`. `.speculate` also writes `mir.guard_of`, and leaves
+/// a diamond alone when `keep` holds one of its join phis (`keepSlice`).
+pub fn runMode(gpa: std.mem.Allocator, mir: *Mir, mode: Mode, keep: ?*const std.DynamicBitSetUnmanaged) !u32 {
     const nb = mir.blockCount();
     if (nb == 0) return 0;
     const preds = try gpa.alloc(u32, nb);
@@ -29,7 +52,7 @@ pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
         countPreds(mir, preds);
         var b: u32 = 0;
         while (b < nb) : (b += 1) {
-            if (try tryConvert(gpa, mir, @fromBackingInt(@intCast(b)), preds)) {
+            if (try tryConvert(gpa, mir, @fromBackingInt(@intCast(b)), preds, mode, keep)) {
                 converted += 1;
                 // Each conversion retires one block's branch and adds none.
                 std.debug.assert(converted <= nb);
@@ -38,6 +61,39 @@ pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
         }
     }
     return converted;
+}
+
+/// The values `roots` read, transitively: operands, call arguments and phi
+/// incomings, one bit per `Mir.Value`. `lib/root.zig` passes it to
+/// `.speculate` for the `.optimized` units' contributions, whose code may
+/// run a speculated arm under fast-math, where an out-of-domain NaN is
+/// poison. Caller owns the set.
+pub fn keepSlice(gpa: std.mem.Allocator, mir: *const Mir, roots: []const Mir.Value) !std.DynamicBitSetUnmanaged {
+    var seen = try std.DynamicBitSetUnmanaged.initEmpty(gpa, mir.defs.len + Mir.Value.first_dynamic);
+    errdefer seen.deinit(gpa);
+    var stack: std.ArrayList(Mir.Value) = .empty;
+    defer stack.deinit(gpa);
+    try stack.appendSlice(gpa, roots);
+    while (stack.pop()) |v0| {
+        const v = mir.resolveAlias(v0);
+        const i = @backingInt(v);
+        if (seen.isSet(i)) continue;
+        seen.set(i);
+        const def = mir.valueDef(v);
+        if (def != .inst_result) continue;
+        const inst = def.inst_result;
+        switch (mir.instData(inst)) {
+            .unary => |u| try stack.append(gpa, u.operand),
+            .binary => |d| try stack.appendSlice(gpa, &.{ d.lhs, d.rhs }),
+            .ternary => |d| try stack.appendSlice(gpa, &.{ d.cond, d.then_val, d.else_val }),
+            .call => |d| try stack.appendSlice(gpa, d.args),
+            .load => |d| try stack.appendSlice(gpa, &.{ d.arr, d.index }),
+            .store => |d| try stack.appendSlice(gpa, &.{ d.arr, d.index, d.value }),
+            .phi => |d| for (0..d.count) |k| try stack.append(gpa, mir.phiPair(inst, @intCast(k)).value),
+            .anew, .branch, .jump => {},
+        }
+    }
+    return seen;
 }
 
 /// §5.2.1 `analog initial` and §5.10.2 `initial_step`: the branch on the
@@ -50,6 +106,27 @@ fn firstPoint(mir: *const Mir, cond: Mir.Value) bool {
     const d = mir.instData(def.inst_result).call;
     // VerA's `vera_timepoint` (§2.9): a select would run the cached arm.
     return d.callee == .analog_initial or d.callee == .@"$tp_hit" or (d.callee == .initial_step and d.args.len == 0);
+}
+
+/// Whether `v` is computed from constants and model parameters alone, so
+/// every evaluation of one card branches the same way on it. A probe, call,
+/// phi or load answers false, and so does a tree past `budget` visits: false
+/// only costs a branch its `.speculate` refusal.
+fn cardOnly(mir: *const Mir, v0: Mir.Value, budget: *u32) bool {
+    if (budget.* == 0) return false;
+    budget.* -= 1;
+    const v = mir.resolveAlias(v0);
+    return switch (mir.valueDef(v)) {
+        .float_const, .int_const, .str_const, .param_ref => true,
+        .undef, .block_param => false,
+        .inst_result => |inst| switch (mir.instData(inst)) {
+            .unary => |u| cardOnly(mir, u.operand, budget),
+            .binary => |d| cardOnly(mir, d.lhs, budget) and cardOnly(mir, d.rhs, budget),
+            .ternary => |d| cardOnly(mir, d.cond, budget) and cardOnly(mir, d.then_val, budget) and
+                cardOnly(mir, d.else_val, budget),
+            .phi, .call, .anew, .load, .store, .branch, .jump => false,
+        },
+    };
 }
 
 fn countPreds(mir: *const Mir, preds: []u32) void {
@@ -69,15 +146,36 @@ fn countPreds(mir: *const Mir, preds: []u32) void {
     }
 }
 
-/// Validate one side: either the direct edge to what the other side joins at,
-/// or a single-pred all-pure block ending in a jump. Returns null on any
-/// disqualifier. Does not mutate: both sides validate before either moves.
-fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32) ?Mir.Block {
+/// One side of a diamond: the blocks from the arm's head to `last`, which
+/// jumps to `join`.
+const Side = struct { last: Mir.Block, join: Mir.Block };
+
+/// Validate one side: a single-pred all-pure block ending in a jump, or under
+/// `.speculate` a chain of them (each jumping to the next, the next entered
+/// only from there). Returns null on any disqualifier. Does not mutate: both
+/// sides validate before either moves.
+fn classifyChain(mir: *const Mir, x: Mir.Block, head: Mir.Block, preds: []const u32, mode: Mode) ?Side {
+    var b = head;
+    // A chain visits each block once: one more step than blocks is a cycle.
+    for (0..preds.len) |_| {
+        const next = classifyArm(mir, x, b, preds, mode) orelse return null;
+        if (mode == .pure or preds[@backingInt(next)] != 1) return .{ .last = b, .join = next };
+        b = next;
+    }
+    return null;
+}
+
+/// Validates one block of an arm; returns the block it jumps to.
+fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32, mode: Mode) ?Mir.Block {
     if (arm == x) return null; // back edge to the branching block itself
     if (preds[@backingInt(arm)] != 1) return null;
     var join: ?Mir.Block = null;
     var it = mir.blockInsts(arm);
     while (it.next()) |inst| {
+        // A collapsed phi row is dead wherever it sits (ssa.zig mints phis
+        // after the terminator), so `.speculate` moves it with the block.
+        if (mode == .speculate and mir.instOp(inst) == .phi and
+            mir.resolveAlias(mir.instResult(inst)) != mir.instResult(inst)) continue;
         if (join != null) return null; // an inst after the terminator (live phi rows land here)
         switch (mir.instData(inst)) {
             .unary => |u| if (u.op == .opt_barrier) return null,
@@ -94,50 +192,53 @@ fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32
             .phi => if (mir.resolveAlias(mir.instResult(inst)) == mir.instResult(inst)) return null,
             .call, .branch => return null,
         }
-        // §4.2.12 a domain-restricted op (ln, sqrt, pow, integer /, …) keeps
-        // its diamond. Such an arm can never render branchless
-        // (render.eagerSafe refuses it), so converting it removes no branch,
-        // and it would pull the arm's values out of their block so shared ones
-        // re-render as trees at each use. As a CFG arm the edge also guards
-        // every value it dominates, which proof.markSelectArms cannot.
-        if (proof.domainOf(mir.instOp(inst)) != .all) return null;
+        // §4.2.12 before the proof a domain-restricted op (ln, sqrt, pow,
+        // integer /, …) keeps its diamond: as a CFG arm the edge guards every
+        // value it dominates, which proof.markSelectArms cannot, and the
+        // proof's verdict (a unit's float mode, an E06xx refusal) reads that
+        // evidence. After it, `.speculate` moves the op and guards it.
+        if (mode == .pure and proof.domainOf(mir.instOp(inst)) != .all) return null;
     }
     const j = join orelse return null;
     if (j == x or j == arm) return null;
     return j;
 }
 
-fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bool {
+fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32, mode: Mode, keep: ?*const std.DynamicBitSetUnmanaged) !bool {
     const term = terminator(mir, x) orelse return false;
     if (mir.instOp(term) != .branch) return false;
     const br = mir.instData(term).branch;
     if (br.then_block == br.else_block) return false;
     if (firstPoint(mir, br.cond)) return false;
+    if (mode == .speculate) {
+        var budget: u32 = 256;
+        if (cardOnly(mir, br.cond, &budget)) return false;
+    }
 
     // Resolve the two sides. At least one must be a real arm; the other may be
     // the join itself (triangle from `&&`/`||` and one-armed `if`).
-    const then_join = classifyArm(mir, x, br.then_block, preds);
-    const else_join = classifyArm(mir, x, br.else_block, preds);
+    const then_c = classifyChain(mir, x, br.then_block, preds, mode);
+    const else_c = classifyChain(mir, x, br.else_block, preds, mode);
     var join: Mir.Block = undefined;
-    var then_arm: ?Mir.Block = null;
-    var else_arm: ?Mir.Block = null;
-    if (then_join != null and else_join != null and then_join.? == else_join.?) {
-        join = then_join.?;
-        then_arm = br.then_block;
-        else_arm = br.else_block;
-    } else if (then_join != null and then_join.? == br.else_block) {
+    var then_arm: ?Side = null;
+    var else_arm: ?Side = null;
+    if (then_c != null and else_c != null and then_c.?.join == else_c.?.join) {
+        join = then_c.?.join;
+        then_arm = then_c;
+        else_arm = else_c;
+    } else if (then_c != null and then_c.?.join == br.else_block) {
         join = br.else_block; // triangle: else edge is direct
-        then_arm = br.then_block;
-    } else if (else_join != null and else_join.? == br.then_block) {
+        then_arm = then_c;
+    } else if (else_c != null and else_c.?.join == br.then_block) {
         join = br.then_block; // triangle: then edge is direct
-        else_arm = br.else_block;
+        else_arm = else_c;
     } else return false;
     std.debug.assert(join != x); // `classifyArm` refuses a join back into X
 
     // Validate every live phi in the join: it must carry a pair for each side
     // of this diamond, or the conversion cannot rewrite it.
-    const then_key: Mir.Block = then_arm orelse x;
-    const else_key: Mir.Block = else_arm orelse x;
+    const then_key: Mir.Block = if (then_arm) |a| a.last else x;
+    const else_key: Mir.Block = if (else_arm) |a| a.last else x;
     {
         var it = mir.blockInsts(join);
         while (it.next()) |inst| {
@@ -146,6 +247,7 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
             if (mir.resolveAlias(r) != r) continue; // collapsed: dead row
             if (phiValueFor(mir, inst, then_key) == null) return false;
             if (phiValueFor(mir, inst, else_key) == null) return false;
+            if (keep) |k| if (k.isSet(@backingInt(r))) return false;
         }
     }
 
@@ -153,22 +255,36 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
     // Emitted rows inherit the branch's provenance token.
     mir.cur_tok = mir.instTok(term);
 
-    // Drop the branch row from X's chain, then splice the arms in.
-    // Late phi rows after the branch stay linked. Each arm's jump is its last
-    // row (`classifyArm`) and is orphaned with the branch.
+    // The cond is peeled of `toBool` wrappers first: a select condition means
+    // "nonzero ⇒ then" (codegen's renderCond), which is exactly what
+    // `ine(x, 0)` asserts of x, so the wrapper adds nothing, and peeling it
+    // leaves the bare comparison as the select's cond, where codegen can
+    // render it as a lane-true S mask instead of an i64 round-trip.
+    const cond = peelToBool(mir, br.cond);
+
+    // Drop the branch row from X's chain, then splice each arm's blocks in,
+    // in order. Late phi rows after the branch stay linked. Each block's jump
+    // is orphaned with the branch. Under `.speculate` a domain-restricted row
+    // takes this arm's literal as the outermost of its guard.
     mir.unlink(x, term);
-    for ([_]?Mir.Block{ then_arm, else_arm }) |arm| if (arm) |a| {
-        mir.unlink(a, mir.blockLast(a));
-        mir.splice(x, a);
+    for ([_]Mir.Block{ br.then_block, br.else_block }, [_]?Side{ then_arm, else_arm }, [_]bool{ true, false }) |head, arm, taken| if (arm) |a| {
+        var b = head;
+        for (0..preds.len) |_| {
+            const jmp = terminator(mir, b).?;
+            const next = mir.instData(jmp).jump.target;
+            if (mode == .speculate) {
+                var it = mir.blockInsts(b);
+                while (it.next()) |inst| if (proof.domainOf(mir.instOp(inst)) != .all)
+                    try mir.addGuardLit(gpa, inst, cond, taken);
+            }
+            mir.unlink(b, jmp);
+            mir.splice(x, b);
+            if (b == a.last) break;
+            b = next;
+        } else unreachable; // `classifyChain` walked this chain to `a.last`
     };
 
-    // One select per live join phi, then the fall-through jump. The cond is
-    // peeled of `toBool` wrappers first: a select condition means "nonzero ⇒
-    // then" (codegen's renderCond), which is exactly what `ine(x, 0)` asserts
-    // of x, so the wrapper adds nothing, and peeling it leaves the bare
-    // comparison as the select's cond, where codegen can render it as a
-    // lane-true S mask instead of an i64 round-trip.
-    const cond = peelToBool(mir, br.cond);
+    // One select per live join phi, then the fall-through jump.
     var phis = mir.blockInsts(join);
     while (phis.next()) |phi| {
         if (mir.instOp(phi) != .phi) continue;
@@ -705,4 +821,73 @@ test "if-conversion is deterministic: equal MIR converts to equal MIR" {
         try std.testing.expectEqualSlices(@TypeOf(s1.mir.insts.items(col)[0]), s1.mir.insts.items(col), s2.mir.insts.items(col));
     try std.testing.expectEqualSlices(u32, s1.mir.extra.items, s2.mir.extra.items);
     try std.testing.expectEqualSlices(Mir.Value, s1.mir.alias.items, s2.mir.alias.items);
+}
+
+test "if-conversion: .speculate flattens a nested domain-restricted arm and guards it (#81)" {
+    // `if (p0 < p1) { if (p0 > 0) v = sqrt(p0) else v = p1 } else v = p1 - p0`:
+    // the l_utsoi shape. `.pure` keeps both branches (a `sqrt` arm, and an
+    // arm holding the inner branch). `.speculate` converts the inner one,
+    // then the outer one through the two blocks the first left behind, and
+    // guards the `sqrt` row with both literals, outermost first.
+    const a = std.testing.allocator;
+    for ([_]Mode{ .pure, .speculate }) |mode| {
+        var m: Mir = .{};
+        defer m.deinit(a);
+        const entry = try m.addBlock(a);
+        const p0 = try m.addBlockParam(a, 0);
+        const p1 = try m.addBlockParam(a, 1);
+        const b1 = try m.addBlock(a);
+        const b2 = try m.addBlock(a);
+        const j = try m.addBlock(a);
+        const inner = try m.addBlock(a);
+        const ij = try m.addBlock(a);
+        const c1 = try m.emit(a, entry, .flt, &.{ p0, p1 });
+        _ = try m.emitBranch(a, entry, c1, b1, b2);
+        const c2 = try m.emit(a, b1, .fgt, &.{ p0, .f_zero });
+        _ = try m.emitBranch(a, b1, c2, inner, ij);
+        const iv = try m.emit(a, inner, .sqrt, &.{p0});
+        _ = try m.emitJump(a, inner, ij);
+        const v1 = try m.emitPhi(a, ij, &.{ .{ .block = inner, .value = iv }, .{ .block = b1, .value = p1 } });
+        _ = try m.emitJump(a, ij, j);
+        const v2 = try m.emit(a, b2, .fsub, &.{ p1, p0 });
+        _ = try m.emitJump(a, b2, j);
+        const out = try m.emitPhi(a, j, &.{ .{ .block = ij, .value = v1 }, .{ .block = b2, .value = v2 } });
+
+        const n = try runMode(a, &m, mode, null);
+        const sqrt_row = m.valueDef(iv).inst_result;
+        if (mode == .pure) {
+            try std.testing.expectEqual(@as(u32, 0), n);
+            try std.testing.expectEqual(@as(?u32, null), m.guardOf(sqrt_row));
+            continue;
+        }
+        try std.testing.expectEqual(@as(u32, 2), n);
+        // Straight-line: the result is a select, and the entry block jumps.
+        try std.testing.expectEqual(Mir.Opcode.select, m.instOp(m.valueDef(m.resolveAlias(out)).inst_result));
+        try std.testing.expectEqual(j, m.instData(terminator(&m, entry).?).jump.target);
+        const l0 = m.guard_lits.items[m.guardOf(sqrt_row).?];
+        try std.testing.expectEqual(Mir.GuardLit{ .cond = c1, .taken = true, .next = l0.next }, l0);
+        const l1 = m.guard_lits.items[l0.next];
+        try std.testing.expectEqual(Mir.GuardLit{ .cond = c2, .taken = true, .next = Mir.GuardLit.end }, l1);
+        // A total row needs no guard.
+        try std.testing.expectEqual(@as(?u32, null), m.guardOf(m.valueDef(v2).inst_result));
+    }
+}
+
+test "if-conversion: .speculate keeps a branch the model card alone decides, and what `keep` holds" {
+    const a = std.testing.allocator;
+    for ([_]bool{ false, true }) |card| {
+        var s = try Shape.init(a, .sqrt, .value);
+        defer s.mir.deinit(a);
+        // Re-point the branch at a card-only condition: `1 > 0`.
+        const br = terminator(&s.mir, s.entry).?;
+        if (card) s.mir.insts.items(.a)[@backingInt(br)] = @backingInt(try s.mir.emit(a, s.entry, .fgt, &.{ .f_one, .f_zero }));
+        var keep = try std.DynamicBitSetUnmanaged.initEmpty(a, s.mir.defs.len + Mir.Value.first_dynamic);
+        defer keep.deinit(a);
+        try std.testing.expectEqual(@as(u32, if (card) 0 else 1), try runMode(a, &s.mir, .speculate, &keep));
+    }
+    var s = try Shape.init(a, .sqrt, .value);
+    defer s.mir.deinit(a);
+    var keep = try keepSlice(a, &s.mir, &.{s.phi});
+    defer keep.deinit(a);
+    try std.testing.expectEqual(@as(u32, 0), try runMode(a, &s.mir, .speculate, &keep));
 }

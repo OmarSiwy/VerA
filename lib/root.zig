@@ -489,6 +489,21 @@ fn lowerAndProve(
     // §4.3.2: a domain violation is a compile error on every target.
     if (!verdict.ok()) return error.CompileFailed;
 
+    // #81: in `.strict` code a speculated arm's NaN or inf is IEEE-defined,
+    // so the arms the proof needed as CFG (several blocks, a domain-restricted
+    // op) become selects too, their domain rows guarded (`Mir.guard_of`).
+    // After the proof, which read the CFG's evidence; the verdict holds only
+    // unit modes, which this does not move. What an `.optimized` unit reads
+    // keeps its branches.
+    {
+        var roots: std.ArrayList(Mir.Value) = .empty;
+        for (verdict.unit_modes, lowered.contributions.items) |m, c| if (m == .optimized)
+            try roots.appendSlice(arena, &.{ c.resist_val, c.react_val });
+        var keep = try ifconv.keepSlice(arena, mir, roots.items);
+        _ = try ifconv.runMode(arena, mir, .speculate, &keep);
+        try verify.check(mir, lowered, "ifconv.speculate");
+    }
+
     // §9.4/§9.5. Reported here, not in lowering, because whether a side effect
     // is kept depends on what the caller asked to build. The model is legal
     // either way, so these are warnings.

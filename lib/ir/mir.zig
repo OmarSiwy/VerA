@@ -324,6 +324,44 @@ iconst_map: std.AutoHashMapUnmanaged(i64, Value) = .empty,
 /// Value means "no alias". Only collapsed phis point elsewhere, so codegen never
 /// emits a decl for them.
 alias: std.ArrayList(Value) = .empty,
+/// §4.2.12/§4.3.2 the speculation guards `prove/ifconv.zig`'s `.speculate`
+/// pass writes: a domain-restricted row (`opcode.Info.domain != .all`) it
+/// moved out of a branch arm ran in the source only while every literal of
+/// its chain held, so codegen evaluates it on a safe argument otherwise.
+/// Row → first literal of its chain in `guard_lits`. Lookup only.
+guard_of: std.AutoHashMapUnmanaged(Inst, u32) = .empty,
+/// The literal pool `guard_of` indexes. A chain is one conversion per arm
+/// level, outermost first; `GuardLit.end` closes it.
+guard_lits: std.ArrayList(GuardLit) = .empty,
+
+/// One literal of a speculation guard: `cond` was nonzero (`taken`) or zero
+/// on the arm the guarded row came from. 12 bytes; at most one per guarded
+/// row per conversion that moved it.
+pub const GuardLit = struct {
+    cond: Value,
+    taken: bool,
+    /// The next literal of the chain, or `end`.
+    next: u32,
+
+    /// Closes a chain.
+    pub const end = std.math.maxInt(u32);
+};
+
+/// Returns the first literal of `inst`'s speculation guard, or null when the
+/// row runs wherever it stands.
+pub fn guardOf(self: *const Mir, inst: Inst) ?u32 {
+    return self.guard_of.get(inst);
+}
+
+/// Prepends the literal (`cond`, `taken`) to `inst`'s speculation guard.
+pub fn addGuardLit(self: *Mir, gpa: std.mem.Allocator, inst: Inst, cond: Value, taken: bool) !void {
+    const at: u32 = @intCast(self.guard_lits.items.len);
+    assert(at != GuardLit.end);
+    const gop = try self.guard_of.getOrPut(gpa, inst);
+    const next = if (gop.found_existing) gop.value_ptr.* else GuardLit.end;
+    try self.guard_lits.append(gpa, .{ .cond = cond, .taken = taken, .next = next });
+    gop.value_ptr.* = at;
+}
 
 /// Frees every table. Keeps `name`, which the Mir does not own.
 pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
@@ -335,6 +373,8 @@ pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
     self.fconst_map.deinit(gpa);
     self.iconst_map.deinit(gpa);
     self.alias.deinit(gpa);
+    self.guard_of.deinit(gpa);
+    self.guard_lits.deinit(gpa);
     self.* = .{ .name = self.name };
 }
 
