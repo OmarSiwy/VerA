@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/OmarSiwy/VerA)](https://github.com/OmarSiwy/VerA/releases/latest)
 [![Docs](https://img.shields.io/badge/docs-book-blue)](https://omarsiwy.github.io/VerA/)
 [![Conformance](https://img.shields.io/badge/conformance-live%20report-brightgreen)](https://omarsiwy.github.io/VerA/report/)
-[![Zig](https://img.shields.io/badge/zig-0.17.0-f7a41d)](https://ziglang.org/download/)
+[![Zig](https://img.shields.io/badge/zig-master%20(0.18--dev)-f7a41d)](https://ziglang.org/download/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 VerA compiles a Verilog-A model (a resistor, a diode, a BSIM4 or PSP
@@ -52,12 +52,15 @@ The [tutorial](https://omarsiwy.github.io/VerA/learn/getting-started.html) conti
 | How | Command |
 |---|---|
 | Nix (from source) | `nix profile add github:OmarSiwy/VerA` |
-| Nix (release binary) | `nix profile add 'github:OmarSiwy/VerA#latest'` (once v0.9.0 is published) |
+| Nix (release binary) | `nix profile add 'github:OmarSiwy/VerA#latest'` |
 | Release tarball | [GitHub releases](https://github.com/OmarSiwy/VerA/releases): x86_64/aarch64 Linux, x86_64/aarch64 macOS, x86_64 Windows, with `SHA256SUMS` |
 | From source | `git clone https://github.com/OmarSiwy/VerA && cd VerA && zig build -Doptimize=ReleaseFast` |
 
-Building a device needs Zig 0.17.0 on `PATH`; the Nix packages bring their
-own. Every install also ships the device contract, `share/vera/contract.zig`.
+Building a device needs the Zig VerA is built with, Zig master (0.18.0-dev,
+from [zig-overlay](https://github.com/mitchellh/zig-overlay)), on `PATH`; the
+Nix packages bring their own. Every install also ships the device contract,
+`share/vera/contract.zig`, and every device declares the VerA release that
+generated it (`vera_version`), which the contract checks at compile time.
 
 ## Usage
 

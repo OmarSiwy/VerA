@@ -7,7 +7,7 @@ diagnostic.
 
 ## Installing
 
-You need `vera` and Zig 0.17.0. [Installing](../using/install.md) has the
+You need `vera` and Zig master (0.18.0-dev). [Installing](../using/install.md) has the
 details; the short version, from a checkout:
 
 ```sh

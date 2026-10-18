@@ -175,14 +175,11 @@ def measure():
 | &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | {classified} | reviewed claims, not evidence | same run |
 | **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **{b_both} / {b_clauses} — {pct(nb_both, nb_clauses)}** | {nb_clauses - nb_both - nb_classified} clauses | `zig build test-1364 -- --coverage` |
 | &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | {b_acc} · {b_ref} · {b_unc} · {b_classified} | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| **D** — `ARCHITECTURE.md` §6 phases landed | hand-entered, see `ARCHITECTURE.md` §8 | not measured by this script | architecture review required |
 | `zig build test` | **{unit}** | pass | `zig build test` |
 | `zig build test-devices` | **{devices}** | pass | `zig build test-devices` |
 
 `--strict` exit code **{strict_rc}** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them. D is
-hand-entered against its source document; if you change it, say which document
-you read.
+A, B and C are measured by this script and nothing else may write them.
 
 B and C count citations without executing fixtures. It is not a conformance score:
 XFAILs and implementation-limit rejections can supply citations, and a clause
