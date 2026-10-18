@@ -169,7 +169,7 @@
           ) (lib.filterAttrs (_: s: s ? ${system}) sources);
         in
         {
-          vera = pkgs.callPackage fromSource { zig = zigs."0.17.0"; };
+          vera = pkgs.callPackage fromSource { zig = zigs.master; };
           veraPackages =
             releases
             // lib.optionalAttrs (latest != null && releases ? ${latest}) { latest = releases.${latest}; };
@@ -214,7 +214,7 @@
 
         built = veraFor pkgs;
 
-        zig = (zigsFor pkgs)."0.17.0";
+        zig = (zigsFor pkgs).master;
         commonInputs = [
           zig
         ];
