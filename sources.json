@@ -22,5 +22,29 @@
       "url": "https://github.com/OmarSiwy/VerA/releases/download/v0.10.0/vera-v0.10.0-x86_64-linux-gnu.tar.gz"
     },
     "zig": "0.17.0"
+  },
+  "0.10.1": {
+    "aarch64-darwin": {
+      "sha256": "eb7d1d2adf2218c65a1c24bdedb48b8af703815ee4ab0cd74c7fb3329f95132c",
+      "url": "https://github.com/OmarSiwy/VerA/releases/download/v0.10.1/vera-v0.10.1-aarch64-macos.tar.gz"
+    },
+    "aarch64-linux": {
+      "sha256": "cc86796da147f483204941dc13f228879b59e2a34c65e314f24fa44dc1d96e7b",
+      "url": "https://github.com/OmarSiwy/VerA/releases/download/v0.10.1/vera-v0.10.1-aarch64-linux-gnu.tar.gz"
+    },
+    "contract": {
+      "sha256": "4c639280e5ce489c3ed5d5f9b622ba3e1f5aadbd1bd68d9bfa57e9ebe5ff643b",
+      "url": "https://raw.githubusercontent.com/OmarSiwy/VerA/v0.10.1/tools/contract.zig"
+    },
+    "date": "2026-10-18",
+    "x86_64-darwin": {
+      "sha256": "241ec5736153d705f61a12c333f607a659c380f6410ced505fe65fd3952f7b3d",
+      "url": "https://github.com/OmarSiwy/VerA/releases/download/v0.10.1/vera-v0.10.1-x86_64-macos.tar.gz"
+    },
+    "x86_64-linux": {
+      "sha256": "d710124ed6c073e135e7f2801c92fc51253aaa757ec890c77fcc0f4725c5f4ed",
+      "url": "https://github.com/OmarSiwy/VerA/releases/download/v0.10.1/vera-v0.10.1-x86_64-linux-gnu.tar.gz"
+    },
+    "zig": "0.17.0"
   }
 }
