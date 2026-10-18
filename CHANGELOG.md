@@ -4,6 +4,10 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+### Fixed
+
+- A large device built by `--emit-so` or `--emit-osdi` compiles again: its split unit files did not see the `inline fn` helpers 0.10.0 added (`zPick`), so diode_cmc, psp103, bsimcmg, hicum2, vbic, mosvar and the mextram 504 variants failed with "use of undeclared identifier 'zPick'" (#81).
+
 ## v0.10.1 — 2026-10-18
 
 | Measure | Number | Remaining to v1.0.0 | Command |

@@ -1136,27 +1136,29 @@ pub const prelude_head_txt =
 
 /// Appends a `const zFoo = zh.zFoo;` alias for each top-level `z*` helper
 /// `src` declares, so a helper that is emitted is aliased by construction. A
-/// line is a declaration by `publish`'s predicate (`fn ` or `const `,
-/// optionally `pub `), and the name must be `z` plus an uppercase letter: the
+/// line is a declaration by `publish`'s predicate (`fn `, `inline fn ` or
+/// `const `, optionally `pub `), and the name must be `z` plus an uppercase letter: the
 /// spelling of every helper an emitted body calls, which keeps a kernel's
 /// internals (`zstd`, `zfIo`, `zf_max`, `ZScan`) out.
 pub fn appendAliases(out: *std.ArrayList(u8), gpa: std.mem.Allocator, src: []const u8) std.mem.Allocator.Error!void {
     var it = std.mem.splitScalar(u8, src, '\n');
     while (it.next()) |line| {
         const decl = if (std.mem.startsWith(u8, line, "pub ")) line[4..] else line;
-        const at: usize = if (std.mem.startsWith(u8, decl, "fn "))
-            "fn ".len
-        else if (std.mem.startsWith(u8, decl, "const "))
-            "const ".len
-        else
-            continue;
-        const rest = decl[at..];
+        const rest = decl[declKeyword(decl) orelse continue ..];
         var n: usize = 0;
         while (n < rest.len and (std.ascii.isAlphanumeric(rest[n]) or rest[n] == '_')) n += 1;
         const name = rest[0..n];
         if (name.len < 2 or name[0] != 'z' or !std.ascii.isUpper(name[1])) continue;
         try out.print(gpa, "const {0s} = zh.{0s};\n", .{name});
     }
+}
+
+/// The length of the keyword that makes `line` a top-level helper
+/// declaration (`fn `, `inline fn ` or `const `), or null. `publish` and
+/// `appendAliases` share it, so every helper h.zig exports is aliased.
+pub fn declKeyword(line: []const u8) ?usize {
+    for ([_][]const u8{ "fn ", "inline fn ", "const " }) |kw| if (std.mem.startsWith(u8, line, kw)) return kw.len;
+    return null;
 }
 
 /// §9.4.3 integer padding, for a printing artifact or a device that formats
@@ -1194,6 +1196,7 @@ test appendAliases {
         \\pub fn zBar() void {}
         \\const zBaz = 1;
         \\pub const zQux = 2;
+        \\inline fn zInl() void {}
         \\fn zlower() void {}
         \\const ZUpper = 3;
         \\    fn zIndented() void {}
@@ -1205,6 +1208,7 @@ test appendAliases {
         \\const zBar = zh.zBar;
         \\const zBaz = zh.zBaz;
         \\const zQux = zh.zQux;
+        \\const zInl = zh.zInl;
         \\
     , out.items);
 }

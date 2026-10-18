@@ -1453,6 +1453,7 @@ pass	ch05_analog_behavior/sequential_ifs_10000.va
 pass	ch05_analog_behavior/single_terminal_branch.va
 pass	ch05_analog_behavior/source_both_potential_and_flow_rejected.va
 pass	ch05_analog_behavior/source_probe_both.va
+pass	ch05_analog_behavior/speculated_arm_model_only_pow.va
 pass	ch05_analog_behavior/static_switch_elision.va
 pass	ch05_analog_behavior/static_switch_port_probe.va
 pass	ch05_analog_behavior/string_written_in_event_body_is_held.va

@@ -289,8 +289,7 @@ fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) E
     while (it.next()) |line| {
         if (!first) try out.append(arena, '\n');
         first = false;
-        if (std.mem.startsWith(u8, line, "fn ") or std.mem.startsWith(u8, line, "const "))
-            try out.appendSlice(arena, "pub ");
+        if (kt.declKeyword(line) != null) try out.appendSlice(arena, "pub ");
         try out.appendSlice(arena, line);
     }
 }
