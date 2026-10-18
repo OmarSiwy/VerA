@@ -3,12 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    # x86_64-darwin only: nixpkgs 26.11 dropped it, and 26.05 still builds
-    # and caches it (security fixes until the end of 2026). Fetched only when
-    # an x86_64-darwin output is evaluated.
+    # nixpkgs 26.11 dropped x86_64-darwin; 26.05 still builds it.
     nixpkgs-x86_64-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
     flake-utils.url = "github:numtide/flake-utils";
-
     zig-overlay.url = "github:mitchellh/zig-overlay";
     zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -24,90 +21,58 @@
     let
       lib = nixpkgs.lib;
 
-      # The release binaries, by version (tools/update-sources.py writes it;
-      # publish.yaml reruns it after every release).
+      # Release binaries by version, written by tools/update-sources.py.
       sources = lib.importJSON ./sources.json;
-      # The newest release, or null before the first (sources.json is `{}`).
-      latest =
-        if sources == { } then null else lib.last (lib.sort lib.versionOlder (lib.attrNames sources));
-      # The tree's own version (build.zig.zon), which the from-source package carries.
-      treeVersion =
-        let
-          line = lib.findFirst (lib.hasInfix ".version = ") "" (
-            lib.splitString "\n" (builtins.readFile ./build.zig.zon)
-          );
-        in
-        builtins.head (builtins.match ".*\"([^\"]+)\".*" line);
+      latest = if sources == { } then null else lib.last (lib.sort lib.versionOlder (lib.attrNames sources));
+      treeVersion = builtins.head (
+        builtins.match ".*\\.version = \"([^\"]+)\".*" (builtins.readFile ./build.zig.zon)
+      );
 
-      # `vera` builds every device by spawning `zig` on code it generated for
-      # one Zig release, so it is wrapped with that Zig first on PATH. It reads
-      # nothing else at run time: the contract and the `sim` tree are embedded
-      # (build.zig `sim_sources`) and written under the work directory.
-      wrapZig = zig: ''
-        wrapProgram $out/bin/vera --prefix PATH : ${zig}/bin
-      '';
+      # vera spawns zig on the code it generates.
+      wrapZig = zig: "wrapProgram $out/bin/vera --prefix PATH : ${zig}/bin";
 
-      # From source. ReleaseFast, what publish.yaml ships: the compiler is a
-      # batch tool whose safety checks the test suites already exercise in
-      # Debug, and the source and binary packages should be the same program.
       fromSource =
         {
           lib,
           stdenv,
           makeWrapper,
           zig,
-          # `zig build -j`: parallel build steps. 2 keeps a build in a few GB;
-          # `.override { zigJobs = 8; }` on a machine with the memory for it.
           zigJobs ? 2,
         }:
-        stdenv.mkDerivation (
-          {
-            pname = "vera";
-            version = "${treeVersion}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
-            # Only what `zig build install` reads: docs/ and tests/ are 33 MB
-            # that would rebuild the package on every fixture edit.
-            src = lib.fileset.toSource {
-              root = ./.;
-              fileset = lib.fileset.unions [
-                ./build.zig
-                ./build.zig.zon
-                ./lib
-                ./src
-                ./tools
-              ];
-            };
-            nativeBuildInputs = [
-              zig
-              makeWrapper
+        stdenv.mkDerivation {
+          pname = "vera";
+          version = "${treeVersion}-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./build.zig
+              ./build.zig.zon
+              ./lib
+              ./src
+              ./tools
             ];
-            dontConfigure = true;
-            dontBuild = true;
-            # -Dcpu=baseline: the default is the build machine's CPU, and a
-            # substituted binary must run on any CPU of the system.
-            installPhase = ''
-              runHook preInstall
-              # The environment, not --global-cache-dir: the build runner's own
-              # children read it, and $HOME does not exist in the sandbox.
-              export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-cache
-              zig build install -j${toString zigJobs} \
-                -Doptimize=ReleaseFast -Dcpu=baseline --prefix "$out"
-              ${wrapZig zig}
-              runHook postInstall
-            '';
-            meta = {
-              description = "Verilog-AMS compiler: Verilog-A to Zig device code";
-              homepage = "https://github.com/OmarSiwy/VerA";
-              license = lib.licenses.asl20;
-              mainProgram = "vera";
-            };
-          }
-          # Zig's linker signs the Mach-O ad hoc; strip would void it. Unproven
-          # on a Mac here, so left as the release package does it.
-          // lib.optionalAttrs stdenv.hostPlatform.isDarwin { dontStrip = true; }
-        );
+          };
+          nativeBuildInputs = [
+            zig
+            makeWrapper
+          ];
+          dontConfigure = true;
+          dontBuild = true;
+          # Zig's ad-hoc Mach-O signature does not survive strip.
+          dontStrip = stdenv.hostPlatform.isDarwin;
+          installPhase = ''
+            export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-cache
+            zig build install -j${toString zigJobs} -Doptimize=ReleaseFast -Dcpu=baseline --prefix "$out"
+            ${wrapZig zig}
+          '';
+          meta = {
+            description = "Verilog-AMS compiler: Verilog-A to Zig device code";
+            homepage = "https://github.com/OmarSiwy/VerA";
+            license = lib.licenses.asl20;
+            mainProgram = "vera";
+          };
+        };
 
-      # A release binary (sources.json). Statically linked on Linux, so
-      # nothing to patch; not stripped, so the Darwin ad-hoc signature holds.
       fromRelease =
         {
           lib,
@@ -128,7 +93,6 @@
           dontStrip = true;
           installPhase = ''
             install -Dm755 vera $out/bin/vera
-            # The tarball is the binary alone; the ABI file is the tag's.
             install -Dm644 ${fetchurl { inherit (contract) url sha256; }} $out/share/vera/contract.zig
             ${wrapZig zig}
           '';
@@ -141,8 +105,7 @@
           };
         };
 
-      # zig-overlay's packages, built from `pkgs` rather than its own nixpkgs,
-      # so the overlay works on whatever nixpkgs the consumer has.
+      # zig-overlay built from the consumer's pkgs.
       zigsFor =
         pkgs:
         import "${zig-overlay}/default.nix" {
@@ -151,36 +114,30 @@
           nixpkgs = pkgs.path;
         };
 
-      # pkgs -> { vera; veraPackages.<version> and .latest }, for the
-      # overlay and for `packages`.
       veraFor =
         pkgs:
         let
-          system = pkgs.stdenv.hostPlatform.system;
           zigs = zigsFor pkgs;
+          system = pkgs.stdenv.hostPlatform.system;
           releases = lib.mapAttrs (
             version: s:
             pkgs.callPackage fromRelease {
               inherit version;
+              inherit (s) contract;
               zig = zigs.${s.zig};
               source = s.${system};
-              inherit (s) contract;
             }
           ) (lib.filterAttrs (_: s: s ? ${system}) sources);
         in
         {
           vera = pkgs.callPackage fromSource { zig = zigs.master; };
           veraPackages =
-            releases
-            // lib.optionalAttrs (latest != null && releases ? ${latest}) { latest = releases.${latest}; };
+            releases // lib.optionalAttrs (latest != null && releases ? ${latest}) { latest = releases.${latest}; };
         };
 
-      # `vera --help` runs, and a resistor goes through codegen and through
-      # `zig` type-checking it against the contract, offline in the sandbox.
       smoke =
         pkgs: vera:
         pkgs.runCommand "vera-smoke-${vera.version}" { nativeBuildInputs = [ vera ]; } ''
-          # What README "Install with Nix" tells a derivation to set: no $HOME.
           export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
           vera --help > /dev/null
           test -s ${vera}/share/vera/contract.zig
@@ -199,7 +156,7 @@
         '';
     in
     {
-      overlays.default = final: _prev: veraFor final;
+      overlays.default = final: _: veraFor final;
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
@@ -207,49 +164,15 @@
         pkgs = import (if system == "x86_64-darwin" then nixpkgs-x86_64-darwin else nixpkgs) {
           inherit system;
           config.allowUnfree = true;
-          # 26.05's "last release for x86_64-darwin" warning, on every
-          # evaluation; a no-op on nixpkgs-unstable.
           config.allowDeprecatedx86_64Darwin = true;
         };
-
         built = veraFor pkgs;
-
         zig = (zigsFor pkgs).master;
-        commonInputs = [
-          zig
-        ];
 
-        # A shell carries what nixpkgs builds for this system (Xyce and perf
-        # are not on Darwin, iverilog not on 26.05's x86_64-darwin) and does
-        # not mark broken (gnucap on Darwin): `availableOn` reads only
-        # `platforms` and `badPlatforms`, and evaluating a broken package fails.
-        available = lib.filter (
-          p: lib.meta.availableOn pkgs.stdenv.hostPlatform p && !(p.meta.broken or false)
-        );
+        # Drop what this system cannot build (availableOn alone misses `broken`).
+        available = lib.filter (p: lib.meta.availableOn pkgs.stdenv.hostPlatform p && !(p.meta.broken or false));
 
-        # GPU Toolchains: CUDA on Linux, ROCm on x86_64-linux. Gated by hand,
-        # since `available` sees only the top package, not its dependencies.
-        cudaPkgs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (
-          with pkgs.cudaPackages;
-          [
-            cudatoolkit # nvcc, headers, libs, nvidia-smi
-            cuda_cudart # runtime (libcudart)
-            cuda_nvcc # compiler driver
-          ]
-        );
-        rocmPkgs = lib.optionals (system == "x86_64-linux") (
-          with pkgs.rocmPackages;
-          [
-            clr # HIP runtime (libamdhip64)
-            hipcc # HIP compiler
-            rocminfo # device query
-            rocm-smi # GPU monitoring
-            hip-common # headers
-          ]
-        );
-        # OpenVAF-Reloaded is not in nixpkgs: its release binary, linked against
-        # the LLVM 18 it was built with. The reference Verilog-A compiler the
-        # external accuracy suites compare VerA against (tests/fixtures/external/).
+        # OpenVAF-Reloaded: the reference Verilog-A compiler, not in nixpkgs.
         openvaf = pkgs.stdenv.mkDerivation rec {
           pname = "openvaf-reloaded";
           version = "24.0.2mob";
@@ -268,91 +191,54 @@
           '';
         };
 
-        # The tools VerA's results are checked against, by name.
+        # yosys gated by hand: its check inputs hold iverilog, refused on 26.05's x86_64-darwin.
         referenceTools =
-          available [
-            pkgs.iverilog # IEEE 1364 simulation reference (ivtest, sv-tests)
-            pkgs.verilator # lint / parse reference
-            pkgs.ngspice # OSDI host: VerA's .osdi vs OpenVAF's, same deck
-            pkgs.xyce # second analog simulator
-            pkgs.gnucap # third opinion for disagreements
-            pkgs.python3 # harness scripts
-          ]
-          # parse / elaborate reference. Gated by hand: its check inputs hold
-          # iverilog, which 26.05 refuses on x86_64-darwin, and `available`
-          # sees only yosys's own platforms.
-          ++ available (lib.optional (system != "x86_64-darwin") pkgs.yosys)
-          ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
-
-        gpuLibPath = pkgs.lib.makeLibraryPath (
-          [
-            "/run/opengl-driver" # NixOS NVIDIA driver (libcuda.so.1)
-          ]
-          ++ cudaPkgs
-          ++ rocmPkgs
-        );
+          available (
+            [
+              pkgs.iverilog
+              pkgs.verilator
+              pkgs.ngspice
+              pkgs.xyce
+              pkgs.python3
+            ]
+            ++ lib.optional (system != "x86_64-darwin") pkgs.yosys
+          )
+          ++ lib.optional (system == "x86_64-linux") openvaf;
       in
       {
-        devShells.default = pkgs.mkShell ({
-          packages =
-            commonInputs
-            ++ available [
-              pkgs.llvmPackages_21.llvm # needed for nvptx compilation
-              pkgs.iverilog # zig build test-beh-verilog
+        devShells = rec {
+          default = pkgs.mkShell {
+            packages = [ zig ] ++ available [
+              pkgs.iverilog
               pkgs.verilator
-            ]
-            ++ cudaPkgs
-            ++ rocmPkgs;
-          LD_LIBRARY_PATH = gpuLibPath;
-        });
-
-        devShells.benchmarking = pkgs.mkShell ({
-          packages =
-            commonInputs
-            ++ available [
-              pkgs.llvmPackages_21.llvm
-
-              # Visualize performance
+            ];
+          };
+          external = pkgs.mkShell { packages = [ zig ] ++ referenceTools; };
+          benchmarking = pkgs.mkShell {
+            inputsFrom = [ external ];
+            packages = available [
               pkgs.perf
-              pkgs.flamegraph
               pkgs.inferno
-            ]
-            ++ referenceTools
-            ++ cudaPkgs
-            ++ rocmPkgs;
-          LD_LIBRARY_PATH = gpuLibPath;
-        });
-
-        # The reference tools alone: what tools/external_analog.py and
-        # tools/external_digital.py run, without the GPU toolchains (CI).
-        devShells.external = pkgs.mkShell { packages = commonInputs ++ referenceTools; };
-
-        # The user documentation (docs/): `mdbook build docs`, and
-        # tools/doctest.py re-running every transcript a page shows.
-        devShells.docs = pkgs.mkShell {
-          packages = commonInputs ++ [
-            pkgs.mdbook
-            pkgs.python3
-          ];
+            ];
+          };
+          docs = pkgs.mkShell {
+            packages = [
+              zig
+              pkgs.mdbook
+              pkgs.python3
+            ];
+          };
         };
 
         packages = built.veraPackages // {
           default = built.vera;
-          vera = built.vera;
-        };
-
-        apps.default = {
-          type = "app";
-          program = lib.getExe built.vera;
-          meta.description = "Run vera, built from this tree";
+          inherit (built) vera;
         };
 
         checks = {
-          vera = built.vera;
           smoke = smoke pkgs built.vera;
         }
         // lib.optionalAttrs (built.veraPackages ? latest) {
-          release = built.veraPackages.latest;
           release-smoke = smoke pkgs built.veraPackages.latest;
         };
 
