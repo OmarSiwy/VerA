@@ -1,6 +1,6 @@
 # The external suites, every reference tool from `nix develop .#external`
 # (the reference tools of `.#benchmarking`, without its GPU toolchains).
-# Each gates by NAME (AGENTS.md §0 rule 3): a disagreement passes only when
+# Each gates by NAME: a disagreement passes only when
 # a row of its suite's TRIAGE.md (tests/fixtures/external/<suite>/) names it
 # with a verdict, and a row that names nothing is STALE and fails too, as an
 # XPASS does. Upstream sources are fetched at their pinned commits into

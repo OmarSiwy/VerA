@@ -6,7 +6,7 @@
 //! run the same numerics outside a device. Beside them sit the host-only
 //! runtime files, never spliced: `integer.zig` (judged by `ref4.zig`),
 //! `fold.zig` and `fmt.zig`, so the compiler and `sim` share one copy of
-//! each operator's semantics (ARCHITECTURE.md I6).
+//! each operator's semantics.
 //! LRM: §2.6.1, §2.7, §3.2, §4.2, §4.3, §4.5, §4.5.11, §4.5.12, §4.5.15,
 //! §5.10.3.3, §9.4.1, §9.4.3, §9.5, §9.5.3, §9.5.4.2, §9.13, §9.17.3, §9.21;
 //! IEEE 1364-2005 §5, §17.1, §17.2.4, §17.9.3.

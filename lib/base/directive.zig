@@ -2,7 +2,7 @@
 //! (an output offset and the value in force from it) and the `timescale
 //! operands. The preprocessor writes them (`Preprocessor.Directives`, which
 //! aliases these); lowering and the stages after it read them through
-//! `Lowered` without importing the frontend (ARCHITECTURE.md Phase 11).
+//! `Lowered` without importing the frontend.
 //! Imports only std.
 //!
 //! LRM clauses this file's code cites: §10.1; IEEE 1364-2005 §19.6, §19.8.

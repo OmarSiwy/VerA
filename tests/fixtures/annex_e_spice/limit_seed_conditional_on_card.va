@@ -1,7 +1,7 @@
 // §9.17.3 `$limit`'s seed argument chosen by a §4.2.12 `?:` on the card: the
 // legal neighbour of reject_limit_seed_reads_solution_through_conditional.va.
 //
-// AGENTS.md §6: a seed "may read card-derived variables, never the solution
+// A seed "may read card-derived variables, never the solution
 // (E0527)". The condition `vt > 0.01` reads the parameter vt alone, so the
 // seed is a function of the card and `seed` can compute it before any solve.
 // vt = 0.025 > 0.01, so §4.2.12 takes expression2 and the seed is 0.3: not

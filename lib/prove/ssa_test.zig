@@ -1,7 +1,7 @@
 //! SSA construction checked end to end: random structured programs in, every
 //! `SsaBuilder` read compared with a concrete run, and the MIR left behind
 //! passed through `verify`. Here, not in `analog/ssa.zig`, because `verify`
-//! is `prove`'s and `analog` cannot import `prove` (ARCHITECTURE.md Phase 5).
+//! is `prove`'s and `analog` cannot import `prove`.
 //! LRM §5.8, §5.9.
 
 const std = @import("std");

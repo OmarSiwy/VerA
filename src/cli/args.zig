@@ -586,7 +586,7 @@ test "parse: --help and -h print the usage on stdout, exit 0, and read no furthe
 test "parse: --version prints contract.vera_version, which is build.zig.zon's .version" {
     // build.zig reads the manifest into `build_options.version`; contract.zig
     // ships alone to hosts, so it keeps the literal and this test holds the
-    // two equal (AGENTS.md §3 bumps both).
+    // two equal.
     try testing.expectEqualStrings(@import("build_options").version, vera_version);
     var l: Line = .init();
     defer l.deinit();

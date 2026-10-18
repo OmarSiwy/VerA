@@ -30,5 +30,5 @@ and VerA printing `could not compile`. A source whose `vvp` run outlives the
 20 s timeout is skipped.
 
 An agreement is not evidence that either tool is right, and a disagreement is
-not evidence VerA is wrong: IEEE 1364-2005 decides (AGENTS.md §6). Each
+not evidence VerA is wrong: IEEE 1364-2005 decides. Each
 disagreement's verdict is a row in `TRIAGE.md`.

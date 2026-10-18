@@ -7,7 +7,7 @@
 //! A real host (ARPice's vtable) also compiles updateState: a lower bound.
 //! Used by tools/report.py's model-build timing.
 
-/// Opt into the contract's conformance checks (AGENTS.md §6).
+/// Opt into the contract's conformance checks.
 pub const vera_validate_contract = true;
 
 const contract = @import("contract");

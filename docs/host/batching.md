@@ -98,8 +98,7 @@ second note's §1b, §2 and §5:
   more.
 
 Read the notes for the tables, the machine and the method before relying on
-a number; `AGENTS.md` §5 in the repository summarises the same measurements
-and the estimates for other instruction sets, which are marked as estimates.
+a number.
 
 ## The testbench's batch family
 

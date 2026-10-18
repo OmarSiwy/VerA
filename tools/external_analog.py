@@ -23,7 +23,7 @@ its license. Nothing fetched is committed: it lands in the cache
 
 Prints one `PASS <name>` or `FAIL <name>: <why>` line per (model x analysis x
 quantity) and writes the sorted FAIL names to `<out>/fail.txt` (the name list
-AGENTS.md §0 rule 3 diffs). A FAIL is `KNOWN` when a row of its suite's
+to diff). A FAIL is `KNOWN` when a row of its suite's
 TRIAGE.md names it (`| `pattern` | verdict | ... |`, an fnmatch pattern over
 the whole name, so one root cause is one row); a row that names no FAIL of a
 suite that ran in full is `STALE`. Exits 1 on any untriaged FAIL or STALE row.

@@ -1,6 +1,5 @@
 //! The `golden` mode: what the compiler SAYS about every fixture, snapshotted,
-//! so a refactor can prove it changed nothing (AGENTS.md §4, "Refactor phases
-//! keep goldens byte-identical").
+//! so a refactor can prove it changed nothing.
 //!
 //!   zig build golden -- before        # on the pre-change tree
 //!   zig build golden -- after         # ... the change ...

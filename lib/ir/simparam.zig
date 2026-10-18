@@ -2,8 +2,7 @@
 //! its host `Model` field, or "answered at run time" out. Lowering diagnoses
 //! and records with these; `Lowered.simparamValue` and codegen answer with the
 //! same rows, so a name is never both unknown and answered. Here, not in
-//! `lower/sysfunc.zig`, so code after lowering reads them from `ir`
-//! (ARCHITECTURE.md Phase 5).
+//! `lower/sysfunc.zig`, so code after lowering reads them from `ir`.
 //!
 //! LRM clauses this file's code cites: §9.15.
 

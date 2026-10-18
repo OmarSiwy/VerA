@@ -3,7 +3,7 @@
 // determined by the authors of the simulator." VerA's claim (VD-012) reads
 // `{expr}` values over a subcircuit's own `PARAMS:`, and refuses inside a
 // definition what it does not read: a skipped card changes the circuit (a
-// dropped R is an open), the silent wrong answer AGENTS.md §4 forbids.
+// dropped R is an open), the silent wrong answer VerA forbids.
 //
 // `{RTOP}` here reads a name the subcircuit does not declare. HSPICE would
 // look for a global `.PARAM RTOP`, which VerA does not read, so the card is

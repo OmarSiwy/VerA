@@ -7,7 +7,7 @@
     tools/conformance.py <subcommand> [...]   # one of the signals below
 
 Every number comes from a command in this file. There is no second place a
-percentage is written down, which is the point: AGENTS.md §2 defines v1.0.0
+percentage is written down, which is the point: v1.0.0 is defined
 as four measures, and three of them are machine-readable today. Only the
 measures block may write A, B and C; every subcommand is a separate signal and
 none of them changes the block or CHANGELOG.md:
@@ -304,7 +304,7 @@ def tally_b(argv):
     (CLAUSE-AUDIT.md §1.1 c), so the rows are hand-read. What CAN be checked is
     the arithmetic, and that is this check's whole job. It answers "is the
     hand-read tally self-consistent?", not "is it right?": re-deriving the rows
-    is reading, and AGENTS.md §2 says so. Never report it as a measurement.
+    is reading. Never report it as a measurement.
 
     ponytail: a split on `|` over the one table, not a markdown parser. The
     table is pinned by its header row, so a reshuffle of §7 cannot silently
@@ -2260,7 +2260,7 @@ def vpi_runs():
     """{c path under tests/fixtures: 'pass' | 'xfail'} for build.zig's
     `vpiRuns`, the `.c` fixtures `zig build test` runs in-process: those with
     a `//! design` line. A `.c` that only compiles is not evidence
-    (AGENTS.md §2) and is absent here."""
+    and is absent here."""
     root = ROOT / "tests/fixtures"
     out = {}
     for path in sorted(root.rglob("*.c")):
@@ -2459,7 +2459,7 @@ def ratchet(argv):
     verdicts (and per-row levels) against the committed VERDICTS.tsv and
     LEVELS.tsv. Any difference fails, a fix as much as a regression, so the
     committed files are always this tree's truth and every change to them is
-    reviewed by name (AGENTS.md §0 rule 3).
+    reviewed by name.
     `--update` writes the run's files over the committed ones."""
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
     if "verdicts" not in opts:
@@ -4708,7 +4708,7 @@ DIFF_HEAD = (
     "# vera: accept (no error, or only errors after parsing) | syntax (every error\n"
     "# from the preprocess or parse stage) | crash.\n"
     "# class: vera-bug (the grammar is right and VerA's parser is not, or VerA\n"
-    "# crashed), extension (a VerA extension AGENTS.md section 6 documents,\n"
+    "# crashed), extension (a documented VerA extension,\n"
     "# which Annex A does not derive), bnf-transcription (the BNF as printed\n"
     "# fails to state a rule the LRM states elsewhere, or states it wrongly; the\n"
     "# PDF prints the same BNF unless the reason says otherwise), context-rule\n"
@@ -4928,7 +4928,7 @@ DIFF_RULES = [
      "`(01)`), which the token-level recognizer reads as an identifier or a number; IEEE 1364-2005 15.4 writes "
      "`edge[01, 0x, x1] clr`", {"dir": "V", "at": r"(edge \[[^>]*|table \( )>>\w+<<"}),
     # VerA's parser takes text no rule gives it.
-    ("extension", "VerA extension (AGENTS.md §6 `vera_lte`, `vera_interp`): an attribute after `ddt`/`absdelay`; "
+    ("extension", "VerA extension (`vera_lte`, `vera_interp`): an attribute after `ddt`/`absdelay`; "
      "A.8.2 allows { attribute_instance } only after an analog_function_identifier (probe "
      "`ddt (* vera_lte = 0 *) (V(p))`)", {"dir": "V", "at": r"(ddt|absdelay|idt|idtmod|transition) >>\(\*<<"}),
     ("vera-bug", "A.1.9 and Syntax 6-4 require a paramset_item_declaration before the paramset statements; VerA "

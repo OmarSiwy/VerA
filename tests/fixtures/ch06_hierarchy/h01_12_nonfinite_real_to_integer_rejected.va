@@ -21,7 +21,7 @@
 // substring against the message, the title and the notes, and the rendered
 // `= note: LRM <section>` line is none of those, so no implementation could have
 // passed it. E0368 is the code for exactly this rule (its catalogue entry cites
-// §4.2.1.1), and AGENTS §6 asks for the code.
+// §4.2.1.1).
 //
 // HISTORY: this was an xfail. VerA accepted the file silently and the parameter
 // came out 9223372036854775807 — the saturation value of its i64 carrier, which is

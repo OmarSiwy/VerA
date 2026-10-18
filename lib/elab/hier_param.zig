@@ -7,8 +7,7 @@ const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 
 /// One §9.18 Table 9-29 hierarchical system parameter (`base`'s, so
-/// `Lowered.SystemCheck` names one without importing elaboration,
-/// ARCHITECTURE.md Phase 11).
+/// `Lowered.SystemCheck` names one without importing elaboration).
 pub const Kind = @import("base").SystemParam;
 
 /// Returns the expression for an instance's value given its parent's

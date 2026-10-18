@@ -1,7 +1,7 @@
 //! `--check`: generated device text in, a `zig build-obj -fno-emit-bin` of it
 //! beside the `contract` module out, as a verdict (null, or an exit status
-//! with its message on `err`). Moved from `src/main.zig` with the spine
-//! (ARCHITECTURE.md Phase 10); the messages are user-visible and frozen.
+//! with its message on `err`). Moved from `src/main.zig` with the spine;
+//! the messages are user-visible and frozen.
 
 const std = @import("std");
 const Io = std.Io;

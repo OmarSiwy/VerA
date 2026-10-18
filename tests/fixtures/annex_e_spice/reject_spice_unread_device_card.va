@@ -4,7 +4,7 @@
 // for `.MODEL` and for flat `.SUBCKT` bodies of numeric-valued
 // R/C/L/V/I/E/F/G/H cards (Vague_Decisions VD-012). Inside a definition,
 // anything else is refused rather than skipped: a skipped card changes the
-// circuit (a dropped R is an open), the silent wrong answer AGENTS.md §4
+// circuit (a dropped R is an open), the silent wrong answer VerA
 // forbids.
 //
 // An S card (a voltage-controlled switch) has no Table E.1 row and no reader

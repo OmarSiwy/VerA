@@ -2,7 +2,7 @@
 //! a versioned `.so` (§8.3 device-side ABI), a prebuilt engine object, a
 //! testbench binary or a `--check` verdict out, each from a spawned `zig`
 //! child. Re-exports only; the files import each other directly. Imports no
-//! compiler module (ARCHITECTURE.md §1 row 12): the spine hands it bytes.
+//! compiler module: the spine hands it bytes.
 //! `contract`: `Part` is the host's `DevicePart`. `dynlib`: only the tests
 //! that load what they built.
 

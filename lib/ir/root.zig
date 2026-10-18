@@ -1,7 +1,7 @@
 //! IR: the SSA MIR and the tables lowering hands every later stage, as types
 //! and their column functions. Re-exports only; the files import each other
-//! directly. Lowering is `analog`'s and the passes over the MIR are `prove`'s
-//! (ARCHITECTURE.md Phase 5); both import this module, so it imports neither.
+//! directly. Lowering is `analog`'s and the passes over the MIR are `prove`'s:
+//! both import this module, so it imports neither.
 //! Since Phase 11 it imports no frontend or elaboration module either: the
 //! AST types `Lowered` carries are `base`'s, and the AST itself stays with
 //! `vera.CompileResult`. `kernels` holds the value folds and kernel tables it reads.

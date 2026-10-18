@@ -4,7 +4,7 @@
 //! parser appends rows; every later stage reads them through `ExprStore`.
 //! Elaboration appends to an overlay (`ExprStore.continuing`) whose ids,
 //! list offsets and side-table indices continue the parser's, so the
-//! parser's rows are never written and keep their numbers (ARCHITECTURE.md I4).
+//! parser's rows are never written and keep their numbers.
 
 const std = @import("std");
 const Integer = @import("kernels").Integer;

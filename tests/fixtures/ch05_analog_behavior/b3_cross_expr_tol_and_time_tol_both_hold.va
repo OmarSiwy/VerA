@@ -25,7 +25,7 @@
 // the four verdicts do not depend on which extra points a tool adds.
 //
 // WHY THE `always`. VerA's pure analog testbench is a fixed grid that inserts
-// no point (AGENTS.md §7); only its mixed-signal runner places solver-chosen
+// no point; only its mixed-signal runner places solver-chosen
 // points. The digital monitor of the same crossing makes this module a mixed
 // one, and its count (§7.3.5, one rising crossing, one event) is checked too.
 //

@@ -235,7 +235,7 @@ pub const NetPart = struct {
 };
 
 /// One port §7.8.4 re-pointed at a connect module (`base`'s, which
-/// documents the fields; ARCHITECTURE.md Phase 11).
+/// documents the fields).
 pub const Inserted = @import("base").Inserted;
 
 /// One instance the first walk elaborated (`Flatten.tree`): the instance as
@@ -279,7 +279,7 @@ pub const SystemCheck = struct { kind: hier_param.Kind, value: Ast.ExprId, name:
 /// flattening appends: new interned names (§6.7 paths), cloned expression rows
 /// and cloned statements. It is an overlay of the parse
 /// (`Ast.SourceFile.overlay`), so they land in the overlay's own rows, numbered
-/// after the parser's, and the parse is never written (ARCHITECTURE.md I4).
+/// after the parser's, and the parse is never written.
 /// Nothing is ever rewritten in place, so every id the parser handed out
 /// stays valid.
 pub const Ctx = struct {
@@ -295,8 +295,7 @@ pub const Ctx = struct {
     default_disciplines: []const @import("frontend").Preprocessor.DefaultDiscipline = &.{},
 };
 
-/// §7.4.4 basic or detail discipline resolution (`base`'s, ARCHITECTURE.md
-/// Phase 11).
+/// §7.4.4 basic or detail discipline resolution (`base`'s).
 pub const DisciplineResolution = @import("base").DisciplineResolution;
 
 /// §3.4 compile-time overrides, shared with Lower.Options (`base`'s).

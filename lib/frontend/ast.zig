@@ -23,7 +23,7 @@ const stmt_file = @import("ast_stmt.zig");
 // ---------------------------------------------------------------------------
 
 /// Handle into the expression columns (LRM annex A expression grammar),
-/// `base`'s (ARCHITECTURE.md Phase 11).
+/// `base`'s.
 pub const ExprId = @import("base").ExprId;
 /// Handle into the statement pool. LRM §5 behavioral statements.
 pub const StmtId = enum(u32) { none = std.math.maxInt(u32), _ };
@@ -124,7 +124,7 @@ pub const SeqBlock = stmt_file.SeqBlock;
 /// decl slices are never freed by `deinit`.
 ///
 /// Elaboration never writes a parse: it writes an `overlay`, a file that
-/// continues the parse (ARCHITECTURE.md I4). The overlay's interner,
+/// continues the parse. The overlay's interner,
 /// expressions and statements number on from the parse's, so every id keeps
 /// its number and reads the same through the overlay; its decl slices start
 /// as the parse's and elaboration may replace them.

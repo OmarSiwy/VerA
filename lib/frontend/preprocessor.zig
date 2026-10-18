@@ -217,12 +217,12 @@ pub const DefaultTransition = Region(?f64);
 /// operands exist to be read back by §9.15 Table 9-27.
 pub const TimescaleEvent = Region(?Timescale);
 
-/// A `timescale's two operands, in seconds (`base`'s, ARCHITECTURE.md Phase 11).
+/// A `timescale's two operands, in seconds (`base`'s).
 pub const Timescale = @import("base").Timescale;
 
 /// One positional directive event: the output offset where its value
 /// changed, and the new value (`base`'s, so `Lowered` holds the lists
-/// without importing the frontend, ARCHITECTURE.md Phase 11).
+/// without importing the frontend).
 pub const Region = @import("base").Region;
 
 /// IEEE 1364 §19.2 `default_nettype_value`, a closed list. `supply0` and

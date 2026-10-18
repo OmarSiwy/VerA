@@ -21,8 +21,8 @@ re-measuring. The logs and the commands:
     models.json      `vera --emit-so` per model, this script (--models)
 
 Everything is built ReleaseFast: the suite's timing table says Debug is "NOT
-the shipping number". The page states what it read, never a typed number
-(AGENTS.md §0 rule 1). The parsing of the measures lines is conformance.py's.
+the shipping number". The page states what it read, never a typed number.
+The parsing of the measures lines is conformance.py's.
 """
 import argparse
 import datetime
@@ -83,7 +83,7 @@ def log(logs, name):
 
 def suite_binary():
     """`benchmark --strict` as the suite binary itself: the build runner
-    truncates a failed step's output (AGENTS.md §0 rule 3), and --strict
+    truncates a failed step's output, and --strict
     fails while any XFAIL remains. A filter that matches nothing makes the
     step fail fast and print the command it ran."""
     p = subprocess.run(SUITES["strict"] + ["zzz-none"], cwd=ROOT, capture_output=True, text=True)

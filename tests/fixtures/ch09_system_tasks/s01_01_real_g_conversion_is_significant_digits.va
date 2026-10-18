@@ -69,7 +69,7 @@
 // characters where Table 9-23 demands the shorter of the two renderings, five.
 // Each row names a distinct branch of the rule: below the -4 floor, above the
 // precision ceiling, and the two sides of the decimal window. All four pass
-// (re-run 2026-10-04 at ae9633f1 with AGENTS.md §6's `vera --emit-exe` command: four ok=1).
+// (re-run 2026-10-04 at ae9633f1 with `vera --emit-exe`: four ok=1).
 //
 // WHY THE ASSERTION IS A STRING COMPARISON. The value of a conversion is text,
 // and the only way to hold text in a Verilog-AMS fixture is §9.5.3's

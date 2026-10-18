@@ -102,9 +102,9 @@ the numbers are in
 
 ## Contributing
 
-Read [`AGENTS.md`](AGENTS.md) first, then make `zig build test` exit 0.
+Make `zig build test` exit 0.
 Questions and bugs go to [GitHub issues](https://github.com/OmarSiwy/VerA/issues).
 
 ## License
 
-Apache 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache 2.0: see [LICENSE](LICENSE).

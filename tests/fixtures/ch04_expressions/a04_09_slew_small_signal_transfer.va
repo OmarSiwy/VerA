@@ -45,7 +45,7 @@
 // numbers above substituted by hand.
 //
 // STATUS AND WHAT THIS FILE IS FOR. Both checks PASS at all six points
-// (re-run 2026-10-04 at ae9633f1 with AGENTS.md §6's `vera --emit-exe` command). That is deliberate and disclosed: §4.5.9's small-signal sentence has
+// (re-run 2026-10-04 at ae9633f1 with `vera --emit-exe`). That is deliberate and disclosed: §4.5.9's small-signal sentence has
 // no fixture anywhere under tests/fixtures/ — 21_slew.va and
 // 129_slew_rate_sign_rejected.va cover the rate limit, the two default-rate
 // spellings and the rate-sign refusal, and none of them touches the transfer

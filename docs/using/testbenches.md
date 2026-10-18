@@ -158,9 +158,6 @@ under `tests/fixtures/` through the same testbench and grades it by these.
 | `//! inherited IEEE 1364-2005 9.2` | the same, for a clause the LRM inherits from IEEE 1364 |
 | `//! fd-exempt REASON` | the derivative and finiteness certificates (`benchmark -- --certify`) do not apply, for the stated reason |
 
-`AGENTS.md` §6 in the repository is the contributor's
-guide to writing one.
-
 ## Running a testbench by hand
 
 `--emit-exe` prints the binary's path on stdout and diagnostics on stderr,

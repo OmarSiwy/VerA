@@ -11,7 +11,7 @@
 //!   `digital.zig`   the `.v` runner metadata both digital runners read
 //! The other runners import the sub-file they need directly.
 //!
-//! The verdict algebra is frozen behaviour (AGENTS.md §2, §6): an `ok=1`
+//! The verdict algebra is frozen behaviour: an `ok=1`
 //! transcript is `met` only through the compiler plug, `//! xfail` turns
 //! `unmet` into XFAIL and `met` into an XPASS FAIL, and `--strict` fails
 //! unasserted and XFAIL fixtures.
@@ -433,7 +433,7 @@ fn keepListed(arena: std.mem.Allocator, io: Io, path: []const u8, root: []const 
 }
 
 /// `--verdicts=`: the run's verdicts as `<verdict>\t<path under root>` rows,
-/// in walk (path) order, so two runs diff by name (AGENTS.md §0 rule 3).
+/// in walk (path) order, so two runs diff by name.
 fn writeVerdicts(io: Io, path: []const u8, root: []const u8, fixtures: []const Fixture, verdicts: []const Verdict) !void {
     var file = try Io.Dir.cwd().createFile(io, path, .{});
     defer file.close(io);
@@ -655,7 +655,7 @@ fn decide(
 
     // The other half of a refusal: each named neighbour is a collected
     // positive fixture, so the pair shows a restriction and not a blanket
-    // refusal (AGENTS.md §2). Whether it passes is read from the same run's
+    // refusal. Whether it passes is read from the same run's
     // verdicts by `tools/conformance.py`.
     for (d.neighbours) |n| {
         const path = try std.fs.path.join(arena, &.{ f.dir(), n });

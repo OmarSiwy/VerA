@@ -4,7 +4,7 @@
 // 232_limit_scaled_probe_rejected: a reversed-polarity junction keeps the probe
 // as the first argument and scales the RESULT, passing the polarity as VerA's
 // trailing sign argument (§9.17.3 leaves arguments past the algorithm's own to
-// the implementation; AGENTS.md §6 "`$limit` arguments").
+// the implementation).
 //
 // "When the simulator has converged, the return value of the $limit() function
 // is the value of the access function reference, within appropriate

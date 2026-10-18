@@ -1,5 +1,5 @@
 //! Fitness test: the `module_specs` rows (`repo_options`) and the lib/ and
-//! src/ sources -> a failure for every breach of ARCHITECTURE.md §3's fitness
+//! src/ sources -> a failure for every breach of the fitness
 //! rules R1-R7 that its allowlist does not name.
 //!
 //! Each allowlist holds today's violations, and each row names the phase that
@@ -138,7 +138,7 @@ const r1_allow = [_]Reach{
 
 /// Empty since Phase 8 split `backend` into `device`, `verilog` and `exe`:
 /// no backend reaches another (the testbench reads a device only through
-/// its text and the contract, AGENTS.md §11.8).
+/// its text and the contract).
 const r2_allow = [_]Reach{};
 
 /// The rows' roles, from the tag names `repo_options` carries.
@@ -202,7 +202,7 @@ test "R1: a runtime row's closure contains no compiler row" {
     defer arena_state.deinit();
     const a = arena_state.allocator();
     var bad: usize = 0;
-    // A `leaf` imports only std (ARCHITECTURE.md §1).
+    // A `leaf` imports only std.
     for (repo.module_names, try rowRoles(a), repo.module_imports) |name, role, imports| if (role == .leaf and imports.len != 0) {
         std.debug.print("R1: leaf `{s}` imports `{s}`\n", .{ name, imports });
         bad += 1;

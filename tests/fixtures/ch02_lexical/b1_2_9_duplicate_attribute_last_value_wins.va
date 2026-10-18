@@ -5,7 +5,7 @@
 // 20_duplicate_attributes.va repeats `desc` and `units`, whose values no
 // arithmetic can see, so it cannot tell first from last. This file repeats an
 // attribute whose value changes what the device computes: VerA's `vera_nodiff`
-// (AGENTS.md §6, ch04_expressions/ddx_vera_nodiff_assignment.va). On (1), the
+// (ch04_expressions/ddx_vera_nodiff_assignment.va). On (1), the
 // assignment stores its value with no derivative; off (0), the derivative is
 // kept. §4.5.6 `ddx` reads which one happened.
 //
@@ -24,7 +24,7 @@
 //! lrm 2.9
 //! lrm 2.9:4
 //! lrm 4.5.6
-//! fd-exempt `(* vera_nodiff *)` stores its assignments with no derivative by design (AGENTS.md §6), so the Jacobian omits what a difference sees
+//! fd-exempt `(* vera_nodiff *)` stores its assignments with no derivative by design, so the Jacobian omits what a difference sees
 //! bias V(a) = 0.5, V(b) = 0.0
 //! checks 5
 `include "check.vh"

@@ -2,7 +2,7 @@
 //! inserted connect module, a §3.4 `--param` override, the §7.4.4
 //! discipline-resolution mode and a §9.18 Table 9-29 system parameter.
 //! Elaboration (`Elaborate`, `hier_param`) aliases them, and `Lowered`
-//! carries them without importing elaboration (ARCHITECTURE.md Phase 11).
+//! carries them without importing elaboration.
 //! Imports only std.
 //!
 //! LRM clauses this file's code cites: §3.4, §6.3.6, §7.4.4, §7.8.4, §9.18, F.2.2.

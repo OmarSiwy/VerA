@@ -54,7 +54,7 @@ pub const beh_verilog = @import("verilog");
 pub const orchestrator = @import("zigbuild");
 /// The fixture testbench: `//!` directives, runner text and its build.
 pub const tb = @import("exe");
-// What `ir` exported until ARCHITECTURE.md Phase 5 moved lowering to `analog`
+// What `ir` exported until lowering moved lowering to `analog`
 // and the MIR passes to `prove`; `ir` cannot re-export either, since both
 // import it.
 /// AST → MIR lowering (`analog`).
@@ -402,7 +402,7 @@ fn compileInArena(
         },
     };
     // Every later stage reads, and elaboration writes, an overlay of the
-    // parse: the parse itself is never written (ARCHITECTURE.md I4), and its
+    // parse: the parse itself is never written, and its
     // ids keep their numbers through the overlay.
     const parsed: *const Ast.SourceFile = parse;
     const file = try arena.create(Ast.SourceFile);

@@ -11,7 +11,7 @@
 //! The row types are also reachable as `Lower.<Name>`, the spelling most callers use:
 //! code after lowering binds this file as `Lower` (`const Lower = @import("ir").Lowered`),
 //! so it reads the rows, `ParamOverride` and the §9.15 `simparam` rows from `ir` and
-//! never imports lowering (ARCHITECTURE.md Phase 5).
+//! never imports lowering.
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4,
 //! §1.3.4.1, §2.7, §2.8.1, §2.9, §2.9.2, §3.1, §3.2, §3.2.2, §3.4, §3.4.2,
@@ -740,7 +740,7 @@ comptime {
 
 // ---- the source, for diagnostics and host facts -----------------------------
 // The AST itself is not here: the VPI, the one reader after lowering, takes it
-// from `vera.CompileResult` (ARCHITECTURE.md Phase 11).
+// from `vera.CompileResult`.
 /// Preprocessed source and the lexer's `.start` column, kept only so a token
 /// index can become a `diag.Span` (`tokenSpan`).
 src: []const u8 = "",

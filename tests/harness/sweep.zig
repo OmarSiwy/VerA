@@ -5,8 +5,8 @@
 //!
 //! The half that can fail is `expected`, kept below: the device
 //! and MIR sizes of every generated shape, asserted under `zig build test`
-//! (AGENTS.md §8: two agents
-//! moving these sizes regenerate the table, they do not pick a side).
+//! (two agents moving these sizes regenerate the table, they do not pick
+//! a side).
 
 const std = @import("std");
 const vera = @import("vera");

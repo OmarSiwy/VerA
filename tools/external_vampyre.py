@@ -27,7 +27,7 @@ Prints `PASS <name>` for a finding both report and `FAIL <name>: <why>` for
 one only one reports, `<model>/<finding>/<key>`, and writes the sorted FAIL
 names to `<out>/fail.txt`. A FAIL is KNOWN when a row of the suite's TRIAGE.md
 names it (fnmatch); a row that names no FAIL of a full run is STALE. Exits 1
-on any untriaged FAIL or STALE row (AGENTS.md §0 rule 3).
+on any untriaged FAIL or STALE row.
 """
 import argparse
 import json

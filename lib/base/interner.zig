@@ -3,7 +3,7 @@
 //! LRM §2.7 strings, §2.8 identifiers. The AST and the MIR each hold one
 //! (`SourceFile.strings`, `Mir.strings`); a `StrId` means something only
 //! against the table that issued it. A table may continue another (`base`,
-//! elaboration's overlay of the parse, ARCHITECTURE.md I4): its ids start
+//! elaboration's overlay of the parse): its ids start
 //! after the base's, so an id keeps its number. Imports only std.
 
 const std = @import("std");

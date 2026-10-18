@@ -1,7 +1,7 @@
 //! The AST handles and scalar enums that outlive the parse: `Ast` aliases
 //! them, and `Lowered` carries them (a parameter's type, a port's direction,
 //! the expression a D2A event term is keyed by) without importing the
-//! frontend (ARCHITECTURE.md Phase 11). Imports only std.
+//! frontend. Imports only std.
 //!
 //! LRM clauses this file's code cites: §3.1, §3.2, §3.3, §3.4.1, §4.7.2.3,
 //! §6.5.2.2, A.1.3, A.1.4, A.2.1.1.

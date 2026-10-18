@@ -1405,7 +1405,7 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // A failed parse still leaves every recovered module in `parser.file`, and
     // the `wreal` refusal is itself a parse error, so the rules read that.
     // Arena-owned, not a local: the returned `Run` points at it. Elaboration
-    // writes an overlay of the parse, never the parse (ARCHITECTURE.md I4).
+    // writes an overlay of the parse, never the parse.
     const parse = try arena.create(Ast.SourceFile);
     parse.* = parser.parseSourceFile() catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,

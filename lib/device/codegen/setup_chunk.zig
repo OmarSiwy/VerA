@@ -701,7 +701,7 @@ test hasWord {
     try std.testing.expect(!hasWord("SS + S_", "S")); // longer names
 }
 
-// Moved from the orchestrator's split-build test (ARCHITECTURE.md Phase 7):
+// Moved from the orchestrator's split-build test:
 // it builds `chunk`'s output, so it lives with codegen, not `zigbuild`.
 test "a chunked setup builds one object per chunk into a library that runs" {
     const zigbuild = @import("zigbuild");

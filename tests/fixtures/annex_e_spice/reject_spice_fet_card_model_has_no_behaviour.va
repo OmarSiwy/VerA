@@ -4,7 +4,7 @@
 // So a `.MODEL NCH NMOS LEVEL=72` (HSPICE's BSIM-CMG level) names a primitive
 // VerA has no equations for. An M card bound to it inside a `.SUBCKT` would be
 // a transistor that conducts nothing, an open where the netlist has a device:
-// the silent wrong circuit AGENTS.md §4 forbids. It is refused at the card,
+// the silent wrong circuit VerA forbids. It is refused at the card,
 // E0953, with E.1.2's remedy in the explanation (write the model as a module,
 // and name it as the `.MODEL`'s type).
 //

@@ -75,7 +75,7 @@
 //! §9.15 (`$simparam`), §9.17.3 (limiting and seeds), §9.19
 //! (`$port_connected`).
 
-/// Opt into the contract's conformance checks (AGENTS.md §6).
+/// Opt into the contract's conformance checks.
 pub const vera_validate_contract = true;
 
 const std = @import("std");

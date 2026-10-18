@@ -130,7 +130,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
             };
             try models.append(pa, model);
             // 3. VerA's own half: the model has to compile. `--check` and both
-            //    include dirs, per AGENTS.md §6 — `check.vh` is at the suite
+            //    include dirs: `check.vh` is at the suite
             //    root and the model's siblings are beside it.
             const r = child.capture(pa, io, &.{
                 vera_exe, "--check",            "--contract", options.contract,
