@@ -4,6 +4,10 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+### Fixed
+
+- A strict device whose solve-dependent branch has a model-only arm (a diode's junction capacitance past `fc`, for one) compiles again: 0.10.0 hoisted that arm's guarded row into `setup`, where it read the solution and failed `--check` with "use of undeclared identifier 'x'". The branchless selects stay; only the guard now counts as a dependency (#81).
+
 ## v0.10.0 — 2026-10-18
 
 | Measure | Number | Remaining to v1.0.0 | Command |

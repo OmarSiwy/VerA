@@ -288,6 +288,8 @@ const Scan = struct {
         const inst = def.inst_result;
         const blk = in.an.def_block[@backingInt(v)];
         if (blk == none_u32) return false;
+        var g = in.mir.guardConds(inst);
+        while (g.next()) |c| if (!(if (s.plc[blk]) s.sv(c) else s.anchored(c))) return false;
         if (!s.plc[blk]) return s.speculable(inst, blk);
         const row = in.mir.instRow(inst);
         switch (row.op) {
@@ -580,6 +582,8 @@ fn tpRule(in: Input, vary: []const bool, inside: []const bool, cds: anytype, v: 
     const def = in.mir.valueDef(v);
     if (def != .inst_result) return varies(in, vary, v);
     const inst = def.inst_result;
+    var g = in.mir.guardConds(inst);
+    while (g.next()) |c| if (varies(in, vary, c)) return true;
     return switch (in.mir.instData(inst)) {
         .unary => |d| varies(in, vary, d.operand),
         .binary => |d| varies(in, vary, d.lhs) or varies(in, vary, d.rhs),

@@ -153,6 +153,8 @@ fn hostStep(self: *const Gen, v: Mir.Value, host: []const bool) bool {
     const def = self.mir.valueDef(self.an.rv(v));
     if (def != .inst_result) return false;
     const inst = def.inst_result;
+    var g = self.mir.guardConds(inst);
+    while (g.next()) |c| if (in(self, host, c)) return true;
     return switch (self.mir.instData(inst)) {
         .call => |c| gen_call.readsHostState(self, inst) or for (c.args) |a| {
             if (in(self, host, a)) break true;

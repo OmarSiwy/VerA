@@ -177,7 +177,9 @@ fn valueNumbers(self: *Gen) Error![]Mir.Value {
     for (Mir.Value.first_dynamic..nv) |i| {
         const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (!plan_setup.candidate(self.input(), self.sinv.val, v) or self.an.rv(v) != v) continue;
-        const row = self.mir.instRow(self.mir.valueDef(v).inst_result);
+        const inst = self.mir.valueDef(v).inst_result;
+        if (self.mir.guardOf(inst) != null) continue; // the guard is not in the key
+        const row = self.mir.instRow(inst);
         const none: Opnd = .{ .tag = .none, .x = 0 };
         var key: Key = .{ .op = row.op, .a = none, .b = none, .c = none };
         switch (Mir.opClass(row.op)) {

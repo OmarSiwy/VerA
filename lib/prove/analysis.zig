@@ -1130,13 +1130,25 @@ fn fixDeps(self: *const Analysis, which: DepCol) Error![]u64 {
         changed = false;
         var v: u32 = 0;
         while (v < self.nv) : (v += 1) {
-            const now = self.defDeps(@fromBackingInt(@intCast(v)), col, which);
+            const now = self.defDeps(@fromBackingInt(@intCast(v)), col, which) | self.guardDeps(@fromBackingInt(@intCast(v)), col, which);
             if (now == col[v]) continue;
             col[v] = now;
             changed = true;
         }
     }
     return col;
+}
+
+/// A guarded row (`Mir.guard_of`) is steered by its guard's conditions as a
+/// select is by its own.
+fn guardDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCol) u64 {
+    if (!which.steered()) return 0;
+    const def = self.mir.valueDef(self.rv(val));
+    if (def != .inst_result) return 0;
+    var acc: u64 = 0;
+    var g = self.mir.guardConds(def.inst_result);
+    while (g.next()) |c| acc |= self.depsIn(col, c);
+    return acc;
 }
 
 /// One step of the lattice: `val`'s bits given the current answer for its

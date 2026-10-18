@@ -353,6 +353,24 @@ pub fn guardOf(self: *const Mir, inst: Inst) ?u32 {
     return self.guard_of.get(inst);
 }
 
+/// The conditions `inst`'s guard reads. Codegen renders them with the row,
+/// so they are operands to every analysis that asks what the row reads.
+pub fn guardConds(self: *const Mir, inst: Inst) GuardIter {
+    return .{ .mir = self, .lit = self.guardOf(inst) orelse GuardLit.end };
+}
+
+pub const GuardIter = struct {
+    mir: *const Mir,
+    lit: u32,
+
+    pub fn next(it: *GuardIter) ?Value {
+        if (it.lit == GuardLit.end) return null;
+        const l = it.mir.guard_lits.items[it.lit];
+        it.lit = l.next;
+        return l.cond;
+    }
+};
+
 /// Prepends the literal (`cond`, `taken`) to `inst`'s speculation guard.
 pub fn addGuardLit(self: *Mir, gpa: std.mem.Allocator, inst: Inst, cond: Value, taken: bool) !void {
     const at: u32 = @intCast(self.guard_lits.items.len);
