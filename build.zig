@@ -100,7 +100,8 @@ const module_specs = [_]ModuleSpec{
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // No `-Doptimize` and no `--release` is Debug, as `standardOptimizeOption` returned before Zig 0.18.
+    const optimize = b.standardOptimizeOption(.{}) orelse .debug;
 
     const mods = defineModules(b, target, true);
 
