@@ -265,7 +265,7 @@ fn emitDevice(
         // backend builds the whole engine as fast as it checks the cache
         // (measured 2026-10-01: v_inv 5.9 Gi either way), so only LLVM builds
         // link it prebuilt.
-        if (f.backend == .llvm) {
+        if (f.backend.forHost() == .llvm) {
             const eng = vera.orchestrator.buildEngine(arena, io, o, f.engine_cache) catch |e| {
                 try err.print("error: {s}: building the digital engine failed: {t}\n", .{ opts.file_name, e });
                 return 1;

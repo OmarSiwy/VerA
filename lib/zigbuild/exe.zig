@@ -165,7 +165,7 @@ fn argvHead(arena: Allocator, opts: BuildOptions, verb: []const u8, bin: []const
         // BadPathName on an absolute path).
         "-fno-emit-implib",
     });
-    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
+    try argv.appendSlice(arena, switch ((opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)).forHost()) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
     });

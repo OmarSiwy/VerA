@@ -44,6 +44,14 @@ pub const Backend = enum {
     pub fn auto(optimize: std.lang.Optimize, arch: std.Target.Cpu.Arch) Backend {
         return if (optimize == .debug and arch == .x86_64) .self_hosted else .llvm;
     }
+
+    /// The backend a build on this host actually uses: `.llvm` on Windows,
+    /// whatever was asked. The self-hosted COFF linker writes a DLL at a fixed
+    /// base with its relocations stripped, so a second one cannot load in the
+    /// same process.
+    pub fn forHost(b: Backend) Backend {
+        return if (builtin.target.os.tag == .windows) .llvm else b;
+    }
 };
 
 /// One support module on the compiler command line. `name` is the `@import`
@@ -159,7 +167,7 @@ fn layoutHash(o: Options) u64 {
     h.update(&.{0});
     h.update(@tagName(o.optimize));
     h.update(&.{0});
-    h.update(@tagName(o.backend));
+    h.update(@tagName(o.backend.forHost()));
     h.update(&.{0});
     for (o.modules) |m| {
         h.update(m.name);
@@ -356,7 +364,7 @@ const split_min_bytes: usize = 768 * 1024;
 
 /// Whether `compileRelease` builds `device` as `Part`s.
 fn splits(o: Options, device: Output) bool {
-    return o.split orelse (o.backend == .llvm and device.text.len >= split_min_bytes);
+    return o.split orelse (o.backend.forHost() == .llvm and device.text.len >= split_min_bytes);
 }
 
 /// Returns `zig build-lib --listen=- ... -Mroot=shim.zig -Mdevice=... -M<support>...`
@@ -382,7 +390,7 @@ fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u
     });
     try a.appendSlice(arena, link_libc);
 
-    switch (o.backend) {
+    switch (o.backend.forHost()) {
         // The only backend that patches in place, so the only one where
         // `-fincremental` pays.
         .self_hosted => try a.appendSlice(arena, &.{ "-fno-llvm", "-fno-lld", "-fincremental" }),
@@ -516,7 +524,7 @@ pub fn buildEngine(gpa: Allocator, io: Io, o: Options, cache_dir: []const u8) !E
         cache_dir,
     });
     try a.appendSlice(arena, link_libc);
-    try a.appendSlice(arena, switch (o.backend) {
+    try a.appendSlice(arena, switch (o.backend.forHost()) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
     });
