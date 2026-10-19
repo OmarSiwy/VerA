@@ -4,6 +4,11 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+### Fixed
+
+- On Windows every device library VerA builds uses LLVM: the self-hosted linker wrote a DLL at a fixed base with no relocations, so a host could not load a second one.
+- A host that loads VerA's device libraries can name the target they are built for (`orchestrator.Options.target`), so they link the host's own libc; inside a Nix sandbox the detected native target is musl, which a glibc host cannot load.
+
 ## v0.10.2 — 2026-10-18
 
 | Measure | Number | Remaining to v1.0.0 | Command |

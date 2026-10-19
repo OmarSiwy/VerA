@@ -119,6 +119,11 @@ pub const Options = struct {
     /// and the shim declares `vera_prebuilt_engine`. Not hashed: the host's
     /// ABI is the same either way.
     engine: ?[]const u8 = null,
+    /// `-target` for every compile, e.g. `x86_64-linux-gnu`: a host that
+    /// dlopens the library passes its own, so the library links the host's
+    /// libc. Null builds for the detected native target, which inside a Nix
+    /// sandbox is musl.
+    target: ?[]const u8 = null,
 };
 
 /// Whether a native build passes `-fstrip`: optimized without safety checks,
@@ -168,6 +173,8 @@ fn layoutHash(o: Options) u64 {
     h.update(@tagName(o.optimize));
     h.update(&.{0});
     h.update(@tagName(o.backend.forHost()));
+    h.update(&.{0});
+    h.update(o.target orelse "");
     h.update(&.{0});
     for (o.modules) |m| {
         h.update(m.name);
@@ -389,6 +396,7 @@ fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u
         try std.fs.path.join(arena, &.{ o.work_dir, ".zig-cache" }),
     });
     try a.appendSlice(arena, link_libc);
+    if (o.target) |t| try a.appendSlice(arena, &.{ "-target", t });
 
     switch (o.backend.forHost()) {
         // The only backend that patches in place, so the only one where
@@ -456,9 +464,10 @@ fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []c
         try std.fs.path.join(arena, &.{ o.work_dir, ".zig-cache" }),
     };
     const stripped = strip(o.optimize, o.debug_info);
-    var a: std.ArrayList([]const u8) = try .initCapacity(arena, head.len + link_libc.len + @intFromBool(stripped) + objs.len + @intFromBool(o.engine != null));
+    var a: std.ArrayList([]const u8) = try .initCapacity(arena, head.len + link_libc.len + 2 * @as(usize, @intFromBool(o.target != null)) + @intFromBool(stripped) + objs.len + @intFromBool(o.engine != null));
     a.appendSliceAssumeCapacity(&head);
     a.appendSliceAssumeCapacity(link_libc);
+    if (o.target) |t| a.appendSliceAssumeCapacity(&.{ "-target", t });
     if (stripped) a.appendAssumeCapacity("-fstrip");
     a.appendSliceAssumeCapacity(objs);
     if (o.engine) |e| a.appendAssumeCapacity(e);
@@ -524,6 +533,7 @@ pub fn buildEngine(gpa: Allocator, io: Io, o: Options, cache_dir: []const u8) !E
         cache_dir,
     });
     try a.appendSlice(arena, link_libc);
+    if (o.target) |t| try a.appendSlice(arena, &.{ "-target", t });
     try a.appendSlice(arena, switch (o.backend.forHost()) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
