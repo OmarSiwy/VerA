@@ -17,6 +17,10 @@ tests/fixtures/external/ (default: all):
     xyce       VerA (in ngspice) against Xyce's built-in model of the same
                version: a third opinion
 
+A model's QA tests run in parallel ($VERA_EXTERNAL_JOBS, default one per CPU),
+and every simulator run is killed after $VERA_EXTERNAL_TIMEOUT seconds
+(default 120): a deck that never converges FAILs by name.
+
 Each folder's MANIFEST pins what is fetched (`url`, `commit` or `sha256`) and
 its license. Nothing fetched is committed: it lands in the cache
 (`$VERA_EXTERNAL_CACHE`, default `.zig-cache/external`, git-ignored).
@@ -39,6 +43,7 @@ off it; noise: the pin current's PSD through a unit CCVS) with the instance
 wired straight to the sources (the `standard` variant only).
 """
 import argparse
+import concurrent.futures
 import fnmatch
 import hashlib
 import math
@@ -57,10 +62,21 @@ EXT = ROOT / "tests" / "fixtures" / "external"
 SUITES = ["selftest", "osdi", "va-models", "cmcqa", "hicum-qa", "xyce"]
 
 # The solver tolerances every QA deck runs under: tight enough that Newton's
-# leftover error at an internal node sits far below the compare's 1e-6.
-OPTIONS = ".options reltol=1e-9 abstol=1e-18 vntol=1e-12"
+# leftover error at an internal node sits far below the compare's 1e-6, and
+# no tighter than double precision can meet. abstol is 100x under the DC clip
+# (1e-13 A); at 1e-18 A it sat under the rounding of a KCL sum of mA
+# currents (an ulp of 1e-3 is 2e-19), so Newton never converged and ngspice
+# stepped gmin, the sources and a transient op for minutes before failing
+# (mosvar igvg, the Mextram Gummel sweeps, VBIC; OpenVAF's libraries alike).
+OPTIONS = ".options reltol=1e-9 abstol=1e-15 vntol=1e-12"
 
 results = []  # (name, ok, why)
+
+# Every simulator run is capped: no passing deck takes more than seconds, and
+# a deck that never converges (ngspice's transient op can step forever) is a
+# FAIL by name instead of the job's whole budget.
+SIM_TIMEOUT = float(os.environ.get("VERA_EXTERNAL_TIMEOUT", "120"))
+JOBS = int(os.environ.get("VERA_EXTERNAL_JOBS", "0")) or os.cpu_count() or 1
 
 
 def record(name, ok, why=""):
@@ -70,6 +86,13 @@ def record(name, ok, why=""):
 
 def run(cmd, cwd=None, timeout=1800):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+
+
+def pmap(fn, items):
+    """`fn` over `items` on JOBS threads (each call runs a simulator
+    process), results in order so the PASS/FAIL lines are deterministic."""
+    with concurrent.futures.ThreadPoolExecutor(JOBS) as pool:
+        yield from pool.map(fn, items)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +120,7 @@ def fetch_git(cache, suite):
     dest.mkdir(parents=True)
     for argv in (["git", "init", "-q"], ["git", "fetch", "-q", "--depth", "1", m["url"], m["commit"]],
                  ["git", "checkout", "-q", "FETCH_HEAD"]):
-        subprocess.run(argv, cwd=dest, check=True)
+        subprocess.run(argv, cwd=dest, check=True, timeout=1800)
     return dest
 
 
@@ -188,9 +211,9 @@ def ngspice(deck, workdir):
     path = workdir / "deck.sp"
     path.write_text(deck)
     try:
-        r = run(["ngspice", "-b", str(path)], cwd=workdir, timeout=900)
+        r = run(["ngspice", "-b", str(path)], cwd=workdir, timeout=SIM_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return "timeout", False
+        return f"Error: timeout after {SIM_TIMEOUT:g} s", False
     out = r.stdout + r.stderr
     bad = re.search(r"(?m)^(Error|.*[Tt]imestep too small|.*singular matrix|.*no convergence|.*simulation\(s\) aborted)", out)
     return out, r.returncode == 0 and not bad
@@ -205,6 +228,27 @@ def read_wrdata(path):
         f = line.split()
         try:
             rows.append([float(x) for x in f])
+        except ValueError:
+            continue
+    return rows
+
+
+class Printed(float):
+    """A reference number and its printed significant digits: `0.0011276` is
+    0.0011276 +- 5e-8, so no compare can ask it for a sixth digit."""
+
+    def __new__(cls, text):
+        x = super().__new__(cls, text)
+        x.digits = len(re.sub(r"[eE].*|[^0-9]", "", text).lstrip("0")) or 1
+        return x
+
+
+def read_reference(path):
+    """A published `.standard` file's rows, every number a `Printed`."""
+    rows = []
+    for line in path.read_text().splitlines() if path.exists() else []:
+        try:
+            rows.append([Printed(x) for x in line.split()])
         except ValueError:
             continue
     return rows
@@ -240,7 +284,8 @@ def cmc_match(a, b, clip, ndig, reltol):
 
 
 def compare_cols(name, cols, ref, sim, kind):
-    """One record per output column of `ref`/`sim` ([x, q1, q2, ...] rows)."""
+    """One record per output column of `ref`/`sim` ([x, q1, q2, ...] rows).
+    A `Printed` reference is matched to no more digits than it prints."""
     clip, ndig, reltol = TOLS[kind]
     if len(ref) != len(sim) or not ref:
         for c in cols:
@@ -250,7 +295,7 @@ def compare_cols(name, cols, ref, sim, kind):
         worst, where = 0.0, None
         bad = False
         for r, s in zip(ref, sim):
-            ok, rel = cmc_match(r[j], s[j], clip, ndig, reltol)
+            ok, rel = cmc_match(r[j], s[j], clip, min(ndig, getattr(r[j], "digits", ndig)), reltol)
             if not ok and (not bad or rel > worst):
                 bad, worst, where = True, rel, (r[0], r[j], s[j])
         if bad:
@@ -591,7 +636,11 @@ def deck_noise(osdi, model, args, t, out):
                 if sp:
                     d.append(f"alter v_{sp} dc = {fmt(sv)}")
                 d.append(f"noise {target} vin {t.freq}")
-                d.append("setplot previous")
+                # A sweep leaves the spectrum plot then the integrated one;
+                # a single frequency leaves only the spectrum, and `previous`
+                # would be the last bias point's.
+                if not t.single_freq():
+                    d.append("setplot previous")
                 d.append(f"wrdata {out} onoise_spectrum")
     return d + [".endc", ".end"]
 
@@ -657,27 +706,30 @@ def run_qaspec(prefix, spec, model, defined, sims, refdir=None, skip=(), src=Non
     setup = Setup(setup_lines)
     _param_files["dir"] = str(Path(spec).parent)
     _param_files["src"] = str(src or Path(spec).parent)
-    with tempfile.TemporaryDirectory(prefix="vera-qa-") as tmp:
-        work = Path(tmp)
-        for name, lines in tests.items():
-            if name in skip:
-                continue
-            t = Test(name, lines, setup)
-            cols = out_names(t)
+    # Tests are built here, in order: a parameter file is read through
+    # _param_files. Only the simulator runs go to the pool.
+    ts = [Test(name, lines, setup) for name, lines in tests.items() if name not in skip]
+
+    def sim(t):
+        with tempfile.TemporaryDirectory(prefix="vera-qa-") as tmp:
             got = []
             for osdi, label in sims:
-                rows, err = simulate(osdi, model, setup.ntype, t, work)
+                rows, err = simulate(osdi, model, setup.ntype, t, Path(tmp))
                 if err:
-                    for c in cols:
-                        record(f"{prefix}/{name}/{c}", False, f"{label}: {err}")
-                    break
+                    return f"{label}: {err}", got
                 got.append(rows)
-            else:
-                if refdir is not None:
-                    ref = read_wrdata(Path(refdir) / f"{name}.standard")
-                    compare_cols(f"{prefix}/{name}", cols, ref, got[0], t.kind)
-                else:
-                    compare_cols(f"{prefix}/{name}", cols, got[1], got[0], t.kind)
+            return None, got
+
+    for t, (err, got) in zip(ts, pmap(sim, ts)):
+        cols = out_names(t)
+        if err:
+            for c in cols:
+                record(f"{prefix}/{t.name}/{c}", False, err)
+        elif refdir is not None:
+            ref = read_reference(Path(refdir) / f"{t.name}.standard")
+            compare_cols(f"{prefix}/{t.name}", cols, ref, got[0], t.kind)
+        else:
+            compare_cols(f"{prefix}/{t.name}", cols, got[1], got[0], t.kind)
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +857,10 @@ def xyce_dc(t, letter, level, xpins, run_dir):
             vecs = " ".join(f"v({p})" if p in t.float else f"i(v_{p})" for p in t.outputs)
             d += [f".print dc format=noindex file={out} v({sp}) {vecs}", ".end"]
             (run_dir / "deck.cir").write_text("\n".join(d) + "\n")
-            r = run(["Xyce", str(run_dir / "deck.cir")], cwd=run_dir, timeout=900)
+            try:
+                r = run(["Xyce", str(run_dir / "deck.cir")], cwd=run_dir, timeout=SIM_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                return None, f"Xyce: timeout after {SIM_TIMEOUT:g} s"
             got = read_wrdata(out)
             if r.returncode != 0 or not got:
                 why = [line for line in (r.stdout + r.stderr).splitlines() if "error" in line.lower()]
@@ -832,20 +887,21 @@ def suite_xyce(ctx):
         setup_lines, tests = read_qaspec(spec, {"ngspice": True})
         setup = Setup(setup_lines)
         _param_files["dir"], _param_files["src"] = str(spec.parent), str(src)
-        with tempfile.TemporaryDirectory(prefix="vera-xyce-") as tmp:
-            work = Path(tmp)
-            for tname, lines in tests.items():
-                t = Test(tname, lines, setup)
-                if t.kind != "dc":
-                    continue
-                cols = out_names(t)
-                got, err = simulate(osdi, module, setup.ntype, t, work)
-                ref, xerr = (None, None) if err else xyce_dc(t, letter, level, xpins.split(","), work)
-                if err or xerr:
-                    for c in cols:
-                        record(f"xyce/{name}/{tname}/{c}", False, err and f"vera: {err}" or xerr)
-                    continue
-                compare_cols(f"xyce/{name}/{tname}", cols, ref, got, "dc")
+        ts = [t for t in (Test(tname, lines, setup) for tname, lines in tests.items()) if t.kind == "dc"]
+
+        def both(t):
+            with tempfile.TemporaryDirectory(prefix="vera-xyce-") as tmp:
+                got, err = simulate(osdi, module, setup.ntype, t, Path(tmp))
+                ref, xerr = (None, None) if err else xyce_dc(t, letter, level, xpins.split(","), Path(tmp))
+                return got, ref, err and f"vera: {err}" or xerr
+
+        for t, (got, ref, err) in zip(ts, pmap(both, ts)):
+            cols = out_names(t)
+            if err:
+                for c in cols:
+                    record(f"xyce/{name}/{t.name}/{c}", False, err)
+            else:
+                compare_cols(f"xyce/{name}/{t.name}", cols, ref, got, "dc")
 
 
 def suite_selftest(_ctx):
@@ -857,6 +913,9 @@ def suite_selftest(_ctx):
     assert not m(1.00002, 1.0, 1e-13, 6, 1e-6)[0]
     assert not m(-1e-3, 1e-3, 1e-13, 6, 1e-6)[0]  # opposite signs
     assert not m(math.nan, 1.0, 1e-13, 6, 1e-6)[0]
+    assert [Printed(x).digits for x in ("0.0011276", "-8.1141e-06", "1000000", "0", "8.89243071283542e-14")] == [5, 5, 7, 1, 15]
+    assert m(Printed("0.0011276"), 0.00112763923, 1e-13, Printed("0.0011276").digits, 1e-6)[0]  # rounding of a 5-digit print
+    assert not m(Printed("0.0011276"), 0.0011278, 1e-13, 5, 1e-6)[0]  # 2 units of its 5th digit
     assert drange(0, 1, 0.25) == [0, 0.25, 0.5, 0.75, 1.0]
     assert drange(1, -0.7, -0.5) == [1, 0.5, 0.0, -0.5]
     assert ifdefs(["`ifdef a", "x", "`else", "y", "`end", "`ifdef b", "z", "`endif"], {"a": True}) == ["x"]

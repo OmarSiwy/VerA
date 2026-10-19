@@ -16,24 +16,34 @@ on:
 jobs:
   # Analog (tools/external_analog.py): VerA's `--emit-osdi` libraries in
   # ngspice against hand-derived values, OpenVAF-Reloaded, the CMC and TU
-  # Dresden QA references and Xyce.
+  # Dresden QA references and Xyce. One job per suite, side by side; inside a
+  # job a model's QA tests run one per CPU, and every simulator run is capped
+  # (VERA_EXTERNAL_TIMEOUT seconds), so a deck that never converges FAILs by
+  # name instead of eating the job's budget.
   external-analog:
+    name: external-analog (${{ matrix.suite }})
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ["selftest osdi", va-models, cmcqa, hicum-qa, xyce]
+    env:
+      VERA_EXTERNAL_TIMEOUT: "120"
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - name: Build vera
         run: nix develop .#external -c zig build -Doptimize=ReleaseFast install
-      - name: External analog suites (osdi, va-models, cmcqa, hicum-qa, xyce)
+      - name: External analog suite ${{ matrix.suite }}
         run: |
-          nix develop .#external -c python3 tools/external_analog.py --out external-out 2>&1 | tee external.txt
+          nix develop .#external -c python3 tools/external_analog.py ${{ matrix.suite }} --out external-out 2>&1 | tee external.txt
           exit "${PIPESTATUS[0]}"
       - name: Job summary
         if: always()
         run: |
           {
-            echo '## External analog suites'
+            echo '## External analog suite ${{ matrix.suite }}'
             echo '```'; tail -1 external.txt; echo '```'
             echo '### FAIL and STALE names'
             echo '```'; grep -E '^(FAIL|STALE) ' external.txt || true; echo '```'
@@ -41,7 +51,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: external-analog
+          name: external-analog-${{ strategy.job-index }}
           path: |
             external.txt
             external-out/fail.txt

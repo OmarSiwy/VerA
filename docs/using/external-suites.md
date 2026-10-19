@@ -50,9 +50,13 @@ for DC, AC and noise.
 
 It prints `PASS <name>` or `FAIL <name>: <why>` per model, analysis and
 quantity, writes the sorted FAIL names to `fail.txt` in its output
-directory (`--out DIR`), and exits 1 if anything failed. CI runs it in the
-`external-analog` job on every push to `main` and every pull request, which
-reports the FAIL names without failing the build.
+directory (`--out DIR`), and exits 1 on a FAIL that no row of its suite's
+`TRIAGE.md` names, or on a row that names no FAIL. A model's QA tests run
+in parallel (`VERA_EXTERNAL_JOBS`, default one per CPU), and each simulator
+run is killed after `VERA_EXTERNAL_TIMEOUT` seconds (default 120), so a deck
+that never converges is one FAIL, not a hung job. CI runs it in the
+`external-analog` jobs, one per suite, on every push to `main` and every
+pull request.
 
 ## Digital: `tools/external_digital.py`
 

@@ -92,5 +92,5 @@ hand-derived ngspice decks over `--emit-osdi` libraries (`mixed.sp` wires a
 VA-Models compact models compiled by both and run through the same QA tests
 ([External accuracy suites](../using/external-suites.md)). The CI job
 `external-analog` runs them on every push to `main` and every pull request,
-and reports their FAIL names without gating. This book quotes no numbers from them; the job summary and
+and gates their FAIL names against each suite's `TRIAGE.md`. This book quotes no numbers from them; the job summary and
 its artifact are the record.
