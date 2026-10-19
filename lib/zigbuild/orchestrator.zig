@@ -50,7 +50,7 @@ pub const Backend = enum {
     /// base with its relocations stripped, so a second one cannot load in the
     /// same process.
     pub fn forHost(b: Backend) Backend {
-        return if (builtin.target.os.tag == .windows) .llvm else b;
+        return if (builtin.target.os.tag == .windows) .llvm else b; // os: picks a backend; every target builds
     }
 };
 
