@@ -136,8 +136,8 @@ changelog under that version says what changed. A host that supports one
 release pins it at compile time:
 
 ```zig
-if (comptime !std.mem.eql(u8, D.vera_version, "0.10.3"))
-    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.10.3");
+if (comptime !std.mem.eql(u8, D.vera_version, "0.10.4"))
+    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.10.4");
 ```
 
 An optional declaration a later release adds stays optional: a host that
