@@ -4,6 +4,53 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+## v0.11.0 — 2026-10-19
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
+### Changed
+
+- **Hosts evaluate devices on the sparse value family only.** `contract.RefDense` and `RefOptions.dense` are removed: `RefFamily` is always sparse, so `.dense = …` no longer compiles. A sparse value carries only the partials it can have, so `evalQ` runs 3.2× faster on diode_cmc (2102 → 655 cycles) and 4.2× on bsim4 (6134 → 1454), with bit-identical values and partials. `contract.denseRow` spreads a sparse row for a host that indexes it at run time.
+- **Dependency masks are exact at any unknown count.** A device past 64 unknowns used to declare every value at the all-ones mask; its masks are now exact, typed `MaskOf(n_u)`. The n×n pattern tables (`jac_pattern`, `q_pattern`, `q_site_pattern`) are emitted up to about 2048 unknowns; above that a host takes each row's lanes from `deriv_reads`.
+- `--std=VAMS-2.3` is refused: Verilog-AMS compiles as VAMS-2023. `` `begin_keywords "VAMS-2.3" `` in source still selects that keyword set, as VAMS-2023 §10.6 requires.
+- A generated testbench's Newton `solve` fails, naming the unknown, when a step comes out NaN; it used to report convergence.
+- The `zFill` helper is gone from generated devices: zero fills use `@memset`, 2.6× faster.
+- `vera --lsp` frees each message's memory after the message instead of holding the largest document for the whole session.
+- Faster compiles on large models: elaboration of wide levels (4096 ports: 75× fewer instructions), lowering (psp103 573M → 186M instructions), the dependency analysis (psp103 11.35 → 5.3 ms), lexing and preprocessing (−16% / −13%), parsing (a 20k-port module 322 → 5.2 ms), and the digital engine (a 64-instance design 1.88 → 1.17 s; multi-driver buses 4.5×).
+
+### Fixed
+
+- A compile reported success with an error in it when 64 warnings had already filled the diagnostic cap; the error count now includes every diagnostic past the cap.
+- A defparam inside an array-of-instances element that reaches a sibling element through an absolute path (`defparam top.u[1].x.p`) is refused with E1100, as the relative form already was (§12.2.1).
+- `repeat` with a count wider than 64 bits, negative, x or z runs 0 times (or, for a huge count, until `$finish`) in both the interpreter and native digital code; a wide count was refused and a negative one errored.
+- `$rtoi(-2147483648.0)` and a real −2^63 converted to a 64-bit integer gave x; they now give the exact value.
+- A NaN tolerance passed the SPICE engine's Newton convergence check.
+- OSDI: `write_jacobian_array_resist`/`_react` wrote the host's compact array by Jacobian entry number, so a device with a resist-only or react-only entry got values in the wrong slots and wrote past the buffer; an out-of-range integer parameter into a narrow field crashed instead of being refused.
+- `vpi_put_delays` in ticks stored raw ticks (2000 instead of 2 under `1us/1ns`); path delays accepted NaN, infinite and negative values. `vpi_get_analog_value` with vpiStringVal used the imaginary part's format; `vpi_printf` with a huge `%.N` precision trapped.
+- A bsim4-class model whose `$strobe` prints an integer of a computed expression generated a testbench that did not compile.
+- A dynamically indexed multidimensional real array could type a stored value as depending on no unknown, dropping its partial.
+- A deep chain of parameters, each default reading the previous one, overflowed the stack in elaboration; so did a deep defparam index in the parser.
+- `` `default_transition `` accepted text that is not a number (`0x10`, `.5`); a `$table_model` file with no data rows was a compile-time error instead of a first-call one; domain-error messages (E0601–E0609, W0653) dropped a long operand range.
+- `vera --lsp` leaked and doubled `.vera-flags` on a second `initialize`, and linted a `.v` document as Verilog-A when memory ran out.
+- Several out-of-memory paths left tables inconsistent or leaked (MIR builders, the SSA builder, `pruneUnits`, `setLogFile`).
+
 ## v0.10.4 — 2026-10-19
 
 | Measure | Number | Remaining to v1.0.0 | Command |
