@@ -28,6 +28,15 @@ fn zSlew(comptime S: type, v: S, prev: f64, dt: f64, rise: f64, fall: f64) S { /
     if (dt <= 0.0) return v;
     return v.minC(prev + rise * dt).maxC(prev - fall * dt);
 }
+/// §4.5.10 `last_crossing` at the point being evaluated: where the input
+/// `crossed` since the last accepted point, `Gen.lastCrossTime`'s
+/// interpolation in the same operation order (so the latch reads the same
+/// bits), whose zero moves with `v` and so carries `v`'s derivative;
+/// otherwise the latched `t_last`, a constant.
+fn zLastCross(comptime S: type, v: S, prev: f64, t: f64, dt: f64, t_last: f64, crossed: bool) S {
+    if (!crossed) return S.con(t_last);
+    return S.con(prev).div(S.con(prev).sub(v)).scale(dt).addC(t - dt);
+}
 /// §5.10.3.1/§4.5.10 the crossing test for a direction that is a PARAMETER
 /// (a constant_expression the model card owns, so codegen cannot pick the
 /// comparison at emit time): +1 rising only, -1 falling only, anything

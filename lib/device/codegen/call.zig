@@ -173,10 +173,10 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
 
 /// Returns the §4.5.10 crossing time inside the step ending at `sim.t`: the
 /// zero of the line through (`sim.t - sim.dt`, `__prev`) and (`sim.t`, `in`),
-/// the "linear interpolation" §4.5.10 names. `eval` answers with it at the
-/// point where `crossTest` holds and `updateState` latches it there, one
-/// spelling for both, so the accepted point and every later one read the
-/// same bits.
+/// the "linear interpolation" §4.5.10 names. `updateState` latches it where
+/// `crossTest` holds; `eval` answers there with `zLastCross`, the same
+/// operations in the same order, so the accepted point and every later one
+/// read the same bits.
 pub fn lastCrossTime(self: *Gen, n: []const u8, in: []const u8) Error![]const u8 {
     return self.arena.print("(sim.t - sim.dt) + inst.{0s}__prev / (inst.{0s}__prev - {1s}) * sim.dt", .{ n, in });
 }
@@ -1365,12 +1365,16 @@ fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKind) 
         // internal state", so a crossing between the last accepted point and
         // this one is already the last crossing here, the point where §5.10.3
         // `cross` on the same expression fires. Otherwise the latched one;
-        // `sim.dt > 0` is `updateState`'s seeding rule.
+        // `sim.dt > 0` is `updateState`'s seeding rule. The interpolated
+        // time moves with the current input, so `zLastCross` carries its
+        // derivative; the latched one is a constant.
         .last_crossing => {
             const v = try self.arena.print("({s}).val()", .{in0});
-            try self.b("S.con(if (sim.dt > 0.0 and ({s})) {s} else inst.{s}__t_last)", .{
-                try crossTest(self, n, args, v), try lastCrossTime(self, n, v), n,
+            try opOpen(self, fm);
+            try self.b("zLastCross({s}, {s}, inst.{s}__prev, sim.t, sim.dt, inst.{s}__t_last, sim.dt > 0.0 and ({s}))", .{
+                kS, in, n, n, try crossTest(self, n, args, v),
             });
+            try opClose(self);
         },
         // §5.10.3 the event is decided here, at the point being evaluated;
         // `updateState` only advances `__prev`/`__next`. §5.10.3.1 "will not
