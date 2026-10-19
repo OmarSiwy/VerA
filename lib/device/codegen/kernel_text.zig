@@ -128,10 +128,10 @@ pub const math_txt =
     \\/// branch IS the builtin, so host emission is numerically unchanged; its
     \\/// device branch is a self-contained soft port. sin/cos joined when the
     \\/// bjt reached tan through the StateKernel's scalar core (`fsin` cannot
-    \\/// select on NVPTX); log1p stays on std.math (pure Zig).
+    \\/// select on NVPTX).
     \\///
-    \\/// expm1 and atan are routed too, and NOT for a missing libcall -- NVPTX
-    \\/// takes both. Both raise the subnormal underflow flag through
+    \\/// expm1, log1p and atan are routed too, and NOT for a missing libcall --
+    \\/// NVPTX takes them. Each raises the subnormal underflow flag through
     \\/// `std.mem.doNotOptimizeAway`, which for a float is
     \\/// `asm volatile ("" :: "rm" (v))`, and AMDGPU cannot match the `m`
     \\/// alternative: "Could not match memory address. Inline asm failure!".
@@ -901,7 +901,7 @@ pub const ac_fam_txt =
     \\                return map(a, contract.gm.expm1(a.v), contract.gm.exp(a.v));
     \\            }
     \\            pub fn log1p(a: T) T {
-    \\                return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v));
+    \\                return map(a, contract.gm.log1p(a.v), 1.0 / (1.0 + a.v));
     \\            }
     \\            pub fn sqrt(a: T) T {
     \\                const s = @sqrt(a.v);

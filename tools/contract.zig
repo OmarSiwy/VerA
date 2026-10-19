@@ -39,7 +39,7 @@ const std = @import("std");
 /// An additive optional declaration stays optional for a host that checks
 /// it with `@hasDecl`. Replaces the integer `abi_version` (last 6) and the
 /// device's `contract_abi`, 2026-10-18.
-pub const vera_version = "0.10.3";
+pub const vera_version = "0.10.4";
 
 /// Whether this program asked for the contract's conformance checks: its root
 /// module declares `pub const vera_validate_contract = true`. Off by default:
@@ -600,6 +600,11 @@ pub const gm = struct {
     pub inline fn expm1(x: f64) f64 {
         return if (comptime dev) softExpm1(x) else std.math.expm1(x);
     }
+    /// ln(1 + x) without cancellation near 0; every value equals
+    /// `std.math`'s on every target (`expm1`'s AMDGCN hole, at |x| < 2^-53).
+    pub inline fn log1p(x: f64) f64 {
+        return if (comptime dev) softLog1p(x) else std.math.log1p(x);
+    }
     // Same AMDGCN hole as `expm1`, dodged through `std.math.atan`'s vector
     // path, which never reaches the idiom. Two lanes because `@Vector(1, f64)`
     // crashes the compiler; the second is discarded. ponytail: port
@@ -640,14 +645,14 @@ pub const gm = struct {
         } else if (e >= 0x3FF + 1) {
             rx = hlog(2 * rx + 1 / (@sqrt(rx * rx + 1) + rx));
         } else if (e >= 0x3FF - 26) {
-            rx = std.math.log1p(rx + rx * rx / (@sqrt(rx * rx + 1) + 1));
+            rx = log1p(rx + rx * rx / (@sqrt(rx * rx + 1) + 1));
         }
         return if (u >> 63 != 0) -rx else rx;
     }
     /// acosh(x) = ln(x + sqrt(x² − 1)) for x >= 1; NaN below.
     pub fn acosh(x: f64) f64 {
         const e = (@as(u64, @bitCast(x)) >> 52) & 0x7FF;
-        if (e < 0x3FF + 1) return std.math.log1p(x - 1 + @sqrt((x - 1) * (x - 1) + 2 * (x - 1)));
+        if (e < 0x3FF + 1) return log1p(x - 1 + @sqrt((x - 1) * (x - 1) + 2 * (x - 1)));
         if (e < 0x3FF + 26) return hlog(2 * x - 1 / (x + @sqrt(x * x - 1)));
         return hlog(x) + 0.693147180559945309417232121458176568;
     }
@@ -658,9 +663,9 @@ pub const gm = struct {
         var y: f64 = @bitCast(u & (std.math.maxInt(u64) >> 1));
         if (y == 1.0) return std.math.copysign(std.math.inf(f64), x);
         if (e < 0x3FF - 1) {
-            if (e >= 0x3FF - 32) y = 0.5 * std.math.log1p(2 * y + 2 * y * y / (1 - y));
+            if (e >= 0x3FF - 32) y = 0.5 * log1p(2 * y + 2 * y * y / (1 - y));
         } else {
-            y = 0.5 * std.math.log1p(2 * (y / (1 - y)));
+            y = 0.5 * log1p(2 * (y / (1 - y)));
         }
         return if (u >> 63 != 0) -y else y;
     }
@@ -1679,6 +1684,55 @@ pub const gm = struct {
         return (x - (e + uf) + 1) * twopk;
     }
 
+    /// musl log1p.c, by way of `std.math.log1p`, minus its one
+    /// `doNotOptimizeAway`, see `log1p` above.
+    fn softLog1p(x: f64) f64 {
+        const Lg1: f64 = 6.666666666666735130e-01;
+        const Lg2: f64 = 3.999999999940941908e-01;
+        const Lg3: f64 = 2.857142874366239149e-01;
+        const Lg4: f64 = 2.222219843214978396e-01;
+        const Lg5: f64 = 1.818357216161805012e-01;
+        const Lg6: f64 = 1.531383769920937332e-01;
+        const Lg7: f64 = 1.479819860511658591e-01;
+        const ix: u64 = @bitCast(x);
+        const hx: u32 = @intCast(ix >> 32);
+        var k: i32 = 1;
+        var c: f64 = 0;
+        var f: f64 = 0;
+        if (hx < 0x3FDA827A or hx >> 31 != 0) {
+            if (ix == 0xBFF0000000000000) return x / 0.0; // log1p(-1) = -inf
+            if (hx >= 0xBFF00000) return (x - x) / 0.0; // x < -1: NaN
+            if ((hx << 1) < (0x3CA00000 << 1)) return x; // |x| < 2^-53
+            if (hx <= 0xBFD2BEC4) {
+                k = 0;
+                c = 0;
+                f = x;
+            }
+        } else if (hx >= 0x7FF00000) return x;
+        if (k != 0) {
+            const uf = 1 + x;
+            const hu: u64 = @bitCast(uf);
+            var iu: u32 = @intCast(hu >> 32);
+            iu += 0x3FF00000 - 0x3FE6A09E;
+            k = @as(i32, @intCast(iu >> 20)) - 0x3FF;
+            if (k < 54) {
+                c = if (k >= 2) 1 - (uf - x) else x - (uf - 1);
+                c /= uf;
+            } else c = 0;
+            iu = (iu & 0x000FFFFF) + 0x3FE6A09E;
+            f = @as(f64, @bitCast((@as(u64, iu) << 32) | (hu & 0xFFFFFFFF))) - 1;
+        }
+        const hfsq = 0.5 * f * f;
+        const s = f / (2.0 + f);
+        const z = s * s;
+        const w = z * z;
+        const t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
+        const t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
+        const R = t2 + t1;
+        const dk: f64 = @floatFromInt(k);
+        return s * (hfsq + R) + (dk * ln2lo + c) - hfsq + f + dk * ln2hi;
+    }
+
     // musl k_sin.c / k_cos.c and the medium branch of __rem_pio2.
     const pio4 = 0x1.921fb54442d18p-1;
     const pio2 = 0x1.921fb54442d18p+0;
@@ -2027,6 +2081,20 @@ pub const gm = struct {
         try std.testing.expectEqual(@as(f64, -1), softExpm1(-std.math.inf(f64)));
         try std.testing.expectEqual(std.math.inf(f64), softExpm1(std.math.inf(f64)));
         try std.testing.expect(std.math.isNan(softExpm1(std.math.nan(f64))));
+        // log1p: the same one-line drop, so the same bit equality. The edges
+        // are its branch points: 2^-53, 1 + x = sqrt(2)/2 and sqrt(2), -1.
+        for ([_]f64{
+            0,      -0.0,     0x1p-60,  -0x1p-60, 0x1p-53, 1e-310, -1e-310, 0.41421,
+            0.4143, -0.29289, -0.29290, -1,       -1.5,    1e300,  0.5,     -0.5,
+        }) |v| {
+            try std.testing.expectEqual(@as(u64, @bitCast(std.math.log1p(v))), @as(u64, @bitCast(softLog1p(v))));
+        }
+        m = -0.999;
+        while (m <= 40.0) : (m += 0.00731) {
+            try std.testing.expectEqual(@as(u64, @bitCast(std.math.log1p(m))), @as(u64, @bitCast(softLog1p(m))));
+        }
+        try std.testing.expectEqual(std.math.inf(f64), softLog1p(std.math.inf(f64)));
+        try std.testing.expect(std.math.isNan(softLog1p(std.math.nan(f64))));
         // The host branch must still BE std's, so expm1/atan are unchanged
         // for every build that is not a GPU kernel.
         try std.testing.expectEqual(std.math.expm1(@as(f64, 0.7)), expm1(0.7));
@@ -3250,7 +3318,7 @@ fn RefDense(comptime L: type, comptime lane: []const u32, comptime collapsed: bo
             return map(a, gm.expm1(a.v), gm.exp(a.v));
         }
         pub fn log1p(a: T) T {
-            return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v));
+            return map(a, gm.log1p(a.v), 1.0 / (1.0 + a.v));
         }
         pub fn sqrt(a: T) T {
             const s = @sqrt(a.v);
@@ -3425,7 +3493,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u32, comptime collapsed: b
                     return map(a, gm.expm1(a.v), gm.exp(a.v));
                 }
                 pub fn log1p(a: T) T {
-                    return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v));
+                    return map(a, gm.log1p(a.v), 1.0 / (1.0 + a.v));
                 }
                 pub fn sqrt(a: T) T {
                     const s = @sqrt(a.v);

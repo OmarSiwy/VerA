@@ -15,6 +15,9 @@ fn run(x: *const [n_u]f64, m: *const D.Model, inst: *D.Instance, st: *D.State, o
     inline for (r.res, 0..) |e, u| out[u] = e.v + e.d[0];
     _ = D.updateState(S, m, inst, x.*, st, sim);
     out[0] += @floatFromInt(inst.vera_status__);
+    // `contract.gm`'s Table 4-15 functions reach log1p, whose std body
+    // AMDGCN cannot lower (`gm.log1p`); compiling them here keeps it so.
+    out[0] += contract.gm.asinh(x[0]) + contract.gm.acosh(x[0]) + contract.gm.atanh(x[0]) + contract.gm.log1p(x[0]);
 }
 
 export fn status_ops_kernel(x: *const [n_u]f64, m: *const D.Model, inst: *D.Instance, st: *D.State, out: *[n_u]f64) callconv(.kernel) void {
