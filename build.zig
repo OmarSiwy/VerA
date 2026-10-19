@@ -72,6 +72,7 @@ pub fn build(b: *Build) void {
     const all_step = b.step("build-all", "Compile every artifact for -Dtarget without running one");
     all_step.dependOn(&exe.step);
     const gen_exe = if (target.query.isNative()) exe else cliExe(b, b.graph.host, optimize, defineModules(b, b.graph.host, false), "vera-gen", true);
+    const va_gen: Gen = .{ .exe = gen_exe, .cached = b.option(bool, "va-cache", "Regenerate a test device's Zig only when its source, its `include`s or its arguments change, not when vera does (default true; false: every vera change regenerates)") orelse true };
 
     const fmt = b.addFmt(.{ .paths = b.pathList(&.{ "lib", "src", "tests", "tools", "build.zig" }), .check = true });
     b.step("fmt-check", "Fail on any file `zig fmt` would change").dependOn(&fmt.step);
@@ -86,6 +87,8 @@ pub fn build(b: *Build) void {
     }
     test_step.dependOn(&exe.step);
     const cli_run = testRun(b, "cli", exe.root_module, runner);
+    // src/cli/lsp.zig's tests walk tests/fixtures; globFiles re-runs configure, so a new fixture counts.
+    for (globFiles(b, "tests/fixtures", "")) |f| cli_run.addFileInput(b.path(f));
     test_step.dependOn(&cli_run.step);
     b.step("test-cli", "Run the CLI's tests (src/main.zig, src/cli/) only").dependOn(&cli_run.step);
 
@@ -120,7 +123,13 @@ pub fn build(b: *Build) void {
     repo.addOption([]const []const u8, "module_imports", &row_imports);
     all_mod.addOptions("repo_options", repo);
     const all_run = testRun(b, "test_all", all_mod, runner);
-    all_run.has_side_effects = true; // reads lib/ and src/ at test time
+    // Reads the tree at test time: every file it can reach is an input, so a
+    // no-op build reuses the result (globFiles re-runs configure for new files).
+    for ([_][]const u8{ "lib", "src", "tools", "tests", "specification" }) |dir| {
+        for (globFiles(b, dir, "")) |f| all_run.addFileInput(b.path(f));
+    }
+    all_run.addFileInput(b.path("build.zig"));
+    all_run.addFileInput(b.path("build.zig.zon"));
     test_step.dependOn(&all_run.step);
     b.step("test-all", "Run tests/test_all.zig, the cross-module claims, only").dependOn(&all_run.step);
 
@@ -184,6 +193,7 @@ pub fn build(b: *Build) void {
     const suite_exe = b.addExecutable(.{ .name = "vera-suite", .root_module = suite_mod });
     all_step.dependOn(&suite_exe.step);
     const suite_run = testRun(b, "suite", suite_mod, runner);
+    suite_run.has_side_effects = true; // reads tests/fixtures at test time
     test_step.dependOn(&suite_run.step);
     b.step("test-suite", "Run the suite runner's own unit tests only").dependOn(&suite_run.step);
     b.step("suite-exe", "Build the suite runner (tests/bench.zig)").dependOn(&suite_exe.step);
@@ -263,7 +273,7 @@ pub fn build(b: *Build) void {
     const test_timers = b.step("test-timers", "Run emitted-device timer scheduling tests");
     const test_paramsets = b.step("test-paramsets", "Run emitted-device paramset binding and host shape tests");
     for (hostTests(b)) |h| {
-        const gen = b.addRunArtifact(gen_exe);
+        const gen = genRun(b, va_gen, h.va);
         gen.addArgs(&.{ "--emit-zig", "-I" });
         gen.addDirectoryArg2(b.path("tests/fixtures"), .{});
         gen.addFileArg(b.path(h.va));
@@ -313,8 +323,9 @@ pub fn build(b: *Build) void {
     });
     vdev_so_host.link_libc = true;
     for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide", "v_huge", "v_say" }) |name| {
-        const src = b.path(b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name}));
-        const gen = b.addRunArtifact(gen_exe);
+        const src_path = b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name});
+        const src = b.path(src_path);
+        const gen = genRun(b, va_gen, src_path);
         gen.addArg("--emit-zig");
         gen.addFileArg(src);
         gen.addArg("-o");
@@ -327,7 +338,7 @@ pub fn build(b: *Build) void {
         vdev_host.addImport(name, dev_mod);
         if (!std.mem.eql(u8, name, "v_count") and !std.mem.eql(u8, name, "v_a2d") and !std.mem.eql(u8, name, "v_buf")) continue;
         vdev_so_host.addImport(name, dev_mod);
-        const so = b.addRunArtifact(gen_exe);
+        const so = genRun(b, va_gen, src_path);
         so.addArgs(&.{ "--emit-so", "--contract" });
         so.addFileArg(b.path("tools/contract.zig"));
         so.addArg("--dyn");
@@ -509,6 +520,46 @@ pub fn build(b: *Build) void {
     }
 }
 
+/// The vera that generates test devices, and whether its runs are keyed on
+/// their inputs alone (`-Dva-cache`).
+const Gen = struct { exe: *Build.Step.Compile, cached: bool };
+
+/// A run of the generating vera on `src` (build-root relative). Cached, vera
+/// runs from a fixed copy under zig-out/gen named by a plain string, so the Run's
+/// hash covers the arguments, `src`'s contents and its `include`s but not
+/// vera's binary: a compiler edit leaves every generated device, and every
+/// object built from it, cached. Rebuild them after a codegen change with
+/// `-Dva-cache=false`.
+fn genRun(b: *Build, gen: Gen, src: []const u8) *Run {
+    if (!gen.cached) return b.addRunArtifact(gen.exe);
+    const copy = b.fmt("zig-out/gen/{s}", .{gen.exe.out_filename});
+    const usf = b.addUpdateSourceFiles();
+    usf.addCopyFileToSource(gen.exe.getEmittedBin(), copy);
+    const run = b.addSystemCommand(&.{b.fmt("./{s}", .{copy})});
+    run.step.dependOn(&usf.step);
+    addIncludes(b, run, src);
+    return run;
+}
+
+/// Declares every file `src` reaches by `` `include "name" `` as an input of
+/// `run`, searched in `src`'s directory then tests/fixtures (the `-I`).
+fn addIncludes(b: *Build, run: *Run, src: []const u8) void {
+    var lines = std.mem.splitScalar(u8, configText(b, src), '\n');
+    while (lines.next()) |line| {
+        const rest = std.mem.cutPrefix(u8, std.mem.trim(u8, line, " \t\r"), "`include") orelse continue;
+        var q = std.mem.tokenizeScalar(u8, rest, '"');
+        const name = q.next() orelse continue;
+        const dirs = [_][]const u8{ std.fs.path.dirnamePosix(src) orelse ".", "tests/fixtures" };
+        for (dirs) |dir| {
+            const path = b.fmt("{s}/{s}", .{ dir, name });
+            b.root.root_dir.handle.access(b.graph.io, path, .{}) catch continue;
+            run.addFileInput(b.path(path));
+            addIncludes(b, run, path);
+            break;
+        }
+    }
+}
+
 /// Every `tests/*_host.zig`, once per `//! device <path under tests/fixtures>` line.
 const HostTest = struct { host: []const u8, va: []const u8 };
 
@@ -563,7 +614,8 @@ fn simSources(b: *Build) *Module {
             b.root.root_dir.handle.access(io, norm, .{}) catch continue;
             seen.put(b.allocator, norm, {}) catch @panic("OOM");
         }
-        _ = wf.addCopyFile(b.path(path), path);
+        // By contents: addCopyFile hashes the absolute source path, so every worktree missed the cache.
+        _ = wf.add(path, configText(b, path));
         root.writer.print("    .{{ \"{s}\", @embedFile(\"{s}\") }},\n", .{ path, path }) catch @panic("OOM");
     }
     root.writer.writeAll("};\n") catch @panic("OOM");
@@ -684,5 +736,9 @@ fn testRun(b: *Build, name: []const u8, mod: *Module, runner: Build.Step.Compile
     b.top_level_steps.get("build-all").?.step.dependOn(&t.step);
     const r = b.addRunArtifact(t);
     r.setEnvironmentVariable("CLICOLOR_FORCE", "true");
+    // A simple-mode runner gets no stdio check, and a Run without one reruns
+    // every build. The exit code makes it cacheable on the binary and args;
+    // a test that reads files at run time sets has_side_effects instead.
+    r.expectExitCode(0);
     return r;
 }

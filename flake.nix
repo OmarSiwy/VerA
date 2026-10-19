@@ -168,6 +168,10 @@
         };
         built = veraFor pkgs;
         zig = (zigsFor pkgs).master;
+        # One global cache per toolchain: two builds of the same dev version
+        # from different store paths share ~/.cache/zig's build-runner entry
+        # and rebuild it on every `zig build` (about a minute each).
+        zigCache = ''export ZIG_GLOBAL_CACHE_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/zig-${builtins.baseNameOf zig}"'';
 
         # Drop what this system cannot build (availableOn alone misses `broken`).
         available = lib.filter (p: lib.meta.availableOn pkgs.stdenv.hostPlatform p && !(p.meta.broken or false));
@@ -208,12 +212,16 @@
       {
         devShells = rec {
           default = pkgs.mkShell {
+            shellHook = zigCache;
             packages = [ zig ] ++ available [
               pkgs.iverilog
               pkgs.verilator
             ];
           };
-          external = pkgs.mkShell { packages = [ zig ] ++ referenceTools; };
+          external = pkgs.mkShell {
+            shellHook = zigCache;
+            packages = [ zig ] ++ referenceTools;
+          };
           benchmarking = pkgs.mkShell {
             inputsFrom = [ external ];
             packages = available [
@@ -222,6 +230,7 @@
             ];
           };
           docs = pkgs.mkShell {
+            shellHook = zigCache;
             packages = [
               zig
               pkgs.mdbook
