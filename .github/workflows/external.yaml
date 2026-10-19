@@ -36,7 +36,7 @@ jobs:
             echo '## External analog suites'
             echo '```'; tail -1 external.txt; echo '```'
             echo '### FAIL and STALE names'
-            echo '```'; grep -E '^(FAIL|STALE) ' external.txt; echo '```'
+            echo '```'; grep -E '^(FAIL|STALE) ' external.txt || true; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -67,9 +67,9 @@ jobs:
         run: |
           {
             echo '## VAMPyRE against VerA'
-            echo '```'; grep -E '^vampyre:' vampyre.txt; echo '```'
+            echo '```'; grep -E '^vampyre:' vampyre.txt || true; echo '```'
             echo '### FAIL and STALE names'
-            echo '```'; grep -E '^(FAIL|STALE) ' vampyre.txt; echo '```'
+            echo '```'; grep -E '^(FAIL|STALE) ' vampyre.txt || true; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Digital (tools/external_digital.py): ivtest and the Verilog-2005 subset
@@ -105,7 +105,7 @@ jobs:
             echo '## External digital suites'
             echo '```'; cat external-digital.tsv; echo '```'
             echo '### FAIL and STALE names'
-            echo '```'; grep -E '^(FAIL|STALE) ' external-digital.txt; echo '```'
+            echo '```'; grep -E '^(FAIL|STALE) ' external-digital.txt || true; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
