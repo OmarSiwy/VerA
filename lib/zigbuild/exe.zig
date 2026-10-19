@@ -360,7 +360,10 @@ test argvHead {
     // `orchestrator.strip`: an unsafe build strips unless DWARF was asked
     // for; `strip` overrides it either way.
     const cases = [_]Case{
-        .{ .opts = debug_stripped, .verb = "build-exe", .want = &.{ "zigx", "build-exe", "-femit-bin=b", "-Odebug", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fno-llvm", "-fno-lld", "-fstrip" } },
+        .{ .opts = debug_stripped, .verb = "build-exe", .want = if (orchestrator.Backend.self_hosted.forHost() == .self_hosted)
+            &.{ "zigx", "build-exe", "-femit-bin=b", "-Odebug", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fno-llvm", "-fno-lld", "-fstrip" }
+        else
+            &.{ "zigx", "build-exe", "-femit-bin=b", "-Odebug", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm", "-fstrip" } },
         .{ .opts = fast, .verb = "build-lib", .want = &.{ "zigx", "build-lib", "-femit-bin=b", "-Ofast", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm", "-fstrip" } },
         .{ .opts = fast_dwarf, .verb = "build-exe", .want = &.{ "zigx", "build-exe", "-femit-bin=b", "-Ofast", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm" } },
         .{ .opts = fast_unstripped, .verb = "build-exe", .want = &.{ "zigx", "build-exe", "-femit-bin=b", "-Ofast", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm" } },

@@ -747,9 +747,11 @@ test "layoutHash pins optimize, backend and the module graph" {
     o.optimize = .fast;
     try std.testing.expect(layoutHash(o) != layoutHash(base));
 
+    // The hash pins the backend the host builds with, so the two collide
+    // where `forHost` maps both to LLVM.
     o = base;
     o.backend = .llvm;
-    try std.testing.expect(layoutHash(o) != layoutHash(base));
+    try std.testing.expectEqual(Backend.self_hosted.forHost() == .llvm, layoutHash(o) == layoutHash(base));
 
     const other = [_]Module{
         .{ .name = "contract", .root = "OTHER.zig" },
@@ -1131,7 +1133,7 @@ test "a split build links one object per part into a library that runs" {
     try std.testing.expect(splits(base, .{ .text = big }));
     var native = base;
     native.backend = .self_hosted;
-    try std.testing.expect(!splits(native, .{ .text = big }));
+    try std.testing.expectEqual(Backend.self_hosted.forHost() == .llvm, splits(native, .{ .text = big }));
 }
 
 test "Backend.auto keeps LLVM for every optimized mode" {
@@ -1299,7 +1301,12 @@ test buildArgv {
 
     // One part: an object, position independent, named for its piece, rooted
     // at its own shim, with no engine (only the link takes it). Self-hosted
-    // adds `-fincremental`; Debug keeps its symbols.
+    // adds `-fincremental`; Debug keeps its symbols. A host that builds only
+    // with LLVM (`forHost`) passes `-fllvm` instead.
+    const self_hosted_flags: []const []const u8 = comptime if (Backend.self_hosted.forHost() == .self_hosted)
+        &.{ "-fno-llvm", "-fno-lld", "-fincremental" }
+    else
+        &.{"-fllvm"};
     const piece = [_][]const u8{
         "zig",
         "build-obj",
@@ -1310,10 +1317,7 @@ test buildArgv {
         "dev_setup",
         "--cache-dir",
         "w" ++ sep ++ ".zig-cache",
-    } ++ lc ++ [_][]const u8{
-        "-fno-llvm",
-        "-fno-lld",
-        "-fincremental",
+    } ++ lc ++ self_hosted_flags[0..self_hosted_flags.len].* ++ [_][]const u8{
         "--dep",
         "device",
         "-Mroot=w" ++ sep ++ "shim_setup.zig",
