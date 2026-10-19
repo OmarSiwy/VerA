@@ -55,7 +55,9 @@
 // still prints ok=1 cannot see an error of that size in its own expectation.
 // No `abs`: under `begin_keywords "1364-2005" there is none, and CHECKX and
 // CHECKI must still expand there (ch10_directives/16_begin_keywords_verilog.va).
-`define VERA_PW(WANT) (((WANT) == 0) ? (`VERA_PERTURB) : (WANT) * (1 + (`VERA_PERTURB)))
+// Arithmetic, not `?:`: a CHECKEQ want may hold an analog operator, which
+// §5.8.1 does not allow under a condition (E0514).
+`define VERA_PW(WANT) ((WANT) * (1 + (`VERA_PERTURB)) + ((WANT) == 0) * (`VERA_PERTURB))
 `define CHECK(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), (abs((GOT) - `VERA_PW(WANT)) <= (TOL)))
 `define CHECKR(NAME, GOT, WANT, RTOL) \
@@ -68,6 +70,11 @@
 `define CHECKEQ(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, `VERA_PW(WANT), (abs((GOT) - `VERA_PW(WANT)) <= (TOL)))
 `else
+// A fixture that prints its own `ok=` (a $monitor or $debug report, which no
+// CHECK can be) writes each literal want as `VERA_PW(want), so a perturbed
+// run moves it as it moves a CHECK's.
+`define VERA_PW(WANT) (WANT)
+
 // Absolute tolerance. Use for values near or at zero.
 `define CHECK(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, WANT, (abs((GOT) - (WANT)) <= (TOL)))

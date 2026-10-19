@@ -71,7 +71,9 @@ module c_math_values_at_run_time(p, n);
         `CHECKX("d atan2(y, x)/dx at x = 0, y = 1", ddx(atan2(V(p) + 1.0, V(n)), V(n)), -1.0);
         `CHECKX("d atan2(y, x)/dy at x = 0, y = 1", ddx(atan2(V(p) + 1.0, V(n)), V(p)), 0.0);
         `CHECKR("d asinh/dx at 0.5", ddx(asinh(V(p) + 0.5), V(p)), 0.8944271909999159, 5e-16);
-        `CHECKR("d asinh/dx at 1e300", ddx(asinh(V(p) + 1e300), V(p)), 1e-300, 5e-16);
+        // Absolute 5e-16 * 1e-300: CHECKR floors its denominator at 1e-30, which
+        // would make a relative 5e-16 an absolute 5e-46, blind at 1e-300.
+        `CHECK("d asinh/dx at 1e300", ddx(asinh(V(p) + 1e300), V(p)), 1e-300, 5e-316);
         `CHECKR("d acosh/dx at 2", ddx(acosh(V(p) + 2.0), V(p)), 0.5773502691896257, 5e-16);
         `CHECKR("d atanh/dx at 0.5", ddx(atanh(V(p) + 0.5), V(p)), 1.3333333333333333, 5e-16);
         `CHECKR("d asin/dx at 0.5", ddx(asin(V(p) + 0.5), V(p)), 1.1547005383792515, 5e-16);

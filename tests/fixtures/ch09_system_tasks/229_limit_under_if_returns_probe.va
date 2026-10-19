@@ -30,6 +30,6 @@ module ch09_limit_under_if_returns_probe(p, n);
     if (type > 0) v = $limit(V(a,n), "pnjlim", 0.025, 0.7);
     I(p,a) <+ V(p,a) / 100.0;
     I(a,n) <+ v / 100.0;
-    `CHECKR("a limit under an if returns the probe", v, 0.5, 1e-3);
+    `CHECKR("a limit under an if returns the probe", v, 0.5, 1e-4);
   end
 endmodule

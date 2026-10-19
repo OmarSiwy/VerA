@@ -20,7 +20,7 @@
 // $limit() function is the value of the access function reference, within
 // appropriate tolerances." A printed operating point is an accepted solution, so
 // the return is the 0.3 V bias, to the solver's convergence tolerance. Hence
-// CHECKR at 1e-3 (the SPICE default reltol) and not an absolute band: §9.17.3
+// CHECKR at 1e-4 (26_limit.va says why) and not an absolute band: §9.17.3
 // says "in all cases, the simulator is responsible for determining ... what the
 // return value is on a given iteration", which is not a last-bit guarantee.
 //
@@ -39,7 +39,7 @@ module ch09_limit_named(p, n);
   analog begin
     limited = $limit(V(p,n), "pnjlim", $vt, 0.7);
     `CHECKR("a converged $limit returns the access function, string form included",
-            limited, 0.3, 1e-3);
+            limited, 0.3, 1e-4);
     I(p,n) <+ limited;
   end
 endmodule

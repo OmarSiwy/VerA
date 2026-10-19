@@ -31,7 +31,7 @@ module say_debug_every_iteration(p, n);
   inout p, n; electrical p, n;
   analog begin
     I(p, n) <+ V(p, n) / 1k - 1m;
-    $debug("debug at iterate V(p,n) = %g ok=%d", V(p, n), V(p, n) == 0.0 || V(p, n) == 1.0);
+    $debug("debug at iterate V(p,n) = %g ok=%d", V(p, n), V(p, n) == `VERA_PW(0.0) || V(p, n) == `VERA_PW(1.0));
     `CHECK("the accepted solution", V(p, n), 1.0, 1e-12);
   end
 endmodule

@@ -40,13 +40,14 @@
 //   NIST2018        0.025851999786435535   1.2010369553128491e-4    0
 //
 // (want = the NIST2018 row, which is CODATA2018 and what VerA uses.) The widest
-// spread is 6.81e-4, so the `id` band is 1e-3: it admits all five sets and still
+// spread is 6.81e-4, so the `id` band is 8e-4: it admits all five sets, sees the
+// 0.1% error a perturbed run (`benchmark -- --perturb`) moves the want by, and still
 // fails a wrong `is` (a decade), a wrong exponent, or a factor of 2. Against the
 // include's own `P_K/`P_Q (the NIST1998 fall-through) the five $vt values differ
 // by at most 7.86e-7 V (SPICE), so the $vt identity band is 1e-6 V: a $vt wrong in
 // kind (Celsius instead of kelvin, q/kT inverted) misses by more than 2e-3 V.
 //
-// The same 1e-3 covers the two powers below, which are proportional to `id`.
+// The same 8e-4 covers the two powers below, which are proportional to `id`.
 //
 // Mixing $vt's k/q with `P_Q in the shot-noise power is not an inconsistency —
 // §4.6.4.1's pwr = 2q|I| means the charge, and `P_Q is how the LRM spells it.
@@ -77,7 +78,7 @@
 // against the correct 3.8485462795887857e-23 — the factor of 2 §4.6.4's own
 // note warns about.
 //
-// THE TWO `//! noise` LINES BELOW CARRY `rtol=1e-3`, for the same reason the
+// THE TWO `//! noise` LINES BELOW CARRY `rtol=1e-3`, for the reason the
 // `CHECKR`s do. Both densities are proportional to `id`, and `id` moves by up
 // to 6.81e-4 relative depending on which k/q set §9.15 leaves the implementation
 // free to pick. tests/fixtures/ch04_expressions/a06_SPEC.md at 8b1514d4's directive grammar defaults numeric fields to 1e-12
@@ -121,13 +122,13 @@ module a06_psd_bias_dependent(a, c);
         // 7.86e-7 V of the include's; see THE NUMBERS above.
         `CHECKEQ("$vt is kT/q; the last digits of k and q are implementation-defined",
             $vt, $temperature * (`P_K / `P_Q), 1e-6);
-        // 1e-3 admits all five Annex D.2 k/q sets (they spread `id` by up to
+        // 8e-4 admits all five Annex D.2 k/q sets (they spread `id` by up to
         // 6.81e-4 through the exponential); see THE NUMBERS above.
-        `CHECKR("the junction current at 0.6 V", id, 1.2010369553128491e-4, 1e-3);
+        `CHECKR("the junction current at 0.6 V", id, 1.2010369553128491e-4, 8e-4);
         `CHECKR("shot-noise power 2q|I| at that bias",
-            2.0 * `P_Q * abs(id), 3.8485462795887857e-23, 1e-3);
+            2.0 * `P_Q * abs(id), 3.8485462795887857e-23, 8e-4);
         `CHECKR("flicker coefficient kf|I|^af at that bias",
-            kf * pow(abs(id), af), 1.2010369553128491e-24, 1e-3);
+            kf * pow(abs(id), af), 1.2010369553128491e-24, 8e-4);
 
         I(a, c) <+ id
             + white_noise(2.0 * `P_Q * abs(id), "shot")

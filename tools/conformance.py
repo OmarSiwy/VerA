@@ -2263,7 +2263,9 @@ def vpi_runs():
     for path in sorted(root.rglob("*.c")):
         text = path.read_text(errors="replace")
         if re.search(r"(?m)^//! design ", text):
-            out[path.relative_to(root).as_posix()] = "xfail" if re.search(r"(?m)^//! (xfail|refuse) ", text) else "pass"
+            # `//! refuse`: the run is refused by name, and build.zig holds it
+            # to that exit and stdout, so a met refusal passes like any run.
+            out[path.relative_to(root).as_posix()] = "xfail" if re.search(r"(?m)^//! xfail ", text) else "pass"
     return out
 
 

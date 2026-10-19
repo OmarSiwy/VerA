@@ -41,6 +41,12 @@
 // (y = u) is out by 8.6 at t = 20ns, a filter with tau = 9ns is out by 0.09,
 // and an uninitialised one is out by the whole response.
 //
+// WHERE IT IS ASSERTED. The comparison runs from 7ns on. Before that the
+// response is small enough that a 0.1% error in the want hides inside the
+// band plus the discretisation error (the same replay: the last such point is
+// 6ns), so a check there could not see one (`benchmark -- --perturb`). The
+// early points are still held by the CHECKI below.
+//
 //! lrm 4.5.11
 //! lrm 4.5.11.4
 //! lrm 4.5.11.4:1000
@@ -53,13 +59,14 @@
 module a04_laplace_ramp_response(p, n);
     inout p, n;
     electrical p, n;
-    real tns;
+    real tns, y;
 
     analog begin
         tns = $abstime * 1e9;
-        `CHECKEQ("a one-pole laplace_nd follows the exact ramp response of 1/(1+s*tau)",
-                 laplace_nd(tns, '{1, 0}, '{1, 1e-8}),
-                 tns - 10.0 * (1.0 - exp(-tns / 10.0)), 1e-3);
+        y = laplace_nd(tns, '{1, 0}, '{1, 1e-8});
+        if (tns > 6.75)
+            `CHECKEQ("a one-pole laplace_nd follows the exact ramp response of 1/(1+s*tau)",
+                     y, tns - 10.0 * (1.0 - exp(-tns / 10.0)), 1e-3);
         // Row-invariant and literal: the lag never leads its input and never
         // exceeds it. A filter that answered its DC gain at every point (the
         // behaviour the existing DC-only fixtures cannot distinguish) sits

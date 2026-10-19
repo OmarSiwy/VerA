@@ -47,7 +47,8 @@
 //   NIST2018        0.025851999786435535   1.2010369553128491e-4    0
 //
 // (want = the NIST2018 row, which is CODATA2018 and what VerA uses.) The widest
-// spread is 6.81e-4, so the `id` band is 1e-3: it admits all five sets and still
+// spread is 6.81e-4, so the `id` band is 8e-4: it admits all five sets, sees the
+// 0.1% error a perturbed run (`benchmark -- --perturb`) moves the want by, and still
 // fails a wrong `is` (a decade), a wrong exponent, or a factor of 2. Against the
 // include's own `P_K/`P_Q (the NIST1998 fall-through) the five $vt values differ
 // by at most 7.86e-7 V (SPICE), so the $vt identity band is 1e-6 V: a $vt wrong in
@@ -111,7 +112,7 @@ module a06_small_signal_linearization(a, c);
             $vt, $temperature * (`P_K / `P_Q), 1e-6);
         // Loose enough to survive all five sets (they spread `id` by up to
         // 6.81e-4), tight enough to catch a wrong `is` or a wrong exponent.
-        `CHECKR("junction current at 0.6 V", id, 1.2010369553128491e-4, 1e-3);
+        `CHECKR("junction current at 0.6 V", id, 1.2010369553128491e-4, 8e-4);
         `CHECKEQ("the operating-point conductance is exactly (id + is)/$vt",
             ddx(id, V(a)), (id + is) / $vt, 1e-15);
         `CHECKX("an independent source has no conductance", ddx(stim, V(a)), 0.0);

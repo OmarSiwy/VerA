@@ -55,7 +55,7 @@ module monitor_after_macro_process(vo);
   initial begin
     q = 1'b0;
     $monitor("monitor t=%0t v=%g ok=%0d", $realtime, V(vo),
-             ($realtime == 0.0 && V(vo) == 0.0) || ($realtime == 4.0 && V(vo) == 7.0));
+             ($realtime == 0.0 && V(vo) == `VERA_PW(0.0)) || ($realtime == 4.0 && V(vo) == `VERA_PW(7.0)));
     #4 q = 1'b1;
   end
   analog begin

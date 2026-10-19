@@ -16,9 +16,10 @@
 //
 //     I = 1e-14 * (exp(0.5 / 0.025864952917090102) - 1) = 2.4855573291413894e-6 A
 //
-// The exponent is 19.33, which amplifies the 3.1e-5 spread in kT/q to 6.0e-4
-// relative in the current; rtol 5e-3 covers every D.2 constant set and still
-// pins two and a half digits. A limexp() that clamped its output, or a $vt
+// The exponent is 19.33, which amplifies the 3.1e-5 spread in kT/q to 6.1e-4
+// relative in the current (the SPICE set); rtol 8e-4 covers every D.2
+// constant set, still sees the 0.1% error a perturbed run moves the want by, and
+// pins three digits. A limexp() that clamped its output, or a $vt
 // answering in millivolts, misses by orders of magnitude.
 //
 //! temp 300.15
@@ -31,7 +32,7 @@ module combined_temperature_diode(p, n);
   analog begin
     thermal_voltage = $vt($temperature);
     `CHECKR("kT/q at the 300.15 K ambient", thermal_voltage, 0.025864952917090102, 1e-4);
-    `CHECKR("Shockley current at 0.5 V", saturation*(limexp(V(p,n)/thermal_voltage)-1.0), 2.4855573291413894e-6, 5e-3);
+    `CHECKR("Shockley current at 0.5 V", saturation*(limexp(V(p,n)/thermal_voltage)-1.0), 2.4855573291413894e-6, 8e-4);
     I(p,n) <+ saturation*(limexp(V(p,n)/thermal_voltage)-1.0);
   end
 endmodule

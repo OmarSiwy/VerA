@@ -474,8 +474,10 @@ fn runAndCheck(
 ) !Result {
     const cfg = ctx.cfg;
     // `--perturb`: check.vh moves every want by a relative δ.
-    // A define ahead of the text, so the first `include "check.vh"` sees it.
-    const compiled_src = if (harness.perturb) |p| try arena.print("`define VERA_PERTURB {e}\n{s}", .{ p, source }) else source;
+    // A define ahead of the text, so the first `include "check.vh"` sees it,
+    // and an IEEE 1364 §19.7 `line after it, so the fixture's own §10.7
+    // `__LINE__ is not moved down by the define's line.
+    const compiled_src = if (harness.perturb) |p| try arena.print("`define VERA_PERTURB {e}\n`line 1 \"{s}\" 0\n{s}", .{ p, f.path, source }) else source;
     // Stages 1-6 with §9.4 display ON. W0650 is about speed, and every fixture
     // that probes a node trips it; allowing it here keeps the transcript about
     // the model rather than about float modes — unless a `//! warn` names it.

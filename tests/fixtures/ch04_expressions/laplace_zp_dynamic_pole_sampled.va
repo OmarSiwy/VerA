@@ -19,8 +19,10 @@
 //
 // y(5ns) = 1.0653066, y(10ns) = 3.6787944. The grid is a04_11's dt = 0.5ns =
 // τ/20, whose worst trapezoidal discretisation error over 0..10ns is 7.67e-4
-// at 10ns (a04_11's derivation), so the tolerance is 1e-3. Resampling the
-// pole gives τ = 1ns from t = 0.5ns on, and y(10ns) near 9: out by 5.
+// at 10ns (a04_11's derivation), so the tolerance is 1e-3. As in a04_11 the
+// check is made from 7ns on, where it can see a 0.1% error in its want
+// (`benchmark -- --perturb`): seven points. Resampling the pole gives τ = 1ns
+// from t = 0.5ns on, and y(10ns) near 9: out by 5.
 //
 // Corrected 2026-10-08 (construct only, the wants are unchanged): the
 // coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
@@ -31,7 +33,7 @@
 //
 //! lrm 4.5.14
 //! lrm 4.5.11.1
-//! checks 21
+//! checks 7
 //! bias V(n) = 0
 //! wave V(k) = 10, 1
 //! time 0, 0.5n, 1n, 1.5n, 2n, 2.5n, 3n, 3.5n, 4n, 4.5n, 5n, 5.5n, 6n, 6.5n, 7n, 7.5n, 8n, 8.5n, 9n, 9.5n, 10n
@@ -41,13 +43,14 @@
 module laplace_zp_dynamic_pole_sampled(k, n);
     inout k, n;
     electrical k, n;
-    real tns;
+    real tns, y;
 
     analog begin
         tns = $abstime * 1e9;
-        `CHECKEQ("the pole is sampled at the analysis start",
-                 laplace_zp(tns, , '{-1.0 / (V(k, n) * 1n), 0.0}),
-                 tns - 10.0 * (1.0 - exp(-tns / 10.0)), 1e-3);
+        y = laplace_zp(tns, , '{-1.0 / (V(k, n) * 1n), 0.0});
+        if (tns > 6.75)
+            `CHECKEQ("the pole is sampled at the analysis start",
+                     y, tns - 10.0 * (1.0 - exp(-tns / 10.0)), 1e-3);
         I(k, n) <+ 0.0;
     end
 endmodule

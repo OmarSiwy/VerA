@@ -38,8 +38,12 @@ module m01_absdelta_sampler(e_in, p);
 
   analog begin
     // Broad observation bounds; see the runner and tolerance scope above.
-    `CHECK("absdelta with delta = 0 samples every timestep, so the copy follows the signal", tracked - $abstime * 1e8, 0.0, 0.6);
-    `CHECK("absdelta with delta = 0.3 never lets the held sample drift past 0.5 V", held - V(e_in), 0.0, 0.5);
+    // Bounds, not values with a band: each is a CHECKI of its inequality, so
+    // a perturbed run has a want to move (`benchmark -- --perturb`).
+    `CHECKI("absdelta with delta = 0 samples every timestep, so the copy follows the signal",
+            abs(tracked - $abstime * 1e8) <= 0.6, 1);
+    `CHECKI("absdelta with delta = 0.3 never lets the held sample drift past 0.5 V",
+            abs(held - V(e_in)) <= 0.5, 1);
     I(p) <+ 1m * tracked;
   end
 endmodule

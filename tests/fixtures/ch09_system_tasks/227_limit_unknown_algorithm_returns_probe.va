@@ -29,6 +29,6 @@ module ch09_limit_unknown_algorithm_returns_probe(p, n);
     v = $limit(V(a,n), "nosuchlim", 0.5);
     I(p,a) <+ V(p,a) / 100.0;
     I(a,n) <+ v / 100.0;
-    `CHECKR("an unknown algorithm returns the probe", v, 0.5, 1e-3);
+    `CHECKR("an unknown algorithm returns the probe", v, 0.5, 1e-4);
   end
 endmodule

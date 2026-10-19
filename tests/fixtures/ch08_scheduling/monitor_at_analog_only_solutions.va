@@ -70,8 +70,8 @@ module monitor_at_analog_only_solutions(vo);
   inout vo; electrical vo;
   initial begin
     $monitor("monitor t=%0t v=%g ok=%0d", $realtime, V(vo),
-             ($realtime == 0.0 && V(vo) == 0.0) || ($realtime == 1.0 && V(vo) == 2.0) ||
-             ($realtime == 2.0 && V(vo) == 4.0));
+             ($realtime == 0.0 && V(vo) == `VERA_PW(0.0)) || ($realtime == 1.0 && V(vo) == `VERA_PW(2.0)) ||
+             ($realtime == 2.0 && V(vo) == `VERA_PW(4.0)));
     #10 $monitoroff;
   end
   analog begin

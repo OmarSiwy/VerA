@@ -32,9 +32,9 @@
 // convergence"). "When the simulator has converged, the return value of the
 // $limit() function is the value of the access function reference, WITHIN
 // APPROPRIATE TOLERANCES" — so the answer is the 0.3 V bias to the solver's own
-// convergence tolerance, and the checks are relative at 1e-3 (the SPICE default
-// reltol) rather than absolute. d/dx (exp(x)-1) at 0.3 is 1.3499, so the derived
-// check widens to 1.16e-3 relative and is written at 2e-3.
+// convergence tolerance, and the checks are relative at 1e-4 (26_limit.va says
+// why) rather than absolute. d/dx (exp(x)-1) at 0.3 is 1.3499, so the derived
+// check widens to 1.16e-4 relative and is written at 2e-4.
 //
 //! lrm 9.17.3
 //! lrm 9.17.3:7
@@ -55,9 +55,9 @@ module ch09_limit_user_function(p, n);
   analog begin
     limited = $limit(V(p,n), mylim, 0.7);
     `CHECKR("an identity limiter returns the access function itself",
-            limited, 0.3, 1e-3);
+            limited, 0.3, 1e-4);
     `CHECKR("so the diode-like current is exp(0.3) - 1",
-            exp(limited) - 1.0, 0.3498588075760032, 2e-3);
+            exp(limited) - 1.0, 0.3498588075760032, 2e-4);
     I(p,n) <+ exp(limited) - 1.0;
   end
 endmodule

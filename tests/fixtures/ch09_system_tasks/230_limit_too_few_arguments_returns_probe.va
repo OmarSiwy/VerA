@@ -28,6 +28,6 @@ module ch09_limit_too_few_arguments_returns_probe(p, n);
     v = $limit(V(a,n), "steplim");
     I(p,a) <+ V(p,a) / 100.0;
     I(a,n) <+ v / 100.0;
-    `CHECKR("a steplim with no step returns the probe", v, 0.5, 1e-3);
+    `CHECKR("a steplim with no step returns the probe", v, 0.5, 1e-4);
   end
 endmodule

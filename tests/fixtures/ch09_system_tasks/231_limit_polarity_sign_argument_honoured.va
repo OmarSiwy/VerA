@@ -15,7 +15,7 @@
 //   (-0.7 - Va) / 100 = -1e-14 * (exp(-Va / 0.025) - 1)
 //
 // is 226's equation in -Va, so Va = -0.625763159 and vd = +0.625763159. Band:
-// relative 1e-3, the solver's convergence tolerance, as in 226.
+// relative 1e-4, the solver's convergence tolerance, as in 226.
 //
 //! lrm 9.17.3
 //! nowarn
@@ -30,7 +30,7 @@ module ch09_limit_polarity_sign_argument_honoured(p, n);
     vd = type * $limit(V(a,n), "pnjlim", 0.025, 0.705018, type);
     I(p,a) <+ V(p,a) / 100.0;
     I(a,n) <+ type * 1e-14 * (exp(vd / 0.025) - 1.0);
-    `CHECKR("the reversed junction settles at the mirrored root", V(a,n), -0.625763159, 1e-3);
-    `CHECKR("and the scaled result is the forward voltage", vd, 0.625763159, 1e-3);
+    `CHECKR("the reversed junction settles at the mirrored root", V(a,n), -0.625763159, 1e-4);
+    `CHECKR("and the scaled result is the forward voltage", vd, 0.625763159, 1e-4);
   end
 endmodule

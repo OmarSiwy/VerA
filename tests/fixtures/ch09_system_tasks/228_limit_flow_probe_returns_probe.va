@@ -28,6 +28,6 @@ module ch09_limit_flow_probe_returns_probe(p, n);
     i = $limit(I(a,b), "pnjlim", 0.025, 0.7);
     I(p,a) <+ V(p,a) / 100.0;
     I(b,n) <+ V(b,n) / 100.0;
-    `CHECKR("a limited flow returns the flow", i, 5e-3, 1e-3);
+    `CHECKR("a limited flow returns the flow", i, 5e-3, 1e-4);
   end
 endmodule

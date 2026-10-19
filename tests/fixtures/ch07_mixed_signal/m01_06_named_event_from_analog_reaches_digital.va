@@ -28,7 +28,7 @@
 // time` list, it is the right want at EVERY timepoint the simulator reports,
 // not only at the four listed ones — which matters, see below.
 //
-// WHY THE TOLERANCE IS 1 AND NOT 0. An earlier draft asserted this to 0.0 and
+// WHY NOT EXACT EVERYWHERE. An earlier draft asserted this to 0.0 and
 // justified it with "the observations are the midpoints between firings, so no
 // check is evaluated in the same instant as a trigger and the delivery order
 // inside one timepoint never matters". That reasoning is false, and it is
@@ -49,13 +49,16 @@
 // M02. At a point placed just BEYOND 5n the increment has certainly happened
 // and the oracle is exact again.
 //
-// So the digits are not written at the firing instants: the tolerance is 1.0,
-// which is precisely one undelivered-yet firing and nothing more. It keeps
-// every discriminator the paragraph below claims — a tool that never delivers
-// reads 0 against a want of 2 at t = 20n and 3 at t = 30n, a tool that latches
-// one delivery reads 1 against 3 at t = 30n, and a tool that delivers on every
-// analog timestep runs away immediately. Narrow the band to 0.0 when M02
-// settles same-instant delivery ordering.
+// So the check admits two counts: the oracle above, or the same partition with
+// `>` for `>=`, which differs from it only AT a firing instant and only by that
+// firing, undelivered yet. Everywhere else it is exact. (It was a CHECKEQ band
+// of 1.0, which also admitted one delivery too many, and could not see its want
+// moved by 0.1%: `benchmark -- --perturb`.) It keeps every discriminator the
+// paragraph below claims — a tool that never delivers reads 0 against a want of
+// 2 at t = 20n and 3 at t = 30n, a tool that latches one delivery reads 1
+// against 3 at t = 30n, and a tool that delivers on every analog timestep runs
+// away immediately. Drop the `>` arm when M02 settles same-instant delivery
+// ordering.
 //
 // COUNTING, NOT SAMPLING, ON PURPOSE. §5.10.4 says an event "is not made to
 // occur by changing the index"; §7.3.6.1 adds, for the analog-variable form of
@@ -108,11 +111,14 @@ module m01_named_event_to_digital(p);
   analog begin
     @(timer(5n, 10n))
       -> ana_event;
-    // Band of 1.0 = exactly one not-yet-delivered firing, for the analog point
-    // §5.10.3.3 places AT a firing instant, where §7.3.6.1 + §7.3.6.5 both land
-    // on the same tick and the LRM fixes no order between them. See WHY THE
-    // TOLERANCE IS 1 above; tighten to 0.0 when M02 settles the ordering.
-    `CHECKEQ("an analog-triggered named event is delivered once per firing", hits, ($abstime >= 5n) + ($abstime >= 15n) + ($abstime >= 25n), 1.0);
+    // Exact, but for the analog point §5.10.3.3 places AT a firing instant,
+    // where §7.3.6.1 + §7.3.6.5 both land on the same tick and the LRM fixes no
+    // order between them: there the firing may be not yet delivered (the `>`
+    // count). See WHY NOT EXACT EVERYWHERE above; drop the `>` arm when M02
+    // settles the ordering.
+    `CHECKI("an analog-triggered named event is delivered once per firing",
+            (hits == ($abstime >= 5n) + ($abstime >= 15n) + ($abstime >= 25n)) ||
+            (hits == ($abstime > 5n) + ($abstime > 15n) + ($abstime > 25n)), 1);
     I(p) <+ 1m * hits;
   end
 endmodule

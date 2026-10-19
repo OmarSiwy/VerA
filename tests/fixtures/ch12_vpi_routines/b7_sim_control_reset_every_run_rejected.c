@@ -23,7 +23,7 @@
  * cbEndOfSimulation never fires.
  */
 
-//! lrm 12.36
+//! lrm 12.36:6
 //! design ch12_vpi_routines/b7_digital.v
 //! stdout b7_reset_every_run: requests=1001 resets=1000
 //! refuse more than 1000 vpiReset requests
