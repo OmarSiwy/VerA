@@ -406,7 +406,11 @@ def svtests(vera, report):
         ok = rc not in (0, "timeout")
         if c["should_fail"]:
             why = None if ok else f"should_fail: vera exited {rc}"
-        elif ok:
+        # A parsing/elaboration test is accepted once vera compiles it; what
+        # its run then does (12.7.6's forever loops at time 0, ended by
+        # vera's event budget) is not the test's question. The refusal test
+        # is iverilog-diff's.
+        elif ok and (c["simulate"] or "could not compile" in err):
             why = f"vera exited {rc}: {first_error(err)}"
         else:
             why = None if not c["simulate"] or sv_asserts(out) else ":assert: failed"
