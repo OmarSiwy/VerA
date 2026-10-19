@@ -32,7 +32,9 @@ fn isUdp(file: *const Ast.SourceFile, name: Ast.StrId) bool {
     return false;
 }
 
-/// §6.6 every module instance in a generate block under `id`, schemes aside.
+/// Appends to `out` every module instance in a generate block under `id`
+/// (§6.6), schemes aside, each renamed into its enclosing generate scopes
+/// (`blockPrefix`); the names are interned and allocated in `arena`.
 pub fn genInstanceList(file: *Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, out: *std.ArrayList(Ast.Instance)) Error!void {
     try genInstanceListIn(file, id, arena, "", out);
 }
@@ -133,49 +135,18 @@ fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, prefix: []cons
 /// ponytail: the localparam's declared type is not applied to the
 /// substituted value; the receiving parameter's type converts it.
 fn bindGenLocals(self: *Flatten, e: Ast.ExprId, locals: []const Ast.ParamDecl) Error!Ast.ExprId {
-    if (e == .none) return e;
-    const x = &self.ctx.file.exprs;
-    var n = x.get(e);
-    switch (n.tag) {
-        .ident => {
-            var k = locals.len;
+    const Bind = struct {
+        locals: []const Ast.ParamDecl,
+        pub fn ident(b: @This(), fl: *Flatten, id: Ast.ExprId, name: Ast.StrId) Error!Ast.ExprId {
+            var k = b.locals.len;
             while (k > 0) {
                 k -= 1;
-                if (locals[k].name == n.str and locals[k].dims.len == 0) return bindGenLocals(self, locals[k].default, locals[0..k]);
+                if (b.locals[k].name == name and b.locals[k].dims.len == 0) return bindGenLocals(fl, b.locals[k].default, b.locals[0..k]);
             }
-            return e;
-        },
-        .unary => {
-            n.lhs = try bindGenLocals(self, x.lhs(e), locals);
-            if (n.lhs == x.lhs(e)) return e;
-        },
-        .binary, .index, .range, .indexed_range, .multi_concat, .pattern_repl => {
-            n.lhs = try bindGenLocals(self, x.lhs(e), locals);
-            n.rhs = try bindGenLocals(self, x.rhs(e), locals);
-            if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e)) return e;
-        },
-        .ternary => {
-            const third = x.ternaryElse(e);
-            n.lhs = try bindGenLocals(self, x.lhs(e), locals);
-            n.rhs = try bindGenLocals(self, x.rhs(e), locals);
-            const t = try bindGenLocals(self, third, locals);
-            if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e) and t == third) return e;
-            n.extra = @backingInt(t);
-        },
-        .call, .sys_call, .builtin_call, .concat, .assign_pattern => {
-            const src = x.args(e);
-            const args = try self.ctx.arena.alloc(Ast.ExprId, src.len);
-            var changed = false;
-            for (src, args) |a, *o| {
-                o.* = try bindGenLocals(self, a, locals);
-                changed = changed or o.* != a;
-            }
-            if (!changed) return e;
-            n.extra = try x.addExprList(self.ctx.arena, args);
-        },
-        else => return e, // else: literals, dotted names and the analog-only forms name no block localparam a constant override can read
-    }
-    return x.add(self.ctx.arena, n);
+            return id;
+        }
+    };
+    return mapIdents(self, e, Bind{ .locals = locals });
 }
 
 /// §6.6.1 a loop generate's module instances, one set per iteration. The
@@ -331,25 +302,39 @@ fn constGenvar(self: *Flatten, e: Ast.ExprId, gv: Ast.StrId, at: ?Ast.ExprId) Er
 /// `e` with every identifier `name` replaced by `with`; rows unchanged where
 /// nothing below them changed.
 pub fn substIdent(self: *Flatten, e: Ast.ExprId, name: Ast.StrId, with: Ast.ExprId) Error!Ast.ExprId {
+    const Subst = struct {
+        name: Ast.StrId,
+        with: Ast.ExprId,
+        pub fn ident(sb: @This(), _: *Flatten, id: Ast.ExprId, n: Ast.StrId) Error!Ast.ExprId {
+            return if (n == sb.name) sb.with else id;
+        }
+    };
+    return mapIdents(self, e, Subst{ .name = name, .with = with });
+}
+
+/// `e` with each identifier row replaced by `ctx.ident(self, row, name)`'s
+/// answer; rows unchanged where nothing below them changed, so a rewrite
+/// that touches nothing appends nothing.
+fn mapIdents(self: *Flatten, e: Ast.ExprId, ctx: anytype) Error!Ast.ExprId {
     if (e == .none) return e;
     const x = &self.ctx.file.exprs;
     var n = x.get(e);
     switch (n.tag) {
-        .ident => return if (n.str == name) with else e,
+        .ident => return ctx.ident(self, e, n.str),
         .unary => {
-            n.lhs = try substIdent(self, x.lhs(e), name, with);
+            n.lhs = try mapIdents(self, x.lhs(e), ctx);
             if (n.lhs == x.lhs(e)) return e;
         },
         .binary, .index, .range, .indexed_range, .multi_concat, .pattern_repl => {
-            n.lhs = try substIdent(self, x.lhs(e), name, with);
-            n.rhs = try substIdent(self, x.rhs(e), name, with);
+            n.lhs = try mapIdents(self, x.lhs(e), ctx);
+            n.rhs = try mapIdents(self, x.rhs(e), ctx);
             if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e)) return e;
         },
         .ternary => {
             const third = x.ternaryElse(e);
-            n.lhs = try substIdent(self, x.lhs(e), name, with);
-            n.rhs = try substIdent(self, x.rhs(e), name, with);
-            const t = try substIdent(self, third, name, with);
+            n.lhs = try mapIdents(self, x.lhs(e), ctx);
+            n.rhs = try mapIdents(self, x.rhs(e), ctx);
+            const t = try mapIdents(self, third, ctx);
             if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e) and t == third) return e;
             n.extra = @backingInt(t);
         },
@@ -358,13 +343,13 @@ pub fn substIdent(self: *Flatten, e: Ast.ExprId, name: Ast.StrId, with: Ast.Expr
             const args = try self.ctx.arena.alloc(Ast.ExprId, src.len);
             var changed = false;
             for (src, args) |a, *o| {
-                o.* = try substIdent(self, a, name, with);
+                o.* = try mapIdents(self, a, ctx);
                 changed = changed or o.* != a;
             }
             if (!changed) return e;
             n.extra = try x.addExprList(self.ctx.arena, args);
         },
-        else => return e, // else: literals, dotted names and the analog-only forms hold no genvar an instance's override or connection reads
+        else => return e, // else: literals, dotted names and the analog-only forms hold no identifier a generate override or connection reads
     }
     return x.add(self.ctx.arena, n);
 }
@@ -454,6 +439,10 @@ const Level = struct {
     /// re-pointed any port: the implicit nets are read from these.
     src: []const Ast.Instance,
     gates: []const Ast.ExprId,
+    /// §3.6.5's test: the nets `module` declares, as a port or a net
+    /// declaration. A parameter, variable or genvar is not one, so an actual
+    /// naming one is E0906, not an implicit net.
+    declared: std.AutoHashMapUnmanaged(Ast.StrId, void),
     /// The instance being walked, and for it its generate scheme and the
     /// §6.2.2 array element next to inline, `k` in `lo..hi`.
     idx: usize = 0,
@@ -467,6 +456,13 @@ const Level = struct {
     /// The unit in force above this one (`inlineInstance`'s return), put
     /// back when this level is done; null at the top.
     parent: ?*const Unit = null,
+
+    comptime {
+        // One row per level of the walk's heap stack, so as deep as the
+        // tree; `k`'s i128 sets the 16 B alignment. A budget: the hash
+        // map's safety lock exists in Debug and ReleaseSafe only.
+        std.debug.assert(@sizeOf(Level) <= 160);
+    }
 };
 
 /// The next instance `walkInstances` inlines from `lv`.
@@ -545,7 +541,14 @@ fn enterLevel(self: *Flatten, source_module: *const Ast.ModuleDecl, path: []cons
             try elab_resolve.resolveDiscipline(self, child_path, q, self.unit.rename.get(n) orelse n, conn.main_tok);
         }
     }
-    return .{ .module = module, .path = path, .all = all, .src = src.items, .gates = gates.items };
+    // Read only by `startInstance`, so a unit with no children skips it.
+    var declared: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    if (src.items.len != 0) try declared.ensureTotalCapacity(self.ctx.arena, @intCast(module.ports.len + module.nets.len));
+    if (src.items.len != 0) {
+        for (module.ports) |p| declared.putAssumeCapacity(p.name, {});
+        for (module.nets) |n| declared.putAssumeCapacity(n.name, {});
+    }
+    return .{ .module = module, .path = path, .all = all, .src = src.items, .gates = gates.items, .declared = declared };
 }
 
 /// Advances `lv` to its next instance to inline, doing for each instance on
@@ -597,7 +600,7 @@ fn nextChild(self: *Flatten, lv: *Level, stack: []const Ast.StrId) Error!?Child 
         if (self.dry and elab_names.gateHolds(self, lv.gate)) {
             const kids = try self.tree.getOrPut(self.ctx.arena, path);
             if (!kids.found_existing) kids.value_ptr.* = .empty;
-            try kids.value_ptr.append(self.ctx.arena, .{ .inst = inst.*, .module = child, .path = child_path });
+            try kids.value_ptr.append(self.ctx.arena, .{ .inst = inst, .module = child, .path = child_path });
         }
         return .{ .inst = inst, .child = child, .ps = ps, .path = child_path, .gate = lv.gate };
     }
@@ -620,10 +623,10 @@ fn startInstance(self: *Flatten, lv: *Level) Error!bool {
     // Collected here, not in `inlineInstance`, because only this loop
     // still has `module` in hand; one level down the names are flat.
     // Reads the source's own connections, not `plan`'s segments.
-    if (!auto and idx < module.instances.len) try checkVariableActuals(self, module, &module.instances[idx]);
+    if (!auto and idx < module.instances.len) try checkVariableActuals(self, module, &lv.declared, &module.instances[idx]);
     if (!auto) for (lv.src[idx].ports) |c| {
         const n = elab_names.netRefName(self, c.expr) orelse continue;
-        if (declares(module, n)) continue;
+        if (lv.declared.contains(n)) continue;
         try self.implicit_nets.append(self.ctx.arena, .{
             .name = self.ctx.file.str(n),
             .main_tok = c.main_tok,
@@ -1057,25 +1060,12 @@ fn appendAnalog(self: *Flatten, unit: *const Unit, unit_id: u32, is_initial: boo
     });
 }
 
-// ponytail: binding needs only the connection list and port, not flattening state.
 /// Returns the connection that binds `port`, the i'th declared port, or
 /// null when the list does not mention it (§6.2.2). The first entry decides
 /// between named and ordered binding; a named list takes the first match.
 pub fn connectionFor(inst: *const Ast.Instance, port: Ast.Port, i: usize) ?Ast.PortConn {
     // One binding rule for the walk and for `insert.plan`, which needs the index.
     return inst.ports[elab_insert.connIndex(inst, port, i) orelse return null];
-}
-
-// ponytail: a linear scan per connection, quadratic in one module's
-// declaration count. Build a per-module set if a generated netlist puts
-// thousands of nets and instances in one module.
-/// Returns whether `module` declares a net `name`, as a §6.5 port or a
-/// §3.6.3 net declaration (§3.6.5's test). A parameter, variable or genvar
-/// is not a net, so an actual naming one is E0906, not an implicit net.
-pub fn declares(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
-    for (module.ports) |p| if (p.name == name) return true;
-    for (module.nets) |n| if (n.name == name) return true;
-    return false;
 }
 
 /// §6.5.2.2 "Each port shall be declared as input, output, or inout
@@ -1098,17 +1088,18 @@ pub fn checkPortDirections(self: *Flatten) Error!void {
 /// either the ports or the internal nets of module A." A VARIABLE of A is
 /// neither, so it cannot stand as the actual of B's continuous port: there is
 /// no node for the port to join (§6.5.1 lists the port expressions, every one
-/// of them a net), and it is not an implicit net either (`declares`).
+/// of them a net), and it is not an implicit net either (`declared`, the
+/// nets `module` declares).
 ///
 /// Only a port of CONTINUOUS discipline: a real variable driving a discrete
 /// or `wreal` input is a real EXPRESSION, which §3.7 and IEEE 1364's input
 /// port rules allow, and the mixed-signal kernel decides those.
-fn checkVariableActuals(self: *Flatten, module: *const Ast.ModuleDecl, inst: *const Ast.Instance) Error!void {
+fn checkVariableActuals(self: *Flatten, module: *const Ast.ModuleDecl, declared: *const std.AutoHashMapUnmanaged(Ast.StrId, void), inst: *const Ast.Instance) Error!void {
     const child = elab_names.findModule(self, inst.module) orelse return;
     for (child.ports, 0..) |p, i| {
         const c = connectionFor(inst, p, i) orelse continue;
         const n = elab_names.netRefName(self, c.expr) orelse continue;
-        if (declares(module, n)) continue;
+        if (declared.contains(n)) continue;
         const is_var = for (module.vars) |v| {
             if (v.name == n) break true;
         } else false;
@@ -1189,17 +1180,6 @@ test connectionFor {
     const named: Ast.Instance = .{ .module = a, .name = a, .ports = &.{ .{ .name = b, .expr = e1 }, .{ .name = a, .expr = e2 } } };
     try std.testing.expectEqual(e2, connectionFor(&named, .{ .name = a }, 0).?.expr);
     try std.testing.expectEqual(e1, connectionFor(&named, .{ .name = b }, 1).?.expr);
-}
-
-test declares {
-    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
-    defer f.deinit();
-    try fixture.parse(&f, "module m(p); inout p; electrical p; electrical w; real v; endmodule");
-    const m = &f.file.modules[0];
-    // §3.6.5: a port and a declared net are nets; a variable is not.
-    try std.testing.expect(declares(m, fixture.id(&f.file, "p").?));
-    try std.testing.expect(declares(m, fixture.id(&f.file, "w").?));
-    try std.testing.expect(!declares(m, fixture.id(&f.file, "v").?));
 }
 
 test checkPortDirections {
@@ -1516,4 +1496,82 @@ test "§6.2.2 an instance tree of any finite depth elaborates; a cycle is E0905,
     try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
     try std.testing.expectEqual(@import("diag").Code.E0905, f.bag.at(0).code);
     try std.testing.expectEqualStrings("`ca` → `cb` → `cc` → `ca` closes at `u.v.w[0].x`", f.bag.at(0).message);
+}
+
+test "§6.2.2 an instance array at the top of i64 is one element; a reversed range walks lowest first" {
+    const src =
+        \\module top(p); inout p; electrical p; kid u{s}(p); endmodule
+        \\module kid(a); inout a; electrical a; analog I(a) <+ V(a); endmodule
+    ;
+    const Case = struct { range: []const u8, paths: []const []const u8 };
+    for ([_]Case{
+        // Advancing past the last element must not overflow (`k: i128`).
+        .{ .range = "[9223372036854775807:9223372036854775807]", .paths = &.{"u[9223372036854775807]."} },
+        .{ .range = "[0:1]", .paths = &.{ "u[0].", "u[1]." } },
+        .{ .range = "[-1:-1]", .paths = &.{"u[-1]."} },
+    }) |c| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(src, .{c.range}));
+        const d = try elaborate.elaborate(f.ctx());
+        try std.testing.expectEqual(c.paths.len + 1, d.units.len);
+        for (c.paths, d.units[1..]) |want, u| try std.testing.expectEqualStrings(want, u.path);
+    }
+}
+
+test "§6.6.1 a loop generate that never ends or does not fold inlines nothing and leaves the diagnostic to the unroll" {
+    for ([_][]const u8{
+        "for (i = 0; i < 2; i = i)", // repeats 0 forever
+        "for (i = 0; i < 2; i = i + r)", // the step reads a real variable
+    }) |scheme| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(
+            \\module top(p); inout p; electrical p; genvar i; real r;
+            \\  generate {s} begin : blk kid u(p); end endgenerate
+            \\endmodule
+            \\module kid(a); inout a; electrical a; analog I(a) <+ V(a); endmodule
+        , .{scheme}));
+        const d = try elaborate.elaborate(f.ctx());
+        try std.testing.expectEqual(@as(usize, 1), d.units.len);
+    }
+}
+
+test "§6.6.3 an instance in a named generate block is named through the block; an unnamed one through genblk<n>" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p;
+        \\  generate if (1) begin : g1 kid u(p); end endgenerate
+        \\  generate if (1) begin kid v(p); end endgenerate
+        \\endmodule
+        \\module kid(a); inout a; electrical a; analog I(a) <+ V(a); endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 3), d.units.len);
+    try std.testing.expectEqualStrings("g1.u.", d.units[1].path);
+    try std.testing.expect(std.mem.startsWith(u8, d.units[2].path, "genblk"));
+    try std.testing.expect(std.mem.endsWith(u8, d.units[2].path, ".v."));
+}
+
+test "A.5.4 a UDP instance is never inlined: W0252, and E0239 past A.2.2.3's two delays" {
+    const src =
+        \\primitive inv(o, i); output o; input i; table 0 : 1; 1 : 0; endtable endprimitive
+        \\module top(p); inout p; electrical p; wire a, b; inv {s} g(a, b); analog I(p) <+ V(p); endmodule
+    ;
+    const Case = struct { delay: []const u8, code: @import("diag").Code };
+    for ([_]Case{
+        .{ .delay = "", .code = .W0252 },
+        .{ .delay = "#(1, 2)", .code = .W0252 },
+        .{ .delay = "#(1, 2, 3)", .code = .E0239 },
+    }) |c| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(src, .{c.delay}));
+        if (c.code == .E0239)
+            try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()))
+        else
+            try std.testing.expectEqual(@as(usize, 1), (try elaborate.elaborate(f.ctx())).units.len);
+        try std.testing.expect(fixture.hasCode(&f.bag, c.code));
+    }
 }

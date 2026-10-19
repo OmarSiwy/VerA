@@ -126,7 +126,6 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
     @memset(indices, null);
 
     var explained: std.EnumSet(Code) = .empty;
-
     for (0..bag.count()) |i| {
         try renderOne(bag, scratch, w, opts, bag.at(i), indices, &explained);
     }
@@ -138,11 +137,7 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
     }
     // A `.run` error was raised after the design compiled: it is its own
     // report, as the native runtime prints it, and no compile failure (#72).
-    var compile_errs: u32 = 0;
-    for (0..bag.count()) |i| {
-        const e = bag.at(i);
-        if (e.severity == .err and e.stage != .run) compile_errs += 1;
-    }
+    const compile_errs = bag.err_count - bag.run_err_count;
     if (opts.summary and (compile_errs != 0 or bag.warn_count != 0)) {
         if (compile_errs != 0) {
             try w.print("{s}error{s}: could not compile due to {d} previous error(s)", .{
@@ -181,9 +176,9 @@ fn place(
 ) !?Placed {
     if (span.isNone()) return null;
     const r = bag.locate(span, file);
-    const idx = try lineIndexFor(bag, scratch, indices, r.file);
     const file_text = bag.sourceText(r.file);
     if (file_text.len == 0) return null;
+    const idx = try lineIndexFor(bag, scratch, indices, r.file);
 
     // `r.offset` is in span currency — the comment-STRIPPED text. Everything
     // from here down is measured in the ORIGINAL file: the line shown must be
@@ -192,14 +187,14 @@ fn place(
     // that straddles a stripped comment widens to cover it rather than
     // underlining the wrong bytes.
     const src_off = bag.toSourceOffset(r.file, r.offset);
-    const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset + span.len()));
+    const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset +| span.len()));
     const loc = idx.loc(src_off);
     const line_text = idx.lineText(file_text, loc.line);
     const start_col = displayCol(line_text, loc.col - 1);
 
     // A span that runs past the end of its line is clamped: an underline may
     // not wrap, and the first line is the informative one.
-    const line_end = src_off + @as(u32, @intCast(line_text.len)) - (loc.col - 1);
+    const line_end = (src_off - (loc.col - 1)) + @as(u32, @intCast(line_text.len));
     // A span that STARTS past its line's text (at the '\n' of a "\r\n", or past
     // the end of the file) has `line_end < src_off`: hold the end at the start,
     // so the caret sits just after the line, one column wide.
@@ -246,12 +241,10 @@ fn renderOne(
         try w.print("{s}{s}-->{s} {s}:{d}:{d}\n", .{
             spaces(width), p.gutter, p.reset, bag.fileName(pr.file), pr.line, pr.col + 1,
         });
-    }
 
-    if (primary != null) {
         // One primary plus at most `max_children` labels.
         var pbuf: [diag_entry.max_children + 1]Placed = undefined;
-        pbuf[0] = primary.?;
+        pbuf[0] = pr;
         var n: usize = 1;
         var lbuf: [diag_entry.max_children]diag_entry.Label = undefined;
         for (bag.labels(e, &lbuf)) |l| {
@@ -292,13 +285,11 @@ fn renderOne(
     }
 
     // --- `--explain` hint, once per code ------------------------------------
-    if (opts.explain_hint) {
-        if (!explained.contains(e.code)) {
-            explained.insert(e.code);
-            try w.print("{s}{s} ={s} {s}help{s}: run `vera --explain {s}` for a detailed explanation\n", .{
-                spaces(width), p.gutter, p.reset, p.help, p.reset, e.code.name(),
-            });
-        }
+    if (opts.explain_hint and !explained.contains(e.code)) {
+        explained.insert(e.code);
+        try w.print("{s}{s} ={s} {s}help{s}: run `vera --explain {s}` for a detailed explanation\n", .{
+            spaces(width), p.gutter, p.reset, p.help, p.reset, e.code.name(),
+        });
     }
     try w.writeByte('\n');
 }
@@ -402,7 +393,7 @@ fn renderFix(
     // Same strip-map step as `place`: the patched line drawn is the ORIGINAL,
     // so the cut points must be measured in it.
     const src_off = bag.toSourceOffset(r.file, r.offset);
-    const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset + fix.span.len()));
+    const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset +| fix.span.len()));
     const loc = idx.loc(src_off);
     const line = idx.lineText(file_text, loc.line);
 

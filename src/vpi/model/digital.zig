@@ -127,10 +127,11 @@ pub fn buildDigital(model_gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Des
             if (p.name == .none) continue; // IEEE 1364-2005 A.1.3 a null port names no net
             const at = r.names.get(.{ .scope = eng, .str = p.name });
             try s.ports.append(gpa, @intCast(objects.hot.items.len));
-            try objects.append(try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at));
-            objects.hot.items[objects.hot.items.len - 1].direction = p.direction;
-            objects.hot.items[objects.hot.items.len - 1].port_index = @intCast(k);
-            objects.hot.items[objects.hot.items.len - 1].src_tok = p.main_tok;
+            var o = try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at);
+            o.direction = p.direction;
+            o.port_index = @intCast(k);
+            o.src_tok = p.main_tok;
+            try objects.append(o);
         }
         for (m.nets) |n| {
             const at = r.names.get(.{ .scope = eng, .str = n.name }) orelse continue;
@@ -204,10 +205,11 @@ pub fn buildDigital(model_gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Des
             if (kind != .reg) try s.variables.append(gpa, @intCast(objects.hot.items.len));
             // A time variable is in neither per-type list: its type is its own.
             if (kind != .time_var) try (if (kind == .reg) &s.regs else if (kind == .real_var) &s.reals else &s.integers).append(gpa, @intCast(objects.hot.items.len));
-            try objects.append(try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
+            var o = try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at);
             // IEEE 1364-2005 §4.8: `time` is unsigned, `integer` signed.
-            objects.hot.items[objects.hot.items.len - 1].is_signed = kind != .time_var and (v.is_signed or kind == .integer);
-            objects.hot.items[objects.hot.items.len - 1].src_tok = v.main_tok;
+            o.is_signed = kind != .time_var and (v.is_signed or kind == .integer);
+            o.src_tok = v.main_tok;
+            try objects.append(o);
             if (kind == .reg) try addBits(arena, &objects, r, code.vpiRegBit);
         }
         // §11.6.12 parameters. The engine folds each into a slot of its own
@@ -236,7 +238,7 @@ pub fn buildDigital(model_gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Des
     const udp_defns = try code.udpDefns(gpa, arena, &objects, file, &attrs, &udps);
     var names = try nameTable(gpa, objects.hot.items);
     defer names.deinit(gpa);
-    var decls: model.Decls = try .init(gpa, objects.hot.items, scopes.items.len);
+    var decls = try model.decls(gpa, objects.hot.items, scopes.items.len);
     defer decls.deinit(gpa);
     for (scopes.items, 0..) |*s, i| {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps, .run = r, .engine = s.engine, .attrs = &attrs };

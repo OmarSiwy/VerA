@@ -101,6 +101,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
     // may predate it.
     std.debug.assert(src.len == module.instances.len + gates.len); // `enterLevel`'s, consumed here
     self.seg_up.clearRetainingCapacity();
+    self.seg_index.clearRetainingCapacity();
     var n_ins: usize = 0;
     for (self.ctx.file.connectrules) |cr| n_ins += cr.insertions.len;
     var rules: std.ArrayList(Rule) = try .initCapacity(self.ctx.arena, n_ins);
@@ -122,7 +123,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
             const ci = connIndex(&inst, p, pi) orelse continue;
             const sig = elab_names.netRefName(self, inst.ports[ci].expr) orelse continue;
             const bound = self.unit.rename.get(sig) orelse sig;
-            const upper = self.seg_down.get(try segKey(self, path, sig)) orelse try elab_segment.up(self, module, path, sig, 0);
+            const upper = self.seg_down.getAdapted(elab_names.PathKey{ .path = path, .local = file.str(sig) }, elab_names.PathKey.Context{}) orelse try elab_segment.up(self, module, path, sig, 0);
             const lower = try elab_segment.down(self, child, child_path, p.name, upper);
             try self.seg_down.put(self.ctx.arena, try segKey(self, child_path, p.name), lower);
             if (lower.domain == .unspecified) continue;
@@ -179,7 +180,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
         const base = file.lvalueBase(pt.expr);
         if (base == .none) continue;
         const sig = file.exprs.strOf(base);
-        const upper = self.seg_down.get(try segKey(self, path, sig)) orelse try elab_segment.up(self, module, path, sig, 0);
+        const upper = self.seg_down.getAdapted(elab_names.PathKey{ .path = path, .local = file.str(sig) }, elab_names.PathKey.Context{}) orelse try elab_segment.up(self, module, path, sig, 0);
         if (upper.domain != .continuous) continue;
         // A mixed terminal no bridge can take whole is refused, never left
         // joined to the analog node.

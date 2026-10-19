@@ -125,3 +125,36 @@ pub fn typeCheck(
     try err.writeAll(aw.writer.buffered());
     return 1;
 }
+
+test typeCheck {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const contract = try gpa.print(".zig-cache/tmp/{s}/contract.zig", .{tmp.sub_path});
+    defer gpa.free(contract);
+    // `validate` runs only when the root turns it on, which `check_root` does.
+    try tmp.dir.writeFile(io, .{ .sub_path = "contract.zig", .data =
+        \\pub fn validate(comptime D: type) void {
+        \\    if (!@import("root").vera_validate_contract) @compileError("off");
+        \\    if (!@hasDecl(D, "eval")) @compileError("no eval");
+        \\}
+        \\
+    });
+    var err: Io.Writer.Allocating = .init(gpa);
+    defer err.deinit();
+
+    const good = typeCheck(gpa, io, &err.writer, "zig", contract, "pub fn eval() void {}\n", "dir/good.va") catch |e| switch (e) {
+        // No `zig` on PATH in this environment: nothing to assert.
+        error.FileNotFound => return error.SkipZigTest,
+        else => return e,
+    };
+    try std.testing.expectEqual(@as(?u8, null), good);
+    try std.testing.expectEqual(@as(usize, 0), err.written().len);
+
+    // The contract's own refusal is a failed check, reported on `err` with
+    // the compiler's message and the source path.
+    try std.testing.expectEqual(@as(?u8, 1), try typeCheck(gpa, io, &err.writer, "zig", contract, "pub const x = 1;\n", "dir/bad.va"));
+    try std.testing.expect(std.mem.startsWith(u8, err.written(), "error: dir/bad.va: codegen produced Zig that does not compile"));
+    try std.testing.expect(std.mem.find(u8, err.written(), "no eval") != null);
+}

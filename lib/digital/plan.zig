@@ -3,7 +3,9 @@
 //! under `static` a role per process with its tables: combinational nodes in
 //! topological order with the bits that dirty them, and the watchers of
 //! processes with one fixed event control. Also `stepLocal` for `--state=auto`.
-//! IEEE 1364-2005 §11.4.2 (active events in any order), §6.1, §9.7.2, §9.7.5, §5.2.1.
+//! IEEE 1364-2005 §11.4.2 (active events in any order), §5.2.1/§5.2.2, §6.1,
+//! §9.7.2/§9.7.3/§9.7.5/§9.7.6/§9.7.7, §10.2.2/§10.2.3, §10.3, §17.1.3, §18;
+//! VAMS §9.22.5 (refused).
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("sim").digital.for_emitter.compile;
@@ -12,17 +14,18 @@ const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
-/// Owned by `rt`, which the emitted executable links; decided per slot
-/// here (`Plan.reach`).
-pub const Reach = @import("sim").rt.Reach;
+const rt = @import("sim").rt;
+/// `rt`'s own rows, which the emitted `rt.Design` holds; decided here.
+pub const Reach = rt.Reach;
+const Edge = rt.Edge;
+const Watcher = rt.Watcher;
+const Sense = rt.Sense;
 
 /// `vera --schedule=`: same-time events in the interpreter's FIFO order
 /// (`fifo`), or combinational processes levelized into topological nodes
 /// (`static`, the default; §11.4.2 lets active events run in any order).
 pub const Schedule = enum { fifo, static };
 
-/// §9.7.2 the edge an event term waits for; `any` is a value change.
-pub const Edge = enum { any, posedge, negedge };
 /// One term of an event control, as the native runtime waits on it.
 pub const Term = struct {
     slot: u32,
@@ -55,13 +58,12 @@ pub const Role = union(enum) {
 /// switch's prongs), and its role.
 pub const Proc = struct { entry: u32, pcs: []const u32, role: Role = .general };
 
-/// A triggered process `proc` waiting at `pc` for `edge` of the slot whose
-/// `Plan.watchers` run holds this row.
-pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };
-
-/// Node `node` reads the bits `mask` of plane word `word`: a change there
-/// dirties it, a change anywhere else in the slot does not.
-pub const Sense = struct { node: u32, word: u32, mask: u64 };
+// Emit-time rows, one per wait term and per process, walked once per pass;
+// 3 of Term's and 4 of Proc's bytes are padding no narrower range removes.
+comptime {
+    std.debug.assert(@sizeOf(Term) == 24);
+    std.debug.assert(@sizeOf(Proc) == 32);
+}
 
 /// `build`'s result, the tables `rt.Design` is emitted from, in the
 /// emitter's arena unless a field says otherwise. The `_start` columns are
@@ -119,6 +121,26 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
     try out.append(self.arena, .{ .slot = at, .edge = edge });
 }
 
+/// `out` := the terms the instruction at `pc` waits on when a process
+/// suspends there: an event control (§9.7.2), an `@*` (§9.7.5), a `wait`'s
+/// operands (§9.7.6), an intra-assignment event control (§9.7.7); empty for
+/// every other instruction. Sets `r.scope` to `pc`'s.
+fn waitTerms(self: *Emitter, pc: u32, out: *std.ArrayList(Term)) Error!void {
+    const r = self.r;
+    r.scope = r.code_scope.items[pc];
+    out.clearRetainingCapacity();
+    switch (r.code.items[pc]) {
+        .wait_event => |e| try terms(self, e, out),
+        .wait_slots => |slots| for (slots) |s| try out.append(self.arena, .{ .slot = s, .edge = .any }),
+        .wait_level => |x| for (x.slots) |s| try out.append(self.arena, .{ .slot = s, .edge = .any }),
+        .sample => |x| {
+            const st = r.file.stmt(x.statement).assign;
+            if (!st.timing_is_delay and !compile.parksOnly(st)) try terms(self, st.timing, out);
+        },
+        else => {}, // else: only these four wait on a slot's value
+    }
+}
+
 /// The plan of `procs`; under `static` each one's `role` is set too.
 pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     const r = self.r;
@@ -128,30 +150,10 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     for (0..r.fan_start.len -| 1) |s| watched[s] = r.fan_start[s] != r.fan_start[s + 1];
     var ts: std.ArrayList(Term) = .empty;
     for (procs) |p| for (p.pcs) |pc| {
-        r.scope = r.code_scope.items[pc];
-        switch (r.code.items[pc]) {
-            .wait_event => |e| {
-                ts.clearRetainingCapacity();
-                try terms(self, e, &ts);
-                for (ts.items) |t| @memset(watched[t.slot..][0..t.count], true);
-            },
-            .wait_slots => |slots| for (slots) |s| {
-                watched[s] = true;
-            },
-            .wait_level => |x| for (x.slots) |s| {
-                watched[s] = true;
-            },
-            .sample => |x| {
-                const st = r.file.stmt(x.statement).assign;
-                if (st.timing_is_delay or compile.parksOnly(st)) continue;
-                ts.clearRetainingCapacity();
-                try terms(self, st.timing, &ts);
-                for (ts.items) |t| @memset(watched[t.slot..][0..t.count], true);
-            },
-            // A held slot is never `set`: the store must meet `rt`'s guard.
-            .override_eval => |x| watched[x.slot] = true,
-            else => {}, // else: only these four wait on a slot's value
-        }
+        // A held slot is never `set`: the store must meet `rt`'s guard.
+        if (r.code.items[pc] == .override_eval) watched[r.code.items[pc].override_eval.slot] = true;
+        try waitTerms(self, pc, &ts);
+        for (ts.items) |t| @memset(watched[t.slot..][0..t.count], true);
     };
     // §17.1.3 a change of a slot the monitor reads asks it to print; a
     // monitor may sit in any subroutine, so every one is looked at.
@@ -325,13 +327,8 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     @memset(watch_lists, .empty);
     for (procs) |p| switch (p.role) {
         .triggered => |t| {
-            r.scope = r.code_scope.items[p.entry];
-            ts.clearRetainingCapacity();
-            switch (r.code.items[p.entry]) {
-                .wait_event => |e| try terms(self, e, &ts),
-                .wait_slots => |slots| for (slots) |s| try ts.append(a, .{ .slot = s, .edge = .any }),
-                else => unreachable, // `fixedWait` admits only these two entries
-            }
+            // `fixedWait` admits only a `wait_event` or `wait_slots` entry.
+            try waitTerms(self, p.entry, &ts);
             for (ts.items) |term| try watch_lists[term.slot].append(a, .{ .proc = t, .pc = p.entry + 1, .edge = term.edge });
         },
         .general, .comb => {},
@@ -372,32 +369,10 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
     var ts: std.ArrayList(Term) = .empty;
     for (procs) |p| for (p.pcs) |pc| {
         if (pc == p.entry and p.role != .general) continue;
-        r.scope = r.code_scope.items[pc];
-        switch (r.code.items[pc]) {
-            .wait_event => |e| {
-                ts.clearRetainingCapacity();
-                try terms(self, e, &ts);
-                for (ts.items) |t| for (reach[t.slot..][0..t.count]) |*item| {
-                    item.terms = true;
-                };
-            },
-            .wait_slots => |slots| for (slots) |s| {
-                reach[s].terms = true;
-            },
-            .wait_level => |x| for (x.slots) |s| {
-                reach[s].terms = true;
-            },
-            .sample => |x| {
-                const st = r.file.stmt(x.statement).assign;
-                if (st.timing_is_delay or compile.parksOnly(st)) continue;
-                ts.clearRetainingCapacity();
-                try terms(self, st.timing, &ts);
-                for (ts.items) |t| for (reach[t.slot..][0..t.count]) |*item| {
-                    item.terms = true;
-                };
-            },
-            else => {}, // else: only these four file an event control
-        }
+        try waitTerms(self, pc, &ts);
+        for (ts.items) |t| for (reach[t.slot..][0..t.count]) |*item| {
+            item.terms = true;
+        };
     };
     for (mon) |s| reach[s].mon = true;
     if (emit.dumps(r)) for (reach) |*x| {
@@ -478,12 +453,9 @@ fn fixedWait(self: *Emitter, p: Proc) Error!bool {
     // select term remembers its bits per suspension (`rt.State.watchBits`).
     // ponytail: such a process is general, not triggered; give `Watcher`
     // a bit window if a levelized design needs it.
-    if (self.r.code.items[p.entry] == .wait_event) {
-        self.r.scope = self.r.code_scope.items[p.entry];
-        var ts: std.ArrayList(Term) = .empty;
-        try terms(self, self.r.code.items[p.entry].wait_event, &ts);
-        for (ts.items) |t| if (t.event_select != .none or t.width != 0) return false;
-    }
+    var ts: std.ArrayList(Term) = .empty;
+    try waitTerms(self, p.entry, &ts);
+    for (ts.items) |t| if (t.event_select != .none or t.width != 0) return false;
     for (p.pcs) |pc| {
         if (pc == p.entry) continue;
         switch (self.r.code.items[pc]) {
@@ -774,13 +746,46 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
 
 /// `in[to] &= set`; `to` is queued when that is its first set or changes it.
 fn meet(a: std.mem.Allocator, in: []u64, seen: []bool, work: *std.ArrayList(u32), nw: usize, to: u32, set: []const u64) Error!void {
-    var changed = !seen[to];
+    // The bits `set` clears, or-ed: no branch in the loop.
+    var lost: u64 = 0;
     for (in[to * nw ..][0..nw], set) |*w, s| {
-        changed = changed or w.* & s != w.*;
+        lost |= w.* & ~s;
         w.* &= s;
     }
+    if (!seen[to] or lost != 0) try work.append(a, to);
     seen[to] = true;
-    if (changed) try work.append(a, to);
+}
+
+test meet {
+    // Against the short-circuit loop it replaced: 0..200 words, at offset
+    // `to` 0 and 1 (a start not on a 32-byte line), seen or not.
+    var prng: std.Random.DefaultPrng = .init(1);
+    const rand = prng.random();
+    var work: std.ArrayList(u32) = .empty;
+    defer work.deinit(std.testing.allocator);
+    var in: [400]u64 = undefined;
+    var old: [400]u64 = undefined;
+    var set: [200]u64 = undefined;
+    for (0..201) |nw| for ([_]u32{ 0, 1 }) |to| for ([_]bool{ false, true }) |was| {
+        rand.bytes(std.mem.sliceAsBytes(&in));
+        rand.bytes(std.mem.sliceAsBytes(&set));
+        // Half the cases: `set` covers `in`, so nothing changes.
+        if (rand.boolean()) for (set[0..nw], in[to * nw ..][0..nw]) |*s, w| {
+            s.* |= w;
+        };
+        old = in;
+        var changed = !was;
+        for (old[to * nw ..][0..nw], set[0..nw]) |*w, s| {
+            changed = changed or w.* & s != w.*;
+            w.* &= s;
+        }
+        var seen = [2]bool{ was, was };
+        work.clearRetainingCapacity();
+        try meet(std.testing.allocator, &in, &seen, &work, nw, to, set[0..nw]);
+        try std.testing.expectEqualSlices(u64, &old, &in);
+        try std.testing.expectEqual(changed, work.items.len == 1);
+        try std.testing.expect(seen[to]);
+    };
 }
 
 /// The slot the instruction at `pc` writes whole with a blocking write.
@@ -858,45 +863,6 @@ const StmtReads = struct {
 
     pub fn stmt(_: *StmtReads, _: Ast.StmtId) Error!void {}
 };
-
-/// Test helper: the `.auto` executable root of `source` under `schedule`.
-fn emitted(arena: std.mem.Allocator, source: []const u8, schedule: Schedule) ![]const u8 {
-    var bag = @import("diag").Bag.init(arena);
-    var sink: std.Io.Writer.Discarding = .init(&.{});
-    var r = try @import("sim").digital.elaborate(arena, source, .{}, &bag, &sink.writer);
-    const p = try emit.program(arena, &r, .{ .source = source, .file_name = "<digital>", .include_dirs = &.{}, .language = @import("frontend").token.default_keyword_set }, schedule, .auto);
-    try std.testing.expectEqual(@as(?[]const u8, null), p.fallback);
-    return p.text;
-}
-
-test build {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    // A plain driver nothing waits on is a node of the settle event under
-    // `static`, and stays a queued driver under `fifo`.
-    const comb = "module m; reg a, b; wire w; assign w = a & b; initial begin a = 0; b = 1; #1 a = 1; end endmodule";
-    try std.testing.expect(std.mem.find(u8, try emitted(a, comb, .static), "fn settle(") != null);
-    try std.testing.expect(std.mem.find(u8, try emitted(a, comb, .fifo), "fn settle(") == null);
-    // One whose output a general process's event control waits on stays
-    // queued: a settle event would change it before a process started in
-    // between ran. (`initial @(w)` stops after one pass, so it is general,
-    // not a triggered process the watcher table wakes.)
-    const waited = "module m; reg a; wire w; assign w = a; initial begin a = 0; #1 a = 1; end initial @(w) $display(\"%b\", w); endmodule";
-    try std.testing.expect(std.mem.find(u8, try emitted(a, waited, .static), "fn settle(") == null);
-}
-
-test stepLocal {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    // o (slot 0, one word) is written whole before each read in its one
-    // activation, so its value at a step boundary is never read: dead.
-    try std.testing.expect(std.mem.find(u8, try emitted(a, "module m; reg [7:0] o; initial begin #1 o = 8'd3; o = o + 1; end endmodule", .static), "    .dead = &.{ .{ 0, 1 }, },\n") != null);
-    // The always reads o before writing it in every activation after its
-    // delay: live, and nothing is dead.
-    try std.testing.expect(std.mem.find(u8, try emitted(a, "module m; reg [7:0] o; initial o = 8'd0; always #1 o = o + 1; endmodule", .static), "    .dead = &.{ },\n") != null);
-}
 
 /// Append every slot `e` reads, a function call's result among them.
 fn exprReads(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!bool {

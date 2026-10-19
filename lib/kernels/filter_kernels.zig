@@ -1,5 +1,5 @@
 // §4.5.11 / §4.5.12 filter kernels — EMITTED VERBATIM into every device that
-// uses a `laplace_*` or `zi_*` operator (`codegen.filt_txt` is `@embedFile` of
+// uses a `laplace_*` or `zi_*` operator (`kernel_text.filt_txt` is `@embedFile` of
 // this file) and `@import`ed by codegen's tests and `kernels/test.zig`. One
 // source, so the numerics the tests check are the numerics the device runs.
 //

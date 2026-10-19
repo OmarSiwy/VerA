@@ -15,9 +15,6 @@ const std = @import("std");
 /// The integration method a `.tran` runs (ESPice `core.query.Method`).
 pub const Method = enum { backward_euler, trapezoidal, gear_2 };
 
-// ponytail: platform SIMD width, not hardcoded.
-const W = std.simd.suggestVectorLength(f64) orelse 8;
-
 /// The integration coefficients, ngspice `CKTag[]` (nicomcof.c). `ag0`
 /// multiplies q(x): it is the companion conductance factor (niinteg.c:77) and the
 /// Jacobian axpy weight. `ag2` multiplies q_prev2 and is nonzero for gear-2
@@ -64,28 +61,16 @@ fn lteCoeff(method: Method) f64 {
     };
 }
 
-/// Advances the dynamic current in place, ngspice `NIintegrate` writing
-/// `CKTstate0[qcap+1]`: i <- ag0*(q0 - q1) minus the method's history term.
-/// Serves both the summed row plane (length n) and the per-state tape.
-/// Asserts that `q0`, `q1` (and `q2` for gear-2) are at least as long as
-/// `i_cur`.
-pub fn advanceCurrent(method: Method, i_cur: []f64, q0: []const f64, q1: []const f64, q2: []const f64, c: Coeffs) void {
-    switch (method) {
-        inline else => |m| companionAt(m, false, i_cur, q0, q1, q2, i_cur, c),
-    }
-}
-
 /// The companion kernel over any index space, `d = ag0*(q0 - q1)` minus the
 /// method's history term (ag1*i_prev for trap, ag2*(q1 - q2) for gear):
-///   accumulate = false: out  = d - history   (NIintegrate)
+///   accumulate = false: out  = d - history   (ngspice NIintegrate)
 ///   accumulate = true:  out += d - history   (the Newton residual's dynamic part)
-/// `i_prev` may alias `out`. q2 is read by gear only, i_prev by trap only.
-/// With `accumulate` every element rounds (out + d) - history: the tail is
-/// the w == 1 instantiation of the vector lane, so position in the slice
-/// never changes the bits. Asserts that every input the method reads is at
-/// least as long as `out`.
+/// `i_prev` may alias `out`: with `accumulate` false and `i_prev == out` it
+/// advances the dynamic current in place. q2 is read by gear only, i_prev by
+/// trap only. With `accumulate` every element rounds (out + d) - history.
+/// Asserts that every input the method reads is at least as long as `out`.
 pub fn companionAt(
-    comptime method: Method,
+    method: Method,
     comptime accumulate: bool,
     out: []f64,
     q0: []const f64,
@@ -94,33 +79,26 @@ pub fn companionAt(
     i_prev: []const f64,
     c: Coeffs,
 ) void {
-    var j: usize = 0;
-    while (j + W <= out.len) : (j += W) companionLane(W, method, accumulate, j, out, q0, q1, q2, i_prev, c);
-    while (j < out.len) : (j += 1) companionLane(1, method, accumulate, j, out, q0, q1, q2, i_prev, c);
-}
-
-inline fn companionLane(
-    comptime w: usize,
-    comptime method: Method,
-    comptime accumulate: bool,
-    j: usize,
-    out: []f64,
-    q0: []const f64,
-    q1: []const f64,
-    q2: []const f64,
-    i_prev: []const f64,
-    c: Coeffs,
-) void {
-    const V = @Vector(w, f64);
-    const a: V = q0[j..][0..w].*;
-    const b: V = q1[j..][0..w].*;
-    const d = @as(V, @splat(c.ag0)) * (a - b);
-    const base = if (accumulate) @as(V, out[j..][0..w].*) + d else d;
-    out[j..][0..w].* = switch (method) {
-        .trapezoidal => base - @as(V, @splat(c.ag1)) * @as(V, i_prev[j..][0..w].*),
-        .gear_2 => base - @as(V, @splat(c.ag2)) * (b - @as(V, q2[j..][0..w].*)),
-        .backward_euler => base,
-    };
+    const n = out.len;
+    std.debug.assert(q0.len >= n);
+    std.debug.assert(q1.len >= n);
+    if (method == .gear_2) std.debug.assert(q2.len >= n);
+    if (method == .trapezoidal) std.debug.assert(i_prev.len >= n);
+    // One plain loop per method, so the method's switch is outside it.
+    switch (method) {
+        .backward_euler => for (out, q0[0..n], q1[0..n]) |*o, a, b| {
+            const d = c.ag0 * (a - b);
+            o.* = if (accumulate) o.* + d else d;
+        },
+        .trapezoidal => for (out, q0[0..n], q1[0..n], i_prev[0..n]) |*o, a, b, p| {
+            const d = c.ag0 * (a - b);
+            o.* = (if (accumulate) o.* + d else d) - c.ag1 * p;
+        },
+        .gear_2 => for (out, q0[0..n], q1[0..n], q2[0..n]) |*o, a, b, b2| {
+            const d = c.ag0 * (a - b);
+            o.* = (if (accumulate) o.* + d else d) - c.ag2 * (b - b2);
+        },
+    }
 }
 
 /// Step history and tolerances for one `stepBound`: `dt` is the step just
@@ -129,7 +107,7 @@ pub const LteIn = struct { dt: f64, dt1: f64, dt2: f64, reltol: f64, abstol: f64
 
 /// Returns ngspice CKTterr's next-step bound in seconds, min over every
 /// charge state j of
-///   i_new_j     = what `advanceCurrent` writes under `cur_method`
+///   i_new_j     = what `companionAt` writes under `cur_method`
 ///   tol_j       = max(abstol + reltol*max(|i_new_j|, |i_prev_j|),
 ///                     reltol*max(|q0_j|, |q1_j|, chgtol)/dt)
 ///   del_j       = trtol*tol_j / max(abstol, lteCoeff(method)*|dd_j|)
@@ -141,15 +119,16 @@ pub const LteIn = struct { dt: f64, dt1: f64, dt2: f64, reltol: f64, abstol: f64
 /// probe (dctran.c:901-913) it is the method being probed. `cur_method` and
 /// `c` are what the step integrated with. `q` is the charge history
 /// [cur, prev, prev2, prev3] over one index space (per state or per row).
-/// Each state rounds as cktterr.c does, divisions included, so every `w`
-/// gives the same bits; `w == 1` is the scalar oracle. An empty history
-/// returns infinity. Asserts that `q[1]`, `q[2]`, `i_prev` (and `q[3]` at
-/// order 2) are at least as long as `q[0]`.
-pub fn stepBound(comptime w: usize, method: Method, cur_method: Method, q: [4][]const f64, i_prev: []const f64, c: Coeffs, lte: LteIn) f64 {
-    // Both methods comptime: a runtime switch stayed inside the vector loop.
+/// Each state rounds as cktterr.c does, divisions included, and the min is
+/// exact, so the result does not depend on how the loop is vectorized. A
+/// NaN del_j is skipped, as a float min would. An empty history returns
+/// infinity. Asserts that `q[1]`, `q[2]`, `i_prev` (and `q[3]` at order 2)
+/// are at least as long as `q[0]`.
+pub fn stepBound(method: Method, cur_method: Method, q: [4][]const f64, i_prev: []const f64, c: Coeffs, lte: LteIn) f64 {
+    // Both methods comptime: a runtime switch stayed inside the loop.
     const min_del = switch (method) {
         inline else => |m| switch (cur_method) {
-            inline else => |cm| minDel(w, m, cm, q, i_prev, c, lte),
+            inline else => |cm| minDel(m, cm, q, i_prev, c, lte),
         },
     };
     // sqrt is monotone, so one sqrt of the min equals the min of the sqrts.
@@ -157,51 +136,43 @@ pub fn stepBound(comptime w: usize, method: Method, cur_method: Method, q: [4][]
 }
 
 /// The min over the states of del_j, before the order-2 root.
-fn minDel(comptime w: usize, comptime method: Method, comptime cur_method: Method, q: [4][]const f64, i_prev: []const f64, c: Coeffs, lte: LteIn) f64 {
-    const V = @Vector(w, f64);
-    const dt: V = @splat(lte.dt);
-    const dt1: V = @splat(lte.dt1);
-    const dt2: V = @splat(lte.dt2);
+fn minDel(comptime method: Method, comptime cur_method: Method, q: [4][]const f64, i_prev: []const f64, c: Coeffs, lte: LteIn) f64 {
+    const n = q[0].len;
+    std.debug.assert(q[1].len >= n);
+    std.debug.assert(q[2].len >= n);
+    std.debug.assert(i_prev.len >= n);
+    if (method != .backward_euler) std.debug.assert(q[3].len >= n);
     // cktterr.c's deltmp sums: d0+d1, d1+d2, then (d1+d2)+d0.
-    const sum01: V = @splat(lte.dt + lte.dt1);
-    const sum12: V = @splat(lte.dt1 + lte.dt2);
-    const sum012: V = @splat(lte.dt + (lte.dt1 + lte.dt2));
-    const av: V = @splat(c.ag0);
-    const a2: V = @splat(c.ag2);
-    const a1: V = @splat(c.ag1);
-    const abstol: V = @splat(lte.abstol);
-    const reltol: V = @splat(lte.reltol);
-    const chgtol: V = @splat(lte.chgtol);
-    const trtol: V = @splat(lte.trtol);
-    const coeff: V = @splat(lteCoeff(method));
-    var vmin: V = @splat(std.math.inf(f64));
-    var i: usize = 0;
-    while (i + w <= q[0].len) : (i += w) {
-        const qc: V = q[0][i..][0..w].*;
-        const qp: V = q[1][i..][0..w].*;
-        const qp2: V = q[2][i..][0..w].*;
-        const ip: V = i_prev[i..][0..w].*;
+    const sum01 = lte.dt + lte.dt1;
+    const sum12 = lte.dt1 + lte.dt2;
+    const sum012 = lte.dt + sum12;
+    const coeff = lteCoeff(method);
+    // del_j > 0 (or NaN), so its bit pattern, sign cleared, orders like its
+    // value, and a NaN's sorts above inf's and never wins: an exact min that
+    // vectorizes, where a float `@min` reduction does not. The sign is
+    // cleared because x86's 0/0 is the negative default NaN.
+    // BE reads no q3: q0 stands in, so the loop needs no fourth length.
+    const q3 = if (method == .backward_euler) q[0] else q[3][0..n];
+    var m: i64 = @bitCast(std.math.inf(f64));
+    for (q[0], q[1][0..n], q[2][0..n], q3, i_prev[0..n]) |qc, qp, qp2, qp3, ip| {
         const i_new = switch (cur_method) {
-            .trapezoidal => av * (qc - qp) - a1 * ip,
-            .gear_2 => av * (qc - qp) - a2 * (qp - qp2),
-            .backward_euler => av * (qc - qp),
+            .trapezoidal => c.ag0 * (qc - qp) - c.ag1 * ip,
+            .gear_2 => c.ag0 * (qc - qp) - c.ag2 * (qp - qp2),
+            .backward_euler => c.ag0 * (qc - qp),
         };
-        const volttol = abstol + reltol * @max(@abs(i_new), @abs(ip));
-        const chargetol = reltol * @max(@max(@abs(qc), @abs(qp)), chgtol) / dt;
+        const volttol = lte.abstol + lte.reltol * @max(@abs(i_new), @abs(ip));
+        const chargetol = lte.reltol * @max(@max(@abs(qc), @abs(qp)), lte.chgtol) / lte.dt;
         const tol = @max(volttol, chargetol);
-        const f12 = (qp - qp2) / dt1;
-        var dd = ((qc - qp) / dt - f12) / sum01;
+        const f12 = (qp - qp2) / lte.dt1;
+        var dd = ((qc - qp) / lte.dt - f12) / sum01;
         if (method != .backward_euler) {
-            const qp3: V = q[3][i..][0..w].*;
-            const f123 = (f12 - (qp2 - qp3) / dt2) / sum12;
+            const f123 = (f12 - (qp2 - qp3) / lte.dt2) / sum12;
             dd = (dd - f123) / sum012;
         }
-        vmin = @min(vmin, trtol * tol / @max(abstol, coeff * @abs(dd)));
+        const del = lte.trtol * tol / @max(lte.abstol, coeff * @abs(dd));
+        m = @min(m, @as(i64, @bitCast(@as(u64, @bitCast(del)) & 0x7fff_ffff_ffff_ffff)));
     }
-    const min_del = @reduce(.Min, vmin);
-    if (comptime w == 1) return min_del;
-    const tail: [4][]const f64 = .{ q[0][i..], q[1][i..], q[2][i..], q[3][i..] };
-    return @min(min_del, minDel(1, method, cur_method, tail, i_prev[i..], c, lte));
+    return @bitCast(m);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,40 +236,66 @@ test "companionAt differentiates q = t^2 as each method should" {
     try testing.expectEqual(16, out[0]);
 }
 
-test advanceCurrent {
+test "companionAt converges at each method's order on q = sin(t) (method of manufactured solutions)" {
+    // dq/dt(1) = cos(1). Halving h divides backward Euler's error by 2 and
+    // the trapezoid's and BDF2's by 4. The trapezoid gets the exact
+    // previous current, so only its own truncation error shows.
+    const t = 1.0;
+    const orders = [_]f64{ 1, 2, 2 };
+    for (methods, orders) |m, order| {
+        var err: [2]f64 = undefined;
+        for (&err, [_]f64{ 1e-2, 5e-3 }) |*e, h| {
+            var out: [1]f64 = undefined;
+            const q = [3]f64{ @sin(t), @sin(t - h), @sin(t - 2 * h) };
+            companionAt(m, false, &out, q[0..1], q[1..2], q[2..3], &.{@cos(t - h)}, coeffs(m, h, h, 0.5));
+            e.* = @abs(out[0] - @cos(t));
+        }
+        try testing.expectApproxEqAbs(std.math.pow(f64, 2, order), err[0] / err[1], 0.1);
+    }
+}
+
+test "companionAt advances the dynamic current in place" {
     // In place, the trapezoid's previous current is its own output slot:
     // i = 2/2·(9 - 1) - 2 = 6, as above.
     var i_cur = [_]f64{2};
-    advanceCurrent(.trapezoidal, &i_cur, &.{9}, &.{1}, &.{0}, coeffs(.trapezoidal, 2, 1, 0.5));
+    companionAt(.trapezoidal, false, &i_cur, &.{9}, &.{1}, &.{0}, &i_cur, coeffs(.trapezoidal, 2, 1, 0.5));
     try testing.expectEqual(6, i_cur[0]);
 }
 
-test "companionAt gives each element the same bits wherever it sits" {
+/// Fills `row` with `scale`-sized values and, one in 32, a NaN or an Inf.
+fn fillEdgy(rnd: std.Random, row: []f64, scale: f64) void {
+    for (row) |*e| e.* = switch (rnd.uintLessThan(u8, 32)) {
+        0 => std.math.nan(f64),
+        1 => -std.math.inf(f64),
+        else => (rnd.float(f64) - 0.5) * scale,
+    };
+}
+
+const len_max = 200;
+const pad = 3; // misaligned starts
+
+test "companionAt equals its one-element instantiation bit for bit: lengths 0..200, every start, NaN/Inf" {
     var prng: std.Random.DefaultPrng = .init(5);
     const rnd = prng.random();
-    const len_max = 40; // past 3 vectors at every width up to 8
-    var q: [3][len_max]f64 = undefined;
-    var ip: [len_max]f64 = undefined;
-    var out: [len_max]f64 = undefined;
-    var base: [len_max]f64 = undefined;
-    for (&q) |*row| {
-        for (row) |*e| e.* = rnd.float(f64) * 1e-12;
-    }
-    for (&ip, &base) |*e, *b| {
-        e.* = rnd.float(f64) - 0.5;
-        b.* = rnd.float(f64);
-    }
-    inline for (methods) |m| inline for (.{ false, true }) |acc| {
+    var q: [3][len_max + pad]f64 = undefined;
+    var ip: [len_max + pad]f64 = undefined;
+    var out: [len_max + pad]f64 = undefined;
+    var base: [len_max + pad]f64 = undefined;
+    for (&q) |*row| fillEdgy(rnd, row, 1e-12);
+    fillEdgy(rnd, &ip, 1);
+    fillEdgy(rnd, &base, 1);
+    inline for (.{ false, true }) |acc| for (methods) |m| {
         const c = coeffs(m, 1e-9, 3e-9, 0.5);
-        for (0..len_max + 1) |len| {
-            @memcpy(out[0..len], base[0..len]);
-            companionAt(m, acc, out[0..len], q[0][0..len], q[1][0..len], q[2][0..len], ip[0..len], c);
-            for (0..len) |j| {
+        for (0..len_max + 1) |len| for (0..pad + 1) |off| {
+            const e = off + len;
+            @memcpy(out[off..e], base[off..e]);
+            companionAt(m, acc, out[off..e], q[0][off..e], q[1][off..e], q[2][off..e], ip[off..e], c);
+            for (off..e) |j| {
                 var one = [1]f64{base[j]};
                 companionAt(m, acc, &one, q[0][j..][0..1], q[1][j..][0..1], q[2][j..][0..1], ip[j..][0..1], c);
                 try expectBits(one[0], out[j]);
             }
-        }
+        };
     };
 }
 
@@ -308,39 +305,44 @@ test stepBound {
     // i_new = 1·(4 - 1) = 3; tol = max(1e-12 + 1e-3·3, 1e-3·4/1) = 4e-3;
     // del = 7·4e-3 / max(1e-12, 0.5·1) = 0.056.
     const be = coeffs(.backward_euler, 1, 1, 0.5);
-    const d1 = stepBound(1, .backward_euler, .backward_euler, .{ &.{4}, &.{1}, &.{0}, &.{0} }, &.{0}, be, lte);
+    const d1 = stepBound(.backward_euler, .backward_euler, .{ &.{4}, &.{1}, &.{0}, &.{0} }, &.{0}, be, lte);
     try testing.expectApproxEqRel(@as(f64, 0.056), d1, 1e-14);
     // Order 2 on q = t^3 at t = 3, 2, 1, 0: the third divided difference
     // is 1. Trapezoid: i_prev = q'(2) = 12, i_new = 2·(27 - 8) - 12 = 26;
     // tol = max(1e-12 + 1e-3·26, 1e-3·27/1) = 0.027;
     // del = sqrt(7·0.027 / 0.08333333333) = 1.5059880477914558.
     const tr = coeffs(.trapezoidal, 1, 1, 0.5);
-    const d2 = stepBound(1, .trapezoidal, .trapezoidal, .{ &.{27}, &.{8}, &.{1}, &.{0} }, &.{12}, tr, lte);
+    const d2 = stepBound(.trapezoidal, .trapezoidal, .{ &.{27}, &.{8}, &.{1}, &.{0} }, &.{12}, tr, lte);
     try testing.expectApproxEqRel(@as(f64, 1.5059880477914558), d2, 1e-14);
     // q = t^2 at t = 2, 1, 0, -1 has no third difference: only the
     // abstol floor bounds it, sqrt(7·6e-3 / 1e-12) ≈ 2e5.
-    const flat = stepBound(1, .trapezoidal, .trapezoidal, .{ &.{4}, &.{1}, &.{0}, &.{1} }, &.{0}, tr, lte);
+    const flat = stepBound(.trapezoidal, .trapezoidal, .{ &.{4}, &.{1}, &.{0}, &.{1} }, &.{0}, tr, lte);
     try testing.expect(flat > 1e5);
     // No states: nothing bounds the step.
-    try testing.expectEqual(std.math.inf(f64), stepBound(W, .gear_2, .gear_2, .{ &.{}, &.{}, &.{}, &.{} }, &.{}, tr, lte));
+    try testing.expectEqual(std.math.inf(f64), stepBound(.gear_2, .gear_2, .{ &.{}, &.{}, &.{}, &.{} }, &.{}, tr, lte));
 }
 
-test "stepBound's vector body equals its scalar instantiation bit for bit" {
+test "stepBound equals the strict min of its one-state bounds: lengths 0..200, every start, NaN/Inf" {
     var prng: std.Random.DefaultPrng = .init(9);
     const rnd = prng.random();
-    const len_max = 40;
-    var q: [4][len_max]f64 = undefined;
-    var ip: [len_max]f64 = undefined;
-    for (&q) |*row| {
-        for (row) |*e| e.* = (rnd.float(f64) - 0.5) * 1e-12;
-    }
-    for (&ip) |*e| e.* = (rnd.float(f64) - 0.5) * 1e-3;
+    var q: [4][len_max + pad]f64 = undefined;
+    var ip: [len_max + pad]f64 = undefined;
+    for (&q) |*row| fillEdgy(rnd, row, 1e-12);
+    fillEdgy(rnd, &ip, 1e-3);
     const lte: LteIn = .{ .dt = 1e-9, .dt1 = 2e-9, .dt2 = 1.5e-9, .reltol = 1e-3, .abstol = 1e-12, .chgtol = 1e-14, .trtol = 7 };
-    for (1..len_max + 1) |len| {
-        const hist: [4][]const f64 = .{ q[0][0..len], q[1][0..len], q[2][0..len], q[3][0..len] };
+    for (0..len_max + 1) |len| for (0..pad + 1) |off| {
+        const e = off + len;
+        const hist: [4][]const f64 = .{ q[0][off..e], q[1][off..e], q[2][off..e], q[3][off..e] };
         for (methods) |m| for (methods) |cm| {
             const c = coeffs(cm, lte.dt, lte.dt1, 0.5);
-            try expectBits(stepBound(1, m, cm, hist, ip[0..len], c, lte), stepBound(W, m, cm, hist, ip[0..len], c, lte));
+            // A float min that skips NaN, over one state at a time.
+            var want = std.math.inf(f64);
+            for (off..e) |j| {
+                const one: [4][]const f64 = .{ q[0][j..][0..1], q[1][j..][0..1], q[2][j..][0..1], q[3][j..][0..1] };
+                const d = stepBound(m, cm, one, ip[j..][0..1], c, lte);
+                if (d < want) want = d;
+            }
+            try expectBits(want, stepBound(m, cm, hist, ip[off..e], c, lte));
         };
-    }
+    };
 }

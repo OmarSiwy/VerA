@@ -29,8 +29,12 @@ fn bytes(p: anytype) []u8 {
 /// no settle, nonblocking row, changed slot, subroutine frame, unwind or
 /// override in progress.
 pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
-    std.debug.assert(s.settle == .idle and s.rows.items.len == 0 and s.changed.items.len == 0 and
-        s.depth == 0 and s.unwind == null and !s.overriding);
+    std.debug.assert(s.settle == .idle);
+    std.debug.assert(s.rows.items.len == 0);
+    std.debug.assert(s.changed.items.len == 0);
+    std.debug.assert(s.depth == 0);
+    std.debug.assert(s.unwind == null);
+    std.debug.assert(!s.overriding);
     try s.sched.save(w);
     inline for (fixed) |f| try w.writeAll(bytes(&@field(s, f)));
     if (!root.logic.two) try w.writeAll(bytes(&s.x));

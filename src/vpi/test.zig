@@ -193,6 +193,25 @@ test "an abandoned iterator is freed by vpi_free_object" {
     try std.testing.expectEqual(@as(usize, 0), root.design.?.iters.count());
 }
 
+test "§12.23: an empty handle set is NULL with no error; an iterator has its type, its iterated type and nothing else" {
+    var res = try openSource(nested_src);
+    defer res.deinit();
+    defer close();
+
+    // No callback is registered and no systf: NULL, and no error (§12.23).
+    try std.testing.expect(vpi_iterate(callback.vpiCallback, null) == null);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    const itr = vpi_iterate(vpiNet, vpi_handle_by_name("top", null));
+    defer _ = vpi_free_object(itr);
+    try std.testing.expectEqual(vpiIterator, vpi_get(vpiType, itr));
+    try std.testing.expectEqual(vpiNet, vpi_get(root.vpiIteratorType, itr));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_get(root.vpiProtected, itr));
+    try std.testing.expectEqual(vpiUndefined, vpi_get(vpiSize, itr));
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    // A property of no object, scheduled-event or iterator alike.
+    try std.testing.expectEqual(vpiUndefined, vpi_get(value.vpiScheduled, itr));
+}
+
 test "the §6.7 upward scope search, and absolute names" {
     var res = try openSource(nested_src);
     defer res.deinit();

@@ -413,6 +413,13 @@ pub const Tag = enum(u8) {
 pub const Stored = struct {
     tag: Tag,
     start: u32,
+
+    // Stored SoA (`Lexer.TokenList`), so a row is these 5 bytes: one tag byte
+    // and one offset.
+    comptime {
+        std.debug.assert(@sizeOf(Tag) == 1);
+        std.debug.assert(@typeInfo(Stored).@"struct".field_names.len == 2);
+    }
 };
 
 /// Every annex B keyword spelling and its tag (LRM §2.8.2), built at comptime
@@ -864,8 +871,6 @@ test "layout invariant: keyword block is contiguous and last" {
     }
     try std.testing.expect(!isKeyword(.eof));
     try std.testing.expect(!isKeyword(.attr_close));
-    // Tag must stay in u8 (enum(u8)); this fails loudly if the set outgrows it.
-    try std.testing.expect(@typeInfo(Tag).@"enum".field_names.len <= 256);
 }
 
 test "keyword_map: spelling round-trips through lexeme" {
@@ -1019,12 +1024,6 @@ test "call groups match annex A.8.2/A.6.5 exactly and are disjoint" {
     try std.testing.expect(isFilterFunction(.kw_limexp) and !isMathFunction(.kw_limexp));
     // §5.10.2 step events are their own Ast tags, not `event_function`s.
     try std.testing.expect(!isEventFunction(.kw_initial_step) and !isEventFunction(.kw_final_step));
-}
-
-test "Stored stays 5 bytes of payload (SoA columns, no len field)" {
-    try std.testing.expectEqual(2, @typeInfo(Stored).@"struct".field_names.len);
-    try std.testing.expectEqual(1, @sizeOf(Tag));
-    try std.testing.expectEqual(4, @sizeOf(u32));
 }
 
 test "§10.6 every version_specifier round-trips; nothing else is one" {

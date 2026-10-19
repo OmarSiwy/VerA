@@ -28,11 +28,11 @@
 //! appending `params`/`aliasparams`); `defparams`, `seed_params`,
 //! `paramset_defparams` and `system_checks` are `override.zig`'s (`run`
 //! adds the top's card-read checks); `nets`, `disc_of`, `segs`,
-//! `port_resolved`, `ooc`, `ooc_inits` and `signal_disciplines` are
-//! `resolve.zig`'s (`addNet` is the only net append); `inserts`,
-//! `unbridged` and `seg_down` are `insert.zig`'s, and `seg_up` is
-//! `segment.zig`'s memo, which `insert.plan` clears per level;
-//! `selection_params` and `ps_outputs` are `paramset.zig`'s (which also
+//! `port_resolved`, `redecided`, `ooc`, `ooc_inits` and
+//! `signal_disciplines` are `resolve.zig`'s (`addNet` is the only net
+//! append); `inserts`, `unbridged` and `seg_down` are `insert.zig`'s, and
+//! `seg_up` and `seg_index` are `segment.zig`'s memos, which `insert.plan`
+//! clears per level; `selection_params` and `ps_outputs` are `paramset.zig`'s (which also
 //! appends paramset variables to `vars`); `attribute_disciplines`,
 //! `local_accesses`, `pending_attributes` and `expression_aliases` are
 //! written by `clone.zig` during the clone, the attribute rows settled by
@@ -240,11 +240,18 @@ pub const Inserted = @import("base").Inserted;
 
 /// One instance the first walk elaborated (`Flatten.tree`): the instance as
 /// its parent wrote it (an array element or a generate copy as the walk
-/// named it), the module it elaborated to, and its own instance path.
-const TreeKid = struct {
-    inst: Ast.Instance,
+/// named it, a row of that level's arena list), the module it elaborated to,
+/// and its own instance path.
+pub const TreeKid = struct {
+    inst: *const Ast.Instance,
     module: *const Ast.ModuleDecl,
     path: []const u8,
+
+    comptime {
+        // One row per instance of the dry walk: two pointers and a slice,
+        // not a 72 B copy of the instance.
+        std.debug.assert(@sizeOf(TreeKid) == 32);
+    }
 };
 
 /// An out-of-context discipline declaration (`Flatten.ooc`), with its token
@@ -539,6 +546,10 @@ pub const Flatten = struct {
     /// `Design.selection_params`: flat parameters a §6.4.2 overload choice
     /// read. May repeat a name; readers treat it as a set.
     selection_params: std.ArrayList(Ast.StrId) = .empty,
+    /// `names.paramValue`'s cache, one row per `params` row
+    /// (`names.syncParamValues`), and how many leading rows it has folded.
+    param_values: std.ArrayList(elab_names.ParamValue) = .empty,
+    param_warm: usize = 0,
     /// `Design.system_checks`, as overrides are composed.
     system_checks: std.ArrayList(SystemCheck) = .empty,
 
@@ -569,6 +580,10 @@ pub const Flatten = struct {
     /// `segment.up`'s answers for the level `insert.plan` is planning, keyed
     /// by instance path and local net name.
     seg_up: std.StringHashMapUnmanaged(elab_segment.Seg) = .empty,
+    /// `segment.indexOf`'s answers for the same level, keyed by instance
+    /// path: each net's declared discipline and child ports. Cleared with
+    /// `seg_up`.
+    seg_index: std.StringHashMapUnmanaged(elab_segment.UnitIndex) = .empty,
     /// The modules `segment.up` is below right now, outermost first: a
     /// source instance list that instantiates one of them again is a cycle
     /// the walk refuses (E0905), so the climb stops there.
@@ -612,6 +627,10 @@ pub const Flatten = struct {
     /// declaration: §3.6.5's implicit nets, the set §7.4.4.1's continuous-wins
     /// rule may overrule without overruling a real declaration.
     port_resolved: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
+    /// The `port_resolved` nets whose discipline was overruled after their
+    /// net row was added (§7.4.4.1's upgrade, F.2.1 4.b's `resolveto`):
+    /// `resolve.resolveMultiCandidates` rewrites their rows once, at the end.
+    redecided: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
 
     /// E.3.2's LAST source, deferred: every bound port of an analog primitive,
     /// whose own `electrical` is only "the default analog primitive" and so
@@ -762,6 +781,7 @@ pub const Flatten = struct {
         // flat namespace, so an identity rename would rewrite every expression
         // in the device for no change.
         try self.params.appendSlice(self.ctx.arena, top.params);
+        try elab_names.syncParamValues(self);
         try elab_override.applyTopDefparams(self);
         try self.aliasparams.appendSlice(self.ctx.arena, top.aliasparams);
         for (top.aliasparams) |al| if (elab_alias.original(self.ctx.file, top.params, top.aliasparams, al)) |target|
@@ -1547,6 +1567,58 @@ test pickTop {
     defer k.deinit();
     try parse(&k, "connectmodule c(a, d); inout a, d; endmodule");
     try std.testing.expectError(error.NoModule, elaborate(k.ctx()));
+}
+
+test "every allocation elaborate makes can fail, and the failure is OutOfMemory, not a swallowed or leaked one" {
+    // One design through every walk: the §12.8.1 seed walk (an upward
+    // defparam), the §7.8.4 dry walk (connectrules), a paramset, an instance
+    // array, a loop and an if-generate, $mfactor and an out-of-context net.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\connectmodule a2d(el, cm); input el; output cm; ca el; dd cm; endmodule
+        \\connectrules r; connect a2d; endconnectrules
+        \\module din(d); input d; dd d; endmodule
+        \\module leaf(a); inout a; ca a; parameter real g = 1.0; analog I(a) <+ g * V(a); endmodule
+        \\paramset ps leaf; parameter real x = 2.0 from [0:9]; .g = x; endparamset
+        \\module mid(a); inout a; ca a; parameter integer n = 2; genvar i; ca w;
+        \\  leaf #(.$mfactor(2.0)) arr[n-1:0](a);
+        \\  generate for (i = 0; i < n; i = i + 1) begin : blk leaf #(.g(i)) u(a); end endgenerate
+        \\  generate if (n > 1) begin ps #(.x(3.0)) p(a); end endgenerate
+        \\  defparam top.k.g = 4.0;
+        \\endmodule
+        \\module top(p); inout p; ca p; mid m(p); leaf k(p); din d(p); ca m.w; endmodule
+    );
+    try std.testing.expectEqual(@as(usize, 0), f.bag.count());
+    // `checkAllAllocationFailures` over an arena would fail only the arena's
+    // chunk requests, so the failing allocator sits ABOVE a fresh arena:
+    // allocation i of `elaborate` itself fails, for every i, and the arena
+    // takes back whatever the failed run built.
+    const base = f.file.base.?;
+    var i: usize = 0;
+    while (true) : (i += 1) {
+        var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        defer arena.deinit();
+        var failing: std.testing.FailingAllocator = .init(arena.allocator(), .{ .fail_index = i });
+        var file = base.overlay(.{});
+        var bag: diag.Bag = .init(arena.allocator());
+        var c = f.ctx();
+        c.arena = failing.allocator();
+        c.file = &file;
+        c.bag = &bag;
+        if (elaborate(c)) |_| {
+            // No failure was induced and swallowed on the way to a design.
+            try std.testing.expect(!failing.has_induced_failure);
+            break;
+        } else |e| {
+            try std.testing.expectEqual(error.OutOfMemory, e);
+            try std.testing.expect(failing.has_induced_failure);
+        }
+    }
+    // The design allocates; the loop above failed each of those.
+    try std.testing.expect(i > 100);
 }
 
 test {

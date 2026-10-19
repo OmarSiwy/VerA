@@ -10,6 +10,7 @@ const std = @import("std");
 const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
 const kt = @import("kernel_text.zig");
+const gen_mask = @import("mask.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_host = @import("host_expr.zig");
@@ -96,8 +97,8 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.out.appendSlice(self.gpa, kt.math_txt);
     try self.out.appendSlice(self.gpa, if (self.display == .emit) kt.domain_report_txt else kt.domain_quiet_txt);
     try self.out.appendSlice(self.gpa, kt.ops_txt);
-    try self.out.appendSlice(self.gpa, kt.family_txt);
-    try self.out.appendSlice(self.gpa, kt.family_dev_txt);
+    try self.out.appendSlice(self.gpa, try wideText(self, kt.family_txt));
+    try self.out.appendSlice(self.gpa, try wideText(self, kt.family_dev_txt));
     if (f.timer) try depublish(self.gpa, &self.out, kt.timer_txt);
     if (f.hist) try depublish(self.gpa, &self.out, kt.hist_txt);
     if (f.hist_quad) try self.out.appendSlice(self.gpa, kt.hist_quad_txt);
@@ -110,7 +111,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // helper block is written private and made public by `publish`.
     if (f.filt) try depublish(self.gpa, &self.out, kt.filt_txt);
     if (f.ac) try self.out.appendSlice(self.gpa, kt.ac_txt);
-    if (f.ac) try self.out.appendSlice(self.gpa, kt.ac_fam_txt);
+    if (f.ac) try self.out.appendSlice(self.gpa, try wideText(self, kt.ac_fam_txt));
     // §9.4.3's padding helper serves §9.5.3 too (`$sformat` is the same
     // formatter), so a device that never prints still needs it to format.
     if (f.strs) try self.out.appendSlice(self.gpa, kt.display_txt);
@@ -155,7 +156,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
     try gen_state.emitDelays(self);
-    try gen_dispatch.emitDerivReads(self, if (self.limits.calls.len != 0) cg_limit.liveSets(self).writes else 0);
+    try gen_dispatch.emitDerivReads(self, if (self.limits.calls.len != 0) (try cg_limit.liveSets(self)).writes else self.zero_mask);
     const k = try gen_family.constant(self);
     if (k.g or k.c) try self.w(
         \\/// ∂eval/∂x (`g`) and ∂q/∂x (`c`) do not depend on x: a host may build
@@ -206,6 +207,25 @@ pub fn batchLead(self: *const Gen) bool {
     return batchOk(self) and self.float.lead;
 }
 
+/// `txt` with its masks typed `contract.MaskOf(n_u)`: `txt` itself up to 64
+/// unknowns, whose masks are the `u64` it is written in; past them, every
+/// `u64` mask parameter widened and the two "past 64, every lane" fallbacks
+/// gone, since each unknown has its own bit. Arena-owned.
+fn wideText(self: *Gen, txt: []const u8) Error![]const u8 {
+    if (self.mw == 1) return txt;
+    var tb: [16]u8 = undefined;
+    const ty = gen_mask.typeName(&tb, self.names.n_u);
+    const pairs = [_][2][]const u8{
+        .{ "comptime m: u64", try self.arena.print("comptime m: {s}", .{ty}) },
+        .{ "comptime _: u64", try self.arena.print("comptime _: {s}", .{ty}) },
+        .{ "if (u < 64) @as(u64, 1) << u else ~@as(u64, 0)", try self.arena.print("@as({s}, 1) << u", .{ty}) },
+        .{ "comptime u >= 64 or (zdr >> u) & 1 != 0", "comptime (zdr >> u) & 1 != 0" },
+    };
+    var out = txt;
+    for (pairs) |pr| out = try std.mem.replaceOwned(u8, self.arena, out, pr[0], pr[1]);
+    return out;
+}
+
 /// Builds `Output.prelude` (the file-scope prologue of a `u/<key>.zig`) and
 /// `Output.helpers` (`h.zig`). Unit files alias the helpers rather than
 /// re-emitting them, so `zig` analyses each once. The aliases are gated on the
@@ -251,7 +271,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     try publish(self.arena, &hz, if (self.display == .emit) kt.domain_report_txt else kt.domain_quiet_txt);
     try publish(self.arena, &hz, kt.ops_txt);
     try hz.appendSlice(self.arena, "const zdr = contract.derivReads(@import(\"device.zig\"));\n");
-    try publish(self.arena, &hz, kt.family_txt);
+    try publish(self.arena, &hz, try wideText(self, kt.family_txt));
     if (f.timer) try publish(self.arena, &hz, kt.timer_txt);
     if (f.hist) try publish(self.arena, &hz, kt.hist_txt);
     if (f.hist_quad) try publish(self.arena, &hz, kt.hist_quad_txt);

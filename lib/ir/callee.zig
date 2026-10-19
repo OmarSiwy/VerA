@@ -5,12 +5,12 @@
 //! user system function (§12.32) or a typo W0852 reports; such a call keeps
 //! its raw name in `Mir.InstData.call.name`. `Mir.emitCall` mints it.
 //!
-//! LRM clauses this file's code cites: §2.9, §3.3, §4.5, §4.5.3, §4.5.4,
-//! §4.5.7, §4.5.13, §4.5.14, §4.6, §4.6.4, §5.10, §5.10.2, §5.10.3, §9.4,
+//! LRM clauses this file's code cites: §2.9, §3.2, §3.3, §4.5, §4.5.3, §4.5.4,
+//! §4.5.7, §4.5.13, §4.5.14, §4.6, §4.6.4, §5.10, §5.10.2, §5.10.3, §7.3.1, §9.4,
 //! §9.4.1, §9.4.3, §9.5, §9.5.1, §9.5.2, §9.5.3, §9.5.4.1, §9.5.4.2, §9.5.5,
-//! §9.5.6, §9.5.7, §9.5.8, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.10, §9.11, §9.13,
+//! §9.5.6, §9.5.7, §9.5.8, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.10, §9.11, §9.12, §9.13,
 //! §9.14, §9.15, §9.17, §9.18, §9.19, §9.21, §12.22.2.
-//! IEEE 1364-2005 clauses cited: §5.4, §17.10, §17.10.2, §17.11.
+//! IEEE 1364-2005 clauses cited: §5.4, §5.5, §17.1, §17.10, §17.10.2, §17.11.
 
 const std = @import("std");
 const op = @import("op.zig");
@@ -462,22 +462,22 @@ comptime {
 
 /// Returns the value type of a call to `c`.
 pub fn ty(c: Callee) Ty {
-    return table.get(c).ty;
+    return table.getPtrConst(c).ty;
 }
 
 /// Returns the argument count a source call to `c` may carry.
 pub fn arity(c: Callee) Arity {
-    return table.get(c).args;
+    return table.getPtrConst(c).args;
 }
 
 /// Returns the descriptor argument's position, or null if `c` takes none.
 pub fn fdArg(c: Callee) ?u3 {
-    return table.get(c).fd;
+    return table.getPtrConst(c).fd;
 }
 
 /// Returns the §9.4/§9.5/§9.7 task family of `c`.
 pub fn family(c: Callee) Family {
-    return table.get(c).family;
+    return table.getPtrConst(c).family;
 }
 
 /// §9.5: every descriptor spelling that reaches the emitter.
@@ -716,7 +716,7 @@ test "Callee.synthetic: lowering's own `$` spellings, never an LRM name" {
 test "callee: the task families agree with the descriptor, format and operator facts" {
     for (std.enums.values(Callee)) |c| {
         errdefer std.debug.print("callee `{s}`\n", .{@tagName(c)});
-        const info = table.get(c);
+        const info = table.getPtrConst(c).*;
         // §9.5.1/§9.5.2: only a file call has a descriptor argument.
         if (info.fd != null) try std.testing.expect(isFileCall(c));
         // §9.4.3 formats the display tasks; §9.5.2 makes the file output

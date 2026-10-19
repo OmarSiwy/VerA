@@ -27,7 +27,7 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 const fixed = @hasDecl(D, "nextBreakpoint");
 const controlled = @hasField(D.U, "period_ctl");
 const body_controlled = @hasField(D.U, "body");
@@ -45,7 +45,7 @@ const Run = struct {
 
     fn init(model: D.Model) Run {
         var r: Run = .{ .model = model };
-        if (@hasDecl(D, "setup")) D.setup(S.Of(0), &r.model);
+        if (@hasDecl(D, "setup")) D.setup(S, &r.model);
         if (@hasDecl(D, "setupInstance")) D.setupInstance(&r.model, &r.inst);
         r.state = D.initState(&r.model, &r.inst);
         return r;

@@ -47,7 +47,7 @@ pub fn parseDottedPath(self: *Parser, allow_index: bool, unfolded: ?*std.ArrayLi
             self.pos += 1;
             const idx = try parse_expr.parseExpr(self);
             _ = try self.expect(.rbracket);
-            if (constIndex(self, idx)) |k| {
+            if (try self.walk(tok, constIndex, .{ self, idx })) |k| {
                 var buf: [24]u8 = undefined;
                 try joined.appendSlice(self.arena, std.mem.print(&buf, "[{d}]", .{k}) catch unreachable);
             } else if (unfolded) |list| {
@@ -74,12 +74,6 @@ pub fn parseDottedPath(self: *Parser, allow_index: bool, unfolded: ?*std.ArrayLi
     return self.file.intern(self.arena, joined.items);
 }
 
-/// `parseDottedPath` with no `unfolded` list, so an index that does not fold
-/// is E0231. A config `instance` clause and a net declaration's name.
-pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
-    return parseDottedPath(self, allow_index, null);
-}
-
 /// A digital parse's `[ … ] .` at the cursor: IEEE 1364-2005 §12.5's instance
 /// select inside a hierarchical name, not a bit-select.
 pub fn instanceSelectAhead(self: *const Parser) bool {
@@ -99,7 +93,7 @@ pub fn instanceSelectAhead(self: *const Parser) bool {
 }
 
 /// `name[k]` for §12.5's instance select `[ constant_expression ]` at the
-/// cursor, spelled as `parseDottedName` spells it; E0231 when it does not
+/// cursor, spelled as `parseDottedPath` spells it; E0231 when it does not
 /// fold.
 pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
     const tok = self.pos;

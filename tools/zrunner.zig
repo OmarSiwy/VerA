@@ -131,22 +131,12 @@ fn runTests(
     for (tests, 0..) |test_fn, idx| {
         const t = Test.wrap(test_fn);
 
-        // Run tests:
         report.test_results[idx] = try t.run(arena, io, environ);
-
         switch (report.test_results[idx]) {
-            .passed => {
-                report.passed_count += 1;
-            },
-            .failed => {
-                report.failed_count += 1;
-            },
-            .skipped => {
-                report.skipped_count += 1;
-            },
-            .xfailed => {
-                report.xfail_count += 1;
-            },
+            .passed => report.passed_count += 1,
+            .failed => report.failed_count += 1,
+            .skipped => report.skipped_count += 1,
+            .xfailed => report.xfail_count += 1,
         }
         report.is_mem_leak = report.is_mem_leak or report.test_results[idx].isMemoryLeak();
     }
@@ -167,12 +157,8 @@ fn writeTestResults(
     var grouped_tests: std.array_hash_map.String(std.ArrayList(TestResult)) = .empty;
     for (report.test_results) |test_result| {
         const gop = try grouped_tests.getOrPut(alloc, test_result.@"test"().namespace);
-        if (gop.found_existing) {
-            try gop.value_ptr.append(alloc, test_result);
-        } else {
-            gop.value_ptr.* = .empty;
-            try gop.value_ptr.append(alloc, test_result);
-        }
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(alloc, test_result);
     }
 
     var written: usize = 0;
@@ -193,32 +179,23 @@ fn writeTestResults(
 /// One test and the namespace it was declared in.
 const Test = struct {
     /// The part after `.test.`/`.decltest.`; borrows `test_fn.name`.
-    name: []const u8 = undefined,
+    name: []const u8,
     /// The part before it, the namespace the report groups by.
-    namespace: []const u8 = undefined,
+    namespace: []const u8,
     test_fn: TestFn,
 
     /// Splits `test_fn.name` at `.test.` or `.decltest.`; both halves borrow it.
     pub fn wrap(test_fn: TestFn) Test {
-        var instance: Test = .{ .test_fn = test_fn };
-        // Split a full name of a test in two parts:
-        //  1. a namespace of the test;
-        //  2. a name of the test.
-        //
-        // Possible templates of full test name are expected:
-        //  - "<namespace>.test.<test name>"
-        //  - "<namespace>.decltest.<test name>"
-        //
-        // The LAST marker splits: a file named test.zig is a namespace
-        // ending in `.test` (`ns.test.test.<name>`, `ns.test.decltest.<decl>`).
+        // "<namespace>.test.<name>" or "<namespace>.decltest.<name>". The
+        // LAST marker splits: a file named test.zig is a namespace ending in
+        // `.test` (`ns.test.test.<name>`, `ns.test.decltest.<decl>`).
         const names: [2][]const u8 = if (std.mem.findLast(u8, test_fn.name, ".decltest.")) |idx|
             .{ test_fn.name[0..idx], test_fn.name[idx + 10 ..] }
         else if (std.mem.findLast(u8, test_fn.name, ".test.")) |idx|
             .{ test_fn.name[0..idx], test_fn.name[idx + 6 ..] }
         else
             .{ "", test_fn.name };
-        instance.namespace = names[0];
-        instance.name = names[1];
+        const instance: Test = .{ .namespace = names[0], .name = names[1], .test_fn = test_fn };
         // Both halves borrow `test_fn.name` and never overlap.
         assert(instance.namespace.len + instance.name.len <= test_fn.name.len);
         assert(std.mem.endsWith(u8, test_fn.name, instance.name));
@@ -536,4 +513,22 @@ test "TestResult: the test it is for, and a skip never leaks" {
     const xfailed: TestResult = .{ .xfailed = .{ .@"test" = t, .is_mem_leak = true } };
     // An xfail excuses the failure, never the leak.
     try std.testing.expect(xfailed.isMemoryLeak());
+}
+
+test "fuzz: the corpus, then the empty input, then fuzz_runs seeded inputs no longer than fuzz_max_len" {
+    const Seen = struct {
+        n: usize = 0,
+        first: [2]usize = .{ 99, 99 },
+        longest: usize = 0,
+        fn one(s: *@This(), smith: *std.testing.Smith) anyerror!void {
+            if (s.n < 2) s.first[s.n] = smith.in.?.len;
+            s.longest = @max(s.longest, smith.in.?.len);
+            s.n += 1;
+        }
+    };
+    var seen: Seen = .{};
+    try fuzz(&seen, Seen.one, .{ .corpus = &.{"abc"} });
+    try std.testing.expectEqual(@as(usize, 1 + 1 + fuzz_runs), seen.n);
+    try std.testing.expectEqual([2]usize{ 3, 0 }, seen.first);
+    try std.testing.expect(seen.longest <= fuzz_max_len);
 }

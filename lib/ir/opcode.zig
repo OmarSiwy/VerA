@@ -4,7 +4,7 @@
 //! compile until its row exists. Target spellings live in
 //! `lib/device/codegen/opcode_zig.zig`: lib/ir does not know the target is Zig.
 //!
-//! LRM clauses this file's code cites: §2.7, §3.2, §4.2, §4.2.1.1, §4.2.1.2,
+//! LRM clauses this file's code cites: §2.7, §3.2, §3.2.2, §4.2, §4.2.1.1, §4.2.1.2,
 //! §4.2.1.3, §4.2.4, §4.2.5, §4.2.7, §4.2.8, §4.2.9, §4.2.11, §4.3.1, §4.3.2.
 
 const std = @import("std");
@@ -178,7 +178,7 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
 
 /// Returns `op`'s row of `table`.
 pub fn get(op: Opcode) Info {
-    return table.get(op);
+    return table.getPtrConst(op).*;
 }
 
 /// Returns `op` over already-folded operands, through the one constant kernel: the
@@ -189,7 +189,7 @@ pub fn get(op: Opcode) Info {
 /// Asserts that `args.len` is that operand count for every opcode that
 /// folds (a `.none` row reads no operand and takes any slice).
 pub fn fold(op: Opcode, args: []const Const) ?Const {
-    return switch (table.get(op).fold) {
+    return switch (table.getPtrConst(op).fold) {
         .none => null,
         .identity => blk: {
             std.debug.assert(args.len == 1);
@@ -264,13 +264,13 @@ test "fold: an opcode's type, not its operands', decides the kernel's rule" {
 
 /// Returns the diagnostic spelling of `op` (see `Info.label`).
 pub fn label(op: Opcode) []const u8 {
-    return table.get(op).label orelse @tagName(op);
+    return table.getPtrConst(op).label orelse @tagName(op);
 }
 
 test "opcode: each row's flags agree with the LRM typing and its fold's shape" {
     for (std.enums.values(Opcode)) |op| {
         errdefer std.debug.print("opcode `{s}`\n", .{@tagName(op)});
-        const info = table.get(op);
+        const info = table.getPtrConst(op).*;
         // §4.2.5/§4.2.7/§4.2.8: a 0/1 result is an integer, and only a 0/1
         // result is a predicate.
         if (info.bool01) try std.testing.expect(info.int);

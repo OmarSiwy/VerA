@@ -12,40 +12,58 @@ const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
+const gen_mask = @import("mask.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
 
-/// Returns the unknowns `v` may depend on: its mask before `zdr` cuts it.
-pub fn mask(self: *const Gen, v: Mir.Value) u64 {
-    return self.an.unknownDeps(v);
+/// Returns the unknowns `v` may depend on, `Gen.mw` words: its mask before
+/// `zdr` cuts it.
+pub fn mask(self: *const Gen, v: Mir.Value) []const u64 {
+    const i: usize = @backingInt(self.an.rv(v));
+    return self.deps[i * self.mw ..][0..self.mw];
+}
+
+/// Returns the unknowns whose derivative reaches `v` through a
+/// frequency-dependent operator (`Analysis.acDynDeps`), `Gen.mw` words.
+pub fn acDyn(self: *const Gen, v: Mir.Value) []const u64 {
+    if (self.acdyn.len == 0) return self.zero_mask;
+    const i: usize = @backingInt(self.an.rv(v));
+    return self.acdyn[i * self.mw ..][0..self.mw];
 }
 
 /// Writes `zTo(S, 0x<m>, `; the caller writes the value and the closing `)`.
-pub fn openTo(self: *Gen, m: u64) Error!void {
-    try self.b("zTo(S, 0x{x}, ", .{m});
+pub fn openTo(self: *Gen, m: []const u64) Error!void {
+    try self.b("zTo(S, 0x{f}, ", .{gen_mask.hex(m, false)});
 }
 
 /// Returns `zOf(S, 0x<m>)` as text for a `{s}` slot, allocated in the arena.
-pub fn ofText(self: *Gen, m: u64) Error![]const u8 {
-    return self.arena.print("zOf(S, 0x{x})", .{m});
+pub fn ofText(self: *Gen, m: []const u64) Error![]const u8 {
+    return self.arena.print("zOf(S, 0x{f})", .{gen_mask.hex(m, false)});
 }
 
 /// Records one real the shared core declares at mask `m`, for `lane_masks`.
 /// Ignored in `setup` (value scalar) and in a `probeBody` dry run.
-pub fn note(self: *Gen, m: u64) Error!void {
+pub fn note(self: *Gen, m: []const u64) Error!void {
     if (self.probe.active or !self.emitting_common or self.su.mode) return;
     try self.fam_masks.append(self.arena, m);
 }
 
 /// Writes `lane_masks`: every distinct mask a real was declared at, cut to
 /// `deriv_reads`, with its use count. A host sizes its lane types from it.
-/// Sorts `fam_masks` in place.
-pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
+/// Sorts `fam_masks` in place. Not written past 64 unknowns, where a
+/// `contract.LaneUse` mask cannot hold one; `contract.laneMasks` then gives
+/// one entry, `deriv_reads`.
+pub fn emitLaneMasks(self: *Gen, deriv_reads: []const u64) Error!void {
+    if (self.mw > 1) return;
     const ms = self.fam_masks.items;
-    for (ms) |*m| m.* &= deriv_reads;
+    for (ms) |*m| {
+        const c = try gen_mask.dupe(self.arena, m.*);
+        gen_mask.andIn(c, deriv_reads);
+        m.* = c;
+    }
     // The cut leaves every mask a subset of `deriv_reads`.
-    for (ms) |m| assert(m & ~deriv_reads == 0);
-    std.mem.sort(u64, ms, {}, std.sort.asc(u64));
+    for (ms) |m| assert(gen_mask.subset(m, deriv_reads));
+    std.mem.sort([]const u64, ms, {}, gen_mask.lessThan);
     try self.w(
         \\/// Every distinct `Of` mask a real in this device is declared at, and
         \\/// how many are (`contract.laneMasks`).
@@ -56,9 +74,9 @@ pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
     var uses_total: usize = 0;
     while (i < ms.len) {
         var j = i;
-        while (j < ms.len and ms[j] == ms[i]) j += 1;
+        while (j < ms.len and gen_mask.eql(ms[j], ms[i])) j += 1;
         assert(j > i);
-        try self.w("    .{{ .mask = 0x{x}, .uses = {d} }},\n", .{ ms[i], j - i });
+        try self.w("    .{{ .mask = 0x{f}, .uses = {d} }},\n", .{ gen_mask.hex(ms[i], false), j - i });
         uses_total += j - i;
         i = j;
     }

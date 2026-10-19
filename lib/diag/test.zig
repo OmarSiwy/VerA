@@ -727,7 +727,8 @@ test "bag: a diagnostic known to be dropped interns nothing" {
     try bag.add(.lower, .E0313, .at(1000), "{s}", .{"never formatted"});
     try std.testing.expectEqual(pool, bag.string_bytes.items.len);
     try std.testing.expectEqual(@as(u32, 1), bag.suppressed);
-    try std.testing.expectEqual(@as(u32, diag_bag.max_entries), bag.err_count);
+    // Counted, though dropped unformatted.
+    try std.testing.expectEqual(@as(u32, diag_bag.max_entries + 1), bag.err_count);
 }
 
 test "bag: dedupe keys on code and start only, and the first one stays" {
@@ -958,17 +959,18 @@ fn bagModelOne(_: void, s: *std.testing.Smith) anyerror!void {
         const start = s.index(32);
         try bag.add(.lower, codes[c], .{ .start = @intCast(start), .end = @intCast(start + 1) }, "", .{});
         if (level[c] == .allow) continue;
-        if (kept >= diag_bag.max_entries) {
-            supp += 1;
-            continue;
-        }
         if (seen[c][start]) {
             dups += 1;
             continue;
         }
+        // Counted whether the cap keeps the row or drops it.
+        if (level[c] == .warn) warns += 1 else errs += 1;
+        if (kept >= diag_bag.max_entries) {
+            supp += 1;
+            continue;
+        }
         seen[c][start] = true;
         kept += 1;
-        if (level[c] == .warn) warns += 1 else errs += 1;
     }
     try std.testing.expectEqual(kept, bag.count());
     try std.testing.expectEqual(supp, bag.suppressed);
@@ -1472,7 +1474,9 @@ fn renderAnyOne(_: void, s: *std.testing.Smith) anyerror!void {
     var bag = diag_bag.Bag.init(arena);
     try bag.setSingleFile("f.va", text);
 
-    const hi: u32 = @intCast(text.len + 4);
+    // Now and then out to maxInt(u32): a span no stage should make, which
+    // must still render rather than overflow.
+    const hi: u32 = if (s.boolWeighted(7, 1)) @intCast(text.len + 4) else std.math.maxInt(u32);
     var n: usize = 0;
     while (n < 80 and !s.eos()) : (n += 1) {
         const a = s.valueRangeAtMost(u32, 0, hi);
@@ -1536,4 +1540,76 @@ test "every catalogue citation is a clause, an annex, or an IEEE 1364-2005 claus
             std.mem.startsWith(u8, lrm, "IEEE 1364-2005 ");
         try std.testing.expect(ok);
     }
+}
+
+test "render: a span out to maxInt(u32) over stripped text clamps, never overflows" {
+    // Offsets come from every stage; one bad end must cost a wide caret, not
+    // an integer-overflow panic in the strip map (`toSourceOffset`).
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag_bag.Bag.init(arena);
+    _ = try bag.addFile("m.va", "abc /* c */ def\n");
+    bag.setStrippedText(.root, "abc   def\n", &.{.{ .out = 5, .src = 11 }});
+
+    const max = std.math.maxInt(u32);
+    var b = bag.build(.lower, .E0313, .{ .start = 6, .end = max });
+    b.suggest(.{ .span = .{ .start = 6, .end = max }, .replacement = "x" }, "h", .{});
+    try b.emit();
+    try bag.add(.lower, .E0207, .{ .start = max - 1, .end = max }, "", .{});
+    // No trailing newline: the last line has text past any offset.
+    const f1 = try bag.addFile("n.va", "xy");
+    var c = bag.build(.preprocess, .E0101, .{ .start = max - 1, .end = max });
+    c.inFile(f1);
+    try c.emit();
+
+    const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
+    try std.testing.expect(std.mem.find(u8, out, " --> m.va:1:13\n") != null);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try diag_render.renderJson(&bag, &aw.writer);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.countScalar(u8, aw.writer.buffered(), '\n'));
+}
+
+test "every code an explanation cites exists" {
+    // A cross-reference ("see E0572") is the reader's next `--explain`; a
+    // typo or a dropped code would send them nowhere.
+    for (0..@typeInfo(diag.Code).@"enum".field_names.len) |i| {
+        const text = diag.info(@fromBackingInt(@intCast(i))).explain;
+        for (0..text.len -| 4) |k| {
+            if (text[k] != 'E' and text[k] != 'W') continue;
+            if (k > 0 and std.ascii.isAlphanumeric(text[k - 1])) continue;
+            const word = text[k..][0..5];
+            if (!std.ascii.isDigit(word[1]) or !std.ascii.isDigit(word[4])) continue;
+            if (k + 5 < text.len and std.ascii.isAlphanumeric(text[k + 5])) continue;
+            if (std.meta.stringToEnum(diag.Code, word) == null) {
+                std.debug.print("{s} cites {s}\n", .{ diag.Code.name(@fromBackingInt(@intCast(i))), word });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "render: the summary counts the errors the cap dropped, and one fails the bag" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A full bag of warnings, then an error past the cap: the compilation
+    // still failed, and the summary says so.
+    var bag = diag_bag.Bag.init(arena);
+    for (0..diag_bag.max_entries) |i| try bag.add(.proof, .W0650, .at(@intCast(i + 1)), "", .{});
+    try bag.add(.lower, .E0313, .at(1000), "", .{});
+    try bag.add(.run, .E1157, .at(1001), "", .{}); // a run error, dropped: no compile error
+    try bag.add(.proof, .W0651, .at(1002), "", .{});
+    try std.testing.expect(bag.failed());
+    try std.testing.expect(std.mem.endsWith(u8, try renderToString(&bag, .{ .explain_hint = false }),
+        \\warning: 3 further diagnostic(s) not shown (limit 64)
+        \\error: could not compile due to 1 previous error(s); 65 warning(s) emitted
+        \\
+    ));
+
+    // Every error counts, kept or dropped.
+    var errs = diag_bag.Bag.init(arena);
+    for (0..diag_bag.max_entries + 2) |i| try errs.add(.lower, .E0313, .at(@intCast(i + 1)), "", .{});
+    try std.testing.expect(std.mem.endsWith(u8, try renderToString(&errs, .{ .explain_hint = false }), "\nerror: could not compile due to 66 previous error(s)\n"));
 }

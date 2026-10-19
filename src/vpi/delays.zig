@@ -252,7 +252,7 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
             return;
         }
         ticks[k] = run.ticksOf(t, obj) orelse return;
-        units[k] = if (t.type == callback.vpiScaledRealTime) t.real else @floatFromInt(ticks[k]);
+        units[k] = if (t.type == callback.vpiScaledRealTime) t.real else run.unitsOf(ticks[k], obj);
         if (pulse == 3) for (1..3) |p| {
             const lt = d.da[element(k, p, mtm, pulse)];
             const same = if (lt.type == callback.vpiSimTime) lt.high == t.high and lt.low == t.low else lt.real == t.real;
@@ -280,10 +280,9 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
         return;
     }
     // What vpi_get_delays reads back: the written delays, in the module's
-    // unit when given scaled.
-    const d_objs = &root.design.?;
-    const idx = (@intFromPtr(o) - @intFromPtr(d_objs.objects.ptr)) / @sizeOf(root.Obj);
-    d_objs.objects[idx].delays = d_objs.arena.allocator().dupe(f64, units[0..n]) catch {
+    // unit however they were given.
+    const design = &root.design.?;
+    design.objects[objIndex(o)].delays = design.arena.allocator().dupe(f64, units[0..n]) catch {
         root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
         return;
     };
@@ -346,6 +345,7 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) bool {
         return false;
     };
     for (out, 0..) |*v, k| v.* = d.da[element(k, 0, mtm, pulse)].real;
+    for (out) |v| if (!isDelay(v)) return notDelay(v);
     const idx = objIndex(o);
     // §12.29: a put with pulsere_flag sets a path's limits; one without
     // leaves them.
@@ -356,6 +356,8 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) bool {
         for (0..n) |k| {
             reject[k] = d.da[element(k, 1, mtm, pulse)].real;
             err[k] = d.da[element(k, 2, mtm, pulse)].real;
+            if (!isDelay(reject[k])) return notDelay(reject[k]);
+            if (!isDelay(err[k])) return notDelay(err[k]);
         }
         limits.put(std.heap.smp_allocator, idx, .{ .reject = reject, .err = err }) catch return noMem();
     }
@@ -377,6 +379,17 @@ fn putEngineLimits(obj: root.vpiHandle, o: *const root.Obj, d: *const Delay) voi
     const scope = root.design.?.scopes[o.owner.get() orelse 0].engine;
     if (!r.tchkLimits(scope, o.src_tok, ticks[0..n]))
         root.fail("NODRIVER", "vpi_put_delays: the engine holds no timing check for that object", .{});
+}
+
+/// Whether `v` is a delay a put may hold: finite and not negative. The
+/// engine's puts get this from `run.ticksOf`; the model's puts never call it.
+fn isDelay(v: f64) bool {
+    return std.math.isFinite(v) and v >= 0;
+}
+
+fn notDelay(v: f64) bool {
+    root.fail("BADDELAY", "vpi_put_delays: {d} is not a delay", .{v});
+    return false;
 }
 
 fn noMem() bool {
@@ -506,6 +519,10 @@ fn putPathDelays(m: *InterModPath, delay_p: ?*Delay) void {
     var got: [3]f64 = undefined;
     for (got[0..n], 0..) |*v, k| {
         v.* = d.da[element(k, 0, mtm, pulse)].real;
+        if (!isDelay(v.*)) {
+            _ = notDelay(v.*);
+            return;
+        }
         if (pulse != 3) continue;
         for (1..3) |p| {
             if (d.da[element(k, p, mtm, pulse)].real == v.*) continue;

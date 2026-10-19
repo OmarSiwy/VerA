@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
 const Analysis = @import("analysis.zig");
 const Input = @import("input.zig").Input;
@@ -152,7 +151,7 @@ fn callInvariant(in: Input, d: anytype) bool {
         // the card; a published homotopy knob (gmin, gdev, sourceScaleFactor)
         // is invariant within a solve, and the host re-runs `setup` after
         // writing one (`setup_simparams` lists which).
-        .@"$simparam" => !Lower.simparamIsRuntime(strArg(in, d.args, 0) orelse return false),
+        .@"$simparam" => !Lowered.simparamIsRuntime(strArg(in, d.args, 0) orelse return false),
         // IEEE 1364 §17.11 math and the §9.11/§9.12.1 conversions: pure.
         .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln", .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil" => true,
         .@"$sin", .@"$cos", .@"$tan", .@"$asin", .@"$acos", .@"$atan" => true,
@@ -519,7 +518,7 @@ fn callTimepoint(in: Input, d: anytype) bool {
 ///     also when an incoming edge's predecessor ends in, or is control-
 ///     dependent on, a varying branch: `if (V(a) > 0) y = 1; else y = 2;`.
 ///     Inside, every branch is checked itself, so data suffices.
-pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
+pub fn timepointVarying(in: Input, t: Lowered.TpBlock) Error!?Mir.Value {
     const a = in.arena;
     const nb = in.an.nb;
     const nv = in.an.nv;
@@ -642,18 +641,19 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *const Lowered) E
     const an = try Analysis.build(arena, mir, lowered);
     const in: Input = .{ .arena = arena, .mir = mir, .an = &an, .lowered = lowered };
     const s = try solve(in, false);
-    var merges: std.ArrayList(Mir.Inst) = .empty;
+    // At most one merge per instruction: sized once, never grown.
+    var merges: std.ArrayList(Mir.Inst) = try .initCapacity(arena, mir.insts.len);
     for (0..an.nb) |bi| {
         var it = mir.blockInsts(@fromBackingInt(@intCast(bi)));
         while (it.next()) |inst| switch (mir.instOp(inst)) {
-            .phi, .select => try merges.append(arena, inst),
+            .phi, .select => merges.appendAssumeCapacity(inst),
             else => {}, // else: only a phi or a select merges a held value with a write
         };
     }
     const web = try arena.alloc(bool, an.nv);
     const keep = try arena.alloc(bool, held.len);
     for (held, keep) |h, *k| {
-        k.* = h.why != .unless_invariant or try observed(in, s, merges.items, web, h.seed);
+        k.* = h.why != .unless_invariant or observed(in, s, merges.items, web, h.seed);
         if (k.*) continue;
         // `.unless_invariant` is a scalar's reason only: `holdArray` rows
         // are `.event`, so no `mem_arrays` row is left pointing here.
@@ -694,7 +694,7 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *const Lowered) E
 }
 
 /// Does a merge of `seed`'s forward web vary from one evaluation to the next?
-fn observed(in: Input, s: Sinv, merges: []const Mir.Inst, web: []bool, seed: Mir.Value) Error!bool {
+fn observed(in: Input, s: Sinv, merges: []const Mir.Inst, web: []bool, seed: Mir.Value) bool {
     const mir = in.mir;
     const an = in.an;
     @memset(web, false);
@@ -871,4 +871,44 @@ test "pruneHeld leaves a module with no card-conditional retention untouched" {
     try std.testing.expectEqual(@as(usize, 1), f.lowered.held_vars.items.len);
     try std.testing.expectEqual(n_insts, f.mir.insts.len);
     try std.testing.expect(!f.mir.hasAlias(seed));
+}
+
+test "timepointVarying: a probe inside the statement varies; the time and held state do not" {
+    // entry: jump miss; miss: v = <x> * 2; jump join. `x` is a probe, then
+    // `$abstime`, then a held read: only the first moves between iterations.
+    for ([_]?[]const u8{ null, "$abstime", "$held_real" }) |callee| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{"a"});
+        defer f.deinit();
+        const a = f.alloc();
+        const miss = try f.mir.addBlock(a);
+        const join = try f.mir.addBlock(a);
+        _ = try f.mir.emitJump(a, .entry, miss);
+        const x = if (callee) |c| try f.mir.emitCall(a, miss, try f.mir.internString(a, c), if (c[1] == 'h') &.{.zero} else &.{}) else try f.probe(0);
+        const v = try f.mir.emit(a, miss, .fmul, &.{ x, .f_two });
+        _ = try f.mir.emitJump(a, miss, join);
+        const an = try f.analysis();
+        const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+        const got = try timepointVarying(in, .{ .tok = 0, .miss = miss, .join = join });
+        try std.testing.expectEqual(if (callee == null) @as(?Mir.Value, v) else null, got);
+    }
+}
+
+test "pruneHeld: a held slot read only under card-fixed control is aliased to its initializer and dropped" {
+    // entry: s = $held_real(0) (`.unless_invariant`), k = s + 1. Nothing
+    // merges `s` with a write, so no card can observe the slot.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const seed = try f.call("$held_real", &.{.zero});
+    const k = try f.mir.emit(a, .entry, .fadd, &.{ seed, .f_one });
+    try f.lowered.held_vars.append(a, .{ .name = "s", .ty = .real, .init = .f_two, .seed = seed, .final = seed, .why = .unless_invariant });
+    const keep = (try pruneHeld(a, &f.mir, &f.lowered)).?;
+    try std.testing.expectEqualSlices(bool, &.{false}, keep);
+    try std.testing.expectEqual(Mir.Value.f_two, f.mir.resolveAlias(seed));
+    // The seed row left its block's chain; its user still reads through it.
+    var it = f.mir.blockInsts(.entry);
+    while (it.next()) |inst| try std.testing.expect(f.mir.instResult(inst) != seed);
+    try std.testing.expectEqual(seed, f.mir.instData(f.mir.valueDef(k).inst_result).binary.lhs);
 }

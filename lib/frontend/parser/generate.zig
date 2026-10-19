@@ -207,7 +207,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     blk.vars = gb.vars.items;
     blk.body = body.items;
 
-    try b.ports.appendSlice(self.arena, gb.ports.items);
+    for (gb.ports.items) |p| try parse_module.addPort(self, b, p);
     try b.aliasparams.appendSlice(self.arena, gb.aliasparams.items);
     // A digital parse keeps the block's nets on the block (§12.4: one set per
     // loop iteration, in the block's scope); the analog pipeline hoists them.
@@ -309,7 +309,7 @@ fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
 /// modules make these linear scans hot.
 fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
     for (b.aliasparams.items) |a| if (a.alias == name) return true;
-    return nameIn(Ast.Port, b.ports.items, name) or
+    return b.port_index.contains(name) or
         nameIn(Ast.ParamDecl, b.params.items, name) or
         nameIn(Ast.VarDecl, b.vars.items, name) or
         nameIn(Ast.NetDecl, b.nets.items, name) or

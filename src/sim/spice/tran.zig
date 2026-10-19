@@ -6,7 +6,7 @@
 //! 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d: `simulate`, `TranHook`, the
 //! MODEINITPRED predictor and `almostEqualUlps`. Adapted: the system is one
 //! VerA device (`circuit.Circuit`) with fixed-size planes, so the scratch is
-//! on the stack and nothing allocates; the stdpp predictor pipeline is its
+//! on the stack and nothing allocates; the predictor is a
 //! plain loop; a recorded point goes to `recorder.record(t, x)`. Not taken:
 //! `.tran uic` and `tstart`, the per-state LTE tape (`q_tape`, `vera_lte`:
 //! the LTE runs over the row plane, ESPice's own fallback), transmission-line
@@ -72,12 +72,10 @@ fn TranHook(comptime C: type) type {
 
         /// Stamps the planes at `x` and adds the companion's dynamic current
         /// to the residual rows (converger hook).
-        pub fn assemble(self: Self, ckt: *C, x: []const f64, t: f64) void {
-            ckt.eval(x, t);
+        pub fn assemble(self: Self, ckt: *C, x: []const f64) void {
+            ckt.eval(x);
             if (C.has_charge) {
-                switch (self.method) {
-                    inline else => |m| integrator.companionAt(m, true, &ckt.rhs, &ckt.q_vec, self.q_prev, self.q_prev2, self.i_prev, self.c),
-                }
+                integrator.companionAt(self.method, true, &ckt.rhs, &ckt.q_vec, self.q_prev, self.q_prev2, self.i_prev, self.c);
             }
         }
 
@@ -126,7 +124,7 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
     if (has_charge) {
         // No setSimState first: q_prev must be the charge the operating point
         // saw, so this eval runs in the static state op.solve left behind.
-        ckt.eval(x, 0);
+        ckt.eval(x);
         // A flat q(0) history makes every divided difference vanish, so LTE
         // control runs from the first step.
         for (q_hist[1..]) |q| @memcpy(q, &ckt.q_vec);
@@ -214,8 +212,8 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
             .residual_tol = std.math.inf(f64),
         };
         ckt.reject_at = null;
-        const nr = converger.newton(ckt, ws, trial, t + dt, nr_opts, hook) catch
-            converger.Result{ .converged = false, .iterations = 0, .max_dx = 0 };
+        const nr = converger.newton(ckt, ws, trial, nr_opts, hook) catch
+            converger.Result{ .converged = false, .iterations = 0 };
 
         if (!nr.converged) {
             // Restore FSM devices to the last accepted state.
@@ -253,7 +251,7 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
 
         if (has_charge) {
             // CKTterr reads the charge of the published point.
-            ckt.evalQ(trial, t + dt);
+            ckt.evalQ(trial);
             @memcpy(q_hist[0], &ckt.q_vec);
             // Taken before the ring rotation below.
             const lq: [4][]const f64 = .{ q_hist[0], q_hist[1], q_hist[2], q_hist[3] };
@@ -266,10 +264,8 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
                 .chgtol = options.chgtol,
                 .trtol = options.trtol,
             };
-            const W = std.simd.suggestVectorLength(f64) orelse 8;
-
             if (steps > 0) {
-                const del = integrator.stepBound(W, eff_method, eff_method, lq, &i_prev, cf, lte);
+                const del = integrator.stepBound(eff_method, eff_method, lq, &i_prev, cf, lte);
                 if (del < 0.9 * dt) {
                     _ = ckt.stateCtl(.revert);
                     // Retry at the LTE's dt and the same order
@@ -286,14 +282,15 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
             // order 2 and adopt min(2*dt, del2) as the next dt whether or not
             // the order changes, as ngspice's `CKTdelta = newdelta` does.
             if (steps > 0 and use_be) {
-                const trial_del = integrator.stepBound(W, options.method, eff_method, lq, &i_prev, cf, lte);
+                const trial_del = integrator.stepBound(options.method, eff_method, lq, &i_prev, cf, lte);
                 const nd2 = @min(2.0 * dt, trial_del);
                 if (nd2 > 1.05 * dt) use_be = false;
                 dt_next = @min(@max(nd2, options.dt_min), effective_dt_max);
             }
 
-            // The dynamic current under the method actually used.
-            integrator.advanceCurrent(eff_method, &i_prev, q_hist[0], q_hist[1], q_hist[2], cf);
+            // The dynamic current under the method actually used, in place
+            // (ngspice NIintegrate).
+            integrator.companionAt(eff_method, false, &i_prev, q_hist[0], q_hist[1], q_hist[2], &i_prev, cf);
 
             // [cur, prev, prev2, prev3] -> [stale, cur, prev, prev2].
             std.mem.rotate([]f64, &q_hist, 3);
@@ -511,4 +508,130 @@ test "the default step ceiling is ngspice's min(tstep, tstop/50)" {
     _ = try runTran(MockRamp, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-6, .dt_max = 2e-5 }, &wide);
     try std.testing.expect(wide.dt_max > 1e-6);
     try std.testing.expect(wide.dt_max <= 2e-5 * (1 + 1e-9));
+}
+
+/// x² + 1 = 0 on one node: no root, so no step's Newton converges.
+const MockStall = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const vera_version = contract.vera_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].mul(p[0]).addC(1.0)});
+    }
+};
+
+test "a step whose Newton never converges cuts dt below dt_min and reports completed = false" {
+    var model: MockStall.Model = .{};
+    var inst: MockStall.Instance = .{};
+    var ckt: Circuit(MockStall) = .init(&model, &inst);
+    var ws: converger.Workspace(1) = .{};
+    var x = [_]f64{1};
+    var log: StepLog = .{ .out = 0 };
+    const r = try simulate(&ckt, &ws, &x, .{ .t_stop = 1e-3, .dt_init = 1e-6 }, &log);
+    try std.testing.expect(!r.completed);
+    try std.testing.expectEqual(0, r.steps);
+    try std.testing.expectEqual(0, r.t_final);
+    // Only the operating point was recorded, and `x` still holds it.
+    try std.testing.expectEqual(1, log.points);
+    try std.testing.expectEqual(1, x[0]);
+}
+
+test "max_steps stops the run short of t_stop" {
+    var model: MockRamp.Model = .{};
+    var inst: MockRamp.Instance = .{};
+    var log: StepLog = .{ .out = 0 };
+    const r = try runTran(MockRamp, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-6, .max_steps = 3 }, &log);
+    try std.testing.expect(!r.completed);
+    try std.testing.expectEqual(3, r.steps);
+    try std.testing.expectEqual(4, log.points);
+    try std.testing.expect(r.t_final < 1e-3);
+}
+
+/// MockRamp with a §5.10.3.3 breakpoint at `bp` from `nextBreakpoint`, and
+/// a §5.10.3.3 `request_reject_at` the first time a step ends past `reject`.
+const MockEvents = struct {
+    pub const U = enum(u8) { in, br };
+    pub const num_ports: usize = 0;
+    pub const vera_version = contract.vera_version;
+    pub const u_kinds = [_]contract.UnknownKind{ .voltage, .current };
+    pub const Model = struct { bp: f64 = std.math.inf(f64), reject: f64 = std.math.inf(f64) };
+    /// Whether an accepted point reached `reject`; `.revert` undoes it.
+    pub const Instance = struct { past: bool = false };
+    pub const State = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, sim: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{ p[0].scale(1e-3).add(p[1]), p[0].addC(-1e3 * sim.t) });
+    }
+    pub fn initState(_: *const Model, _: *Instance) State {
+        return .{};
+    }
+    pub fn updateState(comptime _: type, m: *const Model, inst: *Instance, _: [2]f64, _: *State, sim: contract.SimState) contract.UpdateResult {
+        if (sim.kind != .tran or inst.past or sim.t < m.reject) return .ok;
+        inst.past = true;
+        return if (sim.t > m.reject) .{ .request_reject_at = m.reject } else .ok;
+    }
+    pub fn nextBreakpoint(m: *const Model, t: f64) ?f64 {
+        return if (t < m.bp) m.bp else null;
+    }
+};
+
+/// Records whether any accepted point lands within `tol` of `at`.
+const HitLog = struct {
+    at: f64,
+    tol: f64,
+    hit: bool = false,
+    t_last: f64 = -1,
+
+    pub fn record(self: *HitLog, t: f64, _: []const f64) !void {
+        try std.testing.expect(t > self.t_last);
+        self.t_last = t;
+        if (@abs(t - self.at) <= self.tol) self.hit = true;
+    }
+};
+
+test "§5.10.3.3 a device breakpoint is landed on, and a request_reject_at retries the step to end there" {
+    const opts: Options = .{ .t_stop = 1e-3, .dt_init = 1e-4 };
+    // dt_max = min(tstep, tstop/50) = 2e-5: a breakpoint lands within
+    // min_break = 1e-10·dt_max; a rejection within state_eps = 5e-5·dt_max.
+    {
+        var model: MockEvents.Model = .{ .bp = 3.3333e-4 };
+        var inst: MockEvents.Instance = .{};
+        var ckt: Circuit(MockEvents) = .init(&model, &inst);
+        var ws: converger.Workspace(2) = .{};
+        var x: [2]f64 = undefined;
+        _ = try op.solve(&ckt, &ws, &x, .ic);
+        var log: HitLog = .{ .at = model.bp, .tol = 1e-10 * 2e-5 };
+        try std.testing.expect((try simulate(&ckt, &ws, &x, opts, &log)).completed);
+        try std.testing.expect(log.hit);
+    }
+    {
+        var model: MockEvents.Model = .{ .reject = 4.4444e-4 };
+        var inst: MockEvents.Instance = .{};
+        var ckt: Circuit(MockEvents) = .init(&model, &inst);
+        var ws: converger.Workspace(2) = .{};
+        var x: [2]f64 = undefined;
+        _ = try op.solve(&ckt, &ws, &x, .ic);
+        var log: HitLog = .{ .at = model.reject, .tol = 5e-5 * 2e-5 };
+        try std.testing.expect((try simulate(&ckt, &ws, &x, opts, &log)).completed);
+        try std.testing.expect(log.hit);
+        try std.testing.expect(inst.past);
+    }
+}
+
+test "every method integrates the RC to the closed form, backward Euler at its own order" {
+    // Backward Euler is first order: at the same reltol its global error is
+    // larger than the second-order methods' (about 1e-3 relative here).
+    for ([_]Method{ .backward_euler, .trapezoidal, .gear_2 }, [_]f64{ 1e-2, 1e-3, 1e-3 }) |m, rtol| {
+        var model: MockRc.Model = .{};
+        var inst: MockRc.Instance = .{};
+        var log: StepLog = .{ .out = 1 };
+        const r = try runTran(MockRc, &model, &inst, .{ .t_stop = 1e-3, .dt_init = 1e-4, .method = m }, &log);
+        try std.testing.expect(r.completed);
+        try std.testing.expectApproxEqRel(@as(f64, 0.36787944117144233), log.x_last, rtol);
+    }
 }

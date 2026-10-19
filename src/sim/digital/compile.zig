@@ -17,11 +17,14 @@ const display = @import("display.zig");
 const driver = @import("driver.zig");
 const system = @import("system.zig");
 const elab = @import("elab.zig");
-const Error = @import("root.zig").Error;
-const Run = @import("root.zig").Run;
-const SpecExpr = @import("root.zig").SpecExpr;
-const expectRun = @import("root.zig").expectRun;
-const expectRejected = @import("root.zig").expectRejected;
+const evcd = @import("evcd.zig");
+const vcd = @import("vcd.zig");
+const root = @import("root.zig");
+const Error = root.Error;
+const Run = root.Run;
+const SpecExpr = root.SpecExpr;
+const expectRun = root.expectRun;
+const expectRejected = root.expectRejected;
 const filled = @import("net.zig").filled;
 const tasks = display.tasks;
 
@@ -56,9 +59,9 @@ pub const Instruction = union(enum(u5)) {
     /// `ty`, continues at `Run.case_targets[targets + arm]`; no match continues
     /// at `fallback` (the `default` arm, or past the statement).
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
-    /// `clamp`: §9.7.7's repeat event control, where a count <= 0 is no
-    /// occurrence; the §9.6 statement refuses a negative one.
-    repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32, clamp: bool = false },
+    /// A count of x, z or below 0 runs nothing, at any width; past 64 bits
+    /// it saturates (`exec`, `rt.repeatCount`).
+    repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32 },
     /// The end of a `repeat` body: one count spent from `Run.repeats[counter]`;
     /// while some remain, the body runs again from `body`.
     repeat_next: struct { counter: u32, body: u32 },
@@ -450,7 +453,7 @@ pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
 /// form digital execution does not implement. Must run before `typeOf` or
 /// any evaluation of `e`.
 pub fn checkExpr(self: *Run, e: Ast.ExprId) Error!void {
-    _ = try inferValue(self, e, 0);
+    _ = try inferValue(self, e);
 }
 
 /// IEEE 1364-2005 §26.6.19(e): an application's argument may be read after
@@ -460,16 +463,16 @@ fn rememberVpiScope(self: *Run, e: Ast.ExprId) Error!void {
     try self.vpi_expr_scopes.put(self.arena, .{ self.instanceOf(self.scope), @backingInt(e) }, self.scope);
 }
 
-fn rememberVpiArgument(self: *Run, e: Ast.ExprId, depth: u32) Error!void {
+fn rememberVpiArgument(self: *Run, e: Ast.ExprId) Error!void {
     if (e == .none) return;
     if (deep.exhausted()) return self.deepFail(self.file.exprs.mainTok(e));
     try rememberVpiScope(self, e);
     var buf: [3]Ast.ExprId = undefined;
-    for (self.file.exprs.children(e, &buf)) |arg| try rememberVpiArgument(self, arg, depth + 1);
+    for (self.file.exprs.children(e, &buf)) |arg| try rememberVpiArgument(self, arg);
 }
 
-fn inferValue(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
-    const ty = try infer(self, e, depth);
+fn inferValue(self: *Run, e: Ast.ExprId) Error!Type {
+    const ty = try infer(self, e);
     if (ty.width == 0) return self.exprFail(e, "zero replication requires an immediately enclosing concatenation with a positive-width operand");
     return ty;
 }
@@ -543,7 +546,7 @@ pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
     sub.constant = true;
     const V = struct {
         r: *Run,
-        sub: *const @import("root.zig").Sub,
+        sub: *const root.Sub,
         why: ?[]const u8 = null,
         pub fn expr(v: *@This(), x: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {
             if (x == .none or v.why != null) return;
@@ -625,8 +628,8 @@ fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
 }
 
 // IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up. Its
-// depth is bounded by the stack `deep.runGuarded` reserved (`deep.exhausted`).
-fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
+// recursion is bounded by the stack `deep.runGuarded` reserved (`deep.exhausted`).
+fn infer(self: *Run, e: Ast.ExprId) Error!Type {
     if (e == .none) return self.fail(0, "omitted expressions are not implemented", .{});
     if (deep.exhausted()) return self.deepFail(self.file.exprs.mainTok(e));
     if (self.systf != null) try rememberVpiScope(self, e);
@@ -646,7 +649,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                 const lhs = ex.lhs(e);
                 if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident and try self.indexedArray(lhs) == null)
                     return self.exprFail(e, "a select is of a whole vector or an unpacked array element");
-                if (ex.tag(lhs) == .index) _ = try inferValue(self, lhs, depth + 1);
+                if (ex.tag(lhs) == .index) _ = try inferValue(self, lhs);
                 const at = try self.baseSlot(lhs);
                 if (self.reals.contains(at)) return self.exprFail(e, "§4.8: a real has no bits to select");
                 if (self.isScalar(at)) return self.exprFail(e, "§5.2.1: a scalar has no bits to select");
@@ -665,7 +668,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                         break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
                     },
                     .indexed_range => {
-                        const base = try inferValue(self, ex.lhs(rg), depth + 1);
+                        const base = try inferValue(self, ex.lhs(rg));
                         if (base.real) return self.exprFail(ex.lhs(rg), "§4.8.1: a real is not a part-select index");
                         // "the width_expr shall be a positive constant
                         // integer expression". Kept as the part-select
@@ -676,7 +679,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                         break :blk .{ .width = @intCast(width), .signed = false };
                     },
                     else => { // else: any other expression is a bit-select's index
-                        const index = try inferValue(self, rg, depth + 1);
+                        const index = try inferValue(self, rg);
                         if (index.real) return self.exprFail(rg, "§4.8.1: a real is not a bit-select index");
                         break :blk .{ .width = 1, .signed = false };
                     },
@@ -688,7 +691,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                 // supplying an address for each dimension".
                 if (ex.tag(ex.rhs(x)) == .range or ex.tag(ex.rhs(x)) == .indexed_range)
                     return self.exprFail(ex.rhs(x), "§5.2.2: each array dimension takes an index, not a part-select");
-                _ = try inferValue(self, ex.rhs(x), depth + 1);
+                _ = try inferValue(self, ex.rhs(x));
             }
             const base = try self.slot(x);
             if (self.events.contains(base)) return self.exprFail(e, "§9.7.3: a named event holds no data; it can only be triggered and waited on");
@@ -697,7 +700,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
             break :blk .{ .width = v.width, .signed = v.signed };
         },
         .unary => blk: {
-            const operand = try inferValue(self, ex.lhs(e), depth + 1);
+            const operand = try inferValue(self, ex.lhs(e));
             const op = ex.unOp(e);
             // IEEE 1364-2005 §5.1.1 Table 5-2: a real takes the arithmetic,
             // relational and logical operators, and none of the bitwise ones.
@@ -708,8 +711,8 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
             };
         },
         .binary => blk: {
-            const lhs = try inferValue(self, ex.lhs(e), depth + 1);
-            const rhs = try inferValue(self, ex.rhs(e), depth + 1);
+            const lhs = try inferValue(self, ex.lhs(e));
+            const rhs = try inferValue(self, ex.rhs(e));
             const op = ex.binOp(e);
             if (lhs.real or rhs.real) switch (op) {
                 .add, .sub, .mul, .div, .pow, .eq, .neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => {},
@@ -723,9 +726,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
             };
         },
         .ternary => blk: {
-            _ = try inferValue(self, ex.lhs(e), depth + 1);
-            const yes = try inferValue(self, ex.rhs(e), depth + 1);
-            const no = try inferValue(self, ex.ternaryElse(e), depth + 1);
+            _ = try inferValue(self, ex.lhs(e));
+            const yes = try inferValue(self, ex.rhs(e));
+            const no = try inferValue(self, ex.ternaryElse(e));
             break :blk common(yes, no);
         },
         .sys_call => blk: {
@@ -735,7 +738,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
             // the host to refuse (§20.3).
             if (self.systf) |u| if (u.kind(name)) |k| switch (k) {
                 .func => |t| {
-                    for (ex.args(e)) |arg| try rememberVpiArgument(self, arg, depth + 1);
+                    for (ex.args(e)) |arg| try rememberVpiArgument(self, arg);
                     self.sys_calls[@backingInt(e)] = .user;
                     break :blk t;
                 },
@@ -764,19 +767,19 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                     if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
                     // "The argument can be an integer or an arbitrary sized
                     // vector value" (§17.11.1).
-                    if ((try inferValue(self, args[0], depth + 1)).real) return self.exprFail(args[0], "§17.11.1: $clog2 takes an integer or vector argument, not a real");
+                    if ((try inferValue(self, args[0])).real) return self.exprFail(args[0], "§17.11.1: $clog2 takes an integer or vector argument, not a real");
                     break :blk .{ .width = 32, .signed = true };
                 },
                 .make_signed, .make_unsigned => {
                     if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
-                    const operand = try inferValue(self, args[0], depth + 1);
+                    const operand = try inferValue(self, args[0]);
                     if (operand.real) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
                     break :blk .{ .width = operand.width, .signed = f == .make_signed };
                 },
                 // §17.6.5 `(q_id, status)`, an integer; `status` is written.
                 .q_full => {
                     if (args.len != 2 or args[0] == .none or args[1] == .none) return self.exprFail(e, "$q_full takes (q_id, status)");
-                    _ = try inferValue(self, args[0], depth + 1);
+                    _ = try inferValue(self, args[0]);
                     try checkTarget(self, args[1]);
                     break :blk .{ .width = 32, .signed = true };
                 },
@@ -807,7 +810,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                             .ferror => i == 1,
                             else => false, // else: every other file function only reads its arguments
                         };
-                        if (written) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
+                        if (written) try checkTarget(self, arg) else _ = try inferValue(self, arg);
                     }
                     // §17.2.1: "The type is a character string ... of one of
                     // the forms in Table 17-7".
@@ -821,7 +824,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                 },
                 .rtoi, .itor, .realtobits, .bitstoreal => {
                     if (args.len != 1 or args[0] == .none) return self.exprFail(e, "a §17.8 conversion takes exactly one argument");
-                    const operand = try inferValue(self, args[0], depth + 1);
+                    const operand = try inferValue(self, args[0]);
                     const wants_real = f == .rtoi or f == .realtobits;
                     if (operand.real != wants_real) return self.exprFail(e, "$rtoi and $realtobits convert a real; $itor and $bitstoreal an integral value");
                     break :blk switch (f) {
@@ -837,7 +840,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                     const want: usize = if (f == .test_plusargs) 1 else 2;
                     if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
                     // §17.10.1: "either a string or a nonreal variable".
-                    if ((try inferValue(self, args[0], depth + 1)).real) return self.exprFail(args[0], "§17.10: the plusarg string is a string or a nonreal variable");
+                    if ((try inferValue(self, args[0])).real) return self.exprFail(args[0], "§17.10: the plusarg string is a string or a nonreal variable");
                     if (f == .value_plusargs and ex.tag(args[0]) == .str_literal) try plusargFormat(self, args[0]);
                     if (f == .value_plusargs) {
                         if (args[1] == .none) return self.exprFail(e, "$value$plusargs needs a variable to write");
@@ -858,7 +861,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                     if (args.len != want) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
                     for (args, 0..) |arg, i| {
                         if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
-                        const t = try inferValue(self, arg, depth + 1);
+                        const t = try inferValue(self, arg);
                         if (i == 0) {
                             // §17.9.1: "The seed argument shall be either a
                             // reg, an integer, or a time variable."
@@ -874,7 +877,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
                     if (args.len != f.mathArity().?) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
                     for (args) |arg| {
                         if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
-                        _ = try inferValue(self, arg, depth + 1);
+                        _ = try inferValue(self, arg);
                     }
                     break :blk real_type;
                 }, // else: Table 17-17's math functions, mathArity's rows
@@ -897,7 +900,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
         .concat => blk: {
             var width: u32 = 0;
             for (ex.args(e)) |arg| {
-                const operand = try infer(self, arg, depth + 1);
+                const operand = try infer(self, arg);
                 if (operand.real) return self.exprFail(arg, "§5.1.1: a real cannot be a concatenation operand");
                 if (unsizedConcatOperand(self, arg)) {
                     if (ex.tag(arg) == .int_literal or ex.tag(arg) == .logic_literal)
@@ -910,8 +913,8 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
             break :blk .{ .width = width, .signed = false };
         },
         .multi_concat => blk: {
-            _ = try inferValue(self, ex.lhs(e), depth + 1);
-            const operand = try inferValue(self, ex.rhs(e), depth + 1);
+            _ = try inferValue(self, ex.lhs(e));
+            const operand = try inferValue(self, ex.rhs(e));
             const count = try replicationCount(self, ex.lhs(e));
             const width = std.math.mul(u32, count, operand.width) catch return self.exprFail(e, "replication width exceeds the supported u32 range");
             try self.replications.put(self.arena, key, count);
@@ -975,6 +978,14 @@ fn site(self: *Run, id: Ast.StmtId) Error!void {
 fn doneSite(self: *Run, id: Ast.StmtId, first: u32) Error!void {
     if (self.stmt_sites == null) return;
     try self.done_sites.put(self.arena, position(self) - 1, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = first });
+}
+
+/// A new `Run.repeats` counter, for one `repeat` loop or §9.7.7 repeat
+/// event control. Fails at 2^32 - 1 counters.
+fn repeatCounter(self: *Run, tok: u32) Error!u32 {
+    if (self.repeats.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many repeat counters", .{});
+    try self.repeats.append(self.arena, 0);
+    return @intCast(self.repeats.items.len - 1);
 }
 
 /// Appends one instruction in the executing scope and returns its pc.
@@ -1069,10 +1080,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
         },
         .repeat_stmt => |s| {
             try checkExpr(self, s.count);
-            if (typeOf(self, s.count).width > 64) return self.exprFail(s.count, "repeat counts wider than 64 bits are not implemented");
-            if (self.repeats.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many repeat counters", .{});
-            const counter: u32 = @intCast(self.repeats.items.len);
-            try self.repeats.append(self.arena, 0);
+            const counter = try repeatCounter(self, tok);
             const test_pc = try append(self, .{ .repeat_start = .{ .count = s.count, .counter = counter, .end = 0 } });
             const body_pc = position(self);
             try compileStmt(self, s.body, depth + 1);
@@ -1130,10 +1138,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
             // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
             if (s.timing_is_delay) try checkDelay(self, s.timing) else {
                 if (!s.timing_implicit) try checkEvent(self, s.timing);
-                if (s.timing_repeat != .none) {
-                    try checkExpr(self, s.timing_repeat);
-                    if (typeOf(self, s.timing_repeat).width > 64) return self.exprFail(s.timing_repeat, "repeat counts wider than 64 bits are not implemented");
-                }
+                if (s.timing_repeat != .none) try checkExpr(self, s.timing_repeat);
             }
             if (self.holds.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many intra-assignment timing controls", .{});
             const cell: u32 = @intCast(self.holds.items.len);
@@ -1158,15 +1163,13 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
             }
             // §9.7.7 `repeat (n) @(e)`: n occurrences, none when n <= 0.
             if (s.timing_repeat != .none) {
-                if (self.repeats.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many repeat counters", .{});
-                const counter: u32 = @intCast(self.repeats.items.len);
-                try self.repeats.append(self.arena, 0);
-                const test_pc = try append(self, .{ .repeat_start = .{ .count = s.timing_repeat, .counter = counter, .end = 0, .clamp = true } });
+                const counter = try repeatCounter(self, tok);
+                const test_pc = try append(self, .{ .repeat_start = .{ .count = s.timing_repeat, .counter = counter, .end = 0 } });
                 const body_pc = position(self);
-                try waitIntra(self, id, s, depth);
+                try waitIntra(self, id, s);
                 _ = try append(self, .{ .repeat_next = .{ .counter = counter, .body = body_pc } });
                 self.code.items[test_pc].repeat_start.end = position(self);
-            } else try waitIntra(self, id, s, depth);
+            } else try waitIntra(self, id, s);
             _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
             if (skip) |at| {
                 _ = try append(self, .stop);
@@ -1192,7 +1195,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
                 const at = try append(self, .{ .wait_slots = &.{} });
                 try compileStmt(self, s.body, depth + 1);
                 var watched: std.ArrayList(u32) = .empty;
-                try readSlots(self, s.body, &watched, depth);
+                try readSlots(self, s.body, &watched);
                 // §9.7.5's list is what the statement reads. One that reads
                 // nothing is an empty list, which nothing can trigger: the
                 // process suspends forever, as `@` on a never-changing net
@@ -1228,7 +1231,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
             if (name[0] != '$') return compileEnable(self, s.name, s.args, tok, depth);
             // IEEE 1364-2005 §20.4, as for a function (`infer`).
             if (self.systf) |u| if (u.kind(name)) |k| if (k == .task) {
-                for (s.args) |arg| try rememberVpiArgument(self, arg, 0);
+                for (s.args) |arg| try rememberVpiArgument(self, arg);
                 _ = try append(self, .{ .task = .{ .task = .user, .args = s.args, .tok = tok } });
                 return;
             };
@@ -1236,8 +1239,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
             // §17.4.2 Syntax 17-12 `$stop [ ( n ) ]`, refused by the runner
             // below either way.
             if (std.mem.eql(u8, name, "$stop") and s.args.len > 1) return self.fail(tok, "$stop accepts zero or one argument", .{});
-            if (@import("evcd.zig").tasks.get(name)) |op| {
-                try @import("evcd.zig").check(self, op, s.args, tok);
+            if (evcd.tasks.get(name)) |op| {
+                try evcd.check(self, op, s.args, tok);
                 _ = try append(self, .{ .task = .{ .task = .{ .ports = op }, .args = s.args, .tok = tok } });
                 return;
             }
@@ -1324,21 +1327,16 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
                     if (p.async_) {
                         var sync = p;
                         sync.async_ = false;
-                        const skip = try append(self, .{ .jump = 0 });
-                        const loop = position(self);
-                        _ = try append(self, .{ .task = .{ .task = .{ .pla = sync }, .args = s.args, .tok = tok } });
                         var watched: std.ArrayList(u32) = .empty;
                         const base = try self.slot(s.args[0]);
                         for (0..arr.?.count) |i| try watch(self, base + @as(u32, @intCast(i)), &watched);
                         try sensitivity(self, s.args[1], &watched);
-                        _ = try append(self, .{ .wait_slots = watched.items });
-                        _ = try append(self, .{ .jump = loop });
-                        self.code.items[skip].jump = position(self);
+                        const loop = try watcher(self, .{ .task = .{ .task = .{ .pla = sync }, .args = s.args, .tok = tok } }, watched.items);
                         _ = try append(self, .{ .pla_start = loop });
                         return;
                     }
                 },
-                .dump => |op| try @import("vcd.zig").check(self, op, s.args, tok),
+                .dump => |op| try vcd.check(self, op, s.args, tok),
                 .ports => unreachable, // `evcd.tasks` is looked up first
                 // §17.2.2: the descriptor, then `$display`'s own arguments.
                 .fshow => |sh| {
@@ -1405,12 +1403,13 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
         for (ops) |x| of += overWidth(self, try overTarget(self, x));
         var lo = of;
         for (ops) |x| {
-            lo -= overWidth(self, try overTarget(self, x));
-            try override(self, x, value, kind, .{ .lo = lo, .of = of });
+            const t = try overTarget(self, x);
+            lo -= overWidth(self, t);
+            try override(self, x, t, value, kind, .{ .lo = lo, .of = of });
         }
         return;
     }
-    return override(self, target, value, kind, null);
+    return override(self, target, try overTarget(self, target), value, kind, null);
 }
 
 /// The bits of an overriding value one concatenation operand takes: from
@@ -1453,8 +1452,7 @@ fn overTarget(self: *Run, x: Ast.ExprId) Error!OverTarget {
 }
 
 /// §9.3 one override of `target`: a whole variable or net, or bits of a net.
-fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, slice: ?Slice) Error!void {
-    const t = try overTarget(self, target);
+fn override(self: *Run, target: Ast.ExprId, t: OverTarget, value: Ast.ExprId, kind: Ast.ProcContinuous, slice: ?Slice) Error!void {
     const at = t.at;
     try notAutomatic(self, target, "a procedural continuous assignment");
     const force = kind == .force or kind == .release;
@@ -1466,14 +1464,22 @@ fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcCon
     try checkExpr(self, value);
     var watched: std.ArrayList(u32) = .empty;
     try sensitivity(self, value, &watched);
+    const start = try watcher(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } }, watched.items);
+    const end = position(self);
+    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end, .bits = t.bits } });
+}
+
+/// An out-of-line process that runs `step`, then waits on `watched` and
+/// loops; the code around it jumps over it, so it runs only once started.
+/// Returns its first pc; it ends at the next `position`.
+fn watcher(self: *Run, step: Instruction, watched: []const u32) Error!u32 {
     const skip = try append(self, .{ .jump = 0 });
     const start = position(self);
-    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } });
-    _ = try append(self, .{ .wait_slots = watched.items });
+    _ = try append(self, step);
+    _ = try append(self, .{ .wait_slots = watched });
     _ = try append(self, .{ .jump = start });
-    const end = position(self);
-    self.code.items[skip].jump = end;
-    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end, .bits = t.bits } });
+    self.code.items[skip].jump = position(self);
+    return start;
 }
 
 /// IEEE 1364-2005 §9.8.2 a parallel block: each statement is compiled as an
@@ -1714,34 +1720,34 @@ pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), pr
 /// reads. An assignment target is written, not read, but its subscripts are
 /// read. Requires `compileStmt` to have accepted the statement, so every
 /// expression in it is type-checked.
-fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u32) Error!void {
+fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32)) Error!void {
     if (id == .none) return;
     if (deep.exhausted()) return self.deepFail(self.file.stmtTok(id));
     const ex = &self.file.exprs;
     switch (self.file.stmt(id)) {
-        .block => |b| for (b.body) |s| try readSlots(self, s, out, depth + 1),
+        .block => |b| for (b.body) |s| try readSlots(self, s, out),
         .if_stmt => |s| {
             try sensitivity(self, s.cond, out);
-            try readSlots(self, s.then_s, out, depth + 1);
-            try readSlots(self, s.else_s, out, depth + 1);
+            try readSlots(self, s.then_s, out);
+            try readSlots(self, s.else_s, out);
         },
         .while_stmt => |s| {
             try sensitivity(self, s.cond, out);
-            try readSlots(self, s.body, out, depth + 1);
+            try readSlots(self, s.body, out);
         },
         .for_stmt => |s| {
             try sensitivity(self, s.cond, out);
-            for ([_]Ast.StmtId{ s.init, s.body, s.step }) |part| try readSlots(self, part, out, depth + 1);
+            for ([_]Ast.StmtId{ s.init, s.body, s.step }) |part| try readSlots(self, part, out);
         },
         .repeat_stmt => |s| {
             try sensitivity(self, s.count, out);
-            try readSlots(self, s.body, out, depth + 1);
+            try readSlots(self, s.body, out);
         },
         .case_stmt => |s| {
             try sensitivity(self, s.scrutinee, out);
             for (s.arms) |arm| {
                 for (arm.labels) |label| try sensitivity(self, label, out);
-                try readSlots(self, arm.body, out, depth + 1);
+                try readSlots(self, arm.body, out);
             }
         },
         .assign => |s| {
@@ -1755,7 +1761,7 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u32) E
         // its own terms; §9.7.5 takes the list from the reads either way.
         .empty, .disable => {},
         .event_trigger => |s| try targetReads(self, s.target, out),
-        .event_control => |s| try readSlots(self, s.body, out, depth + 1),
+        .event_control => |s| try readSlots(self, s.body, out),
         else => unreachable, // else: compileStmt admitted only the forms above
     }
 }
@@ -1773,7 +1779,7 @@ fn targetReads(self: *Run, target: Ast.ExprId, out: *std.ArrayList(u32)) Error!v
 }
 
 fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {
-    for (out.items) |seen| if (seen == at) return;
+    if (std.mem.findScalar(u32, out.items, at) != null) return;
     try out.append(self.arena, at);
 }
 
@@ -1823,13 +1829,13 @@ fn intraTimed(s: @FieldType(Ast.Stmt, "assign")) bool {
 /// expression, or for `@*` (`timing_implicit`) the slots the assignment reads,
 /// IEEE 1364-2005 §9.7.5's list as `event_control`'s `@*` builds it from a
 /// statement.
-fn waitIntra(self: *Run, id: Ast.StmtId, s: @FieldType(Ast.Stmt, "assign"), depth: u32) Error!void {
+fn waitIntra(self: *Run, id: Ast.StmtId, s: @FieldType(Ast.Stmt, "assign")) Error!void {
     if (!s.timing_implicit) {
         _ = try append(self, .{ .wait_event = s.timing });
         return;
     }
     var watched: std.ArrayList(u32) = .empty;
-    try readSlots(self, id, &watched, depth);
+    try readSlots(self, id, &watched);
     _ = try append(self, .{ .wait_slots = watched.items });
 }
 
@@ -1956,12 +1962,7 @@ fn exprTerm(self: *Run, e: Ast.ExprId) Error!void {
     self.values = g.items;
     var watched: std.ArrayList(u32) = .empty;
     try sensitivity(self, e, &watched);
-    const skip = try append(self, .{ .jump = 0 });
-    const start = position(self);
-    _ = try append(self, .{ .init_var = .{ .slot = at, .value = e } });
-    _ = try append(self, .{ .wait_slots = watched.items });
-    _ = try append(self, .{ .jump = start });
-    self.code.items[skip].jump = position(self);
+    const start = try watcher(self, .{ .init_var = .{ .slot = at, .value = e } }, watched.items);
     _ = try exec.enqueue(self, .{ .run_process = start }, null, false);
 }
 
@@ -2056,12 +2057,12 @@ test "an expression or statement of any depth: 256, one past the old bound, and 
         for (0..n) |_| try source.writer.writeAll("+1");
         try source.writer.writeAll("; $display(\"%0d\", a); end endmodule");
         var want: [16]u8 = undefined;
-        try @import("root.zig").expectRun(source.written(), try std.mem.print(&want, "{d}\n", .{n}));
+        try expectRun(source.written(), try std.mem.print(&want, "{d}\n", .{n}));
         source.clearRetainingCapacity();
         try source.writer.writeAll("module m; initial ");
         for (0..n) |_| try source.writer.writeAll("if(1) ");
         try source.writer.writeAll("$display(\"deep\"); endmodule");
-        try @import("root.zig").expectRun(source.written(), "deep\n");
+        try expectRun(source.written(), "deep\n");
     }
 }
 
@@ -2071,8 +2072,6 @@ test "control flow validates unselected bodies and every case label" {
     try expectRejected("module m; initial begin $display(\"before\"); while(0) @(a); end endmodule", "undeclared digital variable");
     try expectRejected("module m; initial case(1) default:; default:; endcase endmodule", "multiple default");
     try expectRejected("module m; initial case(1) endcase endmodule", "at least one item");
-    try expectRejected("module m; initial repeat(65'd1); endmodule", "wider than 64");
-    try expectRejected("module m; initial repeat(-1); endmodule", "negative repeat counts");
 }
 
 test "concatenation validates zero replication structure and constant counts" {
@@ -2231,9 +2230,32 @@ test "§9.7.3 a named event is waited on whole, declared first, and has no edge;
     try expectRejected("module m; initial -> nope; endmodule", "undeclared named event");
 }
 
-test "a delay or repeat count wider than 64 bits is refused before any process runs" {
+test "a delay wider than 64 bits is refused before any process runs" {
     try expectRejected("module m; initial #(65'd1) ; endmodule", "delay values wider than 64 bits");
-    try expectRejected("module m; reg a; event e; initial a = repeat (65'd2) @(e) 1'b1; endmodule", "repeat counts wider than 64 bits");
+}
+
+test "§9.6 a repeat count of any width: negative, x or z is zero times; past 64 bits saturates" {
+    try expectRun(
+        \\module m; integer n;
+        \\initial begin
+        \\  n = 0; repeat (-1) n = n + 1; $display("%0d", n);
+        \\  n = 0; repeat (-65'sd1) n = n + 1; $display("%0d", n);
+        \\  n = 0; repeat (65'd2) n = n + 1; $display("%0d", n);
+        \\  n = 0; repeat (65'bx) n = n + 1; repeat (70'sbz) n = n + 1; $display("%0d", n);
+        \\  repeat (65'h1_0000_0000_0000_0000) begin $display("first"); $finish(0); end
+        \\end endmodule
+    , "0\n0\n2\n0\nfirst\n");
+}
+
+test "§9.7.7 a repeat event control of any width: two occurrences, or none for a count <= 0" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m; reg a, b; event e;
+        \\initial begin a = 0; b = 0; #1 -> e; #1 -> e; #1 -> e; end
+        \\initial begin a = repeat (65'd2) @(e) 1'b1; $display("a %0t", $time); end
+        \\initial begin b = repeat (-65'sd2) @(e) 1'b1; $display("b %0t %b", $time, b); end
+        \\endmodule
+    , "b 0 1\na 2\n");
 }
 
 test "§9.8.2 a fork in a task with no timing control joins before the enable returns" {

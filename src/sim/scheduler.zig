@@ -37,7 +37,19 @@ const SlotId = enum(u32) { none = std.math.maxInt(u32), _ };
 pub const Handle = struct { slot: SlotId, generation: u32 };
 /// One dispatched event as `next` returns it: `time` is `now`, `payload`
 /// the caller's row, and `handle` already stale.
-pub const Event = struct { time: Time, region: Region, payload: u32, handle: Handle };
+pub const Event = struct {
+    time: Time,
+    region: Region,
+    payload: u32,
+    handle: Handle,
+
+    // Budget: one per dispatch, returned by value. 21 bytes of fields, 3 of
+    // tail padding.
+    comptime {
+        std.debug.assert(@sizeOf(Handle) == 8);
+        std.debug.assert(@sizeOf(Event) == 24);
+    }
+};
 /// One live event as `Scheduler.pendingPayloads` reports it.
 pub const Live = struct { time: Time, payload: u32 };
 
@@ -670,12 +682,20 @@ fn allocationExercise(allocator: std.mem.Allocator) !void {
         _ = try scheduler.schedule(.active, @intCast(i));
         _ = try scheduler.scheduleAt(1 + @as(Time, @intCast(i)), .nba, @intCast(i));
     }
+    // `restore` grows a fresh queue to the saved one's size.
+    var buf: [8192]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try scheduler.save(&w);
+    var copy = Scheduler.init(allocator);
+    defer copy.deinit();
+    var r: std.Io.Reader = .fixed(w.buffered());
+    try copy.restore(&r);
     var count: usize = 0;
-    while (scheduler.next() != null) count += 1;
+    while (copy.next() != null) count += 1;
     try t.expectEqual(@as(usize, 128), count);
 }
 
-test "allocation failure releases queue storage and partial future insertion" {
+test "allocation failure releases queue storage, partial future insertion and a partial restore" {
     try t.checkAllAllocationFailures(t.allocator, allocationExercise, .{});
 }
 

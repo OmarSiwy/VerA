@@ -1174,3 +1174,13 @@ test "proveOpts: proving the same lowering twice gives the same verdict" {
     try std.testing.expectEqualSlices(FloatMode, a.unit_modes, b.unit_modes);
     try std.testing.expectEqual(a.error_count, b.error_count);
 }
+
+test "a domain error names the operand's range even when a bound prints long" {
+    // `{d}` spells 1e300 in 301 digits; the message must still carry it.
+    var h: Harness = undefined;
+    const v = try proveSrc(&h, head ++ "  parameter real k = -2.0 from [-1e300:-1];\n  analog I(p, n) <+ ln(k) * V(p, n);" ++ tail, .{});
+    defer h.deinit();
+    defer v.deinit(std.testing.allocator);
+    const e = h.find(.E0602) orelse return error.NoDomainError;
+    try std.testing.expect(std.mem.find(u8, e.message, "with known range [-1000000000000") != null and std.mem.find(u8, e.message, ":-1]") != null);
+}

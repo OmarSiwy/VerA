@@ -47,33 +47,21 @@ pub const KeywordSet = token.KeywordSet;
 pub const diag = @import("diag");
 /// MIR to device.zig (`CompileResult.generateOutput`).
 pub const codegen = @import("device").codegen;
-/// MIR to a behavioural Verilog module for digital simulation (`--emit-verilog`).
-pub const beh_verilog = @import("verilog");
 /// The `zigbuild` module under its pre-Phase-7 name: device.zig to a
 /// versioned `.so` (`buildArtifact`), and the testbench build `tb` re-exports.
 pub const orchestrator = @import("zigbuild");
 /// The fixture testbench: `//!` directives, runner text and its build.
 pub const tb = @import("exe");
-// What `ir` exported until lowering moved lowering to `analog`
-// and the MIR passes to `prove`; `ir` cannot re-export either, since both
-// import it.
-/// AST → MIR lowering (`analog`).
-pub const Lower = @import("analog").Lower;
-/// SSA construction used while lowering (`analog`).
-pub const Ssa = @import("analog").Ssa;
-/// Dependency and freedom lattices over a finished MIR (`prove`).
-pub const Analysis = @import("prove").Analysis;
-/// Branch → `select` conversion over MIR (`prove`).
-pub const ifconv = @import("prove").ifconv;
-/// Per-unit float-mode verdict from the finiteness proof (`prove`).
-pub const proof = @import("prove").proof;
-/// The MIR's postcondition, checked after lowering and each MIR pass (`prove`).
-pub const verify = @import("prove").verify;
 /// Hierarchy flattening, AST → one flat module (§6) (`elab`): the type of
 /// `CompileResult.unit_paths` and the §6.7 `sep` the VPI reads, which
 /// `ir.Elaborate` re-exported until Phase 11.
 pub const Elaborate = @import("elab").Elaborate;
 
+const Lower = @import("analog").Lower;
+const ifconv = @import("prove").ifconv;
+const proof = @import("prove").proof;
+const verify = @import("prove").verify;
+const beh_verilog = @import("verilog");
 const token = @import("frontend").token;
 const Lexer = @import("frontend").Lexer;
 const Ast = @import("frontend").Ast;
@@ -1083,6 +1071,13 @@ test compile {
             .err = "error: --param rr: `res` declares no numeric parameter `rr` that a card may set\n",
         },
         .{ .src = "module bad(p); inout p; electrical p; analog I(p) <+ ;\nendmodule\n", .req = .{}, .status = 1, .report = .failed, .text = false, .err = "" },
+        // Refused before any pipeline stage.
+        .{ .src = test_resistor, .req = .{ .spice_path = "/nonexistent/x.sp" }, .status = 2, .report = .none, .text = false, .err = "error: cannot read `/nonexistent/x.sp`: FileNotFound\n" },
+        // Refused after the compile, before codegen or a `zig` child.
+        .{ .src = test_resistor, .req = .{ .zig = true, .expect_module = "cap" }, .status = 1, .report = .after, .text = false, .err = "error: <source>: Verilog-A module is `res` but `cap` was expected — rename one of them\n" },
+        .{ .src = test_resistor, .req = .{ .so = true }, .status = 2, .report = .after, .text = false, .err = "error: --emit-so needs --work-dir DIR\n" },
+        .{ .src = test_resistor, .req = .{ .so = true, .build = .{ .work_dir = "wd" } }, .status = 2, .report = .after, .text = false, .err = "error: --emit-so needs --dyn PATH\n" },
+        .{ .src = test_resistor, .req = .{ .verilog = .{} }, .status = 0, .report = .after, .text = true, .err = "" },
     }) |c| {
         var bag: diag.Bag = .init(gpa);
         defer bag.deinit(gpa);
@@ -1586,7 +1581,7 @@ test "§9.4 W0850 names each task the requested device drops, and no other" {
 // Zig analyses lazily, so an unreferenced decl is never type-checked. This
 // forces analysis of every top-level pub decl of every stage.
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ @This(), BigArena, token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, cg_display, cg_filters, orchestrator }) |stage| {
+    inline for (.{ @This(), BigArena, token, Preprocessor, Lexer, Ast, Parser, Mir, @import("prove").Analysis, @import("analog").Ssa, Elaborate, Lower, proof, naming, codegen, cg_display, cg_filters, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }

@@ -343,9 +343,9 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         pub const calls_ac_dyn = true;
 
         /// The value-only hooks' family: no lanes.
-        const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .dense = true });
+        const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{});
         /// `eval`'s family: unknown `u` on lane `u`.
-        const Dual = contract.RefFamily(f64, &lanes, .{ .dense = false });
+        const Dual = contract.RefFamily(f64, &lanes, .{});
         const lanes = blk: {
             @setEvalBranchQuota(10_000_000);
             var a: [n]u8 = undefined;
@@ -398,18 +398,29 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             return @ptrCast(@alignCast(&vals[i]));
         }
 
-        /// Writes the given parameters of `vals` into `m`.
-        fn overlay(m: *D.Model, vals: *Vals, given: *const [np]bool) void {
+        /// Writes the given parameters of `vals` into `m`. Returns the name
+        /// of an integer parameter whose host value the field cannot hold
+        /// (the host's `int32_t` into VerA's narrower field), with `m`
+        /// partly written; null when every value was written.
+        fn overlay(m: *D.Model, vals: *Vals, given: *const [np]bool) ?[]const u8 {
             @setEvalBranchQuota(10_000_000);
             inline for (params, 0..) |p, i| if (given[i]) {
                 const F = @FieldType(D.Model, p.field);
                 @field(m, p.field) = switch (p.kind) {
                     .real => @floatCast(slot(f64, vals, i).*),
-                    .int => @intCast(slot(i32, vals, i).*),
+                    .int => std.math.cast(F, slot(i32, vals, i).*) orelse return p.field,
                     .str => if (slot(Str, vals, i).*) |z| std.mem.span(z) else @as(F, ""),
                 };
                 if (@hasField(D.Model, p.field ++ "__given")) @field(m, p.field ++ "__given") = true;
             };
+            return null;
+        }
+
+        /// Logs `overlay`'s refusal of parameter `param`, fatal.
+        fn refuseInt(handle: ?*anyopaque, param: []const u8) void {
+            var buf: [512]u8 = undefined;
+            const at = "vera osdi: integer parameter `";
+            log(handle, log_lvl_fatal, std.mem.print(&buf, at ++ "{s}` is outside its type's range", .{param}) catch at);
         }
 
         /// Writes `m`'s value of every parameter not given into `vals`, so a
@@ -644,7 +655,11 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 res.flags |= eval_ret_flag_fatal;
                 return;
             };
-            overlay(&m.card, &m.vals, &m.given);
+            if (overlay(&m.card, &m.vals, &m.given)) |param| {
+                refuseInt(handle, param);
+                res.flags |= eval_ret_flag_fatal;
+                return;
+            }
             var d = m.card;
             if (!derive(handle, &d)) res.flags |= eval_ret_flag_fatal;
             readback(&d, &m.vals, &m.given);
@@ -670,7 +685,11 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 res.flags |= eval_ret_flag_fatal;
                 return;
             };
-            overlay(&self.row, &self.vals, &self.given);
+            if (overlay(&self.row, &self.vals, &self.given)) |param| {
+                refuseInt(handle, param);
+                res.flags |= eval_ret_flag_fatal;
+                return;
+            }
             if (@hasField(D.Model, "temperature__")) self.row.temperature__ = temperature;
             // §9.19 `$port_connected`: ngspice connects the first
             // `connected` terminals and makes the rest internal nodes.
@@ -959,19 +978,27 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             };
         }
 
+        /// `dst` holds `n_resist` (`n_react`) doubles: the entries with the
+        /// flag, in entry order (OpenVAF internals.md).
         fn writeJacobianResist(ip: *anyopaque, _: *anyopaque, dst: [*]f64) callconv(.c) void {
             @setEvalBranchQuota(10_000_000);
             const self = inst(ip);
+            comptime var j = 0;
             inline for (entries, 0..) |e, k| if (e.resist) {
-                dst[k] = self.jac[k];
+                dst[j] = self.jac[k];
+                j += 1;
             };
+            comptime assert(j == n_resist);
         }
         fn writeJacobianReact(ip: *anyopaque, _: *anyopaque, dst: [*]f64) callconv(.c) void {
             @setEvalBranchQuota(10_000_000);
             const self = inst(ip);
+            comptime var j = 0;
             inline for (entries, 0..) |e, k| if (e.react) {
-                dst[k] = self.jac_q[k];
+                dst[j] = self.jac_q[k];
+                j += 1;
             };
+            comptime assert(j == n_react);
         }
 
         // ---- noise ---------------------------------------------------------
@@ -1571,4 +1598,91 @@ test "log: a message past the buffer is cut, not dropped" {
     log(null, log_lvl_err, &long);
     try testing.expectEqual(@as(usize, 1023), Capture.len);
     try testing.expectEqual(@as(u8, '\n'), Capture.got[1022]);
+}
+
+/// Two grounded conductances coupled only by a capacitance: (0, 1) and
+/// (1, 0) are reactive entries with no resistive part.
+const Cg = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const vera_version = contract.vera_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+    pub const jac_pattern = [2]u64{ 0b01, 0b10 };
+    pub const q_pattern = [2]u64{ 0b11, 0b11 };
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return .{ S.probe(0, x[0]).scale(2), S.probe(1, x[1]).scale(3) };
+    }
+    pub fn q(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Sites(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const v = p[0].sub(p[1]).scale(5);
+        return contract.sites(@This(), S, .{ v, v.neg() });
+    }
+    pub fn evalQ(comptime S: type, x: *const [2]S.V, m: *const Model, i: *const Instance, sim: contract.SimState) struct { res: contract.Rows(Cg, S), q: contract.Sites(Cg, S) } {
+        return .{ .res = eval(S, x, m, i, sim), .q = q(S, x, m, i, sim) };
+    }
+};
+
+test "write_jacobian_array_*: one slot per resistive (reactive) entry, in entry order, nothing past them" {
+    const H = Osdi(Cg, "cg");
+    const d = &H.descriptors[0];
+    try testing.expectEqual(@as(u32, 4), d.num_jacobian_entries);
+    try testing.expectEqual(@as(u32, 2), d.num_resistive_jacobian_entries);
+    try testing.expectEqual(@as(u32, 4), d.num_reactive_jacobian_entries);
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    _ = evalAt(d, &inst, &model, &.{ 1, 0 });
+    // OpenVAF's internals.md: an array of num_resistive_jacobian_entries,
+    // the entries without JACOBIAN_ENTRY_RESIST left out.
+    var arr: [4]f64 = @splat(-1);
+    d.write_jacobian_array_resist(&inst, &model, &arr);
+    try testing.expectEqualSlices(f64, &.{ 2, 3, -1, -1 }, &arr);
+    d.write_jacobian_array_react(&inst, &model, &arr);
+    try testing.expectEqualSlices(f64, &.{ 5, -5, -5, 5 }, &arr);
+}
+
+/// A conductance with a narrow integer parameter, as VerA emits one.
+const Narrow = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const vera_version = contract.vera_version;
+    pub const Model = struct { k: u8 = 1 };
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, m: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const i = p[0].sub(p[1]).scale(@floatFromInt(m.k));
+        return contract.rows(@This(), S, .{ i, i.neg() });
+    }
+};
+
+test "an integer parameter the field cannot hold is fatal, not a trap; the neighbour in range is read" {
+    const H = Osdi(Narrow, "narrow");
+    const d = &H.descriptors[0];
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    const card: *i32 = @ptrCast(@alignCast(d.access(null, &model, 1, access_flag_set).?));
+    for ([_]i32{ -1, 256 }) |bad| {
+        card.* = bad;
+        d.setup_model(null, &model, &no_paras, &info);
+        try testing.expectEqual(eval_ret_flag_fatal, info.flags);
+    }
+    card.* = 255;
+    d.setup_model(null, &model, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    const own: *i32 = @ptrCast(@alignCast(d.access(&inst, &model, 0, access_flag_set | access_flag_instance).?));
+    own.* = -3;
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(eval_ret_flag_fatal, info.flags);
+    own.* = 3;
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    try testing.expectEqual(@as(u8, 3), inst.row.k);
 }

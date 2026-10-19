@@ -2,7 +2,8 @@
 //! decoding (LRM §2.1-§2.8, Tables 2-1 and 2-2). `Lexer.next` depends only on
 //! (src, pos), so `tokenEnd` recovers a token's end by re-lexing. The lexer never
 //! fails except on OOM: malformed input becomes one `.invalid` token for the parser
-//! to report. Byte scans stay scalar because each covers one short token.
+//! to report. Only the identifier scan is a vector block compare (`identEnd`);
+//! the white space and literal scans stay per-byte, where a block lost.
 
 const std = @import("std");
 const token = @import("token.zig");
@@ -15,6 +16,12 @@ pub const TokenList = std.MultiArrayList(token.Stored);
 pub const Lexer = struct {
     src: []const u8,
     pos: u32 = 0,
+
+    // Budget: the scan's whole state, three words in registers (4 B of
+    // padding after `pos`). A u32 `pos` matches the u32 token starts.
+    comptime {
+        std.debug.assert(@sizeOf(Lexer) == 24);
+    }
 
     /// Already-lexed tokens for a prefix of `src`, replayed by `tokenizeSeeded`
     /// instead of re-scanned. `len` is the prefix's byte length; the columns are
@@ -216,7 +223,7 @@ pub const Lexer = struct {
     /// reach here, so they are never looked up as keywords.
     fn lexIdentOrKeyword(self: *Lexer) token.Tag {
         const start = self.pos;
-        while (isIdentChar(self.peek(0))) self.pos += 1;
+        self.pos = @intCast(identEnd(self.src, self.pos));
         return token.lookupKeyword(self.src[start..self.pos]) orelse .identifier;
     }
 
@@ -227,7 +234,7 @@ pub const Lexer = struct {
         const start = self.pos;
         self.pos += 1; // '`'
         const name = self.pos;
-        while (isIdentChar(self.peek(0))) self.pos += 1;
+        self.pos = @intCast(identEnd(self.src, self.pos));
         const text = self.src[name..self.pos];
         if (std.mem.eql(u8, text, "begin_keywords")) return .dir_begin_keywords;
         if (std.mem.eql(u8, text, "end_keywords")) return .dir_end_keywords;
@@ -251,7 +258,7 @@ pub const Lexer = struct {
     fn lexSystemIdentifier(self: *Lexer) token.Tag {
         self.pos += 1;
         const body = self.pos;
-        while (isIdentChar(self.peek(0))) self.pos += 1;
+        self.pos = @intCast(identEnd(self.src, self.pos));
         return if (self.pos == body) .invalid else .system_identifier;
     }
 
@@ -361,6 +368,34 @@ pub fn isSpace(c: u8) bool {
 /// §2.8: letters, digits, `$` and `_` (only the first character is restricted).
 pub fn isIdentChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '$';
+}
+
+/// Returns the first index at or after `i` whose byte is not `isIdentChar`,
+/// else `s.len`. Asserts `i <= s.len`.
+pub fn identEnd(s: []const u8, i: usize) usize {
+    std.debug.assert(i <= s.len);
+    var k = i;
+    // One block compare and one predictable branch per 32 bytes, in place of
+    // a loop exit mispredicted at the end of nearly every identifier: lexing
+    // the five largest compact models fell from 6.16 to 5.17 ms. A plain
+    // 64-byte block loop vectorizes too, but must rescan its block per byte
+    // to find the end, and measured 8.25 ms. The loop below is the tail, the
+    // no-vector fallback, and the oracle the test checks this against.
+    if (std.simd.suggestVectorLength(u8)) |lanes| {
+        const V = @Vector(lanes, u8);
+        const Mask = @Int(.unsigned, lanes);
+        while (k + lanes <= s.len) : (k += lanes) {
+            const b: V = s[k..][0..lanes].*;
+            const letter: Mask = @bitCast((b | @as(V, @splat(0x20))) -% @as(V, @splat('a')) < @as(V, @splat(26)));
+            const digit: Mask = @bitCast(b -% @as(V, @splat('0')) < @as(V, @splat(10)));
+            const under: Mask = @bitCast(b == @as(V, @splat('_')));
+            const dollar: Mask = @bitCast(b == @as(V, @splat('$')));
+            const out = ~(letter | digit | under | dollar);
+            if (out != 0) return k + @ctz(out);
+        }
+    }
+    while (k < s.len and isIdentChar(s[k])) k += 1;
+    return k;
 }
 
 /// Returns where the §2.8.1 escaped identifier whose body starts at `i` (just
@@ -943,6 +978,53 @@ test "isBasedDigit is §2.6.1's digit set of each radix, plus _ x z ?" {
             try testing.expectEqual(four_state or in_radix, isBasedDigit(c, radix));
         }
     }
+}
+
+test "tokens tile the text: only white space between them, each re-lexes to its own end" {
+    // Property over random text from the bytes every scanner branches on: no
+    // byte is lost or read twice, and `tokenSpan` (a re-lex) ends where the
+    // scan did, so a diagnostic caret covers exactly the token.
+    const alphabet = "aZ_$09 \t\n\r\x0c\\\"'`.+-*/<>=!&|~^(){}[];:,?@#ehxsk\x00\x0b\x80\xff";
+    var prng: std.Random.DefaultPrng = .init(0x7e57);
+    const rand = prng.random();
+    var buf: [96]u8 = undefined;
+    for (0..4000) |_| {
+        const src = buf[0..rand.uintAtMost(usize, buf.len)];
+        for (src) |*b| b.* = alphabet[rand.uintLessThan(usize, alphabet.len)];
+        var list = try Lexer.tokenize(testing.allocator, src);
+        defer list.deinit(testing.allocator);
+        const starts = list.items(.start);
+        var prev_end: u32 = 0;
+        for (starts, 0..) |start, k| {
+            for (src[prev_end..start]) |c| try testing.expect(isSpace(c));
+            const span = tokenSpan(src, starts, @intCast(k));
+            try testing.expect(span.end > span.start or list.items(.tag)[k] == .eof);
+            prev_end = span.end;
+        }
+        try testing.expectEqual(@as(u32, @intCast(src.len)), prev_end);
+    }
+}
+
+test "identEnd agrees with the per-byte isIdentChar loop for every byte, position and start" {
+    // Oracle: the scalar loop the block scan replaced. Every byte value ends
+    // a run at every position of a 130-byte text (past four 32-byte blocks,
+    // so every block and tail boundary), from four starts.
+    var buf: [130]u8 = undefined;
+    for (&buf, 0..) |*b, k| b.* = "aZ09_$"[k % 6];
+    for (0..buf.len) |at| {
+        for (0..256) |c| {
+            buf[at] = @intCast(c);
+            for (0..4) |from| {
+                const s = buf[0..@max(at + 1, from)];
+                var want = from;
+                while (want < s.len and isIdentChar(s[want])) want += 1;
+                try testing.expectEqual(want, identEnd(s, from));
+            }
+        }
+        buf[at] = "aZ09_$"[at % 6];
+    }
+    try testing.expectEqual(@as(usize, 0), identEnd("", 0));
+    try testing.expectEqual(@as(usize, buf.len), identEnd(&buf, 0));
 }
 
 test "escapedEnd stops at the first byte outside printable ASCII 33-126 (§2.8.1)" {

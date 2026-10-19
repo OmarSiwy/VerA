@@ -120,6 +120,14 @@ pub const Tchk = struct {
     /// Run-time: the occurrences of [0] and [1] (`$width`: [0] is the
     /// pulse's open timestamp, cleared once measured).
     at: [2]Stamp = .{ .{}, .{} },
+
+    // Budget: `changed` reads one row per watching check per change. The
+    // optional stamps (16 B each) are the slack a sentinel would reclaim.
+    comptime {
+        std.debug.assert(@sizeOf(Event) == 40);
+        std.debug.assert(@sizeOf(Stamp) == 40);
+        std.debug.assert(@sizeOf(Tchk) == 200);
+    }
 };
 
 // ---- elaboration -----------------------------------------------------------

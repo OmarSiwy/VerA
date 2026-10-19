@@ -95,7 +95,7 @@ pub fn buildExe(
     const bin = if (opts.out_path) |p| try gpa.dupe(u8, p) else try binPath(gpa, arena, opts);
     errdefer gpa.free(bin);
 
-    const m_root = try bind(arena, io, dir, opts, "tb", "root", runner_zig);
+    const m_root = try arena.print("-Mroot={s}", .{try writeModule(arena, io, dir, opts, "tb", runner_zig)});
 
     // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
     var argv = try argvHead(arena, opts, if (opts.shared_lib) "build-lib" else "build-exe", bin);
@@ -110,7 +110,7 @@ pub fn buildExe(
         try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
         // A `.v` device (`digital.emitDevice`) runs on `sim`'s engine.
         if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim" });
-        try argv.appendSlice(arena, &.{ "--dep", "contract", try bind(arena, io, dir, opts, "device", "device", text) });
+        try argv.appendSlice(arena, &.{ "--dep", "contract", try arena.print("-Mdevice={s}", .{try writeModule(arena, io, dir, opts, "device", text)}) });
     } else try argv.append(arena, m_root);
     try argv.append(arena, try arena.print("-Mcontract={s}", .{opts.contract}));
     if (opts.mixed) {
@@ -197,21 +197,8 @@ fn runZig(gpa: Allocator, io: Io, argv: []const []const u8, bin: []const u8) !Bu
 }
 
 /// Writes one module's source to `<name>.<suffix>.zig` in `dir` and returns
-/// the `-M<binding>=<path>` flag, allocated in `arena`. The name-qualified file
-/// keeps two artifacts sharing a work root from overwriting each other.
-fn bind(
-    arena: Allocator,
-    io: Io,
-    dir: Io.Dir,
-    opts: BuildOptions,
-    suffix: []const u8,
-    binding: []const u8,
-    text: []const u8,
-) ![]const u8 {
-    return arena.print("-M{s}={s}", .{ binding, try writeModule(arena, io, dir, opts, suffix, text) });
-}
-
-/// `bind`'s file half: writes `<name>.<suffix>.zig` and returns its path.
+/// its path, allocated in `arena`. The name-qualified file keeps two
+/// artifacts sharing a work root from overwriting each other.
 fn writeModule(arena: Allocator, io: Io, dir: Io.Dir, opts: BuildOptions, suffix: []const u8, text: []const u8) ![]const u8 {
     assert(suffix.len != 0);
     assert(std.mem.findAny(u8, suffix, "/\\") == null);
@@ -334,13 +321,6 @@ test batchRoot {
     try std.testing.expect(std.mem.find(u8, src, "argv[0][at + 11 ..]") != null);
 }
 
-test "batchRoot uses no name Zig 0.17 deprecates" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const src = try batchRoot(arena_state.allocator(), 1);
-    try std.testing.expect(std.mem.find(u8, src, "std.mem.lastIndexOf") == null);
-}
-
 test argvHead {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -373,6 +353,34 @@ test argvHead {
         try std.testing.expectEqual(c.want.len, argv.len);
         for (c.want, argv) |w, a| try std.testing.expectEqualStrings(w, a);
     }
+}
+
+test "buildExe hands back zig's stderr for a testbench that does not compile" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try gpa.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer gpa.free(work);
+    try tmp.dir.writeFile(io, .{ .sub_path = "c.zig", .data = "" });
+    const contract = try std.fs.path.join(gpa, &.{ work, "c.zig" });
+    defer gpa.free(contract);
+    const opts: BuildOptions = .{ .work_dir = work, .contract = contract, .name = "broken" };
+
+    // `std.testing.allocator` fails the test if `bin` or the report leaks.
+    const r = buildExe(gpa, io, "pub const x = 1;\n", "pub fn main() void { _ = @import(\"device\").y; }\n", opts) catch |e| switch (e) {
+        // No `zig` on PATH in this environment: nothing to assert.
+        error.FileNotFound => return error.SkipZigTest,
+        else => return e,
+    };
+    defer r.deinit(gpa);
+    try std.testing.expect(r == .failed);
+    try std.testing.expect(std.mem.find(u8, r.failed, "no member named 'y'") != null);
+
+    // A compiler that cannot be spawned is an error, and `bin` is freed.
+    var gone = opts;
+    gone.zig_exe = "/nonexistent/zig";
+    try std.testing.expectError(error.FileNotFound, buildExe(gpa, io, "", "", gone));
 }
 
 test stage {

@@ -168,11 +168,10 @@ pub fn varPort(self: *Parser, b: *parse_module.Body, storage: @FieldType(Ast.Var
     });
 }
 
-/// Returns the header port named `name`, or null. The pointer is invalidated
-/// by the next append to `b.ports`.
+/// Returns the first header port named `name`, or null. The pointer is
+/// invalidated by the next append to `b.ports`.
 pub fn findPort(b: *parse_module.Body, name: Ast.StrId) ?*Ast.Port {
-    for (b.ports.items) |*p| if (p.name == name) return p;
-    return null;
+    return &b.ports.items[b.port_index.get(name) orelse return null];
 }
 
 // -----------------------------------------------------------------------
@@ -349,7 +348,7 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // may be declared for sig in the module where sig was declared". The
         // dotted name never matches `findPort`, so it lands as a net
         // declaration under its path and elaboration reads it as one.
-        const name = try parse_hier.parseDottedName(self, false);
+        const name = try parse_hier.parseDottedPath(self, false, null);
         // A.2.3 `ams_net_identifier ::= net_identifier { dimension }`. The
         // digital engine makes one net per element; analog lowering has no
         // array of nodes, so an analog parse refuses it here.

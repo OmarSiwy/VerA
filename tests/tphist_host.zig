@@ -14,8 +14,8 @@ const D = @import("device");
 const ptx = @import("ptx");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
-const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &.{ 0, 1 }, .{});
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 /// `I(p, n)` at V = 0 is `1u * s`, the cached sum of the history.
 fn sumAt(m: *const D.Model, inst: *D.Instance, sim: contract.SimState) f64 {
@@ -27,7 +27,7 @@ fn sumAt(m: *const D.Model, inst: *D.Instance, sim: contract.SimState) f64 {
 test "§2.9 a cached statement's held history reads back through a miss and a hit" {
     var m: D.Model = .{};
     if (@hasDecl(D, "derive")) D.derive(f64, &m);
-    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), &m);
+    if (@hasDecl(D, "setup")) D.setup(S0, &m);
     const inst = try std.testing.allocator.create(D.Instance);
     defer std.testing.allocator.destroy(inst);
     inst.* = .{};

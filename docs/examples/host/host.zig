@@ -19,9 +19,9 @@ comptime {
 
 const n = contract.nU(D);
 /// The family `eval` computes in: unknown u carries derivative lane u.
-const S = contract.RefFamily(f64, &std.simd.iota(u8, n), .{ .dense = true });
+const S = contract.RefFamily(f64, &std.simd.iota(u8, n), .{});
 /// The value-only family the card-time hooks compute in: no lanes.
-const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .dense = true });
+const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{});
 
 pub fn main() void {
     // The card: every parameter at its default. Then the card-time hooks,
@@ -45,12 +45,12 @@ pub fn main() void {
     for (1..50) |it| {
         // One call: each row's value is the current leaving that node
         // through the device, and its lanes are the row of the Jacobian.
-        const rows: [n]S.Of(0) = D.eval(S, &x, &model, &inst, .{});
+        const rows = D.eval(S, &x, &model, &inst, .{});
         var f: [n]f64 = undefined;
         var j: [n][n]f64 = undefined;
-        for (rows, 0..) |row, r| {
-            f[r] = row.v;
-            j[r] = row.d;
+        inline for (0..n) |r| {
+            f[r] = rows[r].v;
+            j[r] = contract.denseRow(n, rows[r]);
         }
         // Columns outside `deriv_reads` carry no lane: their constant
         // partials are in `jac_const` (this diode has none).

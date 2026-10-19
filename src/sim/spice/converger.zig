@@ -2,10 +2,10 @@
 //! stamp, factor, solve, accept.
 //!
 //! In: a system `sys` and a start `x`; out: the converged `x`, or a report
-//! that it did not converge. `sys` is a pointer with fields `n`,
-//! `diag_slots`, `rhs` and `current_row`, and optional pub methods
+//! that it did not converge. `sys` is a pointer with fields `n`, `rhs`
+//! and `current_row`, and optional pub methods
 //! beginSolve, advanceIteration, checkConvergence, applyLimits and
-//! updateStates. `hook` provides assemble(sys, x, t) and vals(sys) (the
+//! updateStates. `hook` provides assemble(sys, x) and vals(sys) (the
 //! Jacobian, row-major n x n).
 //!
 //! Copied from OmarSiwy/ESPice src/solver/converger.zig at
@@ -27,10 +27,6 @@
 //! SPICE's (ngspice niiter.c, niconv.c), not the LRM's.
 const std = @import("std");
 const dense_lu = @import("dense_lu.zig");
-
-fn Deref(comptime P: type) type {
-    return if (@typeInfo(P) == .pointer) @typeInfo(P).pointer.child else P;
-}
 
 /// Controls for one nonlinear solve. Defaults are SPICE's `.options`.
 pub const Options = struct {
@@ -61,8 +57,6 @@ pub const Result = struct {
     /// Iterations run, the converging one included; `max_iter` when not
     /// converged.
     iterations: u16,
-    /// Largest scaled step of the accepted iterate; 0 when not converged.
-    max_dx: f64,
 };
 
 /// Returns the per-system Newton scratch for `n` unknowns: the matrix copy
@@ -86,70 +80,51 @@ pub fn Workspace(comptime n: usize) type {
 /// returns before swapping CKTrhs into CKTrhsOld (niiter.c), and CKTdump and
 /// every device state read CKTrhsOld. A NaN or infinite iterate never
 /// converges.
-pub fn newton(
-    sys: anytype,
-    ws: anytype,
-    x: []f64,
-    t: f64,
-    opts: Options,
-    hook: anytype,
-) dense_lu.Error!Result {
-    const S = Deref(@TypeOf(sys));
+pub fn newton(sys: anytype, ws: anytype, x: []f64, opts: Options, hook: anytype) dense_lu.Error!Result {
+    const S = @TypeOf(sys.*);
     const n = sys.n;
+    std.debug.assert(x.len >= n);
+    std.debug.assert(ws.a.len >= n * n);
     const dx = ws.dx[0..n];
     const x_old = ws.x_old[0..n];
-    var iter: u16 = 0;
     var init_fix = opts.init_fix;
     if (comptime @hasDecl(S, "beginSolve")) sys.beginSolve();
 
-    while (iter < opts.max_iter) : (iter += 1) {
+    for (0..opts.max_iter) |iter| {
         if (comptime @hasDecl(S, "advanceIteration")) if (iter != 0) sys.advanceIteration(x_old);
-        hook.assemble(sys, x, t);
+        hook.assemble(sys, x);
         const v = hook.vals(sys);
         if (opts.gmin > 0) for (0..n) |i| if (!sys.current_row[i]) {
-            v[sys.diag_slots[i]] += opts.gmin;
+            v[i * (n + 1)] += opts.gmin;
             sys.rhs[i] += opts.gmin * x[i];
         };
         @memcpy(ws.a[0 .. n * n], v[0 .. n * n]);
         try dense_lu.factorizeSolveNeg(n, ws.a[0 .. n * n], sys.rhs[0..n], dx);
-        const st = finalizeStep(sys, x, dx, x_old, sys.rhs[0..n], v, iter, opts);
-        if (st.converged and init_fix) {
+        if (!finalizeStep(sys, x, dx, x_old, v, iter == 0, opts)) continue;
+        if (init_fix) {
             init_fix = false;
-        } else if (st.converged) {
-            @memcpy(x[0..n], x_old[0..n]);
-            return .{ .converged = true, .iterations = iter + 1, .max_dx = st.scaled };
+            continue;
         }
+        @memcpy(x[0..n], x_old);
+        return .{ .converged = true, .iterations = @intCast(iter + 1) };
     }
-    return .{ .converged = false, .iterations = opts.max_iter, .max_dx = 0 };
+    return .{ .converged = false, .iterations = opts.max_iter };
 }
 
-/// One iterate's verdict, and its scaled step for `Result.max_dx`.
-const Step = struct { converged: bool, scaled: f64 };
-
 /// Applies `dx` and runs the acceptance gates in order: device limiting,
-/// first iterate, per-row delta, row-scaled residual, device convergence,
-/// then state staging.
-fn finalizeStep(
-    sys: anytype,
-    x: []f64,
-    dx: []const f64,
-    x_old: []f64,
-    residual: []const f64,
-    vals: []const f64,
-    iter: u16,
-    opts: Options,
-) Step {
-    const S = Deref(@TypeOf(sys));
+/// first iterate, per-row delta, row-scaled residual (`sys.rhs`), device
+/// convergence, then state staging. True when every gate passes.
+fn finalizeStep(sys: anytype, x: []f64, dx: []const f64, x_old: []f64, vals: []const f64, first: bool, opts: Options) bool {
+    const S = @TypeOf(sys.*);
     const n = sys.n;
     const scaled = updateAndNorm(x[0..n], dx[0..n], x_old[0..n], sys.current_row[0..n], opts.reltol, opts.abstol, opts.vntol);
 
-    const limited = if (comptime @hasDecl(S, "applyLimits")) sys.applyLimits(x, x_old) else false;
-
-    if (limited) return .{ .converged = false, .scaled = scaled };
-    if (iter == 0) return .{ .converged = false, .scaled = scaled };
-    if (scaled >= 1.0) return .{ .converged = false, .scaled = scaled };
+    if (comptime @hasDecl(S, "applyLimits")) if (sys.applyLimits(x, x_old)) return false;
+    if (first) return false;
+    // Negated, so a NaN norm (a NaN tolerance) fails too.
+    if (!(scaled < 1.0)) return false;
     for (0..n) |i| {
-        const scale = @abs(vals[sys.diag_slots[i]]);
+        const scale = @abs(vals[i * (n + 1)]);
         // A zero diagonal is a voltage-defined branch row (V/E/H source):
         // its scale is the source gain, and an exact solution still leaves
         // O(gain * eps) residual there (a 1e9-gain E source reads 2.7e-8).
@@ -157,57 +132,44 @@ fn finalizeStep(
         if (scale == 0) continue;
         const tol = @max(opts.residual_tol, 10.0 * scale * (opts.reltol * @abs(x[i]) + opts.vntol));
         // Negated, so a NaN residual fails too.
-        if (!(@abs(residual[i]) <= tol)) return .{ .converged = false, .scaled = scaled };
+        if (!(@abs(sys.rhs[i]) <= tol)) return false;
     }
-    if (comptime @hasDecl(S, "checkConvergence")) {
-        if (!sys.checkConvergence(x)) return .{ .converged = false, .scaled = scaled };
-    }
+    if (comptime @hasDecl(S, "checkConvergence")) if (!sys.checkConvergence(x)) return false;
     // Last, at the x_k `newton` publishes. A device that flips here forces
     // one more iterate.
-    if (comptime @hasDecl(S, "updateStates")) {
-        if (sys.updateStates(x_old[0..n])) |_| return .{ .converged = false, .scaled = scaled };
-    }
-    return .{ .converged = true, .scaled = scaled };
+    if (comptime @hasDecl(S, "updateStates")) if (sys.updateStates(x_old[0..n]) != null) return false;
+    return true;
 }
 
 const inf = std.math.inf(f64);
 
 /// x_old = x; x += dx; returns max |dx| / (reltol * max(|x|, |x_old|) + atol),
 /// atol = abstol on current rows, vntol elsewhere. A row whose new x or dx
-/// is NaN or infinite scores inf: `@max` lowers to maxnum, which would drop
-/// a NaN and pass a diverged step. Max is exact and order-independent, so
-/// the vector body and scalar tail agree bitwise with a plain scalar loop.
+/// is NaN or infinite scores inf, and a zero step scores 0 whatever its
+/// tolerance (ngspice's |dx| <= tol holds), so zero tolerances give no 0/0.
+/// Asserts that every slice is as long as `x`.
 fn updateAndNorm(x: []f64, dx: []const f64, x_old: []f64, current_row: []const bool, reltol: f64, abstol: f64, vntol: f64) f64 {
-    const W = std.simd.suggestVectorLength(f64) orelse 1;
-    const V = @Vector(W, f64);
-    const rel: V = @splat(reltol);
-    const abs_i: V = @splat(abstol);
-    const abs_v: V = @splat(vntol);
-    const inf_v: V = @splat(inf);
-    var worst_v: V = @splat(0);
-    var i: usize = 0;
-    while (i + W <= x.len) : (i += W) {
-        const xo: V = x[i..][0..W].*;
-        const d: V = dx[i..][0..W].*;
-        const cur: @Vector(W, bool) = current_row[i..][0..W].*;
-        const xn = xo + d;
-        x_old[i..][0..W].* = xo;
-        x[i..][0..W].* = xn;
-        const tol = rel * @max(@abs(xn), @abs(xo)) + @select(f64, cur, abs_i, abs_v);
-        const finite = (@abs(xn) < inf_v) & (@abs(d) < inf_v);
-        worst_v = @max(worst_v, @select(f64, finite, @abs(d) / tol, inf_v));
+    std.debug.assert(dx.len == x.len);
+    std.debug.assert(x_old.len == x.len);
+    std.debug.assert(current_row.len == x.len);
+    var worst: i64 = 0;
+    for (x, dx, x_old, current_row) |*xi, d, *xo, c| {
+        const o = xi.*;
+        xo.* = o;
+        const xn = o + d;
+        xi.* = xn;
+        const atol = if (c) abstol else vntol;
+        const tol = reltol * @max(@abs(xn), @abs(o)) + atol;
+        const finite = @abs(xn) < inf and @abs(d) < inf;
+        const r = if (!finite) inf else if (d == 0) 0 else @abs(d) / tol;
+        // The max runs over the bit patterns, sign cleared: they order like
+        // the non-negative ratios with NaN above inf, so the max is exact,
+        // order-independent and vectorizes, and a NaN (from a NaN tolerance)
+        // propagates where a float `@max` (maxnum) would drop it. The sign is
+        // cleared because x86's default NaN is negative.
+        worst = @max(worst, @as(i64, @bitCast(@as(u64, @bitCast(r)) & 0x7fff_ffff_ffff_ffff)));
     }
-    var worst: f64 = @reduce(.Max, worst_v);
-    for (x[i..], dx[i..], x_old[i..], current_row[i..x.len]) |*xi, dxi, *xoi, is_cur| {
-        const xo = xi.*;
-        xoi.* = xo;
-        xi.* = xo + dxi;
-        const atol = if (is_cur) abstol else vntol;
-        const tol = reltol * @max(@abs(xi.*), @abs(xo)) + atol;
-        const finite = @abs(xi.*) < inf and @abs(dxi) < inf;
-        worst = @max(worst, if (finite) @abs(dxi) / tol else inf);
-    }
-    return worst;
+    return @bitCast(worst);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,16 +181,28 @@ fn updateAndNorm(x: []f64, dx: []const f64, x_old: []f64, current_row: []const b
 
 const testing = std.testing;
 
-test "updateAndNorm scores a NaN step as infinite and a small one below 1" {
+test "updateAndNorm scores a NaN step as infinite, a small one below 1, a zero one 0, and a NaN tolerance NaN" {
     var x = [_]f64{ 1.0, 0.0, 2.0 };
     var x_old: [3]f64 = undefined;
     const cur = [_]bool{ false, true, false };
     try testing.expect(updateAndNorm(&x, &.{ 1e-9, 1e-15, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6) < 1.0);
     try testing.expectEqual(@as(f64, 1.0), x_old[0]);
     try testing.expectEqual(inf, updateAndNorm(&x, &.{ std.math.nan(f64), 0, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6));
+    try testing.expectEqual(inf, updateAndNorm(&x, &.{ 0, -inf, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6));
+    // Zero tolerances: a zero step at x = 0 passes (no 0/0), any other
+    // step is infinitely large.
+    var z = [_]f64{0};
+    try testing.expectEqual(0, updateAndNorm(&z, &.{0}, x_old[0..1], &.{true}, 0, 0, 0));
+    try testing.expectEqual(inf, updateAndNorm(&z, &.{1e-300}, x_old[0..1], &.{true}, 0, 0, 0));
+    // A NaN tolerance propagates, and `finalizeStep`'s `!(scaled < 1)`
+    // refuses it.
+    var y = [_]f64{1.0};
+    try testing.expect(std.math.isNan(updateAndNorm(&y, &.{1e-9}, x_old[0..1], &.{false}, std.math.nan(f64), 1e-12, 1e-6)));
+    try testing.expectEqual(0, updateAndNorm(x[0..0], &.{}, x_old[0..0], &.{}, 1e-3, 1e-12, 1e-6));
 }
 
-/// The plain loop `updateAndNorm` vectorizes, as its header states it.
+/// The strict scalar loop `updateAndNorm` must equal: float compares, with
+/// the first NaN ratio (sign cleared) winning over every other.
 fn normOracle(x: []f64, dx: []const f64, x_old: []f64, current_row: []const bool, reltol: f64, abstol: f64, vntol: f64) f64 {
     var worst: f64 = 0;
     for (x, dx, x_old, current_row) |*xi, d, *xo, c| {
@@ -237,38 +211,48 @@ fn normOracle(x: []f64, dx: []const f64, x_old: []f64, current_row: []const bool
         xi.* = o + d;
         const tol = reltol * @max(@abs(xi.*), @abs(o)) + (if (c) abstol else vntol);
         const finite = @abs(xi.*) < inf and @abs(d) < inf;
-        worst = @max(worst, if (finite) @abs(d) / tol else inf);
+        const r = if (!finite) inf else if (d == 0) 0 else @abs(d) / tol;
+        if (!std.math.isNan(worst) and !(r <= worst)) worst = @abs(r);
     }
     return worst;
 }
 
-test "updateAndNorm equals its scalar loop bit for bit at every length" {
+test "updateAndNorm equals its strict scalar loop bit for bit: lengths 0..200, every start, NaN/Inf" {
     var prng: std.Random.DefaultPrng = .init(11);
     const rnd = prng.random();
-    const len_max = 40; // past 3 vectors at every width up to 8
-    var x: [len_max]f64 = undefined;
-    var x2: [len_max]f64 = undefined;
-    var dx: [len_max]f64 = undefined;
-    var xo: [len_max]f64 = undefined;
-    var xo2: [len_max]f64 = undefined;
-    var cur: [len_max]bool = undefined;
-    for (0..len_max + 1) |len| for (0..8) |_| {
-        for (x[0..len], dx[0..len], cur[0..len]) |*xi, *d, *c| {
+    const len_max = 200;
+    const pad = 3; // misaligned starts
+    var x: [len_max + pad]f64 = undefined;
+    var x2: [len_max + pad]f64 = undefined;
+    var dx: [len_max + pad]f64 = undefined;
+    var xo: [len_max + pad]f64 = undefined;
+    var xo2: [len_max + pad]f64 = undefined;
+    var cur: [len_max + pad]bool = undefined;
+    for (0..len_max + 1) |len| for (0..pad + 1) |off| {
+        const e = off + len;
+        for (x[off..e], dx[off..e], cur[off..e]) |*xi, *d, *c| {
             xi.* = 4 * rnd.float(f64) - 2;
             d.* = (rnd.float(f64) - 0.5) * std.math.pow(f64, 10, -12 * rnd.float(f64));
             c.* = rnd.boolean();
-            // An occasional diverged entry: infinite x or NaN step.
-            switch (rnd.uintLessThan(u8, 32)) {
+            // An occasional diverged entry: infinite x or step, NaN step.
+            switch (rnd.uintLessThan(u8, 64)) {
                 0 => xi.* = inf,
                 1 => d.* = std.math.nan(f64),
+                2 => d.* = -inf,
+                3 => {
+                    xi.* = 0;
+                    d.* = 0;
+                },
                 else => {},
             }
         }
-        @memcpy(x2[0..len], x[0..len]);
-        const got = updateAndNorm(x[0..len], dx[0..len], xo[0..len], cur[0..len], 1e-3, 1e-12, 1e-6);
-        const want = normOracle(x2[0..len], dx[0..len], xo2[0..len], cur[0..len], 1e-3, 1e-12, 1e-6);
+        @memcpy(x2[off..e], x[off..e]);
+        // Zero tolerances on one run in eight, where zero steps must score 0.
+        const tol: f64 = if (len % 8 == 0) 0 else 1e-6;
+        const got = updateAndNorm(x[off..e], dx[off..e], xo[off..e], cur[off..e], 1e-3, tol * 1e-6, tol);
+        const want = normOracle(x2[off..e], dx[off..e], xo2[off..e], cur[off..e], 1e-3, tol * 1e-6, tol);
         try testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
-        for (x2[0..len], x[0..len], xo2[0..len], xo[0..len]) |a, b, c, d| {
+        for (x2[off..e], x[off..e], xo2[off..e], xo[off..e]) |a, b, c, d| {
             try testing.expectEqual(@as(u64, @bitCast(a)), @as(u64, @bitCast(b)));
             try testing.expectEqual(@as(u64, @bitCast(c)), @as(u64, @bitCast(d)));
         }
@@ -280,11 +264,6 @@ test "updateAndNorm equals its scalar loop bit for bit at every length" {
 fn LinearSys(comptime n: usize) type {
     return struct {
         n: usize = n,
-        diag_slots: [n]u32 = blk: {
-            var d: [n]u32 = undefined;
-            for (&d, 0..) |*e, i| e.* = i * n + i;
-            break :blk d;
-        },
         rhs: [n]f64 = undefined,
         current_row: [n]bool = @splat(false),
         jac: [n * n]f64 = undefined,
@@ -293,7 +272,7 @@ fn LinearSys(comptime n: usize) type {
 
         const Sys = @This();
         const Hook = struct {
-            pub fn assemble(_: Hook, s: *Sys, x: []const f64, _: f64) void {
+            pub fn assemble(_: Hook, s: *Sys, x: []const f64) void {
                 s.jac = s.g;
                 for (0..n) |i| {
                     var r = -s.b[i];
@@ -315,28 +294,26 @@ test newton {
     var sys: L = .{ .g = .{ 2, -1, -1, 2 }, .b = .{ 1, 0 } };
     var ws: Workspace(2) = .{};
     var x = [_]f64{ 0, 0 };
-    const r = try newton(&sys, &ws, &x, 0, .{}, L.Hook{});
+    const r = try newton(&sys, &ws, &x, .{}, L.Hook{});
     try testing.expect(r.converged);
     try testing.expectEqual(2, r.iterations);
-    try testing.expect(r.max_dx < 1);
     try testing.expectApproxEqAbs(@as(f64, 2.0 / 3.0), x[0], 1e-15);
     try testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0), x[1], 1e-15);
 
     // INITFIX: the first passing iterate only re-arms, so one more runs.
     x = .{ 0, 0 };
-    const fix = try newton(&sys, &ws, &x, 0, .{ .init_fix = true }, L.Hook{});
+    const fix = try newton(&sys, &ws, &x, .{ .init_fix = true }, L.Hook{});
     try testing.expect(fix.converged);
     try testing.expectEqual(3, fix.iterations);
 
     // One iteration is never enough.
     x = .{ 0, 0 };
-    const short = try newton(&sys, &ws, &x, 0, .{ .max_iter = 1 }, L.Hook{});
+    const short = try newton(&sys, &ws, &x, .{ .max_iter = 1 }, L.Hook{});
     try testing.expect(!short.converged);
     try testing.expectEqual(1, short.iterations);
-    try testing.expectEqual(0, short.max_dx);
 
     // max_iter = 0 runs nothing.
-    const none = try newton(&sys, &ws, &x, 0, .{ .max_iter = 0 }, L.Hook{});
+    const none = try newton(&sys, &ws, &x, .{ .max_iter = 0 }, L.Hook{});
     try testing.expect(!none.converged);
     try testing.expectEqual(0, none.iterations);
 }
@@ -346,11 +323,11 @@ test "newton returns error.Singular, and a NaN residual never converges" {
     var ws: Workspace(2) = .{};
     var x = [_]f64{ 0, 0 };
     var singular: L = .{ .g = .{ 1, 2, 2, 4 }, .b = .{ 1, 1 } };
-    try testing.expectError(error.Singular, newton(&singular, &ws, &x, 0, .{}, L.Hook{}));
+    try testing.expectError(error.Singular, newton(&singular, &ws, &x, .{}, L.Hook{}));
 
     var poisoned: L = .{ .g = .{ 2, -1, -1, 2 }, .b = .{ std.math.nan(f64), 0 } };
     x = .{ 0, 0 };
-    const r = try newton(&poisoned, &ws, &x, 0, .{ .max_iter = 5 }, L.Hook{});
+    const r = try newton(&poisoned, &ws, &x, .{ .max_iter = 5 }, L.Hook{});
     try testing.expect(!r.converged);
     try testing.expectEqual(5, r.iterations);
 }
@@ -362,20 +339,19 @@ test "Options.gmin shunts voltage rows only" {
     var ws: Workspace(1) = .{};
     var sys: L = .{ .g = .{1}, .b = .{1} };
     var x = [_]f64{0};
-    const r = try newton(&sys, &ws, &x, 0, .{ .gmin = 1 }, L.Hook{});
+    const r = try newton(&sys, &ws, &x, .{ .gmin = 1 }, L.Hook{});
     try testing.expect(r.converged);
     try testing.expectEqual(@as(f64, 0.5), x[0]);
 
     sys.current_row = .{true};
     x = .{0};
-    _ = try newton(&sys, &ws, &x, 0, .{ .gmin = 1 }, L.Hook{});
+    _ = try newton(&sys, &ws, &x, .{ .gmin = 1 }, L.Hook{});
     try testing.expectEqual(@as(f64, 1), x[0]);
 }
 
 /// x - 1 = 0 with every optional hook, each counting or vetoing.
 const HookSys = struct {
     n: usize = 1,
-    diag_slots: [1]u32 = .{0},
     rhs: [1]f64 = undefined,
     current_row: [1]bool = .{false},
     jac: [1]f64 = undefined,
@@ -408,7 +384,7 @@ const HookSys = struct {
     }
 
     const Hook = struct {
-        pub fn assemble(_: Hook, s: *HookSys, x: []const f64, _: f64) void {
+        pub fn assemble(_: Hook, s: *HookSys, x: []const f64) void {
             s.jac = .{1};
             s.rhs = .{x[0] - 1};
         }
@@ -423,7 +399,7 @@ test "newton's optional hooks: counted, vetoing, flipping, limiting" {
     var x = [_]f64{0};
 
     var plain: HookSys = .{};
-    const r = try newton(&plain, &ws, &x, 0, .{}, HookSys.Hook{});
+    const r = try newton(&plain, &ws, &x, .{}, HookSys.Hook{});
     try testing.expect(r.converged);
     try testing.expectEqual(2, r.iterations);
     try testing.expectEqual(1, plain.begins);
@@ -434,15 +410,15 @@ test "newton's optional hooks: counted, vetoing, flipping, limiting" {
     // Each veto or state flip costs exactly one more iterate.
     var vetoed: HookSys = .{ .vetoes = 2 };
     x = .{0};
-    try testing.expectEqual(4, (try newton(&vetoed, &ws, &x, 0, .{}, HookSys.Hook{})).iterations);
+    try testing.expectEqual(4, (try newton(&vetoed, &ws, &x, .{}, HookSys.Hook{})).iterations);
     var flipped: HookSys = .{ .flips = 1 };
     x = .{0};
-    try testing.expectEqual(3, (try newton(&flipped, &ws, &x, 0, .{}, HookSys.Hook{})).iterations);
+    try testing.expectEqual(3, (try newton(&flipped, &ws, &x, .{}, HookSys.Hook{})).iterations);
 
     // A device that limits every iterate never converges.
     var limited: HookSys = .{ .limit_always = true };
     x = .{0};
-    const l = try newton(&limited, &ws, &x, 0, .{ .max_iter = 7 }, HookSys.Hook{});
+    const l = try newton(&limited, &ws, &x, .{ .max_iter = 7 }, HookSys.Hook{});
     try testing.expect(!l.converged);
     try testing.expectEqual(7, l.iterations);
 }

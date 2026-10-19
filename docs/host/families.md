@@ -65,11 +65,12 @@ A device publishes masks so you carry no lane it never reads:
 | `constant` | `.{ .g, .c }`: dF/dx (or dQ/dx) does not depend on x, so a stamp built once may be reused. A wrong promise freezes the Jacobian |
 
 `contract.rowMask(D, r)` is the mask row `r` is returned at:
-`jac_pattern[r] & deriv_reads`. Up to 64 unknowns the masks are `u64`; a
-device past 64 that declares `deriv_reads` names its masks in `MaskOf(n)`
-(`u<n>`), and `contract.Mask(D)` is that type. A device past 64 that declares
-no masks keeps the dense `u64` default, so a host that handles only `u64`
-masks still gets every device it got before.
+`jac_pattern[r] & deriv_reads`. Up to 64 unknowns the masks are `u64`; past
+64 they are `MaskOf(n)` (`u<n>`), and `contract.Mask(D)` is that type. Masks
+are exact at any size: a value's mask names exactly the unknowns it depends on.
+The n×n tables (`jac_pattern`, `q_pattern`, `q_site_pattern`) are emitted up to
+about 2048 unknowns; past that a host takes each row's lanes from
+`deriv_reads`.
 
 The [minimal host](minimal-host.md) shows the stamping that `jac_const`
 needs: lanes on the `deriv_reads` columns, constants on the rest.
@@ -92,17 +93,14 @@ pub fn RefFamily(comptime L: type, comptime lane: anytype, comptime opts: RefOpt
   unknown up to 255 of them, `std.simd.iota(u32, n)` past them; all
   `no_lane` is the value-only family the card-time hooks (`setup`,
   `derive`) and the value-only state hooks take.
-- `.dense = true`: every `Of(m)` is one type, the value and an array of
-  every lane, so a scatter loop may index `d` at run time. Masks only
-  document intent.
-- `.dense = false` (sparse): `Of(m)` carries exactly `m`'s lanes as a
-  `@Vector(@popCount(m), L)`, so a row with three live columns does three
-  lanes of arithmetic. It serves any number of unknowns, and refuses at
-  compile time a mask naming an unknown `lane` does not carry.
+- `opts` is `.{ .collapse_applied = … }`, the family's trait (`family_fns`).
 
-Dense is the simple choice (the examples use it); sparse is the fast one for
-a large device, where most rows touch a few of many unknowns.
-`tests/arpice_dyn.zig` builds its devices over the sparse family.
+`Of(m)` carries exactly `m`'s lanes as a `@Vector(@popCount(m), L)`, so a row
+with three live columns does three lanes of arithmetic. It serves any number
+of unknowns, and refuses at compile time a mask naming an unknown `lane` does
+not carry. A host whose matrix indexes a row at run time (a Newton plane, a
+gate, an AC system) spreads it with `contract.denseRow(n, row)`: each lane at
+its unknown's column, +0 elsewhere.
 
 ## jac_f32
 

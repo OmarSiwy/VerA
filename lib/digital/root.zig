@@ -51,5 +51,5 @@ fn emitDeviceDeep(arena: std.mem.Allocator, source: []const u8, opts: sim_digita
 }
 
 test {
-    _ = emit;
+    _ = @import("tests.zig");
 }

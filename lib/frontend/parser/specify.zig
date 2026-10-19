@@ -161,7 +161,7 @@ fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     const name = try self.expectIdent();
     const e = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
-    return if (self.peek() == .lbracket) parse_expr.parseSelect(self, e) else e;
+    return if (self.peek() == .lbracket) parse_expr.parseSelectAt(self, e, self.pos) else e;
 }
 
 /// Parses A.7.2 `list_of_path_inputs` or `list_of_path_outputs`, the same
@@ -324,8 +324,7 @@ fn terminalName(self: *const Parser, t: Ast.ExprId) Ast.StrId {
 }
 
 fn portNamed(b: *const parse_module.Body, name: Ast.StrId) ?Ast.Port {
-    for (b.ports.items) |p| if (p.name == name) return p;
-    return null;
+    return b.ports.items[b.port_index.get(name) orelse return null];
 }
 
 /// A terminal's width when its port's range and its select are literal.

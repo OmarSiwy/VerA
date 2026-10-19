@@ -14,7 +14,7 @@ const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
 const naming = @import("ir").names;
 const Lowered = @import("ir").Lowered;
-const HeldVar = @import("ir").Lowered.HeldVar;
+const HeldVar = Lowered.HeldVar;
 const Mir = @import("ir").Mir;
 const diag = @import("diag");
 const Io = std.Io;
@@ -34,8 +34,8 @@ comptime {
 /// (`ParamInfo.shape`, §3.4), allocated in `arena`. A shape parameter is fixed
 /// at compile time, so a non-empty result means the caller must compile again
 /// with it as `Options.param_overrides`, as `--param` would.
-pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lowered.ParamOverride {
-    var out: std.ArrayList(@import("ir").Lowered.ParamOverride) = .empty;
+pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const Lowered.ParamOverride {
+    var out: std.ArrayList(Lowered.ParamOverride) = .empty;
     for (d.params) |card| for (lowered.params.items) |p| {
         if (p.shape and std.mem.eql(u8, p.name, card.name)) try out.append(arena, .{ .name = card.name, .value = card.value });
     };
@@ -926,11 +926,9 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
 /// Emits the §4.6.4.1/.2 `white`, `flicker` and `ef` checks, read from
 /// `noisePsd` at the enclosing operating point. `mdl` names the card.
 fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
-    var any = false;
     for (d.noise) |w| {
-        if (w.needsPoint()) any = true;
-    }
-    if (!any) return;
+        if (w.needsPoint()) break;
+    } else return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"noisePsd\")) {\n");
     try out.appendSlice(arena, noise_close);
     try out.print(arena, "            const psd = D.noisePsd(Dual, x, &{s}, &inst, sim_state);\n", .{mdl});
@@ -1092,11 +1090,9 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
 /// enclosing operating point (A.8.2 makes both `analog_expression`s, so they
 /// may depend on bias). `mdl` names the card.
 fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
-    var any = false;
     for (d.acstim) |w| {
-        if (w.needsPoint()) any = true;
-    }
-    if (!any) return;
+        if (w.needsPoint()) break;
+    } else return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"acStim\")) {\n");
     try out.appendSlice(arena, noise_close);
     try out.print(arena, "            const stim = D.acStim(Val, x, &{s}, &inst, sim_state);\n", .{mdl});

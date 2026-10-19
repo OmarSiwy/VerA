@@ -31,6 +31,8 @@ const plan_args = @import("codegen/plan/args.zig");
 const plan_setup = @import("prove").setup;
 const plan_qsite = @import("codegen/plan/qsite.zig");
 const plan_jac = @import("codegen/plan/jac.zig");
+const gen_mask = @import("codegen/mask.zig");
+const gen_family = @import("codegen/family.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 
@@ -225,7 +227,18 @@ pub const Gen = struct {
     /// Then the storage is `S`; otherwise plain `f64`, and a store keeps only
     /// the value, since no load could see what it dropped. See `prepare`.
     arr_s: []bool = &.{},
-    /// The mask of each `Lowered.mem_arrays` row's storage (`prepare`).
+    /// Words per unknown mask (`codegen/mask.zig`): `max(1, ceil(n_u / 64))`.
+    mw: u32 = 1,
+    /// `Analysis.deps` and `Analysis.acdyn` at `mw` words per value (the
+    /// analysis' own slices when they are that wide); `acdyn` empty when
+    /// the module has no frequency-dependent operator. `family.mask` and
+    /// `family.acDyn` read them.
+    deps: []const u64 = &.{},
+    acdyn: []const u64 = &.{},
+    /// `mw` zero words.
+    zero_mask: []const u64 = &.{},
+    /// The mask of each `Lowered.mem_arrays` row's storage, `mw` words per
+    /// row (`prepare`).
     arr_mask: []u64 = &.{},
     /// The setup roots and `setup`'s emission state (`codegen/setup.zig`).
     su: gen_setup.Setup = .{},
@@ -371,7 +384,7 @@ pub const Gen = struct {
     /// coefficients.
     jac: gen_dispatch.Jac = .{},
     /// The raw mask of every real declared, for `family.emitLaneMasks`.
-    fam_masks: std.ArrayList(u64) = .empty,
+    fam_masks: std.ArrayList([]const u64) = .empty,
 
     /// The one fact `plan_jobs` needs from the renderer: does a §4.5 control
     /// argument (or §4.6.3 stimulus) render host-side, or only off the core?
@@ -437,6 +450,22 @@ pub const Gen = struct {
 
     // ------------------------------------------------------------------ setup
 
+    /// `col` (`w` words per value) at `mw` words per value: `col` itself when
+    /// `w == mw`, else a zero-extended copy from `arena`.
+    fn widen(arena: std.mem.Allocator, col: []const u64, words: u32, mw: u32) Error![]const u64 {
+        std.debug.assert(words <= mw);
+        if (words == mw) return col;
+        const n = col.len / words;
+        const out = try gen_mask.zero(arena, @intCast(n * mw));
+        for (0..n) |i| @memcpy(out[i * mw ..][0..words], col[i * words ..][0..words]);
+        return out;
+    }
+
+    /// Array `id`'s storage mask: `mw` words of `arr_mask`.
+    pub fn arrMask(self: *const Gen, id: usize) []u64 {
+        return self.arr_mask[id * self.mw ..][0..self.mw];
+    }
+
     fn prepare(self: *Gen) Error!void {
         // The emitted Zig runs about 24 bytes per MIR instruction; one guess
         // up front saves a dozen doublings.
@@ -450,15 +479,19 @@ pub const Gen = struct {
             const arr: Mir.Value = @fromBackingInt(@intCast(self.mir.insts.items(.a)[ii]));
             if (!self.an.dFree(arr)) self.arr_s[self.an.arrOf(arr).?] = true;
         };
+        self.names = try plan_names.plan(self.input(), self.verdict.unit_modes.len);
+        self.mw = @intCast(@max(1, std.math.divCeil(u32, self.names.n_u, 64) catch unreachable));
+        self.deps = try widen(self.arena, self.an.deps, self.an.dep_words, self.mw);
+        self.acdyn = try widen(self.arena, self.an.acdyn, self.an.dep_words, self.mw);
+        self.zero_mask = try gen_mask.zero(self.arena, self.mw);
+        try gen_dispatch.alloc(self);
         // One storage holds every version of its array, so its elements are
         // typed by the union of their masks.
-        self.arr_mask = try self.arena.alloc(u64, self.arr_s.len);
-        @memset(self.arr_mask, 0);
+        self.arr_mask = try gen_mask.zero(self.arena, @intCast(self.arr_s.len * self.mw));
         if (self.arr_mask.len != 0) for (0..self.an.nv) |v| {
             const id = self.an.arrOf(@fromBackingInt(@intCast(v))) orelse continue;
-            self.arr_mask[id] |= self.an.unknownDeps(@fromBackingInt(@intCast(v)));
+            gen_mask.orIn(self.arrMask(id), gen_family.mask(self, @fromBackingInt(@intCast(v))));
         };
-        self.names = try plan_names.plan(self.input(), self.verdict.unit_modes.len);
         // After `plan_names.plan`, which fills the `branch_u` that `freeFlows`
         // subtracts.
         self.topo = try plan_topo.plan(self.input(), self.names.branch_u);

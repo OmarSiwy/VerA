@@ -35,8 +35,8 @@ Step by step:
   compile time that the host meets what this device needs: here only
   `calls_setup`, because the device has a `setup`. Leave the declaration out
   and the build fails with an error saying so.
-- **The families.** `S` is the dense reference family with one derivative
-  lane per unknown: every value `eval` computes carries its partial with
+- **The families.** `S` is the reference family with one derivative lane
+  per unknown it may carry: every value `eval` computes carries its partial with
   respect to `a`, `k` and `ai`. `Val` has no lanes; the card-time hooks take
   it. [Scalar families](families.md) explains both.
 - **The card.** `Model` holds every parameter at its default. The host runs
@@ -46,8 +46,9 @@ Step by step:
   the family itself, `Val`, not a value type.
 - **One evaluation per iterate.** `D.eval` returns one row per unknown: its
   value is the current leaving that node through the device, and its lanes
-  are that row of the Jacobian. With a dense family every row has the same
-  type, so the result coerces to an array.
+  are that row of the Jacobian. Each row carries only the lanes it can have,
+  so the host reads rows with an `inline for` and spreads each into a matrix
+  row with `contract.denseRow`.
 - **Constant columns.** An unknown outside `deriv_reads` carries no lane;
   its partials are compile-time constants in `jac_const`. This diode has
   none, but the loop is what a general host needs.

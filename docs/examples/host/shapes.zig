@@ -69,7 +69,7 @@ test "families.md: family_fns, family_primitives, JacConst, LaneUse, Constant, R
     try expectNames(contract.JacConst(Dev.U), &.{ "row", "col", "g", "c", "when" });
     try expectNames(contract.LaneUse, &.{ "mask", "uses" });
     try expectNames(contract.Constant, &.{ "g", "c" });
-    try expectNames(contract.RefOptions, &.{ "dense", "collapse_applied" });
+    try expectNames(contract.RefOptions, &.{"collapse_applied"});
 }
 
 test "state.md: StateClass, UpdateResult, StateCtlOp, QStamp, LimitResult" {

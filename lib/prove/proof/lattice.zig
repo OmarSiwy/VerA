@@ -134,8 +134,9 @@ pub fn domainOf(op: Mir.Opcode) Domain {
     return Mir.opcode.get(op).domain;
 }
 
-/// Membership oracle: the definition every `Interval` predicate is checked against.
-fn member(i: Interval, x: f64) bool {
+/// Membership oracle: the definition every `Interval` predicate is checked
+/// against, here and in `transfer.zig`'s tests.
+pub fn member(i: Interval, x: f64) bool {
     if (i.nonzero and x == 0) return false;
     const above = x > i.lo or (x == i.lo and !i.lo_open);
     const below = x < i.hi or (x == i.hi and !i.hi_open);

@@ -557,10 +557,9 @@ pub fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
             },
         };
         if (allowed.len == 0) continue; // desc/units: a string is the whole rule
-        var in_domain = false;
-        for (allowed) |ok| {
-            if (std.mem.eql(u8, got, ok)) in_domain = true;
-        }
+        const in_domain = for (allowed) |ok| {
+            if (std.mem.eql(u8, got, ok)) break true;
+        } else false;
         if (!in_domain) {
             var b = self.errWith(a.main_tok, .E0358);
             b.msg("`{s} = \"{s}\"`", .{ name, got });

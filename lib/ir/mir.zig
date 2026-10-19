@@ -5,9 +5,9 @@
 //! indices. A Value index renumbers when the source changes, so it must never
 //! reach an emitted name or a content hash (names.zig canonicalizes).
 //!
-//! LRM clauses this file's code cites: §2.7, §2.9, §3.2, §3.4, §4.2.1.1,
-//! §4.2.1.2, §4.2.3, §4.2.4, §4.2.5, §4.2.7, §4.2.8, §4.2.9, §4.2.10, §4.2.11,
-//! §4.2.12, §4.3.1, §4.3.2, §4.4, §4.5, §4.7, §5.6.1.2, §5.10.
+//! LRM clauses this file's code cites: §2.7, §2.9, §3.2, §3.2.2, §3.4,
+//! §4.2.1.1, §4.2.1.2, §4.2.1.3, §4.2.3, §4.2.4, §4.2.5, §4.2.7, §4.2.8, §4.2.9, §4.2.10, §4.2.11,
+//! §4.2.12, §4.3.1, §4.3.2, §4.4, §4.5, §4.7, §5.6.1.2, §5.10, §10.1.
 //! IEEE 1364-2005 clauses cited: §5.1.5, §19.1.
 
 const std = @import("std");
@@ -289,6 +289,7 @@ comptime {
     assert(std.MultiArrayList(ValueRow).capacityInBytes(1) == 9);
     assert(std.MultiArrayList(BlockRow).capacityInBytes(1) == 8);
     assert(@sizeOf(PhiPair) == 8); // two `extra` words
+    assert(@sizeOf(GuardLit) == 12);
 }
 
 /// The lowered module's name.
@@ -359,10 +360,12 @@ pub fn guardConds(self: *const Mir, inst: Inst) GuardIter {
     return .{ .mir = self, .lit = self.guardOf(inst) orelse GuardLit.end };
 }
 
+/// Walks one guard chain in chain order (`guard_lits`).
 pub const GuardIter = struct {
     mir: *const Mir,
     lit: u32,
 
+    /// Returns the next literal's condition, or null past the chain's end.
     pub fn next(it: *GuardIter) ?Value {
         if (it.lit == GuardLit.end) return null;
         const l = it.mir.guard_lits.items[it.lit];
@@ -375,9 +378,10 @@ pub const GuardIter = struct {
 pub fn addGuardLit(self: *Mir, gpa: std.mem.Allocator, inst: Inst, cond: Value, taken: bool) !void {
     const at: u32 = @intCast(self.guard_lits.items.len);
     assert(at != GuardLit.end);
+    try self.guard_lits.ensureUnusedCapacity(gpa, 1); // no `guard_of` entry without its literal
     const gop = try self.guard_of.getOrPut(gpa, inst);
     const next = if (gop.found_existing) gop.value_ptr.* else GuardLit.end;
-    try self.guard_lits.append(gpa, .{ .cond = cond, .taken = taken, .next = next });
+    self.guard_lits.appendAssumeCapacity(.{ .cond = cond, .taken = taken, .next = next });
     gop.value_ptr.* = at;
 }
 
@@ -416,8 +420,11 @@ fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Va
     const i = self.defs.len + Value.first_dynamic;
     assert(i < std.math.maxInt(u32));
     const v: Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
-    try self.defs.append(gpa, .{ .kind = kind, .payload = payload });
-    try self.alias.append(gpa, v); // self-parent = no alias
+    // Both reserved first: `alias` stays parallel to `defs` on failure.
+    try self.defs.ensureUnusedCapacity(gpa, 1);
+    try self.alias.ensureUnusedCapacity(gpa, 1);
+    self.defs.appendAssumeCapacity(.{ .kind = kind, .payload = payload });
+    self.alias.appendAssumeCapacity(v); // self-parent = no alias
     return v;
 }
 
@@ -434,9 +441,12 @@ pub fn addFloatConst(self: *Mir, gpa: std.mem.Allocator, x: f64) !Value {
         @as(u64, @bitCast(std.math.inf(f64))) => return .f_inf,
         else => {},
     }
-    const gop = try self.fconst_map.getOrPut(gpa, bits);
-    if (!gop.found_existing) gop.value_ptr.* = try self.addValue(gpa, .float_const, bits);
-    return gop.value_ptr.*;
+    // Reserve before `addValue`, so a failed add leaves no entry behind.
+    try self.fconst_map.ensureUnusedCapacity(gpa, 1);
+    if (self.fconst_map.get(bits)) |v| return v;
+    const v = try self.addValue(gpa, .float_const, bits);
+    self.fconst_map.putAssumeCapacityNoClobber(bits, v);
+    return v;
 }
 
 /// Returns the §4.2 integer constant `x`, deduped; 0, 1 and -1 are sentinels.
@@ -447,10 +457,11 @@ pub fn addIntConst(self: *Mir, gpa: std.mem.Allocator, x: i64) !Value {
         -1 => return .neg_one,
         else => {},
     }
-    const gop = try self.iconst_map.getOrPut(gpa, x);
-    if (!gop.found_existing)
-        gop.value_ptr.* = try self.addValue(gpa, .int_const, @bitCast(x));
-    return gop.value_ptr.*;
+    try self.iconst_map.ensureUnusedCapacity(gpa, 1);
+    if (self.iconst_map.get(x)) |v| return v;
+    const v = try self.addValue(gpa, .int_const, @bitCast(x));
+    self.iconst_map.putAssumeCapacityNoClobber(x, v);
+    return v;
 }
 
 /// Returns a §2.7 string literal Value. `bytes` must outlive the Mir. The string itself is deduped by the interner; the
@@ -625,6 +636,7 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
     const next = self.insts.items(.next);
     const first = self.blocks.items(.first);
     const last = self.blocks.items(.last);
+    const home = self.insts.items(.block);
     const head = if (after == .none) first[@backingInt(from)] else next[@backingInt(after)];
     if (head == .none) return true;
     if (from == to) return false;
@@ -638,7 +650,7 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
     } else return false;
     const tail = last[@backingInt(from)];
     var moved = head;
-    while (moved != .none) : (moved = next[@backingInt(moved)]) self.insts.items(.block)[@backingInt(moved)] = to;
+    while (moved != .none) : (moved = next[@backingInt(moved)]) home[@backingInt(moved)] = to;
     if (after == .none) first[@backingInt(from)] = .none else next[@backingInt(after)] = .none;
     last[@backingInt(from)] = after;
     next[@backingInt(tail)] = term;
@@ -676,10 +688,11 @@ pub fn splice(self: *Mir, to: Block, from: Block) void {
     const next = self.insts.items(.next);
     const first = self.blocks.items(.first);
     const last = self.blocks.items(.last);
+    const home = self.insts.items(.block);
     const head = first[@backingInt(from)];
     if (head == .none) return;
     var moved = head;
-    while (moved != .none) : (moved = next[@backingInt(moved)]) self.insts.items(.block)[@backingInt(moved)] = to;
+    while (moved != .none) : (moved = next[@backingInt(moved)]) home[@backingInt(moved)] = to;
     const tail = last[@backingInt(to)];
     if (tail == .none) first[@backingInt(to)] = head else next[@backingInt(tail)] = head;
     last[@backingInt(to)] = last[@backingInt(from)];
@@ -713,6 +726,7 @@ fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst
 
 /// Appends `row` to `block` with a fresh result Value, and returns it.
 fn addResultInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Value {
+    try self.insts.ensureUnusedCapacity(gpa, 1); // no result Value without its row
     const result = try self.addValue(gpa, .inst_result, 0);
     var r = row;
     r.result = result;
@@ -841,11 +855,12 @@ pub fn instResult(self: *const Mir, inst: Inst) Value {
 /// columns.
 pub fn instData(self: *const Mir, inst: Inst) InstData {
     const i = @backingInt(inst);
+    const cols = self.insts.slice();
     const row: struct { op: Opcode, a: u32, b: u32, c: u32 } = .{
-        .op = self.insts.items(.op)[i],
-        .a = self.insts.items(.a)[i],
-        .b = self.insts.items(.b)[i],
-        .c = self.insts.items(.c)[i],
+        .op = cols.items(.op)[i],
+        .a = cols.items(.a)[i],
+        .b = cols.items(.b)[i],
+        .c = cols.items(.c)[i],
     };
     return switch (opClass(row.op)) {
         .unary => .{ .unary = .{ .op = row.op, .operand = @fromBackingInt(@intCast(row.a)) } },
@@ -1294,4 +1309,100 @@ test deinit {
     try std.testing.expectEqualStrings("kept", mir.name);
     try std.testing.expectEqual(@as(u32, 0), mir.blockCount());
     try std.testing.expectEqual(@as(usize, 0), mir.defs.len);
+}
+
+test "mir: a speculation guard chain reads back newest literal first" {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+    const entry = try mir.addBlock(gpa);
+    const v = try mir.emit(gpa, entry, .fneg, &.{.f_one});
+    const inst = mir.valueDef(v).inst_result;
+
+    // An unguarded row has no chain.
+    try std.testing.expectEqual(@as(?u32, null), mir.guardOf(inst));
+    var none = mir.guardConds(inst);
+    try std.testing.expectEqual(@as(?Value, null), none.next());
+
+    // `addGuardLit` prepends: the outer conversion runs last, so it heads
+    // the chain (`guard_lits`: outermost first).
+    try mir.addGuardLit(gpa, inst, .one, true);
+    try mir.addGuardLit(gpa, inst, .zero, false);
+    var it = mir.guardConds(inst);
+    try std.testing.expectEqual(Value.zero, it.next().?);
+    try std.testing.expectEqual(Value.one, it.next().?);
+    try std.testing.expectEqual(@as(?Value, null), it.next());
+    const head = mir.guard_lits.items[mir.guardOf(inst).?];
+    try std.testing.expect(!head.taken);
+    try std.testing.expect(mir.guard_lits.items[head.next].taken);
+}
+
+/// Fails unless every side table agrees with `defs` and `insts`: the
+/// invariants a builder call must keep even when it fails part way.
+fn expectConsistent(mir: *const Mir) !void {
+    const fd = Value.first_dynamic;
+    try std.testing.expectEqual(mir.defs.len, mir.alias.items.len);
+    var fit = mir.fconst_map.iterator();
+    while (fit.next()) |e| {
+        try std.testing.expect(@backingInt(e.value_ptr.*) - fd < mir.defs.len);
+        try std.testing.expectEqual(e.key_ptr.*, @as(u64, @bitCast(mir.valueDef(e.value_ptr.*).float_const)));
+    }
+    var iit = mir.iconst_map.iterator();
+    while (iit.next()) |e| {
+        try std.testing.expect(@backingInt(e.value_ptr.*) - fd < mir.defs.len);
+        try std.testing.expectEqual(e.key_ptr.*, mir.valueDef(e.value_ptr.*).int_const);
+    }
+    var git = mir.guard_of.valueIterator();
+    while (git.next()) |lit| try std.testing.expect(lit.* < mir.guard_lits.items.len);
+    for (mir.defs.items(.kind), mir.defs.items(.payload), 0..) |kind, payload, i| {
+        if (kind != .inst_result) continue;
+        try std.testing.expect(payload < mir.insts.len);
+        try std.testing.expectEqual(@as(u32, @intCast(i + fd)), @backingInt(mir.instResult(@fromBackingInt(@intCast(payload)))));
+    }
+}
+
+test "mir: a builder call that runs out of memory leaves every table consistent" {
+    // Fault injection with recovery: fail allocation k, swallow the error,
+    // keep building, and check the cross-table invariants after each run.
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        errdefer std.debug.print("failing allocation {d}\n", .{k});
+        var failing: std.testing.FailingAllocator = .init(std.testing.allocator, .{ .fail_index = k });
+        const gpa = failing.allocator();
+        var mir: Mir = .{};
+        defer mir.deinit(gpa);
+        const entry = mir.addBlock(gpa) catch null;
+        for (0..3) |round| {
+            const x: f64 = @floatFromInt(round);
+            _ = mir.addFloatConst(gpa, 1.5 + x) catch {};
+            _ = mir.addIntConst(gpa, 7 + @as(i64, @intCast(round))) catch {};
+            const b = entry orelse continue;
+            const v = mir.emit(gpa, b, .fneg, &.{.f_one}) catch continue;
+            mir.addGuardLit(gpa, mir.valueDef(v).inst_result, v, true) catch {};
+            _ = mir.emitCall(gpa, b, mir.internString(gpa, "exp") catch continue, &.{v}) catch {};
+        }
+        try expectConsistent(&mir);
+        if (!failing.has_induced_failure) break;
+    }
+}
+
+test "mir: building leaks nothing when any allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var mir: Mir = .{};
+            defer mir.deinit(gpa);
+            try mir.reserve(gpa, 4, 4, 4);
+            const entry = try mir.addBlock(gpa);
+            const join = try mir.addBlock(gpa);
+            const k = try mir.addFloatConst(gpa, 1.5);
+            const n = try mir.addIntConst(gpa, 9);
+            const s = try mir.addStrConst(gpa, "tran");
+            const v = try mir.emit(gpa, entry, .fmul, &.{ k, try mir.addParamRef(gpa, 0) });
+            try mir.addGuardLit(gpa, mir.valueDef(v).inst_result, n, true);
+            _ = try mir.emitCall(gpa, entry, try mir.internString(gpa, "$strobe"), &.{ s, v });
+            _ = try mir.emitBranch(gpa, entry, n, join, join);
+            const p = try mir.emitPhi(gpa, join, &.{});
+            try mir.setPhiPairs(gpa, mir.valueDef(p).inst_result, &.{.{ .block = entry, .value = v }});
+        }
+    }.run, .{});
 }

@@ -80,53 +80,25 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // Not `enter`: callbacks, time queues, events and systf registrations are
     // objects without a design, and a handle to one still has a type.
     if (refused("vpi_get")) return vpiUndefined;
+    // A handle VerA issued that is no design object: §12.23's iterator,
+    // §11.6.25's callback, §12.30's scheduled event, a systf registration,
+    // IEEE 1364-2005 §26.6.16's inter-module path, a time queue. Each has a
+    // type and, at most, one property of its own.
+    const other: ?c_int = if (asIter(obj) != null) vpiIterator else if (callback.asCb(obj) != null) callback.vpiCallback else if (value.asEvent(obj) != null) value.vpiSchedEvent else if (systf.asSystf(obj) != null) systf.vpiUserSystf else if (delays.asPath(obj) != null) systf.vpiInterModPath else if (run.asQueue(obj) != null) run.vpiTimeQueue else null;
     // IEEE 1364-2005 §26.3.5: "All objects have a vpiIsProtected property",
     // which vpi_user.h numbers as Annex G's vpiProtected (VD-045). No object
     // is protected: §28's `pragma protect` is refused where it is written
     // (E0146).
-    if (prop == vpiProtected and (asIter(obj) != null or callback.asCb(obj) != null or
-        value.asEvent(obj) != null or systf.asSystf(obj) != null or
-        run.asQueue(obj) != null or delays.asPath(obj) != null or asObj(obj) != null)) return 0;
+    if (prop == vpiProtected and (other != null or asObj(obj) != null)) return 0;
     if (root.unansweredProp(prop)) |u| {
         root.failUnanswered("vpi_get", u);
         return vpiUndefined;
     }
-    // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
-    // question with an answer. Nothing else about an iterator is a §11.6
-    // property.
-    if (asIter(obj)) |it| {
-        if (prop == vpiType) return vpiIterator;
-        if (prop == vpiIteratorType) return it.ty;
-        fail("NOPROP", "vpi_get: an iterator has no property {d}", .{prop});
-        return vpiUndefined;
-    }
-    // §11.6.25's callback object has a type and nothing else §11.6 lists.
-    if (callback.asCb(obj)) |_| {
-        if (prop == vpiType) return callback.vpiCallback;
-        fail("NOPROP", "vpi_get: a callback has no property {d}", .{prop});
-        return vpiUndefined;
-    }
-    // §12.30's vpiSchedEvent: a type, and whether it is still to happen.
-    if (value.asEvent(obj)) |e| {
-        if (prop == vpiType) return value.vpiSchedEvent;
-        if (prop == value.vpiScheduled) return @intFromBool(value.scheduled(e));
-        fail("NOPROP", "vpi_get: a scheduled event has no property {d}", .{prop});
-        return vpiUndefined;
-    }
-    if (systf.asSystf(obj)) |_| {
-        if (prop == vpiType) return systf.vpiUserSystf;
-        fail("NOPROP", "vpi_get: a vpiUserSystf has no property {d}; vpi_get_systf_info reads it", .{prop});
-        return vpiUndefined;
-    }
-    // IEEE 1364-2005 §26.6.16 draws an inter-module path with no property.
-    if (delays.asPath(obj)) |_| {
-        if (prop == vpiType) return systf.vpiInterModPath;
-        fail("NOPROP", "vpi_get: an inter-module path has no property {d}", .{prop});
-        return vpiUndefined;
-    }
-    if (run.asQueue(obj)) |_| {
-        if (prop == vpiType) return run.vpiTimeQueue;
-        fail("NOPROP", "vpi_get: a time queue has no property {d}; vpi_get_time reads its time", .{prop});
+    if (other) |t| {
+        if (prop == vpiType) return t;
+        if (prop == vpiIteratorType) if (asIter(obj)) |it| return it.ty;
+        if (prop == value.vpiScheduled) if (value.asEvent(obj)) |e| return @intFromBool(value.scheduled(e));
+        fail("NOPROP", "vpi_get: a {s} has no property {d}", .{ typeName(t), prop });
         return vpiUndefined;
     }
     // §12.5's NULL-object case: IEEE 1364-2005 §26.6.1 Details b.

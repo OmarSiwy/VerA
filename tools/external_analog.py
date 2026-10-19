@@ -522,7 +522,7 @@ def fmt(v):
     return repr(float(v))
 
 
-def source(name, pin, t, val, ac=False, suffix=""):
+def source(pin, t, val, ac=False, suffix=""):
     """A pin's voltage source (or 0 A source when floating)."""
     node = pin + suffix
     if pin in t.float:
@@ -531,7 +531,7 @@ def source(name, pin, t, val, ac=False, suffix=""):
     return f"v_{pin}{suffix} {node} {ref} dc {fmt(val)}" + (" ac 1" if ac else "")
 
 
-def header(osdi, model, args, t, suffix=""):
+def header(osdi, model, args, t):
     typ = args.split()
     return [
         f"* {t.name}",
@@ -549,7 +549,7 @@ def instance(t, suffix=""):
 
 def deck_dc(osdi, model, args, t, out):
     d = header(osdi, model, args, t)
-    d += [source("v", p, t, t.bias.get(p, 0.0)) for p in t.pins]
+    d += [source(p, t, t.bias.get(p, 0.0)) for p in t.pins]
     d += [instance(t), ".control", "set numdgt=15", "set wr_singlescale", "set wr_vecnames", "set appendwrite"]
     sp, a, b, st = t.sweep
     vecs = " ".join(f"v({p})" if p in t.float else f"i(v_{p})" for p in t.outputs)
@@ -576,7 +576,7 @@ def deck_ac(osdi, model, args, t, out):
     fpins = sorted({o[2] for o in t.outputs}, key=t.pins.index)
     d = header(osdi, model, args, t)
     for f in fpins:
-        d += [source("v", p, t, t.bias.get(p, 0.0), ac=(p == f), suffix="_" + f) for p in t.pins]
+        d += [source(p, t, t.bias.get(p, 0.0), ac=(p == f), suffix="_" + f) for p in t.pins]
         d.append(instance(t, "_" + f))
     d += [".control", "set numdgt=15", "set wr_singlescale", "set wr_vecnames", "set appendwrite"]
     vecs = " ".join(f"i(v_{m}_{f})" for (_, m, f) in t.outputs)
@@ -619,7 +619,7 @@ def parse_ac(t, out):
 def deck_noise(osdi, model, args, t, out):
     pin = t.outputs[0]
     d = header(osdi, model, args, t)
-    d += [source("v", p, t, t.bias.get(p, 0.0)) for p in t.pins]
+    d += [source(p, t, t.bias.get(p, 0.0)) for p in t.pins]
     d += [instance(t), "vin dummy 0 0 ac 1", "rin dummy 0 1"]
     if pin in t.float:
         target = f"v({pin})"
@@ -657,7 +657,7 @@ def deck_tran(osdi, model, args, t, out):
     pin, wave = re.match(r"V\((\w+)\)=(.*)", stim).groups()
     d = header(osdi, model, args, t)
     for p in t.pins:
-        s = source("v", p, t, t.bias.get(p, 0.0))
+        s = source(p, t, t.bias.get(p, 0.0))
         d.append(s + (f" {wave}" if p == pin else ""))
     d += [instance(t), ".control", "set numdgt=15", "set wr_singlescale", "set wr_vecnames", "set appendwrite"]
     vecs = " ".join(f"i(v_{p})" for p in t.outputs)

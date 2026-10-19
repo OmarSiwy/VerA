@@ -22,7 +22,7 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 fn Bench(comptime D: type) type {
     return struct {
         const n = contract.nU(D);
-        const S = contract.RefFamily(f64, &lanes, .{ .dense = false });
+        const S = contract.RefFamily(f64, &lanes, .{});
         const lanes = blk: {
             var a: [n]u8 = undefined;
             for (&a, 0..) |*l, i| l.* = i;

@@ -351,7 +351,7 @@ fn parseConfigRule(self: *Parser) Error!Ast.ConfigRule {
         return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
     self.pos += 1;
     var rule: Ast.ConfigRule = .{ .select = .default, .expand = .{ .liblist = &.{} }, .main_tok = tok };
-    if (is_instance) rule.select = .{ .instance = try parse_hier.parseDottedName(self, false) } else if (!is_default) rule.select = .{ .cell = try parseLibCell(self) };
+    if (is_instance) rule.select = .{ .instance = try parse_hier.parseDottedPath(self, false, null) } else if (!is_default) rule.select = .{ .cell = try parseLibCell(self) };
     if (self.reservedIs(self.pos, "liblist")) {
         // IEEE 1364-2005 §13.3.1.4: "It is an error if a library name is
         // included in a cell selection clause and the corresponding expansion

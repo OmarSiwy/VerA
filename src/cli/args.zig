@@ -116,7 +116,7 @@ pub const usage_text =
     \\                          module definitions the .va can instantiate
     \\  --no-std-defs           do not prepend the annex D prelude
     \\  --std=SPEC              source language, a `begin_keywords specifier:
-    \\                          1364-1995|1364-2001|1364-2005|VAMS-2.3|VAMS-2023
+    \\                          1364-1995|1364-2001|1364-2005|VAMS-2023
     \\                          (default; 1364-2005 under -Dlanguage=verilog).
     \\                          A 1364 language frees every AMS keyword as an
     \\                          identifier and refuses AMS constructs (E0242)
@@ -365,10 +365,17 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
         } else if (std.mem.eql(u8, arg, "-I")) {
             try cli.include_dirs.append(gpa, try pathValue(args, err, "-I", "a directory") orelse return 2);
         } else if (std.mem.startsWith(u8, arg, "--std=")) {
-            cli.language = vera.KeywordSet.fromSpecifier(arg["--std=".len..]) orelse {
+            const set = vera.KeywordSet.fromSpecifier(arg["--std=".len..]) orelse {
                 try err.print("error: `{s}`: not a `begin_keywords version specifier\n", .{arg});
                 return 2;
             };
+            // VerA compiles Verilog-AMS as VAMS-2023 only. "VAMS-2.3" stays a
+            // `begin_keywords specifier in source, which §10.6 requires.
+            if (set == .vams_2_3) {
+                try err.print("error: `{s}`: Verilog-AMS is compiled as VAMS-2023; use `begin_keywords \"VAMS-2.3\" in the source for its keyword set\n", .{arg});
+                return 2;
+            }
+            cli.language = set;
         } else if (std.mem.eql(u8, arg, "--no-std-defs")) {
             cli.std_defs = false;
         } else if (std.mem.eql(u8, arg, "--diagnostics=json")) {
@@ -812,6 +819,7 @@ test "parse: the language, library and reporting flags" {
     // An empty expected name is a name; no module is called that.
     try testing.expectEqualStrings("", l.cli.expect_module.?);
     try expectRefused(&.{"--std=1800-2017"}, "error: `--std=1800-2017`: not a `begin_keywords version specifier\n");
+    try expectRefused(&.{"--std=VAMS-2.3"}, "error: `--std=VAMS-2.3`: Verilog-AMS is compiled as VAMS-2023; use `begin_keywords \"VAMS-2.3\" in the source for its keyword set\n");
     try expectRefused(&.{"--discipline-resolution=full"}, "error: `--discipline-resolution=full`: not basic|detail\n");
 }
 
@@ -889,4 +897,30 @@ test "resolve: one run builds one artifact: a testbench beside a library or a ty
     // nothing, so neither conflicts.
     try expectSettled(&.{ "--emit-exe", "-o", "tb", "m.va" }, null, "");
     try expectSettled(&.{ "--check", "--emit-exe", "m.va" }, null, "");
+}
+
+test "parse: the switches set their field and read no value" {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, null), try l.read(&.{
+        "--lsp",        "--power-pins", "--validate-contract", "--jac-f32",      "--jac-f32-host",
+        "--debug-info", "--lint",       "--color=never",       "--emit-verilog", "m.va",
+    }));
+    const c = l.cli;
+    try testing.expect(c.lsp and c.power_pins and c.validate_contract and c.jac_f32 and c.jac_f32_host and c.debug_info and c.lint_flag and c.emit_verilog);
+    try testing.expect(c.color == .never);
+    try testing.expectEqualStrings("--emit-verilog", c.codegen_flag.?);
+    try testing.expectEqualStrings("m.va", c.paths.items[0]);
+}
+
+fn parseLine(gpa: std.mem.Allocator) !void {
+    var cli: Cli = .{};
+    defer cli.deinit(gpa);
+    var it: Argv = .{ .items = &.{ "-I", "inc", "--param", "r=1", "--deny=W0650", "--libmap", "a.map", "-L", "lib", "top.v" } };
+    var discard: Io.Writer.Discarding = .init(&.{});
+    try testing.expectEqual(@as(?u8, null), try parse(&cli, gpa, &it, &discard.writer, &discard.writer));
+}
+
+test "parse: `Cli.deinit` frees every list, whichever allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, parseLine, .{});
 }

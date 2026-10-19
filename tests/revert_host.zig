@@ -21,7 +21,7 @@ const D = @import("device");
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
 
 /// The reference family with no lanes: nothing here asks for a Jacobian.
-const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 /// (t, V(a)) at each accepted point, and the attempt rejected after the second.
 const points = [_][2]f64{ .{ 0, 0 }, .{ 1e-9, 1 }, .{ 2e-9, 1 }, .{ 3e-9, 0 }, .{ 4e-9, 1 } };
@@ -53,7 +53,7 @@ fn run(rejects: usize) Run {
         }
         const sim = simAt(p[0], t_prev, k == 0);
         const x = bias(p[1]);
-        const r: [n_u]S = D.eval(S, &x, &model, &out.inst, sim);
+        const r: [n_u]S.Of(0) = D.eval(S, &x, &model, &out.inst, sim);
         for (r, 0..) |v, i| out.r[k][i] = v.v;
         _ = D.updateState(S, &model, &out.inst, x, &out.state, sim);
         _ = D.stateCtl(&model, &out.inst, &out.state, .commit);
@@ -135,16 +135,16 @@ test "§9.13.1 rejected first call restores the constant seed" {
     const x = bias(-1);
     const sim = simAt(0, 0, true);
     for (0..2) |_| {
-        const r: [n_u]S = D.eval(S, &x, &model, &inst, sim);
+        const r: [n_u]S.Of(0) = D.eval(S, &x, &model, &inst, sim);
         try std.testing.expectEqual(@as(f64, -2146999808), r[@backingInt(D.U.o_rc)].v);
     }
     _ = D.updateState(S, &model, &inst, x, &state, sim);
     _ = D.stateCtl(&model, &inst, &state, .revert);
-    const retried: [n_u]S = D.eval(S, &x, &model, &inst, sim);
+    const retried: [n_u]S.Of(0) = D.eval(S, &x, &model, &inst, sim);
     try std.testing.expectEqual(@as(f64, -2146999808), retried[@backingInt(D.U.o_rc)].v);
     _ = D.updateState(S, &model, &inst, x, &state, sim);
     _ = D.stateCtl(&model, &inst, &state, .commit);
-    const next: [n_u]S = D.eval(S, &x, &model, &inst, simAt(1e-9, 0, false));
+    const next: [n_u]S.Of(0) = D.eval(S, &x, &model, &inst, simAt(1e-9, 0, false));
     try std.testing.expectEqual(@as(f64, 1181502348), next[@backingInt(D.U.o_rc)].v);
 }
 test "§4.5 a revert leaves no field of Instance or State behind" {

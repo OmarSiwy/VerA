@@ -146,9 +146,11 @@ pub const StmtRow = row: {
     break :row @Union(.auto, u.tag_type.?, u.field_names, &types, u.field_attrs);
 };
 
-// Budget: the widest non-block arm (24 B) plus the tag.
+// Budget: the widest non-block arm (24 B) plus the tag; `SeqBlock`, the arm
+// kept out of the row, is the 104 B `StmtRow`'s doc names.
 comptime {
     std.debug.assert(@sizeOf(StmtRow) <= 32);
+    std.debug.assert(@sizeOf(SeqBlock) <= 104);
 }
 
 /// IEEE 1364-2005 §9.3 A.6.2 `procedural_continuous_assignments`.

@@ -20,7 +20,7 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
+const Dual = contract.RefFamily(f64, &lanes, .{});
 const lanes = blk: {
     var l: [n_u]u8 = undefined;
     for (&l, 0..) |*e, u| e.* = u;
@@ -48,10 +48,10 @@ test "§4.5.7 under .ac the delay's partial leaves G and C for acDyn" {
     const g_ac = D.eval(Dual, &x, &model, &inst, ac);
     const q_dc = contract.qRows(D, Dual, D.q(Dual, &x, &model, &inst, dc));
     const q_ac = contract.qRows(D, Dual, D.q(Dual, &x, &model, &inst, ac));
-    try std.testing.expectEqual(@as(f64, 3.0), g_dc[a].d[in]);
-    try std.testing.expectEqual(@as(f64, 2.0), g_ac[a].d[in]);
-    try std.testing.expectEqual(@as(f64, 1e-9), q_dc[d].d[in]);
-    try std.testing.expectEqual(@as(f64, 0.0), q_ac[d].d[in]);
+    try std.testing.expectEqual(@as(f64, 3.0), g_dc[a].ddxAt(in));
+    try std.testing.expectEqual(@as(f64, 2.0), g_ac[a].ddxAt(in));
+    try std.testing.expectEqual(@as(f64, 1e-9), q_dc[d].ddxAt(in));
+    try std.testing.expectEqual(@as(f64, 0.0), q_ac[d].ddxAt(in));
     // The values do not move: the operating point is the same point.
     try std.testing.expectEqual(g_dc[a].v, g_ac[a].v);
 
@@ -60,10 +60,10 @@ test "§4.5.7 under .ac the delay's partial leaves G and C for acDyn" {
     D.acDyn(f64, &model, &inst, &x, ac, w, &out);
     const h = std.math.sqrt1_2;
     const aa = out[slot(a, in)];
-    try std.testing.expectApproxEqAbs(2.0 + h, g_ac[a].d[in] + aa.re, 1e-12);
+    try std.testing.expectApproxEqAbs(2.0 + h, g_ac[a].ddxAt(in) + aa.re, 1e-12);
     try std.testing.expectApproxEqAbs(-h, aa.im, 1e-12);
     // C is real, so jω·C lands on the imaginary part.
     const dd = out[slot(d, in)];
-    try std.testing.expectApproxEqAbs(std.math.pi / 4.0 * h, g_ac[d].d[in] + dd.re, 1e-12);
-    try std.testing.expectApproxEqAbs(std.math.pi / 4.0 * h, w * q_ac[d].d[in] + dd.im, 1e-12);
+    try std.testing.expectApproxEqAbs(std.math.pi / 4.0 * h, g_ac[d].ddxAt(in) + dd.re, 1e-12);
+    try std.testing.expectApproxEqAbs(std.math.pi / 4.0 * h, w * q_ac[d].ddxAt(in) + dd.im, 1e-12);
 }

@@ -19,10 +19,7 @@ const Mir = @import("ir").Mir;
 const diag = @import("diag");
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
-const err = Lower.err;
 const poison = Lower.poison;
-const call = Lower.call;
-const toReal = Lower.toReal;
 
 /// This file's private state on `Lower` (`Lower.table_model_state`).
 pub const State = struct {
@@ -205,7 +202,6 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         previous,
     });
     for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, a)));
-    // ponytail: rows are already lowered; append their contiguous values in order.
     try vals.appendSlice(self.arena, rows);
     self.out.uses.insert(.table_model);
     const result = try self.call("$table_model", vals.items);
@@ -260,7 +256,7 @@ pub fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]
 /// the column count. Resolved against `include_dirs`, like an `include (§9.21 names
 /// no search path). A non-null `missing` defers to the caller (see
 /// `lowerTableModel`) both a file that cannot be read and one whose text is not a
-/// data set (a token that is not a number, rows of unequal width): either way the
+/// data set (a token that is not a number, rows of unequal width, no row): either way the
 /// first call captures no data set, and that call is where §9.21.1 errs.
 fn readTableFile(
     self: *Lower,
@@ -325,6 +321,11 @@ fn readTableFile(
             return null;
         }
     }
+    // A file of blank lines and comments has no rows: no data set either.
+    if (cols == 0) if (missing) |m| {
+        m.* = true;
+        return null;
+    };
     return .{ .vals = vals.items, .cols = cols };
 }
 

@@ -9,11 +9,11 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 fn published(vc: f64) f64 {
     var model: D.Model = .{};
-    if (@hasDecl(D, "setup")) D.setup(S.Of(0), &model);
+    if (@hasDecl(D, "setup")) D.setup(S, &model);
     var inst: D.Instance = .{};
     if (@hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
     var state = D.initState(&model, &inst);

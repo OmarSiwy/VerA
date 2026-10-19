@@ -29,8 +29,6 @@ pub const vpi = @import("vpi");
 pub const exhaustive = @import("exhaustive.zig");
 /// Every diagnostic's `.lrm` names a clause the LRM or IEEE 1364-2005 has.
 pub const citations = @import("citations.zig");
-/// The fitness rules R1-R7, each with its shrinking allowlist.
-pub const fitness = @import("fitness.zig");
 /// The in-process fuzz targets, replayed with seeded
 /// inputs by zrunner's `fuzz`.
 pub const fuzz_targets = @import("fuzz.zig");

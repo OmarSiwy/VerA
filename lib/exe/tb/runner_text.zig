@@ -140,14 +140,24 @@ pub const runner_body =
     \\    return @abs(got - want) <= 1e-12 * @abs(want) + 1e-15;
     \\}
     \\
-    \\/// Forward-mode dual: value plus one partial per solver unknown. It is the
-    \\/// contract's reference family in its dense layout, so the testbench runs
-    \\/// the numerics every host is held to (`contract.RefFamily`).
-    \\/// `collapsed` is the contract's `collapse_applied` trait: the testbench
-    \\/// evaluates with `false`, and `narrowCheck` with both.
+    \\/// Forward-mode dual: the contract's reference family
+    \\/// (`contract.RefFamily`), each value carrying only the lanes of the
+    \\/// unknowns it may depend on. A row is read through `dense`. `collapsed`
+    \\/// is the contract's `collapse_applied` trait: the testbench evaluates
+    \\/// with `false`, and `narrowCheck` with both.
     \\const Dual = DualC(false);
     \\fn DualC(comptime collapsed: bool) type {
-    \\    return contract.RefFamily(f64, &lane_of, .{ .dense = true, .collapse_applied = collapsed });
+    \\    return contract.RefFamily(f64, &lane_of, .{ .collapse_applied = collapsed });
+    \\}
+    \\/// The local matrix row a host assembles: the value and every column's
+    \\/// partial, indexable at run time.
+    \\const Row = struct { v: f64, d: [n_u]f64 = @splat(0.0) };
+    \\/// `rows` (what `eval`, `q` or `qRows` returned) as `Row`s, each lane at
+    \\/// its unknown's column and every other column +0.
+    \\fn dense(rows: anytype) [rows.len]Row {
+    \\    var out: [rows.len]Row = undefined;
+    \\    inline for (0..rows.len) |r| out[r] = .{ .v = rows[r].v, .d = contract.denseRow(n_u, rows[r]) };
+    \\    return out;
     \\}
     \\/// Unknown `u` on lane `u`; `u32`, so past 255 unknowns too.
     \\const lane_of = blk: {
@@ -159,7 +169,7 @@ pub const runner_body =
     \\/// `limit`, `seed`, `collapse`, `derive`, the iteration hooks):
     \\/// the reference family with no lanes, so every path runs the arithmetic
     \\/// `eval` does.
-    \\const Val = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+    \\const Val = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
     \\
     \\/// A batch family: `V` is NL operating points, one per vector element, and
     \\/// every value is lane-free. Per element it computes what `Val` does:
@@ -193,8 +203,8 @@ pub const runner_body =
     \\    pub const V = VF;
     \\    pub const Lane = Val;
     \\    pub const lane_count = NL;
-    \\    pub fn laneOf(a: B, comptime w: usize) Val.Of(0) { return .{ .v = a.v[w] }; }
-    \\    pub fn fromLanes(comptime _: u64, ls: [NL]Val.Of(0)) B {
+    \\    pub fn laneOf(a: B, comptime w: usize) Val.Of(0) { return Val.con(a.v[w]); }
+    \\    pub fn fromLanes(comptime _: contract.Mask(D), ls: [NL]Val.Of(0)) B {
     \\        var r: VF = undefined;
     \\        inline for (0..NL) |w| r[w] = ls[w].v;
     \\        return .{ .v = r };
@@ -216,7 +226,7 @@ pub const runner_body =
     \\        comptime std.debug.assert(T == D.Instance);
     \\        return batch_insts[w];
     \\    }
-    \\    pub fn Of(comptime _: u64) type { return B; }
+    \\    pub fn Of(comptime _: contract.Mask(D)) type { return B; }
     \\    pub fn con(c: f64) B { return .{ .v = @splat(c) }; }
     \\    pub fn lift(v: VF) B { return .{ .v = v }; }
     \\    pub fn probe(comptime _: usize, v: VF) B { return .{ .v = v }; }
@@ -230,7 +240,7 @@ pub const runner_body =
     \\            inline for (0..NL) |i| r[i] = f(a.v[i]);
     \\            return .{ .v = r };
     \\        }
-    \\        pub fn to(a: B, comptime _: u64) B { return a; }
+    \\        pub fn to(a: B, comptime _: contract.Mask(D)) B { return a; }
     \\        pub fn val(a: B) f64 { const arr: [NL]f64 = a.v; return arr[batch_lead.leader]; }
     \\        pub fn leadKeep(a: *B, n: B, keep: @Vector(NL, bool)) void { a.v = @select(f64, keep, n.v, a.v); }
     \\        pub fn ddxAt(_: B, comptime _: usize) f64 { return 0.0; }
@@ -266,6 +276,8 @@ pub const runner_body =
     \\};
     \\
     \\comptime {
+    \\    // A batch value is its vector and nothing else: passed by value per op.
+    \\    std.debug.assert(@sizeOf(BatchCore.B) == @sizeOf(VF));
     \\    contract.checkFamily(Dual);
     \\    contract.checkFamily(Val);
     \\    contract.checkFamily(Batch);
@@ -323,10 +335,10 @@ pub const runner_body =
     \\    }
     \\    const qv: [n_u]Batch.B = if (comptime @hasDecl(D, "q")) qRowsOf(Batch, &xv, model, &insts[0]) else undefined;
     \\    for (0..NL) |k| {
-    \\        const rs: [n_u]Val = D.eval(Val, &xs[k], model, &insts[k], sim_state);
+    \\        const rs: [n_u]Val.Of(0) = D.eval(Val, &xs[k], model, &insts[k], sim_state);
     \\        for (0..n_u) |i| laneAssert("res", i, k, @as([NL]f64, rv[i].v)[k], rs[i].v);
     \\        if (comptime @hasDecl(D, "q")) {
-    \\            const qs = qRowsOf(Val, &xs[k], model, &insts[k]);
+    \\            const qs: [n_u]Val.Of(0) = qRowsOf(Val, &xs[k], model, &insts[k]);
     \\            for (0..n_u) |i| laneAssert("q", i, k, @as([NL]f64, qv[i].v)[k], qs[i].v);
     \\        }
     \\    }
@@ -378,10 +390,10 @@ pub const runner_body =
     \\fn fusedCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    if (comptime !@hasDecl(D, "evalQ")) return;
     \\    const both = D.evalQ(Dual, x, model, inst, sim_state);
-    \\    const both_res: [n_u]Dual = both.res;
-    \\    const both_q: [n_q]Dual = both.q;
-    \\    const res: [n_u]Dual = D.eval(Dual, x, model, inst, sim_state);
-    \\    const qq: [n_q]Dual = D.q(Dual, x, model, inst, sim_state);
+    \\    const both_res = dense(both.res);
+    \\    const both_q = dense(both.q);
+    \\    const res = dense(D.eval(Dual, x, model, inst, sim_state));
+    \\    const qq = dense(D.q(Dual, x, model, inst, sim_state));
     \\    for (0..n_u) |i| {
     \\        fusedAssert("res", i, both_res[i].v, res[i].v);
     \\        for (0..n_u) |j| fusedAssert("dres", i, both_res[i].d[j], res[i].d[j]);
@@ -431,16 +443,16 @@ pub const runner_body =
     \\
     \\fn narrowCheckAs(comptime collapsed: bool, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    const Dl = DualC(collapsed);
-    \\    const r0: [n_u]Dl = D.eval(Dl, x, model, inst, sim_state);
-    \\    const q0: [n_u]Dl = if (comptime @hasDecl(D, "q")) qRowsOf(Dl, x, model, inst) else undefined;
+    \\    const r0 = dense(D.eval(Dl, x, model, inst, sim_state));
+    \\    const q0: [n_u]Row = if (comptime @hasDecl(D, "q")) dense(qRowsOf(Dl, x, model, inst)) else undefined;
     \\    for (0..n_u) |c| {
     \\        if (hasLane(c)) continue;
     \\        var xs = x.*;
     \\        xs[c] += 1.0;
-    \\        const r1: [n_u]Dl = D.eval(Dl, &xs, model, inst, sim_state);
+    \\        const r1 = dense(D.eval(Dl, &xs, model, inst, sim_state));
     \\        narrowAssert(Dl, "res", false, model, c, &r0, &r1);
     \\        if (comptime @hasDecl(D, "q")) {
-    \\            const q1: [n_u]Dl = qRowsOf(Dl, &xs, model, inst);
+    \\            const q1 = dense(qRowsOf(Dl, &xs, model, inst));
     \\            narrowAssert(Dl, "q", true, model, c, &q0, &q1);
     \\        }
     \\    }
@@ -459,7 +471,7 @@ pub const runner_body =
     \\    if (comptime D.constant.c and @hasDecl(D, "q")) constAssert("q", withConst(Dual, qRowsOf(Dual, x, model, inst), model, true), withConst(Dual, qRowsOf(Dual, &xs, model, inst), model, true));
     \\}
     \\
-    \\fn constAssert(what: []const u8, a: [n_u]Dual, b: [n_u]Dual) void {
+    \\fn constAssert(what: []const u8, a: [n_u]Row, b: [n_u]Row) void {
     \\    for (0..n_u) |i| for (0..n_u) |j| {
     \\        const p = a[i].d[j];
     \\        const q = b[i].d[j];
@@ -469,60 +481,14 @@ pub const runner_body =
     \\    };
     \\}
     \\
-    \\/// The family gate. The device's rows on a SPARSE family, whose each value
-    \\/// carries only the lanes of the unknowns it may depend on, must be
-    \\/// `Dual`'s: every value bit for bit, and every lane `deriv_reads` names
-    \\/// equal, a lane the sparse value does not carry reading as zero. Two
-    \\/// escapes, neither a tolerance: zeros match whatever their sign, and
-    \\/// `Dual`'s NaN may stand where the sparse value has no lane — a dense
-    \\/// `0·inf` on a lane that is structurally zero. Above 64 unknowns no mask
-    \\/// names a lane and there is nothing to compare.
-    \\fn sparseCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    if (comptime n_u > 64) return;
-    \\    const Sp = contract.RefFamily(f64, &lane_of, .{ .dense = false });
-    \\    const want: [n_u]Dual = D.eval(Dual, x, model, inst, sim_state);
-    \\    const got = D.eval(Sp, x, model, inst, sim_state);
-    \\    inline for (0..n_u) |r| sparseAssert("res", u_names[r], got[r], want[r]);
-    \\    if (comptime @hasDecl(D, "q")) {
-    \\        const wq: [n_q]Dual = D.q(Dual, x, model, inst, sim_state);
-    \\        const gq = D.q(Sp, x, model, inst, sim_state);
-    \\        inline for (0..n_q) |k| sparseAssert("q site", std.fmt.comptimePrint("{d}", .{k}), gq[k], wq[k]);
-    \\        if (comptime @hasDecl(D, "evalQ")) {
-    \\            const both = D.evalQ(Sp, x, model, inst, sim_state);
-    \\            inline for (0..n_u) |r| sparseAssert("evalQ res", u_names[r], both.res[r], want[r]);
-    \\            inline for (0..n_q) |k| sparseAssert("evalQ q site", std.fmt.comptimePrint("{d}", .{k}), both.q[k], wq[k]);
-    \\        }
-    \\    }
-    \\}
-    \\
-    \\fn sparseAssert(what: []const u8, name: []const u8, got: anytype, want: Dual) void {
-    \\    if (@as(u64, @bitCast(got.val())) != @as(u64, @bitCast(want.v))) {
-    \\        std.debug.print("sparse_check FAIL: {s}[{s}]: sparse {e} vs dense {e}\n", .{ what, name, got.val(), want.v });
-    \\        std.process.exit(1);
-    \\    }
-    \\    inline for (0..n_u) |u| {
-    \\        const carried = (@TypeOf(got).mask >> u) & 1 != 0;
-    \\        const g = got.ddxAt(u);
-    \\        const w = want.d[u];
-    \\        const same = @as(u64, @bitCast(g)) == @as(u64, @bitCast(w)) or (g == 0.0 and w == 0.0) or
-    \\            (std.math.isNan(g) and std.math.isNan(w)) or (!carried and std.math.isNan(w));
-    \\        if (hasLane(u) and !same) {
-    \\            std.debug.print("sparse_check FAIL: d{s}[{s}]/dx[{s}]: sparse {e} vs dense {e}{s}\n", .{
-    \\                what, name, u_names[u], g, w, if (carried) "" else " (no sparse lane)",
-    \\            });
-    \\            std.process.exit(1);
-    \\        }
-    \\    }
-    \\}
-    \\
     \\fn hasLane(u: usize) bool {
-    \\    return u >= 64 or (contract.derivReads(D) >> @intCast(u)) & 1 != 0;
+    \\    return (contract.derivReads(D) >> @intCast(u)) & 1 != 0;
     \\}
     \\
     \\/// Column `c`'s unit step moved every row by `r1 - r0`; each must be the
     \\/// `jac_const` entry a host would stamp (0 when there is none), to the
     \\/// rounding of the rows' magnitude.
-    \\fn narrowAssert(comptime Dl: type, what: []const u8, react: bool, model: *const D.Model, c: usize, r0: *const [n_u]Dl, r1: *const [n_u]Dl) void {
+    \\fn narrowAssert(comptime Dl: type, what: []const u8, react: bool, model: *const D.Model, c: usize, r0: *const [n_u]Row, r1: *const [n_u]Row) void {
     \\    for (0..n_u) |i| {
     \\        var k: f64 = 0.0;
     \\        inline for (comptime contract.jacConst(D)) |e| {
@@ -539,7 +505,7 @@ pub const runner_body =
     \\    }
     \\}
     \\
-    \\fn patAssert(what: []const u8, pat: [n_u]u64, r: *const [n_u]Dual) void {
+    \\fn patAssert(what: []const u8, pat: [n_u]contract.Mask(D), r: *const [n_u]Row) void {
     \\    for (0..n_u) |i| for (0..n_u) |j| {
     \\        if (r[i].d[j] == 0.0) continue;
     \\        if ((pat[i] >> @intCast(j)) & 1 != 0) continue;
@@ -555,7 +521,7 @@ pub const runner_body =
     \\/// codegen ever writes `res[ru]` without going through `patRow`, and the
     \\/// value, not the derivative, is what it looks at: `isource` writes rows
     \\/// whose every partial is zero.
-    \\fn rowAssert(what: []const u8, rows: u64, r: *const [n_u]Dual) void {
+    \\fn rowAssert(what: []const u8, rows: contract.Mask(D), r: *const [n_u]Row) void {
     \\    for (0..n_u) |i| {
     \\        if ((rows >> @intCast(i)) & 1 != 0) continue;
     \\        if (r[i].v == 0.0) continue;
@@ -581,16 +547,17 @@ pub const runner_body =
     \\/// reactive residual's rows through `q_stamps`.
     \\const n_q = contract.nQ(D);
     \\
-    \\/// For a family whose `Of(_)` is one type (all of this file's).
-    \\fn qRowsOf(comptime Sc: type, x: *const [n_u]Sc.V, model: *const D.Model, inst: contract.InstancePtr(D)) [n_u]Sc.Of(0) {
+    \\/// A lane-free family's (`Val`, `Batch`) coerces to `[n_u]Sc.Of(0)`; a
+    \\/// `Dual`'s is read through `dense`.
+    \\fn qRowsOf(comptime Sc: type, x: *const [n_u]Sc.V, model: *const D.Model, inst: contract.InstancePtr(D)) contract.QRows(D, Sc) {
     \\    return contract.qRows(D, Sc, D.q(Sc, x, model, inst, sim_state));
     \\}
     \\
     \\/// The whole local Jacobian a host assembles: the device's lanes on the
     \\/// columns in `deriv_reads`, `jac_const` on the rest (`g` of `eval`, `c`
     \\/// of the reactive rows).
-    \\fn withConst(comptime Dl: type, rows: [n_u]Dl, model: *const D.Model, react: bool) [n_u]Dl {
-    \\    var out = rows;
+    \\fn withConst(comptime Dl: type, rows: anytype, model: *const D.Model, react: bool) [n_u]Row {
+    \\    var out = dense(rows);
     \\    inline for (comptime contract.jacConst(D)) |e| {
     \\        if (contract.jacConstApplies(D, e, model, Dl.collapse_applied))
     \\            out[@backingInt(e.row)].d[@backingInt(e.col)] = if (react) e.c else e.g;
@@ -640,7 +607,7 @@ pub const runner_body =
     \\
     \\fn commitCharge(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64) void {
     \\    if (comptime !@hasDecl(D, "q")) return;
-    \\    const qq = qRowsOf(Dual, x, model, inst);
+    \\    const qq = dense(qRowsOf(Dual, x, model, inst));
     \\    for (0..n_u) |i| q_prev[i] = qq[i].v;
     \\}
     \\
@@ -650,10 +617,10 @@ pub const runner_body =
     \\fn acceptCheck(model: *const D.Model, inst: *const D.Instance, x: *const [n_u]f64, state: *const State) void {
     \\    if (comptime !@hasDecl(D, "acceptQ") or State == void) return;
     \\    var iw = inst.*;
-    \\    const want: [n_q]Dual = D.q(Dual, x, model, &iw, sim_state);
+    \\    const want = dense(D.q(Dual, x, model, &iw, sim_state));
     \\    var ic = inst.*;
     \\    var sc = state.*;
-    \\    const got: [n_q]Dual = D.acceptQ(Dual, x, model, &ic, &sc, sim_state);
+    \\    const got = dense(D.acceptQ(Dual, x, model, &ic, &sc, sim_state));
     \\    for (0..n_q) |i| {
     \\        if (@as(u64, @bitCast(got[i].v)) == @as(u64, @bitCast(want[i].v)) and
     \\            std.mem.eql(u8, std.mem.asBytes(&got[i].d), std.mem.asBytes(&want[i].d))) continue;
@@ -800,7 +767,6 @@ pub const runner_body =
     \\    fusedCheck(x, model, inst);
     \\    patternCheck(x, model, inst);
     \\    narrowCheck(x, model, inst);
-    \\    sparseCheck(x, model, inst);
     \\    constCheck(x, model, inst);
     \\    fdCheck(x, model, inst);
     \\    finiteCheck(n, model, inst);
@@ -862,16 +828,16 @@ pub const runner_body =
     \\    var copy = inst.*; // a `mutable_eval` device writes its instance
     \\    var out: [n_u]f64 = @splat(0.0);
     \\    if (react) {
-    \\        if (comptime @hasDecl(D, "q")) for (&out, qRowsOf(Val, x, model, &copy)) |*o, e| {
+    \\        if (comptime @hasDecl(D, "q")) for (&out, @as([n_u]Val.Of(0), qRowsOf(Val, x, model, &copy))) |*o, e| {
     \\            o.* = e.v;
     \\        };
     \\    } else {
-    \\        const r: [n_u]Val = D.eval(Val, x, model, &copy, sim_state);
+    \\        const r: [n_u]Val.Of(0) = D.eval(Val, x, model, &copy, sim_state);
     \\        for (&out, r) |*o, e| o.* = e.v;
     \\    }
     \\    return out;
     \\}
-    \\fn fdRows(what: []const u8, react: bool, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D), ad: *const [n_u]Dual, tally: *[3]usize) void {
+    \\fn fdRows(what: []const u8, react: bool, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D), ad: *const [n_u]Row, tally: *[3]usize) void {
     \\    const eps = std.math.floatEps(f64);
     \\    const r0 = fdEval(react, x, model, inst);
     \\    for (0..n_u) |j| {
@@ -1172,9 +1138,13 @@ pub const runner_body =
     \\        for (0..n_u) |i| {
     \\            if (!solved[i]) continue;
     \\            const tol = u_abstol[i] + solve_reltol * @abs(x[i]);
-    \\            if (@abs(dx[i]) > tol and @abs(dx[i]) > worst_dx) {
-    \\                settled = false;
-    \\                worst_dx = @abs(dx[i]);
+    \\            // Written so a NaN step (a NaN residual or Jacobian entry)
+    \\            // never settles: it runs out the cap and fails by name.
+    \\            const step_i = @abs(dx[i]);
+    \\            if (step_i <= tol) continue;
+    \\            settled = false;
+    \\            if (!(step_i <= worst_dx)) {
+    \\                worst_dx = step_i;
     \\                worst = i;
     \\            }
     \\        }
@@ -1617,7 +1587,7 @@ pub const big_stack_text =
     \\/// ponytail: about 128 lane-wide temporaries per unknown and sixteen
     \\/// copies of each array (a Debug frame copies by value; measured on
     \\/// array_past_2_20_elements.va); a device far past that needs more.
-    \\const big_stack_bytes = @sizeOf(Dual) * n_u * 128 + 16 * (@sizeOf(D.Instance) + mem_bytes);
+    \\const big_stack_bytes = @sizeOf(Row) * n_u * 128 + 16 * (@sizeOf(D.Instance) + mem_bytes);
     \\const big_stack = n_u > 256 or big_stack_bytes > (1 << 20);
     \\fn bigStack(init: std.process.Init.Minimal) void {
     \\    const t = std.Thread.spawn(.{ .stack_size = (8 << 20) + big_stack_bytes }, run, .{init}) catch |e|

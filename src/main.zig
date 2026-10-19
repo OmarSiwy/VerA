@@ -278,3 +278,19 @@ test compileFailed {
     try std.testing.expectEqual(@as(u8, 1), try compileFailed(&bag, &w, false, false, error.OutOfMemory));
     try std.testing.expectEqualStrings("error: OutOfMemory\n", w.buffered());
 }
+
+test simTree {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const wd = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    // Twice: the second run replaces every file in place.
+    for (0..2) |_| {
+        const c = try simTree(std.testing.io, a, wd);
+        try std.testing.expectEqualStrings(try std.fs.path.join(a, &.{ wd, "vera-src", "tools", "contract.zig" }), c);
+        const text = try Io.Dir.cwd().readFileAlloc(std.testing.io, c, a, .unlimited);
+        try std.testing.expect(std.mem.find(u8, text, "vera_version") != null);
+    }
+}

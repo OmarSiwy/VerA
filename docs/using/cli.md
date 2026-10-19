@@ -79,7 +79,7 @@ Neovim 0.11 and later needs `editors/nvim` on its runtime path and
 | `-I DIR` | add a directory to the `` `include `` search path (repeatable, in order) |
 | `--param NAME=VALUE` | compile with top-module parameter `NAME` set to `VALUE` (LRM §3.4). A parameter that sizes an array or selects a generate arm is fixed at that value; any other stays a value the model card can change |
 | `--spice PATH` | read a SPICE netlist; its `.MODEL` and `.SUBCKT` cards become modules the source can instantiate (LRM Annex E.2) |
-| `--std=SPEC` | the source language, as a `` `begin_keywords `` specifier: `1364-1995`, `1364-2001`, `1364-2005`, `VAMS-2.3` or `VAMS-2023` (the default). A 1364 language frees every AMS keyword as an identifier |
+| `--std=SPEC` | the source language, as a `` `begin_keywords `` specifier: `1364-1995`, `1364-2001`, `1364-2005` or `VAMS-2023` (the default). A 1364 language frees every AMS keyword as an identifier. Verilog-AMS is compiled as VAMS-2023 only; `` `begin_keywords "VAMS-2.3" `` in the source still selects that keyword set (LRM §10.6) |
 | `--no-std-defs` | do not prepend the LRM Annex D prelude (`disciplines.vams`, `constants.vams`) |
 | `--discipline-resolution=basic\|detail` | LRM §7.4.4's mode for undeclared interconnect (default `basic`; `detail` is Annex F.2.2) |
 | `--libmap FILE`, `-L LIB` | a `.v` design's IEEE 1364-2005 §13 libraries: a library map file (repeatable), and the libraries an instance's cell is searched in |

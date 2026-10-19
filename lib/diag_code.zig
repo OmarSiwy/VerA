@@ -1270,8 +1270,8 @@ fn infoOf(c: Code) Info {
         ),
         .E0204 => retiredInfo(
             \\"module instantiation is not supported". Retired: A.4.1
-            \\module_instantiation now parses and `ir/elaborate.zig` flattens the
-            \\instance tree into the one device VerA emits, so the condition does
+            \\module_instantiation now parses and `elab/elaborate.zig` flattens
+            \\the instance tree into the one device VerA emits, so the condition does
             \\not exist to report. Annex C.8 keeps clause 6 hierarchy inside the
             \\Verilog-A subset, which made refusing an instance a refusal of part
             \\of the subset.
@@ -2072,10 +2072,10 @@ fn infoOf(c: Code) Info {
             .lrm = "10.6",
             .explain =
             \\`vera --std=1364-1995|1364-2001|1364-2005` compiles plain IEEE
-            \\1364 Verilog. That makes
-            \\the 1364 set the "implementation's default set of reserved
-            \\keywords" of LRM 10.6, so every Verilog-AMS keyword -- `analog`,
-            \\`discipline`, `ddt`, `sin` ... -- is an ordinary identifier:
+            \\1364 Verilog. That makes the 1364 set the "implementation's
+            \\default set of reserved keywords" of LRM 10.6, so every Verilog-AMS
+            \\keyword -- `analog`, `discipline`, `ddt`, `sin` ... -- is an
+            \\ordinary identifier:
             \\
             \\    reg [3:0] analog;      // legal under --std=1364-2005
             \\
@@ -2153,10 +2153,11 @@ fn infoOf(c: Code) Info {
             \\    error");
             \\  - `-L` naming a library no map declares (13.7.1: "with the
             \\    definitions of these libraries to be taken from the library
-            \\    map file");
-            \\  - `-incdir`, which VerA does not implement.
+            \\    map file").
             \\
             \\A file no specification matches is compiled into `work` (13.2.1).
+            \\A library's `-incdir` paths join the include search path of every
+            \\file, not only that library's.
             ,
         },
         .E0297 => .{
@@ -2398,11 +2399,9 @@ fn infoOf(c: Code) Info {
             \\cases differ in kind; they do not, and both are now accepted out
             \\loud. See that entry.
             \\
-            \\Under `--run` a switch is E1100 instead: the discrete engine has
-            \\no conduction model, and §7.10's strength REDUCTION (`rnmos` drops
-            \\its input one strength level) and bidirectional flow are neither
-            \\of them a function of the input bits, which is all
-            \\`src/sim/digital.zig`'s gate evaluator computes.
+            \\NOT REPORTED under `--run`, where the discrete engine runs the
+            \\switch for real: IEEE 1364-2005 §7.6/§7.7 conduction, §7.11/§7.12
+            \\strength reduction and the bidirectional flow of a pass switch.
             ,
         },
         .W0252 => .{
@@ -4431,13 +4430,20 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0509 => .{
-            .title = "concatenation is only supported as a filter coefficient list",
+            .title = "assignment pattern is only legal where an array is expected",
             .lrm = "4.5.11",
             .explain =
-            \\The `{...}` form is accepted where LRM 4.5.11 and 4.5.12 expect a
-            \\vector of Laplace or Z-transform coefficients. Elsewhere it is a
-            \\bit concatenation (LRM 4.2.13), which the analog subset has no
-            \\vector operands for.
+            \\The assignment pattern `'{...}` (LRM 4.2.14) is an array value, so
+            \\it is accepted only where an array is expected: a Laplace or
+            \\Z-transform coefficient vector (4.5.11, 4.5.12), an array
+            \\parameter or variable, an array argument. Used as an ordinary
+            \\operand it has no value:
+            \\
+            \\    transition('{1.0, 2.0})            // no: a scalar slot
+            \\    laplace_nd(V(p), '{1.0}, '{1.0, 1.0})   // yes
+            \\
+            \\The plain concatenation `{...}` (4.2.13) is a different operator
+            \\and is a value anywhere; in a filter coefficient slot it is E0572.
             ,
         },
         .E0510 => .{
@@ -4535,31 +4541,33 @@ fn infoOf(c: Code) Info {
             .title = "analog operator control argument is not a constant or parameter expression",
             .lrm = "4.5",
             .explain =
-            \\The CONTROL arguments of a §4.5 analog operator — the delay of
-            \\`absdelay`, the rise/fall times of `transition`, the slew rates of
-            \\`slew`, the initial condition of `idt`/`idtmod`, the period of a
-            \\`zi_*` filter — are evaluated by the HOST, outside the derivative
-            \\domain the residual is computed in. VerA renders them as plain
-            \\f64 expressions over `Model`, so they may be built from literals
-            \\and parameters and from +, -, *, /, abs, sqrt, min, max and pow
-            \\over those. Anything else has no value at that point.
+            \\The CONSTANT arguments of a §4.5 analog operator (Table 4-20's
+            \\"constant expression arguments": the delay, rise/fall times and
+            \\time_tol of `transition`, the slew rates of `slew`, a ddt or idt
+            \\abstol, the period of a `zi_*` filter) are evaluated by the HOST,
+            \\outside the derivative domain the residual is computed in. VerA
+            \\renders them as plain f64 expressions over `Model`, so they may be
+            \\built from literals, parameters and card-time `$simparam` answers,
+            \\through arithmetic, comparisons, `?:` and the math functions.
+            \\Anything else has no value at that point.
             \\
-            \\A control argument that depends on a NODE VOLTAGE is the usual
-            \\cause, and it is not a spelling problem: the operator's history is
-            \\advanced once per accepted timestep, before the Newton iteration
-            \\that would produce such a value.
+            \\An argument that depends on a NODE VOLTAGE is the usual cause, and
+            \\it is not a spelling problem: the operator's history is advanced
+            \\once per accepted timestep, before the Newton iteration that would
+            \\produce such a value.
             \\
-            \\    absdelay(V(a), V(b))       // no: the delay is a solve result
-            \\    absdelay(V(a), len*sqrt(l*c))   // yes: parameters only
+            \\    transition(V(a), 0, V(c))        // no: a solve result
+            \\    transition(V(a), 0, tr*1e-9)     // yes: parameters only
             \\
-            \\A delay assigned into a `real` variable first is fine — the
+            \\A value assigned into a `real` variable first is fine — the
             \\expression is resolved through SSA, not by spelling — but one that
             \\merges two different values on two arms of a runtime `if` is not.
             \\
-            \\NOTE on §4.5.7: a time-VARYING `absdelay` delay is legal in the
-            \\LRM when a `maxdelay` argument is given. VerA does not
-            \\implement it; without `maxdelay` the LRM freezes td at its first
-            \\evaluation, which is exactly the constant this code requires.
+            \\Table 4-20's DYNAMIC arguments are not this code: `absdelay`'s td
+            \\(frozen at its first evaluation without maxdelay, §4.5.7, clamped
+            \\to maxdelay with it), `idt`'s ic and assert, `idtmod`'s ic, modulus
+            \\and offset. Nor are a filter's coefficients or a signal-valued
+            \\`maxdelay`, which §4.5.14 samples at the start of the analysis.
             ,
         },
         .E0516 => .{
@@ -5043,9 +5051,8 @@ fn infoOf(c: Code) Info {
             \\  - a zi_* period T is mandatory and positive, its transition time
             \\    nonnegative.
             \\
-            \\VerA also refuses here the forms it does not implement, and the
-            \\message says so: a zi_* filter with a nonzero transition time or
-            \\start time (only the abrupt tau = 0, t0 = 0 form runs).
+            \\A zi_* transition time or start time must also be a constant
+            \\expression; a nonzero one runs as 4.5.12's tau-long ramp.
             \\
             \\    laplace_zp(V(in), '{-1, 1}, '{-1, 0})          // no: -1+1j alone
             \\    laplace_zp(V(in), '{-1, 1, -1, -1}, '{-1, 0})  // yes: a pair
@@ -5600,8 +5607,8 @@ fn infoOf(c: Code) Info {
             \\with or without the fallback expression: "cannot be resolved" is about
             \\whether the name exists, so returning the fallback for a name that
             \\exists would be a wrong value with no diagnostic. This is an
-            \\implementation limit (specification/Vague_Decisions.md §7), not a rule of the
-            \\LRM. Spell the name as a literal or a string parameter.
+            \\implementation limit (specification/Vague_Decisions.md §7), not a
+            \\rule of the LRM. Spell the name as a literal or a string parameter.
             ,
         },
         .E0894 => .{
@@ -6336,7 +6343,7 @@ fn infoOf(c: Code) Info {
             \\constant.
             \\
             \\This is NOT "hierarchy is unsupported" any more — that was E0204,
-            \\retired. §6.2.2 instantiation elaborates and `ir/elaborate.zig`
+            \\retired. §6.2.2 instantiation elaborates and `elab/elaborate.zig`
             \\flattens the tree, and because a flattened entity's name IS its
             \\hierarchical path (`Elaborate.sep`), resolving a §6.7 reference is
             \\the ordinary lookup under the joined name. So this fires when the
@@ -7270,10 +7277,11 @@ fn infoOf(c: Code) Info {
             \\without them cannot keep: `===` or `!==` against an x or z, a `case`
             \\label with an x or z bit, `$sscanf` (an x or z in its input is EOF,
             \\IEEE 1364-2005 §17.2.4.3), a §17.5.4 plane PLA (a z personality bit
-            \\ignores its input), and any design the native code generator
-            \\does not compile (strength and multi-driver nets, gates, switches
-            \\and the rest run only in the 4-state interpreter). Drop
-            \\`--two-state` to run it with 4-state logic.
+            \\ignores its input), a §7.9 net resolved from strengths or several
+            \\drivers or driven by a three-state, switch, UDP or pull driver, and
+            \\any design the native code generator does not compile, which runs
+            \\only in the 4-state interpreter. Drop `--two-state` to run it with
+            \\4-state logic.
             ,
         },
         .E1103 => .{
@@ -7629,9 +7637,9 @@ fn infoOf(c: Code) Info {
             \\decides the calls it can honour:
             \\
             \\  - the string names an algorithm VerA implements: pnjlim, fetlim,
-            \\    limvds, fetlimds, pnjlimds, steplim. An unknown name, or none, leaves the
-            \\    choice to the simulator "just as if no string had been
-            \\    supplied", and VerA's choice is none;
+            \\    limvds, fetlimds, pnjlimds, steplim. An unknown name, or none,
+            \\    leaves the choice to the simulator "just as if no string had
+            \\    been supplied", and VerA's choice is none;
             \\  - the first argument is a potential probe V(a) or V(a,b): there
             \\    must be a node to correct. A flow has none (`type*V(a,b)` is
             \\    not an access function reference at all: E0891);

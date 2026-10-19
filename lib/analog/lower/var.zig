@@ -83,6 +83,12 @@ pub const State = struct {
     /// local costs one copy, not one per mention (hisimhv_va: ~4.9k
     /// mentions, ~0.9 MB of arena strings before).
     held_keys: std.StringHashMapUnmanaged(void) = .empty,
+    /// Every `held_vars` name handed out (`uniqueHeld`), so a clash is one
+    /// probe, not a scan of the table per held row.
+    held_used: std.StringHashMapUnmanaged(void) = .empty,
+    /// Declaration token -> its last `vera_scratch` spec (`scratchSpec`),
+    /// built on first use from every attribute in the file.
+    scratch_specs: ?std.AutoHashMapUnmanaged(u32, Ast.NatureAttr) = null,
 };
 
 /// One `scope_log` row: a declared name and what it shadowed, as rows of
@@ -106,7 +112,8 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.analog) |blk| try scanHeld(self, blk.body, .none);
     self.var_state.held_frames.clearRetainingCapacity();
     // §3.2 retention, beside the §5.10 rule above: see `Exposed`.
-    var x: Exposed = .{ .l = self, .vars = module.vars };
+    var x: Exposed = .{ .l = self };
+    for (module.vars) |*v| if (v.dims.len != 0) try x.arrays.put(self.arena, v.name, v);
     for (module.analog) |blk| {
         // §5.2.1 an `analog initial` body runs on the first evaluation only,
         // so what it assigns is not assigned on the later ones.
@@ -164,8 +171,9 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// a slot that might not be needed, never a hold that is missed.
 const Exposed = struct {
     l: *Lower,
-    /// The module's variables; a named block's are in `held_frames`.
-    vars: []const Ast.VarDecl,
+    /// The module's array variables by name, for `declOf`; a named block's
+    /// declarations are in `held_frames`.
+    arrays: std.AutoHashMapUnmanaged(Ast.StrId, *const Ast.VarDecl) = .empty,
     /// Every key the walk has met, with the sets it is in (`Marks`). One map
     /// and a byte per key, where six sets over the same keys stored each key
     /// six times.
@@ -302,7 +310,7 @@ const Exposed = struct {
         for (x.ws.items) |w| {
             const t = self.file.lvalueBase(w);
             if (t == .none) continue;
-            const k = try heldKey(self, self.file.str(self.file.exprs.strOf(t)));
+            const k = try heldKey(self, self.file.exprs.strOf(t));
             try x.write(k);
             if (t == w) try x.def(k) else if (try x.elem(k, w)) |ek| try x.def(ek);
         }
@@ -363,14 +371,14 @@ const Exposed = struct {
             // Subscripts first; they are reads of their own.
             var i = e;
             while (i != t) : (i = ex.lhs(i)) try x.read(ex.rhs(i));
-            const k = try heldKey(x.l, file.str(ex.strOf(t)));
+            const k = try heldKey(x.l, ex.strOf(t));
             if (x.has(k, .def)) return;
             if (t != e) if (try x.elem(k, e)) |ek| {
                 if (!x.has(ek, .def)) try x.exposed(k);
                 return;
             };
             // The whole variable, or an element nobody can name statically.
-            if (!x.allCells(k, file.str(ex.strOf(t)))) try x.exposed(k);
+            if (!x.allCells(k, ex.strOf(t))) try x.exposed(k);
             return;
         }
         // §4.7.2.3 an `output` actual is written by the call, not read.
@@ -417,7 +425,7 @@ const Exposed = struct {
 
     /// Is every §3.2.2 element of array `k` (declared `name`) assigned?
     /// False for a scalar, whose own key `read` has already tried.
-    fn allCells(x: *Exposed, k: []const u8, name: []const u8) bool {
+    fn allCells(x: *Exposed, k: []const u8, name: Ast.StrId) bool {
         const decl = x.declOf(name) orelse return false;
         if (decl.dims.len == 0) return false;
         // This walk runs before `dimsBounds` has refused a shape (E0308,
@@ -436,16 +444,16 @@ const Exposed = struct {
         return have == cells;
     }
 
-    /// The nearest declaration of `name`, as `heldKey` resolves it.
-    fn declOf(x: *Exposed, name: []const u8) ?*const Ast.VarDecl {
+    /// The nearest declaration of `name`, as `heldKey` resolves it, or null
+    /// when that is a module scalar or nothing.
+    fn declOf(x: *Exposed, name: Ast.StrId) ?*const Ast.VarDecl {
         const frames = x.l.var_state.held_frames.items;
         var i = frames.len;
         while (i > 0) {
             i -= 1;
-            for (frames[i].vars) |*v| if (x.l.file.strings.eql(v.name, name)) return v;
+            for (frames[i].vars) |*v| if (v.name == name) return v;
         }
-        for (x.vars) |*v| if (x.l.file.strings.eql(v.name, name)) return v;
-        return null;
+        return x.arrays.get(name);
     }
 };
 
@@ -454,13 +462,14 @@ const Exposed = struct {
 /// decided by the NEAREST declaration of it, so the walk looks outward from the
 /// innermost named block and falls back to the bare (module-scope) name — a
 /// module variable assigned from inside a block is still the module's.
-fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
+fn heldKey(self: *Lower, id: Ast.StrId) Oom![]const u8 {
+    const name = self.file.str(id);
     var i = self.var_state.held_frames.items.len;
     while (i > 0) {
         i -= 1;
         const f = self.var_state.held_frames.items[i];
         for (f.vars) |v| {
-            if (!self.file.strings.eql(v.name, name)) continue;
+            if (v.name != id) continue; // interned: identity is name equality
             var buf: [lower_shape.elem_key_len]u8 = undefined;
             const key = std.mem.print(&buf, "{s}{s}", .{ f.prefix, name }) catch
                 return self.arena.print("{s}{s}", .{ f.prefix, name });
@@ -487,7 +496,7 @@ fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: Body) Oom!void {
         for (writes.items) |w| {
             const t = self.file.lvalueBase(w);
             if (t == .none) continue;
-            const key = try heldKey(self, self.file.str(self.file.exprs.strOf(t)));
+            const key = try heldKey(self, self.file.exprs.strOf(t));
             try self.var_state.held_names.put(self.arena, key, .event);
             const only = try self.var_state.d2a_only.getOrPutValue(self.arena, key, true);
             only.value_ptr.* = only.value_ptr.* and in_event == .d2a;
@@ -836,7 +845,7 @@ pub fn countAssign(self: *Lower, place: Ssa.Place) Oom!void {
 /// device keeps a slot (E0534, and the variable is held where observable).
 /// The string `"uninit"` drops the zero start too; any other string is E0538.
 fn scratchOn(self: *Lower, tok: u32) Oom!Scratch {
-    const a = scratchSpec(self, tok) orelse return .off;
+    const a = try scratchSpec(self, tok) orelse return .off;
     if (a.value == .none) return .zero;
     const c = lower_constfold.foldExpr(self, a.value, false) orelse {
         try self.err(a.main_tok, .E0534, "", .{});
@@ -872,10 +881,10 @@ fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u
 /// SAME named block twice, which is two executions of one source declaration
 /// and so, by §5.3.2, two locations that happen to share a path.
 fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
-    for (self.out.held_vars.items) |h| {
-        if (std.mem.eql(u8, h.name, name)) return self.arena.print("{s}.{d}", .{ name, idx });
-    }
-    return name;
+    const used = &self.var_state.held_used;
+    const unique = if (used.contains(name)) try self.arena.print("{s}.{d}", .{ name, idx }) else name;
+    try used.put(self.arena, unique, {});
+    return unique;
 }
 
 /// §5.10. Give one event-assigned variable its persistent `Instance` slot and
@@ -1132,7 +1141,7 @@ pub fn checkScratchOwners(self: *Lower, module: *const Ast.ModuleDecl) Oom!void 
 /// the declaration.
 fn refuseDigitalScratch(self: *Lower, digital: *const std.AutoHashMapUnmanaged(Ast.StrId, void), v: Ast.VarDecl) Oom!void {
     if (!digital.contains(v.name)) return;
-    const a = scratchSpec(self, v.main_tok) orelse return;
+    const a = try scratchSpec(self, v.main_tok) orelse return;
     if (a.value != .none) {
         const c = lower_constfold.foldExpr(self, a.value, false) orelse return;
         if ((scratchMode(c) orelse return) == .off) return;
@@ -1141,12 +1150,18 @@ fn refuseDigitalScratch(self: *Lower, digital: *const std.AutoHashMapUnmanaged(A
 }
 
 /// The last `vera_scratch` spec on the declaration at token `tok` (§2.9).
-fn scratchSpec(self: *const Lower, tok: u32) ?Ast.NatureAttr {
-    var spec: ?Ast.NatureAttr = null;
-    for (self.file.attributes.items) |b| if (b.owner.kind == .declaration and b.owner.tok == tok) for (b.specs) |s| {
-        if (std.mem.eql(u8, self.file.str(s.name), "vera_scratch")) spec = s;
-    };
-    return spec;
+fn scratchSpec(self: *Lower, tok: u32) Oom!?Ast.NatureAttr {
+    const specs = &self.var_state.scratch_specs;
+    if (specs.* == null) {
+        // Built once: a scan of every attribute per declaration was 2% of a
+        // large compact model's lint.
+        var map: std.AutoHashMapUnmanaged(u32, Ast.NatureAttr) = .empty;
+        for (self.file.attributes.items) |b| if (b.owner.kind == .declaration) for (b.specs) |s| {
+            if (std.mem.eql(u8, self.file.str(s.name), "vera_scratch")) try map.put(self.arena, b.owner.tok, s);
+        };
+        specs.* = map;
+    }
+    return specs.*.?.get(tok);
 }
 
 fn isVarTok(self: *const Lower, module: *const Ast.ModuleDecl, tok: u32) bool {
@@ -1174,6 +1189,17 @@ test zeroOf {
     try std.testing.expectEqual(Mir.Value.f_zero, zeroOf(.real));
     try std.testing.expectEqual(Mir.Value.zero, zeroOf(.integer));
     try std.testing.expectEqual(Mir.Value.undef, zeroOf(.string));
+}
+
+test uniqueHeld {
+    // One `Instance` field per held row: a name taken is suffixed by its row.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator, "module m; endmodule");
+    defer h.deinit();
+    try std.testing.expectEqualStrings("x", try uniqueHeld(&h.low, "x", 0));
+    try std.testing.expectEqualStrings("y", try uniqueHeld(&h.low, "y", 1));
+    try std.testing.expectEqualStrings("x.2", try uniqueHeld(&h.low, "x", 2));
+    try std.testing.expectEqualStrings("x.3", try uniqueHeld(&h.low, "x", 3));
 }
 
 test "checkOneItemPerScope: §6.8 one identifier declares one item in a scope (E0362)" {
@@ -1217,6 +1243,9 @@ test "declareVarDecl: §2.9 vera_scratch values and owners" {
     try Lower.expectBodyVerdict("  (* vera_scratch *) real s;", "    s = 1.0;", null);
     try Lower.expectBodyVerdict("  (* vera_scratch = \"nope\" *) real s;", "    s = 1.0;", .E0538);
     try Lower.expectBodyVerdict("  (* vera_scratch = \"uninit\" *) real s = 1.0;", "", .E0539);
+    // The last spec on a declaration wins.
+    try Lower.expectBodyVerdict("  (* vera_scratch = \"nope\", vera_scratch *) real s;", "    s = 1.0;", null);
+    try Lower.expectBodyVerdict("  (* vera_scratch, vera_scratch = \"nope\" *) real s;", "    s = 1.0;", .E0538);
     try Lower.expectBodyVerdict("  (* vera_scratch *) parameter real g = 1.0;", "", .E0535);
     // §7.3.1 a `reg`'s packed range is a constant (E0352).
     try Lower.expectBodyVerdict("  integer w;\n  reg [w:0] r;", "", .E0352);

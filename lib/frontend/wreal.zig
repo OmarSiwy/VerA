@@ -22,9 +22,15 @@ const Ast = @import("ast.zig");
 /// Fails only with `OutOfMemory`, from `bag`.
 pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) std.mem.Allocator.Error!void {
     const ex = &file.exprs;
+    // Both rules need a wreal, which most files never declare; the walk
+    // below is O(connections × declarations).
+    for (file.modules) |*m| {
+        if (hasWreal(m)) break;
+    } else return;
     for (file.modules) |*m| {
         for (m.nets) |n| if (n.kind == .wreal) try wrealDrivers(file, starts, bag, m, n.name, n.init != .none);
         for (m.ports) |p| if (p.kind == .wreal) try wrealDrivers(file, starts, bag, m, p.name, false);
+        const parent_wreal = hasWreal(m);
         for (m.instances) |inst| {
             // The last same-named module (IEEE 1364-2005 §13.2.1.1), as
             // `elaborate.findModule` binds it.
@@ -33,6 +39,8 @@ pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) s
                 k -= 1;
                 if (file.modules[k].name == inst.module) break &file.modules[k];
             } else continue;
+            // E0919 needs a wreal on one side of the port.
+            if (!parent_wreal and !hasWreal(child)) continue;
             for (inst.ports, 0..) |conn, i| {
                 if (conn.expr == .none or ex.tag(conn.expr) != .ident) continue;
                 const port = if (conn.name == .none) (nthPort(child.ports, i) orelse continue) else for (child.ports) |p| {
@@ -78,6 +86,16 @@ fn nthPort(ports: []const Ast.Port, n: usize) ?Ast.Port {
     }
     return null;
 }
+
+/// Whether `m` declares a wreal net or port.
+fn hasWreal(m: *const Ast.ModuleDecl) bool {
+    for (m.ports) |p| if (p.kind == .wreal) return true;
+    for (m.nets) |n| if (n.kind == .wreal) return true;
+    return false;
+}
+
+// ponytail: a module that does declare a wreal still pays O(connections ×
+// declarations) here; index its nets by name if a wreal netlist gets large.
 
 /// The declared net type of `name` in `m`, or null if `m` declares no such net.
 fn netKind(m: *const Ast.ModuleDecl, name: Ast.StrId) ?Ast.NetKind {
@@ -244,4 +262,34 @@ test "E0919 binds the last module of a name (IEEE 1364-2005 §13.2.1.1)" {
     var bag: diag.Bag = .init(a);
     try check(&f, &test_starts, &bag);
     try expectReports(&bag, &.{.{ .E0919, 30 }});
+}
+
+test "E0919 from the parent's side, into a child that declares no wreal; no wreal anywhere reports nothing" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var f: Ast.SourceFile = .empty;
+    const rw = try ident(&f, a, "rw");
+    const p = try f.intern(a, "p");
+    const child = try f.intern(a, "child");
+    // module child(p); wand p;  module top; wreal rw; child u(rw);
+    const wand_port = [_]Ast.Port{.{ .name = p, .kind = .wand }};
+    const nets = [_]Ast.NetDecl{.{ .name = f.exprs.strOf(rw), .kind = .wreal }};
+    const conns = [_]Ast.PortConn{.{ .expr = rw, .main_tok = 4 }};
+    const insts = [_]Ast.Instance{.{ .module = child, .name = try f.intern(a, "u"), .ports = &conns }};
+    const mods = [_]Ast.ModuleDecl{
+        .{ .name = child, .ports = &wand_port },
+        .{ .name = try f.intern(a, "top"), .ports = &.{}, .nets = &nets, .instances = &insts },
+    };
+    f.modules = &mods;
+    var bag: diag.Bag = .init(a);
+    try check(&f, &test_starts, &bag);
+    try expectReports(&bag, &.{.{ .E0919, 40 }});
+    // The same netlist with `rw` a `wor`: no wreal on either side.
+    const wor = [_]Ast.NetDecl{.{ .name = f.exprs.strOf(rw), .kind = .wor }};
+    const plain = [_]Ast.ModuleDecl{ mods[0], .{ .name = mods[1].name, .ports = &.{}, .nets = &wor, .instances = &insts } };
+    f.modules = &plain;
+    var quiet: diag.Bag = .init(a);
+    try check(&f, &test_starts, &quiet);
+    try expectReports(&quiet, &.{});
 }

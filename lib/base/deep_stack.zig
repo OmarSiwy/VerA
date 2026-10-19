@@ -145,7 +145,7 @@ pub const Segments = struct {
     frames: u32 = 0,
     base: u32 = 0,
 
-    /// Whether the current segment is full: `caller_cap` levels while no
+    /// Returns whether the current segment is full: `caller_cap` levels while no
     /// segment has begun (the caller's own stack), `segment_cap` on one. The
     /// next level then runs through `segment`.
     pub fn due(s: Segments, caller_cap: u32, segment_cap: u32) bool {
@@ -202,7 +202,7 @@ fn largest(hint: usize) usize {
     return @max(least, std.mem.alignBackward(usize, @min(want, total), 1 << 20));
 }
 
-/// `f(args...)` on a thread with the stack `largest(depth_hint)` (halved
+/// Calls `f(args...)` on a thread with the stack `largest(depth_hint)` (halved
 /// until a thread starts), joined before returning; on this thread when it
 /// already is one, or when no thread can be started (then `exhausted` gives
 /// this thread the foreign budget, so a deep walk is still a refusal and
@@ -236,7 +236,9 @@ pub fn runGuarded(depth_hint: usize, comptime f: anytype, args: anytype) @typeIn
     }
 }
 
-/// Whether the calling step is within `margin` of the end of its stack.
+/// Returns whether the calling step is within `margin` of the end of its
+/// stack. On a thread `runGuarded` did not start, the first call fixes the
+/// floor `foreign` bytes below itself.
 pub fn exhausted() bool {
     if (builtin.os.tag == .freestanding) return false; // os: a comptime target test; freestanding has no stack to bound
     const at = @frameAddress();
@@ -250,7 +252,8 @@ pub fn exhausted() bool {
 /// The refusal past `exhausted`; its argument is `mib()`.
 pub const message = "nesting here exhausts the {d} MiB stack VerA reserved for it";
 
-/// The MiB this thread's stack was reserved with.
+/// Returns the MiB this thread's stack was reserved with (0 before
+/// `runGuarded` or `exhausted` ran on it).
 pub fn mib() usize {
     return reserved >> 20;
 }
@@ -329,4 +332,38 @@ test "runGuarded reserves a stack deeper than the main thread's, and exhausted s
     const t = try std.Thread.spawn(.{ .stack_size = 16 << 20 }, Walk.host, .{&got});
     t.join();
     try std.testing.expectError(error.Exhausted, got);
+}
+
+test "Segments: the caller's cap until a segment begins, the segment's on one, restored after" {
+    const Walk = struct {
+        fn inner(s: *Segments) bool {
+            // Two levels into the segment begun at level 5.
+            s.frames += 2;
+            defer s.frames -= 2;
+            return s.due(100, 2) and !s.due(100, 3);
+        }
+    };
+    var s: Segments = .{ .frames = 4 };
+    try std.testing.expect(!s.due(5, 1)); // 4 levels of the caller's 5
+    s.frames = 5;
+    try std.testing.expect(s.due(5, 1));
+    try std.testing.expect(try s.segment(1, Walk.inner, .{&s}));
+    try std.testing.expectEqual(Segments{ .frames = 5, .base = 0 }, s);
+}
+
+test "runGuarded: a nested call runs in place, on the thread and stack already reserved" {
+    const Walk = struct {
+        fn outer() [2]std.Thread.Id {
+            return .{ std.Thread.getCurrentId(), runGuarded(0, inner, .{}) };
+        }
+        fn inner() std.Thread.Id {
+            return std.Thread.getCurrentId();
+        }
+    };
+    if (builtin.single_threaded or largest(0) < 256 << 20) return error.SkipZigTest;
+    const ids = runGuarded(0, Walk.outer, .{});
+    try std.testing.expectEqual(ids[0], ids[1]);
+    try std.testing.expect(ids[0] != std.Thread.getCurrentId());
+    // A hint past all memory asks for all of it, never more.
+    try std.testing.expect(largest(std.math.maxInt(usize)) <= @min(std.process.totalSystemMemory() catch 8 << 30, 1 << 48));
 }

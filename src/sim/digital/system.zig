@@ -14,6 +14,7 @@ const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
+const wordMask = @import("net.zig").wordMask;
 
 // ---- §17.6 stochastic analysis queues ---------------------------------------
 
@@ -259,11 +260,8 @@ pub fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
     var n = bytes;
     while (n != 0) {
         n -= 1;
-        var c: u8 = 0;
-        for (0..8) |k| {
-            const at = n * 8 + @as(u32, @intCast(k));
-            if (at < v.width and v.bit(at) == .one) c |= @as(u8, 1) << @intCast(k);
-        }
+        // A byte never straddles a word; the bits above `width` are 0.
+        const c: u8 = @truncate(v.values()[n / 8] >> @intCast(n % 8 * 8));
         if (c == 0 and out.items.len == 0) continue;
         try out.append(a, c);
     }
@@ -281,7 +279,7 @@ fn low32(d: ?i64) ?i64 {
 }
 
 /// One §17.2 function call; every one of them returns an integer.
-pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId, _: u32) Error!i64 {
+pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId) Error!i64 {
     if (f == .sscanf) return scanCall(self, a, args);
     const t = table(self) orelse return switch (f) {
         .fopen, .fgets, .fread, .ferror => 0,
@@ -487,9 +485,12 @@ pub fn readWord(a: std.mem.Allocator, t: contract.FileIo, d: i64, width: u32) Er
     for (0..bytes) |k| {
         const c = t.getc(d);
         if (c < 0) return .{ .value = null, .n = @intCast(k) };
-        const lo: u32 = @intCast((bytes - 1 - k) * 8);
-        for (0..8) |b| if (lo + b < width and (c >> @intCast(b)) & 1 != 0) setBit(v, lo + @as(u32, @intCast(b)), .one);
+        const lo = (bytes - 1 - k) * 8;
+        v.values()[lo / 64] |= @as(u64, @intCast(c)) << @intCast(lo % 64);
     }
+    // The top byte's bits above `width` are dropped.
+    const top = v.values().len - 1;
+    v.values()[top] &= wordMask(width, top);
     return .{ .value = v, .n = bytes };
 }
 
@@ -540,15 +541,9 @@ pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, b
 fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
     const input = try text(a, try evaluate.eval(self, a, args[0], 0));
     const format = try text(a, try evaluate.eval(self, a, args[1], 0));
-    return (try scanInto(self, a, input, format, args[2..])).code;
-}
-
-/// `Scan` of `input` by `format`, each value assigned to its output in
-/// `outs`: the call's code and the input characters the scan used.
-fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]const u8, outs: []const Ast.ExprId) Error!struct { code: i64, used: usize } {
-    var sc: Scan = .init(input, format, outs.len);
-    try scanAssign(self, a, &sc, outs);
-    return .{ .code = sc.result, .used = sc.at };
+    var sc: Scan = .init(input, format, args.len - 2);
+    try scanAssign(self, a, &sc, args[2..]);
+    return sc.result;
 }
 
 fn scanAssign(self: *Run, a: std.mem.Allocator, sc: *Scan, outs: []const Ast.ExprId) Error!void {
@@ -740,7 +735,10 @@ pub const Scan = struct {
 /// character in the low byte. Assigning it pads or truncates on the left.
 fn stringValue(a: std.mem.Allocator, s: []const u8) Error!Int.Literal {
     const v = try filled(a, @intCast(@max(1, s.len) * 8), false, .zero);
-    for (s, 0..) |ch, k| setBitsOfByte(v, @intCast((s.len - 1 - k) * 8), ch);
+    for (s, 0..) |ch, k| {
+        const at = s.len - 1 - k;
+        v.values()[at / 8] |= @as(u64, ch) << @intCast(at % 8 * 8);
+    }
     return v;
 }
 
@@ -755,10 +753,6 @@ pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show:
     if (show) |sh| try @import("display.zig").display(self, args[1..], a, sh) else try @import("display.zig").sformat(self, args[1..], a);
     self.out = saved;
     try evaluate.assign(self, a, args[0], try stringValue(a, buf.written()));
-}
-
-fn setBitsOfByte(v: Int.Literal, lo: u32, byte: u8) void {
-    for (0..8) |k| if (byte & (@as(u8, 1) << @intCast(k)) != 0) setBit(v, lo + @as(u32, @intCast(k)), .one);
 }
 
 // ---- §17.5 programmable logic arrays ----------------------------------------

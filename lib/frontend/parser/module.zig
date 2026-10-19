@@ -28,7 +28,12 @@ const Error = parser.Error;
 /// Accumulators for one module body. Arena-owned; each list's `.items`
 /// becomes a `ModuleDecl` slice, in source order.
 pub const Body = struct {
+    /// Append with `addPort`, which keeps `port_index`.
     ports: std.ArrayList(Ast.Port) = .empty,
+    /// The first `ports` index of each port name: a body declaration finds
+    /// its header port in O(1) (`parse_net.findPort`), not by a scan that
+    /// made a module's port declarations quadratic in its ports.
+    port_index: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty,
     /// The header is A.1.3's `list_of_port_declarations`, whose ports "shall
     /// not be redeclared within the body of the module" (§6.2).
     ansi: bool = false,
@@ -152,15 +157,17 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
     // IEEE 1364-2005 §12.3.3: one declaration covers every port reference
     // to its name (`(a, a)`, `(a[7:4], a[3:0])`), which the body folded
     // into the first.
-    for (b.ports.items, 0..) |*p, i| for (b.ports.items[0..i]) |q| if (q.name == p.name) {
+    for (b.ports.items, 0..) |*p, i| {
+        const first = b.port_index.get(p.name).?;
+        if (first == i) continue;
+        const q = b.ports.items[first];
         p.direction = q.direction;
         p.discipline = q.discipline;
         p.range = q.range;
         p.type_range = q.type_range;
         p.kind = q.kind;
         p.is_signed = q.is_signed;
-        break;
-    };
+    }
     try parse_generate.checkGenBlockNames(self, &b);
     try parse_generate.nameGenBlocks(self, &b);
     const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
@@ -243,7 +250,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         // null port, a header position nothing inside connects to (§6.5.1:
         // "The port expression is optional").
         if (dir == .unspecified and (self.peek() == .comma or self.peek() == .rparen)) {
-            try b.ports.append(self.arena, .{ .name = try nullPortName(self, b), .main_tok = self.pos });
+            try addPort(self, b, .{ .name = try nullPortName(self, b), .main_tok = self.pos });
             plain = true;
             if (!self.eat(.comma)) break;
             continue;
@@ -260,7 +267,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             _ = try self.expect(.lparen);
             close_named = true;
             if (dir == .unspecified and self.eat(.rparen)) {
-                try b.ports.append(self.arena, .{ .name = try nullPortName(self, b), .external_name = external, .main_tok = tok });
+                try addPort(self, b, .{ .name = try nullPortName(self, b), .external_name = external, .main_tok = tok });
                 plain = true;
                 if (!self.eat(.comma)) break;
                 continue;
@@ -286,7 +293,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
                 _ = try self.expect(.rbracket);
                 select = .{ .msb = msb, .lsb = lsb };
             }
-            try b.ports.append(self.arena, .{
+            try addPort(self, b, .{
                 .name = name,
                 .direction = dir,
                 .discipline = disc,
@@ -305,6 +312,15 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
+}
+
+/// Appends `p` to `b.ports` and, if its name is new, to `b.port_index`.
+/// On OOM neither table grows.
+pub fn addPort(self: *Parser, b: *Body, p: Ast.Port) error{OutOfMemory}!void {
+    try b.ports.ensureUnusedCapacity(self.arena, 1);
+    const slot = try b.port_index.getOrPut(self.arena, p.name);
+    if (!slot.found_existing) slot.value_ptr.* = @intCast(b.ports.items.len);
+    b.ports.appendAssumeCapacity(p);
 }
 
 /// The internal name of a null port, the next `b.ports` entry. A digital

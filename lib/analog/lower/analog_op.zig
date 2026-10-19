@@ -738,37 +738,68 @@ fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
 /// so no side effect repeats).
 pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
     const gen = self.mir.resolveAlias(n);
-    var reach = try reachOf(self, gen);
+    var reach = try reachOf(self, gen, v);
     defer reach.deinit(self.arena);
     return coeffAt(self, v, gen, &reach, 0, null);
 }
 
-/// The Values whose operands, along the edges `coeffAt` follows, lead to
-/// `gen`: off this set the walk answers `.absent` without descending, so its
-/// cost is the generator-bearing paths and not every path of the DAG. An
+/// The Values of `v`'s cone whose operands, along the edges `coeffAt` follows,
+/// lead to `gen`: off this set the walk answers `.absent` without descending, so
+/// its cost is the generator-bearing paths and not every path of the DAG. An
 /// unsealed phi (no operands yet) is kept in, since what it will carry is
-/// unknown. Indexed by `@backingInt(value)`; O(values) per fixpoint pass.
-fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.bit_set.Dynamic {
+/// unknown. Indexed by `@backingInt(value)`. O(cone) per fixpoint pass, not
+/// O(values): a module of n noisy `<+` would otherwise lower in O(n²).
+fn reachOf(self: *Lower, gen: Mir.Value, v: Mir.Value) Oom!std.bit_set.Dynamic {
     const mir = self.mir;
-    const fd = Mir.Value.first_dynamic;
-    const n = fd + mir.defs.len;
+    const n = Mir.Value.first_dynamic + mir.defs.len;
     var reach = try std.bit_set.Dynamic.initEmpty(self.arena, n);
+    errdefer reach.deinit(self.arena);
     reach.set(@backingInt(gen));
-    const kinds = mir.defs.items(.kind);
-    const payloads = mir.defs.items(.payload);
+    // The cone: every instruction result `v`'s operand edges lead to, phis'
+    // back edges included, which is all `coeffAt` can visit.
+    var seen = try std.bit_set.Dynamic.initEmpty(self.arena, n);
+    defer seen.deinit(self.arena);
+    var cone: std.ArrayList(Mir.Value) = .empty;
+    defer cone.deinit(self.arena);
+    var stack: std.ArrayList(Mir.Value) = .empty;
+    defer stack.deinit(self.arena);
+    try stack.append(self.arena, mir.resolveAlias(v));
+    while (stack.pop()) |x| {
+        if (seen.isSet(@backingInt(x))) continue;
+        seen.set(@backingInt(x));
+        const inst = switch (mir.valueDef(x)) {
+            .inst_result => |i| i,
+            .undef, .float_const, .int_const, .str_const, .param_ref, .block_param => continue,
+        };
+        try cone.append(self.arena, x);
+        switch (mir.instData(inst)) {
+            .unary => |u| try stack.append(self.arena, mir.resolveAlias(u.operand)),
+            .binary => |bn| try stack.appendSlice(self.arena, &.{ mir.resolveAlias(bn.lhs), mir.resolveAlias(bn.rhs) }),
+            .ternary => |t| try stack.appendSlice(self.arena, &.{ mir.resolveAlias(t.then_val), mir.resolveAlias(t.else_val) }),
+            .phi => |p| for (0..p.count) |k| try stack.append(self.arena, mir.resolveAlias(mir.phiPair(inst, @intCast(k)).value)),
+            .call => |c| for (c.args) |arg| try stack.append(self.arena, mir.resolveAlias(arg)),
+            .anew, .branch, .jump => {},
+            .load => |l| try stack.appendSlice(self.arena, &.{ mir.resolveAlias(l.arr), mir.resolveAlias(l.index) }),
+            .store => |st| try stack.appendSlice(self.arena, &.{ mir.resolveAlias(st.arr), mir.resolveAlias(st.index), mir.resolveAlias(st.value) }),
+        }
+    }
     // Operands precede their users except along a phi's back edge or an
     // alias onto a later value; those need another pass.
+    std.mem.sortUnstable(Mir.Value, cone.items, {}, struct {
+        fn lt(_: void, l: Mir.Value, r: Mir.Value) bool {
+            return @backingInt(l) < @backingInt(r);
+        }
+    }.lt);
     var changed = true;
     var passes: usize = 0;
     while (changed) : (passes += 1) {
-        // Each pass that continues sets a bit, and there are `n` of them.
-        std.debug.assert(passes <= n);
+        // Each pass that continues sets a bit, and the cone has that many.
+        std.debug.assert(passes <= cone.items.len);
         changed = false;
-        for (fd..n) |i| {
-            if (kinds[i - fd] != .inst_result or reach.isSet(i)) continue;
-            const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @truncate(payloads[i - fd]))));
-            if (operandReaches(mir, inst, &reach)) {
-                reach.set(i);
+        for (cone.items) |x| {
+            if (reach.isSet(@backingInt(x))) continue;
+            if (operandReaches(mir, mir.valueDef(x).inst_result, &reach)) {
+                reach.set(@backingInt(x));
                 changed = true;
             }
         }

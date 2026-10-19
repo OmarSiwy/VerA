@@ -4,35 +4,31 @@ const Module = Build.Module;
 const Import = Module.Import;
 const Run = Build.Step.Run;
 
-/// What a row may import; tests/fitness.zig reads it through `repo_options`.
-const Role = enum { runtime, leaf, compiler, backend, tool };
-
 /// In dependency order: a module may import only rows above it.
 const module_specs = [_]struct {
     name: []const u8,
     path: []const u8,
-    role: Role,
     imports: []const []const u8 = &.{},
     c: ?[]const u8 = null,
 }{
-    .{ .name = "contract", .path = "tools/contract.zig", .role = .runtime },
-    .{ .name = "base", .path = "lib/base/root.zig", .role = .leaf },
-    .{ .name = "kernels", .path = "lib/kernels/root.zig", .role = .runtime, .imports = &.{"contract"} },
-    .{ .name = "diag", .path = "lib/diag.zig", .role = .compiler },
-    .{ .name = "dynlib", .path = "lib/dynlib.zig", .role = .leaf },
-    .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels" } },
-    .{ .name = "elab", .path = "lib/elab/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels" } },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels" } },
-    .{ .name = "analog", .path = "lib/analog/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "elab", "ir", "kernels" } },
-    .{ .name = "prove", .path = "lib/prove/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "ir", "contract", "analog" } },
-    .{ .name = "zigbuild", .path = "lib/zigbuild/root.zig", .role = .tool, .imports = &.{ "contract", "dynlib" } },
-    .{ .name = "device", .path = "lib/device/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
-    .{ .name = "verilog", .path = "lib/verilog/beh_verilog.zig", .role = .backend, .imports = &.{ "ir", "prove" } },
-    .{ .name = "exe", .path = "lib/exe/tb.zig", .role = .backend, .imports = &.{ "diag", "frontend", "ir", "zigbuild" } },
-    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "device", "verilog", "exe", "kernels", "zigbuild" } },
-    .{ .name = "sim", .path = "src/sim/root.zig", .role = .runtime, .imports = &.{ "contract", "base", "diag", "frontend", "kernels" } },
-    .{ .name = "digital", .path = "lib/digital/root.zig", .role = .backend, .imports = &.{ "sim", "frontend", "diag", "contract", "kernels", "base" } },
-    .{ .name = "vpi", .path = "src/vpi/root.zig", .role = .tool, .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
+    .{ .name = "contract", .path = "tools/contract.zig" },
+    .{ .name = "base", .path = "lib/base/root.zig" },
+    .{ .name = "kernels", .path = "lib/kernels/root.zig", .imports = &.{"contract"} },
+    .{ .name = "diag", .path = "lib/diag.zig" },
+    .{ .name = "dynlib", .path = "lib/dynlib.zig" },
+    .{ .name = "frontend", .path = "lib/frontend/root.zig", .imports = &.{ "base", "diag", "kernels" } },
+    .{ .name = "elab", .path = "lib/elab/root.zig", .imports = &.{ "base", "diag", "frontend", "kernels" } },
+    .{ .name = "ir", .path = "lib/ir/root.zig", .imports = &.{ "base", "diag", "kernels" } },
+    .{ .name = "analog", .path = "lib/analog/root.zig", .imports = &.{ "diag", "frontend", "elab", "ir", "kernels" } },
+    .{ .name = "prove", .path = "lib/prove/root.zig", .imports = &.{ "diag", "frontend", "ir", "contract", "analog" } },
+    .{ .name = "zigbuild", .path = "lib/zigbuild/root.zig", .imports = &.{ "contract", "dynlib" } },
+    .{ .name = "device", .path = "lib/device/root.zig", .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
+    .{ .name = "verilog", .path = "lib/verilog/beh_verilog.zig", .imports = &.{ "ir", "prove" } },
+    .{ .name = "exe", .path = "lib/exe/tb.zig", .imports = &.{ "diag", "frontend", "ir", "zigbuild" } },
+    .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "device", "verilog", "exe", "kernels", "zigbuild" } },
+    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "contract", "base", "diag", "frontend", "kernels" } },
+    .{ .name = "digital", .path = "lib/digital/root.zig", .imports = &.{ "sim", "frontend", "diag", "contract", "kernels", "base" } },
+    .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
 };
 
 const M = struct {
@@ -110,17 +106,6 @@ pub fn build(b: *Build) void {
     const all_mod = m.make("tests/test_all.zig", mods);
     const repo = b.addOptions();
     repo.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
-    var row_names: [module_specs.len][]const u8 = undefined;
-    var row_roles: [module_specs.len][]const u8 = undefined;
-    var row_imports: [module_specs.len][]const u8 = undefined;
-    for (module_specs, &row_names, &row_roles, &row_imports) |spec, *n, *r, *i| {
-        n.* = spec.name;
-        r.* = @tagName(spec.role);
-        i.* = std.mem.join(b.allocator, " ", spec.imports) catch @panic("OOM");
-    }
-    repo.addOption([]const []const u8, "module_names", &row_names);
-    repo.addOption([]const []const u8, "module_roles", &row_roles);
-    repo.addOption([]const []const u8, "module_imports", &row_imports);
     all_mod.addOptions("repo_options", repo);
     const all_run = testRun(b, "test_all", all_mod, runner);
     // Reads the tree at test time: every file it can reach is an input, so a

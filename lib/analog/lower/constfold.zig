@@ -103,7 +103,7 @@ const Env = struct {
     }
     /// Returns name `e`'s bit length, or null when nothing states it.
     pub fn width(env: Env, e: Ast.ExprId) ?u32 {
-        return nameWidth(env.self, e, 0);
+        return nameWidthFor(env.self, e, 0, false);
     }
 };
 
@@ -125,12 +125,9 @@ const ClogEnv = struct {
 /// variable or typed parameter, an untyped local parameter's default's
 /// (IEEE 1364-2005 §12.2, "the type and range of the final value assigned"),
 /// and null for one the host may override, or anything not an integer.
-/// `$clog2` additionally reads an inferred parameter's final elaborated HDL
-/// default, or, under `clog2_host`, a card value's unsized width (VD-089).
-fn nameWidth(self: *const Lower, e: Ast.ExprId, depth: u32) ?u32 {
-    return nameWidthFor(self, e, depth, false);
-}
-
+/// `$clog2` (`self_determined`) additionally reads an inferred parameter's
+/// final elaborated HDL default, or, under `clog2_host`, a card value's
+/// unsized width (VD-089).
 fn nameWidthFor(self: *const Lower, e: Ast.ExprId, depth: u32, comptime self_determined: bool) ?u32 {
     if (depth > 32) return null;
     const ex = &self.file.exprs;
@@ -152,10 +149,14 @@ fn nameWidthFor(self: *const Lower, e: Ast.ExprId, depth: u32, comptime self_det
     if (self_determined and self.clog2_host != 0 and hostSizedParam(self, name) != null) return self.clog2_host;
     if (self_determined) return p.source_width;
     if (!p.is_local) return null;
+    const decl = paramDecl(self, p.name) orelse return null;
+    return constfold.operandWidth(self.file, decl.default, deeper);
+}
+
+/// The module's own declaration of parameter `name`, or null.
+fn paramDecl(self: *const Lower, name: []const u8) ?*const Ast.ParamDecl {
     const module = self.module orelse return null;
-    for (module.params) |decl| {
-        if (std.mem.eql(u8, self.file.str(decl.name), p.name)) return constfold.operandWidth(self.file, decl.default, deeper);
-    }
+    for (module.params) |*decl| if (self.file.strings.eql(decl.name, name)) return decl;
     return null;
 }
 
@@ -167,7 +168,7 @@ pub fn packedWidth(self: *const Lower, range: Ast.Dim) ?u32 {
     return std.math.cast(u32, @abs(@as(i128, left) - right) + 1);
 }
 
-/// `nameWidth` one level down, as `constfold.operandWidth`'s `env`.
+/// `nameWidthFor` one level down, as `constfold.operandWidth`'s `env`.
 fn WidthEnv(comptime self_determined: bool) type {
     return struct {
         self: *const Lower,
@@ -222,11 +223,8 @@ pub fn hostSizedParam(self: *const Lower, name: []const u8) ?usize {
     const pi = self.param_index.get(name) orelse return null;
     const p = self.out.params.items[pi];
     if (p.ty != .integer or p.integer32 or p.is_local) return null;
-    const module = self.module orelse return null;
-    for (module.params) |decl| {
-        if (std.mem.eql(u8, self.file.str(decl.name), name)) return if (decl.packed_range == null) pi else null;
-    }
-    return null;
+    const decl = paramDecl(self, name) orelse return null;
+    return if (decl.packed_range == null) pi else null;
 }
 
 /// The width-and-sign plan `lower/expr.zig` lowers a `$clog2` operand by, under
@@ -250,12 +248,8 @@ pub fn clog2WideCarrier(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
                 if (self.file.strings.eql(p.name, name)) return wideParamCarrier(self, p, depth + 1);
             }
             const pi = self.param_index.get(name) orelse return false;
-            const p = self.out.params.items[pi];
-            const module = self.module orelse return false;
-            for (module.params) |decl| {
-                if (std.mem.eql(u8, self.file.str(decl.name), p.name)) return wideParamCarrier(self, decl, depth + 1);
-            }
-            return false;
+            const decl = paramDecl(self, self.out.params.items[pi].name) orelse return false;
+            return wideParamCarrier(self, decl.*, depth + 1);
         },
         else => return false, // else: no proof that the carrier retains every high bit
     }
@@ -293,12 +287,8 @@ fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
             if (p.ty != .integer) break :blk null;
             if (p.integer32) break :blk true;
             if (!p.is_local) break :blk null; // host overrides carry no signedness
-            const module = self.module orelse break :blk null;
-            for (module.params) |decl| {
-                if (std.mem.eql(u8, self.file.str(decl.name), p.name))
-                    break :blk integerSourceSigned(self, decl.default, depth + 1);
-            }
-            break :blk null;
+            const decl = paramDecl(self, p.name) orelse break :blk null;
+            break :blk integerSourceSigned(self, decl.default, depth + 1);
         },
         .unary => switch (ex.unOp(e)) {
             .plus, .minus, .bit_not => integerSourceSigned(self, ex.lhs(e), depth + 1),

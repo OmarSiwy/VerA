@@ -55,7 +55,7 @@ pub const Server = struct {
     /// One update's outcome: the output's cache digest, or the compiler's
     /// report.
     const Update = union(enum) {
-        ok: struct { digest: Cache.BinDigest, cache_hit: bool },
+        ok: Cache.BinDigest,
         failed: std.zig.ErrorBundle,
     };
 
@@ -67,7 +67,6 @@ pub const Server = struct {
     pub fn wait(s: *Server, gpa: Allocator) !Update {
         const r = &s.out.interface;
         var digest: ?Cache.BinDigest = null;
-        var cache_hit = false;
         while (true) {
             const header = r.takeStruct(ServerMsg.Header, .little) catch return error.CompilerGone;
             const body = r.readAllocAll(gpa, header.bytes_len) catch |err| switch (err) {
@@ -82,8 +81,6 @@ pub const Server = struct {
                 .emit_digest => {
                     if (body.len < @sizeOf(ServerMsg.EmitDigest) + Cache.bin_digest_len)
                         return error.ProtocolMismatch;
-                    const eh: *align(1) const ServerMsg.EmitDigest = @ptrCast(body.ptr);
-                    cache_hit = eh.flags.cache_hit;
                     digest = body[@sizeOf(ServerMsg.EmitDigest)..][0..Cache.bin_digest_len].*;
                 },
                 .error_bundle => {
@@ -100,7 +97,7 @@ pub const Server = struct {
                 else => {},
             }
         }
-        return .{ .ok = .{ .digest = digest orelse return error.NoArtifact, .cache_hit = cache_hit } };
+        return .{ .ok = digest orelse return error.NoArtifact };
     }
 };
 
@@ -128,7 +125,7 @@ fn putMsg(w: *Io.Writer, tag: ServerMsg.Tag, body: []const u8) !void {
 const empty_bundle: [@sizeOf(ServerMsg.ErrorBundle)]u8 = @splat(0);
 
 /// Runs `Server.wait` over `stream` as the child's stdout.
-fn waitOver(stream: []const u8) !Server.Update {
+fn waitOver(gpa: Allocator, stream: []const u8) !Server.Update {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -139,7 +136,7 @@ fn waitOver(stream: []const u8) !Server.Update {
     var buf: [16]u8 = undefined;
     var s: Server = undefined;
     s.out = file.readerStreaming(io, &buf);
-    return s.wait(std.testing.allocator);
+    return s.wait(gpa);
 }
 
 test "Server.wait returns the digest an update emitted" {
@@ -149,25 +146,22 @@ test "Server.wait returns the digest an update emitted" {
     try putMsg(&w, .zig_version, builtin.zig_version_string);
     // A message nothing here reads is skipped whole.
     try putMsg(&w, .file_system_inputs, "\x01src/a.zig\x00");
-    try putMsg(&w, .emit_digest, &([_]u8{1} ++ digest)); // flags.cache_hit = 1
+    try putMsg(&w, .emit_digest, &([_]u8{1} ++ digest)); // flags, then the digest
     try putMsg(&w, .error_bundle, &empty_bundle);
 
-    const u = try waitOver(w.buffered());
+    const u = try waitOver(std.testing.allocator, w.buffered());
     try std.testing.expect(u == .ok);
-    try std.testing.expectEqualSlices(u8, &digest, &u.ok.digest);
-    try std.testing.expect(u.ok.cache_hit);
+    try std.testing.expectEqualSlices(u8, &digest, &u.ok);
 }
 
-test "Server.wait hands over a failed update's report" {
+/// Writes into `w` one update that failed with a one-message report.
+fn putFailed(w: *Io.Writer) !void {
     const gpa = std.testing.allocator;
     var wip: std.zig.ErrorBundle.Wip = try .init(gpa);
     errdefer wip.deinit();
     try wip.addRootErrorMessage(.{ .msg = try wip.addString("boom") });
     var sent = try wip.toOwnedBundle("");
     defer sent.deinit(gpa);
-
-    var bytes: [512]u8 = undefined;
-    var w: Io.Writer = .fixed(&bytes);
     try w.writeStruct(ServerMsg.Header{
         .tag = .error_bundle,
         .bytes_len = @intCast(@sizeOf(ServerMsg.ErrorBundle) + 4 * sent.extra.len + sent.string_bytes.len),
@@ -178,8 +172,15 @@ test "Server.wait hands over a failed update's report" {
     }, .little);
     try w.writeSliceEndian(u32, sent.extra, .little);
     try w.writeAll(sent.string_bytes);
+}
 
-    var u = try waitOver(w.buffered());
+test "Server.wait hands over a failed update's report" {
+    const gpa = std.testing.allocator;
+    var bytes: [512]u8 = undefined;
+    var w: Io.Writer = .fixed(&bytes);
+    try putFailed(&w);
+
+    var u = try waitOver(gpa, w.buffered());
     // `std.testing.allocator` fails the test if the caller-owned bundle leaks.
     switch (u) {
         .ok => return error.TestUnexpectedResult,
@@ -190,40 +191,54 @@ test "Server.wait hands over a failed update's report" {
     }
 }
 
+/// `waitOver`, then frees a failed update's report.
+fn waitFreed(gpa: Allocator, stream: []const u8) !void {
+    var u = try waitOver(gpa, stream);
+    if (u == .failed) u.failed.deinit(gpa);
+}
+
+test "Server.wait frees every body and the report when an allocation fails" {
+    var bytes: [512]u8 = undefined;
+    var w: Io.Writer = .fixed(&bytes);
+    try putMsg(&w, .zig_version, builtin.zig_version_string);
+    try putFailed(&w);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, waitFreed, .{w.buffered()});
+}
+
 test "Server.wait refuses a stream it cannot trust" {
     var bytes: [256]u8 = undefined;
 
     // Another compiler: the version string differs.
     var w: Io.Writer = .fixed(&bytes);
     try putMsg(&w, .zig_version, "0.0.0-other");
-    try std.testing.expectError(error.ProtocolMismatch, waitOver(w.buffered()));
+    try std.testing.expectError(error.ProtocolMismatch, waitOver(std.testing.allocator, w.buffered()));
 
     // A digest body one byte short of flags + `bin_digest_len`.
     const short: [Cache.bin_digest_len]u8 = @splat(0);
     w = .fixed(&bytes);
     try putMsg(&w, .emit_digest, &short);
-    try std.testing.expectError(error.ProtocolMismatch, waitOver(w.buffered()));
+    try std.testing.expectError(error.ProtocolMismatch, waitOver(std.testing.allocator, w.buffered()));
 
     // An error bundle shorter than its own header.
     w = .fixed(&bytes);
     try putMsg(&w, .error_bundle, &.{ 0, 0, 0, 0 });
-    try std.testing.expectError(error.ProtocolMismatch, waitOver(w.buffered()));
+    try std.testing.expectError(error.ProtocolMismatch, waitOver(std.testing.allocator, w.buffered()));
 
     // An update that ended without emitting anything.
     w = .fixed(&bytes);
     try putMsg(&w, .error_bundle, &empty_bundle);
-    try std.testing.expectError(error.NoArtifact, waitOver(w.buffered()));
+    try std.testing.expectError(error.NoArtifact, waitOver(std.testing.allocator, w.buffered()));
 }
 
 test "Server.wait reports a child that went away" {
     var bytes: [64]u8 = undefined;
     // Nothing at all, then a header cut short, then a body cut short.
-    try std.testing.expectError(error.CompilerGone, waitOver(""));
-    try std.testing.expectError(error.CompilerGone, waitOver(&.{ 1, 0, 0 }));
+    try std.testing.expectError(error.CompilerGone, waitOver(std.testing.allocator, ""));
+    try std.testing.expectError(error.CompilerGone, waitOver(std.testing.allocator, &.{ 1, 0, 0 }));
     var w: Io.Writer = .fixed(&bytes);
     try w.writeStruct(ServerMsg.Header{ .tag = .zig_version, .bytes_len = 10 }, .little);
     try w.writeAll("0.1");
-    try std.testing.expectError(error.CompilerGone, waitOver(w.buffered()));
+    try std.testing.expectError(error.CompilerGone, waitOver(std.testing.allocator, w.buffered()));
 }
 
 test send {

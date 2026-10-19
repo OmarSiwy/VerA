@@ -86,7 +86,7 @@ pub fn sweep(ckt: anytype, x_op: []const f64, out: usize, freqs: []const f64, de
     const op_sim = ckt.sim;
     defer ckt.setSimState(op_sim);
     ckt.setSimState(.{ .t = op_sim.t, .kind = .noise, .analog_initial = false });
-    ckt.eval(x_op, 0);
+    ckt.eval(x_op);
     const c_mat: [n * n]f64 = if (C.has_charge) ckt.c_vals else @splat(0);
     // `eval`'s family, so a `ddx` in a PSD argument reads its partial (#32).
     const psd = D.noisePsd(C.Dual, x_op[0..n].*, ckt.model, ckt.inst, ckt.sim);
@@ -467,4 +467,28 @@ test "§4.6.1 the sweep linearizes as a .noise analysis, so ac_dyn_slots count o
     try std.testing.expectApproxEqRel(@as(f64, 4e-18), dens[0], 1e-12);
     // The operating point's analysis is left as it was.
     try std.testing.expectEqual(contract.AnalysisKind.static, ckt.sim.kind);
+}
+
+/// One floating node: no conductance, no charge, one noise current.
+const MockFloating = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const vera_version = contract.vera_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].scale(0)});
+    }
+
+    pub const noise_gens = [_]contract.NoiseGen(@This()){.{ .row = 0, .col = 0, .kind = .thermal }};
+
+    pub fn noisePsd(comptime _: type, _: [1]f64, _: *const Model, _: *const Instance, _: contract.SimState) [1]contract.PsdTerm {
+        return .{.{ .white = 1e-24 }};
+    }
+};
+
+test "a frequency whose admittance does not factor is error.Singular" {
+    try std.testing.expectError(error.Singular, densityAt(MockFloating, .{}, &.{1e3}));
 }

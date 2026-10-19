@@ -209,20 +209,14 @@ fn claim(self: *Run, item: Pending) Error!u32 {
 /// IEEE 1364-2005 §10.3 `disable`: it "terminates the activity" of a named
 /// block, and "execution continues with the statement following the block".
 /// Drops every resumption into [start, end) (`stopRange`) and, only if one
-/// was dropped, resumes at `end`: a block nobody is suspended in has no
-/// activity, and resuming there would run the tail of a body twice. The
-/// executing process's own jump past the block is its dispatch arm's.
-fn disableRange(self: *Run, start: u32, end: u32) Error!void {
+/// was dropped, resumes at `end` once and returns true: a block nobody is
+/// suspended in has no activity, and resuming there would run the tail of a
+/// body twice. A process disabling a block it runs inside stops on true, so
+/// the statement after the block runs once, not once per process; on false
+/// its own jump past the block is its dispatch arm's.
+fn disable(self: *Run, start: u32, end: u32) Error!bool {
     // ponytail: an NBA already scheduled from inside the block still lands; it
     // is a write the block completed before it was disabled.
-    if (try stopRange(self, start, end)) _ = try enqueue(self, .{ .run_process = end }, null, false);
-}
-
-/// `disableRange` by a process running inside [start, end) itself, which
-/// continues at `end` on its own unless another process inside was ended:
-/// then one resumption at `end` is queued and true says the caller stops,
-/// so the statement after the block runs once, not once per process.
-fn disableInside(self: *Run, start: u32, end: u32) Error!bool {
     if (!try stopRange(self, start, end)) return false;
     _ = try enqueue(self, .{ .run_process = end }, null, false);
     return true;
@@ -275,6 +269,7 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
     if (kind == .normal) return value.equality(.case_equal, label) == .one;
     // IEEE1364-2005 §9.5.1: wildcards apply symmetrically to either value.
     // Per plane word: z is (value 0, unknown 1), x is (1, 1).
+    // Per declared word: a parsed unsized literal's planes may be longer.
     for (0..(value.width + 63) / 64) |w| {
         const av = value.values()[w];
         const au = value.unknowns()[w];
@@ -469,12 +464,6 @@ fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
     const out = try filled(a, v.width, v.signed, .zero);
     @memcpy(out.planes, v.planes);
     return out;
-}
-
-/// §10.2.2 copy-out: formal `slot` assigned to the caller's lvalue `target`,
-/// under the assignment rules (§5.5.3) and in the caller's scope.
-fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Error!void {
-    try evaluate.put(self, a, target, try evaluate.convertSlot(self, a, slot, try evaluate.targetType(self, target)), false, null);
 }
 
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
@@ -877,8 +866,10 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 pc += 1;
                 continue;
             },
+            // §10.2.2 copy-out: the formal assigned to the caller's lvalue,
+            // under the assignment rules (§5.5.3) and in the caller's scope.
             .copy_out => |s| {
-                try copyOut(self, scratch, s.target, s.slot);
+                try evaluate.put(self, scratch, s.target, try evaluate.convertSlot(self, scratch, s.slot, try evaluate.targetType(self, s.target)), false, null);
                 pc += 1;
                 continue;
             },
@@ -898,10 +889,9 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 var next = pc + 1;
                 var resumed = false;
                 for (sub.ranges.items) |rg| {
-                    if (pc >= rg.start and pc < rg.end) {
-                        next = rg.end;
-                        if (try disableInside(self, rg.start, rg.end)) resumed = true;
-                    } else try disableRange(self, rg.start, rg.end);
+                    const inside = pc >= rg.start and pc < rg.end;
+                    if (inside) next = rg.end;
+                    if (try disable(self, rg.start, rg.end) and inside) resumed = true;
                 }
                 if (sub.active != 0) {
                     self.unwind = idx;
@@ -913,10 +903,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             },
             .disable_block => |b| {
                 const inside = pc >= b.start and pc < b.end;
-                const resumed = if (inside) try disableInside(self, b.start, b.end) else blk: {
-                    try disableRange(self, b.start, b.end);
-                    break :blk false;
-                };
+                const resumed = try disable(self, b.start, b.end) and inside;
                 if (self.done_hook) |h| if (self.done_sites.contains(pc)) try h(self, pc);
                 if (resumed) return;
                 // IEEE1364 §10.3: self/ancestor disable resumes AFTER the
@@ -940,13 +927,12 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             },
             .repeat_start => |s| {
                 const value = try evaluate.eval(self, scratch, s.count, 0);
-                const count = if (value.hasUnknown()) 0 else blk: {
-                    if (value.signed and value.asInt().? < 0) {
-                        if (s.clamp) break :blk 0;
-                        return self.exprFail(s.count, "negative repeat counts are not implemented; IEEE1364-2005 does not define this case explicitly");
-                    }
-                    break :blk value.values()[0];
-                };
+                // §9.6/§9.7.7: x, z or a negative count of any width is zero
+                // times; past 64 bits saturates, as 2^64 passes never end.
+                const words = value.values();
+                const count: u64 = if (value.hasUnknown() or (value.signed and value.bit(value.width - 1) == .one))
+                    0
+                else if (std.mem.allEqual(u64, words[1..], 0)) words[0] else std.math.maxInt(u64);
                 self.repeats.items[s.counter] = count;
                 pc = if (count == 0) s.end else pc + 1;
                 continue;

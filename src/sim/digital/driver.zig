@@ -20,13 +20,6 @@ const Driver = @import("net.zig").Driver;
 const Signal = @import("net.zig").Signal;
 const filled = @import("net.zig").filled;
 
-/// Whether `driver_update` fires for a connect module's own driver of the
-/// signal (the `assign d = out;` of §9.22.6). It does not: §9.22.6 separates
-/// that driver, which "will drive the receivers", from "the drivers of the
-/// connect module digital port", the ordinary drivers §9.22 ¶3's access
-/// functions see (the user's 2026-09-24 reading of §9.22.6). Fixture m04_12 pins it.
-const cm_driver_updates = false;
-
 /// The engine's §9.22 driver-access state (`Run.drv`), written by
 /// `segregate` during elaboration and by `arm` once the slots are final.
 pub const State = struct {
@@ -94,15 +87,9 @@ pub fn segregate(r: *Run, e: *elab.Elab) Error!void {
         };
         const rx_slot = e.nets.items[rx].slot;
         var it = r.names.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* != slot or isConnect(r, entry.key_ptr.scope)) continue;
-            const info = r.scope_info.items[entry.key_ptr.scope];
-            if (info.lexical) continue;
-            const m = &r.file.modules[info.def];
-            for (m.ports) |p| if (p.name == entry.key_ptr.str and p.direction == .input) {
-                entry.value_ptr.* = rx_slot;
-            };
-        }
+        while (it.next()) |entry| if (entry.value_ptr.* == slot and ordinaryInput(r, entry.key_ptr.scope, entry.key_ptr.str)) {
+            entry.value_ptr.* = rx_slot;
+        };
         try r.drv.receivers.put(r.arena, d, rx);
     }
     for (gate_reads.items) |g| if (r.drv.receivers.get(g.net)) |rx| {
@@ -146,7 +133,7 @@ fn ordinary(r: *const Run, net: u32, i: ?u64) union(enum) { count: u32, driver: 
 pub fn checkUpdate(r: *Run, e: Ast.ExprId) Error!void {
     const signal = r.file.exprs.lhs(e);
     const net = r.net_of.get(try r.scalarSlot(signal)) orelse return r.exprFail(signal, "§9.22.5: driver_update watches the drivers of a net");
-    for (r.drv.watched.items) |w| if (w == net) return;
+    if (std.mem.findScalar(u32, r.drv.watched.items, net) != null) return;
     try r.drv.watched.append(r.arena, net);
 }
 
@@ -160,7 +147,13 @@ pub fn arm(r: *Run) Error!void {
             if (k == 1 and half == net) break;
             for (r.netDrivers(half)) |di| {
                 const dr = r.drivers[di];
-                if (isConnect(r, dr.scope) and !cm_driver_updates) continue;
+                // `driver_update` does not fire for a connect module's own
+                // driver (the `assign d = out;` of §9.22.6): §9.22.6 separates
+                // that driver, which "will drive the receivers", from "the
+                // drivers of the connect module digital port", the ordinary
+                // drivers §9.22 ¶3's access functions see (the user's
+                // 2026-09-24 reading of §9.22.6). Fixture m04_12 pins it.
+                if (isConnect(r, dr.scope)) continue;
                 if (dr.source == .bridge) {
                     try watch(r, dr.source.bridge.src, r.nets[net].slot, true);
                 } else for (dr.sensitivity) |s| try watch(r, s, r.nets[net].slot, false);
@@ -322,16 +315,18 @@ fn pending(r: *Run, a: std.mem.Allocator, di: u32) Error!?Pend {
 fn receivers(r: *const Run, slot: u32) u32 {
     var n: u32 = 0;
     var it = r.names.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.* != slot or isConnect(r, entry.key_ptr.scope)) continue;
-        const info = r.scope_info.items[entry.key_ptr.scope];
-        if (info.lexical) continue;
-        const m = &r.file.modules[info.def];
-        for (m.ports) |p| {
-            if (p.name == entry.key_ptr.str and p.direction == .input) n += 1;
-        }
-    }
+    while (it.next()) |entry| n += @intFromBool(entry.value_ptr.* == slot and ordinaryInput(r, entry.key_ptr.scope, entry.key_ptr.str));
     return n;
+}
+
+/// Whether name `str` in `scope` is an input port of an ordinary module
+/// instance (not a connect module's, not a block's local).
+fn ordinaryInput(r: *const Run, scope: u32, str: Ast.StrId) bool {
+    if (isConnect(r, scope)) return false;
+    const info = r.scope_info.items[scope];
+    if (info.lexical) return false;
+    for (r.file.modules[info.def].ports) |p| if (p.name == str) return p.direction == .input;
+    return false;
 }
 
 /// §9.22.4 "bits 5-3 for strength0 and bits 2-0 for strength1", each a level of

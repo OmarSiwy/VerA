@@ -109,7 +109,6 @@ pub const ConfigDecl = decl_file.ConfigDecl;
 // Statements: LRM ch5, A.6 (ast_stmt.zig).
 pub const Stmt = stmt_file.Stmt;
 pub const StmtRow = stmt_file.StmtRow;
-pub const BlockId = stmt_file.BlockId;
 pub const ProcContinuous = stmt_file.ProcContinuous;
 pub const CaseKind = stmt_file.CaseKind;
 pub const CaseArm = stmt_file.CaseArm;
@@ -647,4 +646,35 @@ test "overlay: the parse's ids read through it, its own continue them, and the p
     try testing.expectEqual(@as(usize, 2), parse.stmts.items.len);
     try testing.expectEqual(@as(u32, 1), parse.exprs.len());
     try testing.expectEqual(@as(?StrId, null), parse.strings.find("y"));
+}
+
+fn seedOom(gpa: std.mem.Allocator, src: *const SourceFile) !void {
+    var f: SourceFile = .empty;
+    // On OOM `f` holds a partial copy, which `deinit` frees.
+    defer f.deinit(gpa);
+    try f.seedFrom(gpa, src);
+    try testing.expectEqual(src.stmts.items.len, f.stmts.items.len);
+    try testing.expectEqual(src.exprs.logic.items.len, f.exprs.logic.items.len);
+}
+
+test "seedFrom on OOM leaves a partial copy that deinit frees, at every allocation" {
+    const gpa = testing.allocator;
+    var src: SourceFile = .empty;
+    defer src.deinit(gpa);
+    _ = try src.intern(gpa, "x");
+    const one = try src.exprs.addInt(gpa, 0, 1);
+    _ = try src.exprs.addReal(gpa, 0, 0.5);
+    for (0..3) |k| {
+        const planes = try gpa.dupe(u64, &.{ k, 0 });
+        _ = src.exprs.addLogic(gpa, 1, .{ .width = 1, .sized = true, .signed = false, .planes = planes }) catch |e| {
+            gpa.free(planes);
+            return e;
+        };
+    }
+    _ = try src.exprs.addExprList(gpa, &.{one});
+    const s = try src.addStmt(gpa, .empty, 2);
+    _ = try src.addStmt(gpa, .{ .block = .{ .body = &.{s} } }, 3);
+    try src.attributes.append(gpa, .{ .owner = .{ .kind = .statement, .tok = 2 }, .specs = &.{} });
+    try src.lte_attrs.append(gpa, .{ .stmt = s, .value = one, .main_tok = 2 });
+    try testing.checkAllAllocationFailures(gpa, seedOom, .{&src});
 }

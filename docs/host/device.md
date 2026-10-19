@@ -116,8 +116,9 @@ operating point at t = 0. One value serves every instance.
 
 `Rows(D, S)` is a tuple whose row `r` has type `S.Of(rowMask(D, r))`: the
 row carries exactly the derivative lanes its `jac_pattern` entry allows.
-With a dense family every `Of(m)` is one type, so the tuple coerces to an
-array, which is what the minimal host does. [Scalar
+Rows can differ in type, so a host reads them with an `inline for`, and
+`contract.denseRow(n, row)` spreads one into a matrix row, which is what the
+minimal host does. [Scalar
 families](families.md) explains the lanes.
 
 The instance pointer is `*const Instance`, or `*Instance` when the device
@@ -136,8 +137,8 @@ changelog under that version says what changed. A host that supports one
 release pins it at compile time:
 
 ```zig
-if (comptime !std.mem.eql(u8, D.vera_version, "0.10.4"))
-    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.10.4");
+if (comptime !std.mem.eql(u8, D.vera_version, "0.11.0"))
+    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.11.0");
 ```
 
 An optional declaration a later release adds stays optional: a host that

@@ -444,7 +444,7 @@ pub fn below(r: *Run, scope: u32, inst: u32) bool {
 
 /// One port bit as §18.4.3 dumps it: the Table 18-7 state character and
 /// its strength0 and strength1 components, each 0..7.
-pub const State = struct { c: u8, s0: u8, s1: u8 };
+const State = struct { c: u8, s0: u8, s1: u8 };
 
 /// A signal's strength components: the strength0 and strength1 levels it
 /// spans (0 on a side it does not reach).
@@ -456,7 +456,7 @@ fn levels(s: Signal) [2]u8 {
 /// what the input side (`in`, the test fixture) and the output side (`out`,
 /// the device) drive. "Strength 7 to 5: strong strength; Strength 4 to 1:
 /// weak strength."
-pub fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
+fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
     const li = levels(in);
     const lo = levels(out);
     if (in.none() and out.none()) return .{ .c = switch (dir) {

@@ -12,9 +12,10 @@ const Ast = Front.Ast;
 const Int = @import("kernels").Integer;
 const compile = @import("compile.zig");
 const driver = @import("driver.zig");
-const Error = @import("root.zig").Error;
-const Run = @import("root.zig").Run;
-const expectRun = @import("root.zig").expectRun;
+const root = @import("root.zig");
+const Error = root.Error;
+const Run = root.Run;
+const expectRun = root.expectRun;
 const setBit = @import("net.zig").setBit;
 const wordMask = @import("net.zig").wordMask;
 const evaluate = @import("evaluate.zig");
@@ -120,35 +121,32 @@ fn selectChanged(t: *Term, value: Int.Literal) bool {
 /// write path for the active and NBA regions, so none bypasses §5.10.1
 /// resumption. A write to a slot a §9.3 override holds is dropped, unless
 /// `overriding`.
-pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
+pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // §9.3: while a procedural continuous assignment holds the slot, its own
     // process is the only writer: an `assign` over a variable, a `force`
     // over anything, including a net's resolution.
-    var planes = planes_in;
-    if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
-        if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
-        // §9.3.2 a forced select of a net keeps its bits; the rest resolve.
-        if (o.parts.items.len != 0) {
-            const cur = self.values[target];
-            const kept: Int.Literal = .{ .width = cur.width, .signed = cur.signed, .sized = cur.sized, .planes = try self.arena.dupe(u64, planes) };
-            for (o.parts.items) |p| for (p.bits.lo..p.bits.lo + p.bits.width) |i| setBit(kept, @intCast(i), cur.bit(@intCast(i)));
-            planes = kept.planes;
-        }
-    };
     const dest = self.values[target];
     const before = dest.bit(0);
-    // A real changes when its value does: -0.0 and +0.0 compare equal
-    // (VAMS §3.7, IEEE 754 `==`), and a NaN never equals itself.
-    const differ = !std.mem.eql(u64, dest.planes, planes);
-    const changed = if (self.reals.contains(target))
-        @as(f64, @bitCast(dest.planes[0])) != @as(f64, @bitCast(planes[0]))
-    else
-        differ;
-    // "No change" governs only the event: -0.0 over +0.0 still stores its
-    // bits, so `1.0/r` reads -inf (specification/Vague_Decisions.md VD-032). Not
-    // copied when equal, which also covers `planes` aliasing `dest.planes`
-    // (`a = a`), a copy @memcpy forbids.
-    if (differ) @memcpy(dest.planes, planes);
+    const changed = changed: {
+        if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
+            if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
+            // §9.3.2 a forced select of a net keeps its bits; the rest resolve.
+            if (o.parts.items.len != 0) break :changed keepForced(dest, planes, o.parts.items);
+        };
+        // A real changes when its value does: -0.0 and +0.0 compare equal
+        // (VAMS §3.7, IEEE 754 `==`), and a NaN never equals itself.
+        const differ = !std.mem.eql(u64, dest.planes, planes);
+        const changed = if (self.reals.contains(target))
+            @as(f64, @bitCast(dest.planes[0])) != @as(f64, @bitCast(planes[0]))
+        else
+            differ;
+        // "No change" governs only the event: -0.0 over +0.0 still stores its
+        // bits, so `1.0/r` reads -inf (specification/Vague_Decisions.md VD-032). Not
+        // copied when equal, which also covers `planes` aliasing `dest.planes`
+        // (`a = a`), a copy @memcpy forbids.
+        if (differ) @memcpy(dest.planes, planes);
+        break :changed changed;
+    };
     // A §10.4.5 constant function running during elaboration: nothing
     // watches a slot yet.
     if (self.growing != null or self.folding_constant) return;
@@ -171,6 +169,37 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     // After `wake`, so a `driver_update` process runs after the driver it
     // watches has re-evaluated (both join the same active-region FIFO).
     try driver.stored(self, target, true);
+}
+
+/// Writes `planes` into `dest` but for the bits of each forced select in
+/// `parts` (a `compile.Bits` each, at `.bits`), which keep `dest`'s, and
+/// returns whether `dest` changed. Word by word in place, so a net held by
+/// a forced select resolves without allocating. `planes` may alias `dest`.
+fn keepForced(dest: Int.Literal, planes: []const u64, parts: anytype) bool {
+    std.debug.assert(planes.len == dest.planes.len);
+    const words = dest.values().len;
+    var differ = false;
+    for (0..words) |w| {
+        var keep: u64 = 0;
+        for (parts) |p| keep |= selectWord(p.bits, w);
+        for ([2]usize{ w, words + w }) |i| {
+            const new = (planes[i] & ~keep) | (dest.planes[i] & keep);
+            differ = differ or new != dest.planes[i];
+            dest.planes[i] = new;
+        }
+    }
+    return differ;
+}
+
+/// The bits of plane word `w` that `bits` covers.
+fn selectWord(bits: compile.Bits, w: usize) u64 {
+    const base: u64 = w * 64;
+    const lo = @max(bits.lo, base);
+    const hi = @min(@as(u64, bits.lo) + bits.width, base + 64);
+    if (lo >= hi) return 0;
+    const n = hi - lo;
+    const ones = if (n == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(n)) - 1;
+    return ones << @intCast(lo - base);
 }
 
 /// §5.10.4 `-> e`: named event `at` occurs, resuming what waits on it.
@@ -235,7 +264,7 @@ pub fn forceValue(self: *Run, slot: u32, planes: []const u64) Error!void {
 pub fn requestAnalog(self: *Run) Error!void {
     if (self.analog_pending) return;
     self.analog_pending = true;
-    _ = self.scheduler.schedule(.analog, @import("root.zig").analog_payload) catch |e|
+    _ = self.scheduler.schedule(.analog, root.analog_payload) catch |e|
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
 }
 
@@ -248,7 +277,7 @@ fn requestD2a(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!vo
     };
     if (self.d2a_fired == 0 or self.d2a_pending) return;
     self.d2a_pending = true;
-    _ = self.scheduler.schedule(.explicit_d2a, @import("root.zig").analog_payload) catch |e|
+    _ = self.scheduler.schedule(.explicit_d2a, root.analog_payload) catch |e|
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
 }
 
@@ -639,4 +668,33 @@ test "§9.7 an event control on a named event resumes on each trigger and only t
         \\initial begin #1 -> e; #1 -> e; #1 $display("%0d", n); end
         \\endmodule
     , "2\n");
+}
+
+test keepForced {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const filled = @import("net.zig").filled;
+    const P = struct { bits: compile.Bits };
+    // Selects inside one word, across the word boundary, and touching the
+    // top bit: the forced bits keep x, the rest take the new 1s.
+    for ([_][]const P{
+        &.{.{ .bits = .{ .lo = 3, .width = 2 } }},
+        &.{.{ .bits = .{ .lo = 60, .width = 10 } }},
+        &.{ .{ .bits = .{ .lo = 0, .width = 1 } }, .{ .bits = .{ .lo = 129, .width = 1 } } },
+        &.{.{ .bits = .{ .lo = 0, .width = 130 } }},
+    }) |parts| {
+        const dest = try filled(arena.allocator(), 130, false, .x);
+        const ones = try filled(arena.allocator(), 130, false, .one);
+        const all_forced = parts[0].bits.width == 130;
+        try std.testing.expectEqual(!all_forced, keepForced(dest, ones.planes, parts));
+        for (0..130) |i| {
+            const held = for (parts) |p| {
+                if (i >= p.bits.lo and i < p.bits.lo + p.bits.width) break true;
+            } else false;
+            try std.testing.expectEqual(if (held) Int.Bit.x else Int.Bit.one, dest.bit(@intCast(i)));
+        }
+        // The same write again changes nothing; so does `dest` over itself.
+        try std.testing.expect(!keepForced(dest, ones.planes, parts));
+        try std.testing.expect(!keepForced(dest, dest.planes, parts));
+    }
 }

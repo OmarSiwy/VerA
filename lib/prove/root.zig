@@ -29,4 +29,5 @@ pub const Fixture = @import("fixture.zig").Fixture;
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("ssa_test.zig");
+    _ = @import("oom_test.zig");
 }

@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Lowered = @import("ir").Lowered;
 
 /// Errors from directive parsing and point expansion.
 pub const Error = Allocator.Error || error{
@@ -69,7 +70,7 @@ pub const Directives = struct {
     sweeps: []const Sweep = &.{},
     /// §9.10 `$temperature`, in kelvin.
     temp: f64 = 300.15,
-    /// §9.10 `$abstime` values, strictly increasing. Each operating point
+    /// §9.10 `$abstime` values, finite and strictly increasing. Each operating point
     /// runs once per time, with `dt` from the previous entry (§4.5.3) and
     /// `updateState` after each, so §4.5 stateful operators see transient
     /// history. `sim.mixed.run` takes the same list and requires the order.
@@ -117,7 +118,7 @@ pub const Directives = struct {
     spice: []const u8 = "",
     /// `//! discipline-resolution basic|detail`: the §7.4.4 mode the fixture
     /// is compiled in (`vera --discipline-resolution=`).
-    discipline_resolution: @import("ir").Lowered.DisciplineResolution = .basic,
+    discipline_resolution: Lowered.DisciplineResolution = .basic,
     /// `//! display record`: the testbench is built over a device that
     /// records its §9.4 display tasks (`contract.SaySite`) and prints what
     /// `say` records (`vera --emit-exe --display=record`), not one that prints.
@@ -265,20 +266,20 @@ pub const Mixed = struct {
     wide: []const []const u8 = &.{},
     words: []const u32 = &.{},
     /// §8.5 the explicit D2A terms, in site order.
-    events: []const @import("ir").Lowered.DiscreteEvent = &.{},
+    events: []const Lowered.DiscreteEvent = &.{},
     /// §7.8.4 the inserted connect modules, which the source hierarchy the
     /// digital half re-elaborates does not hold.
-    inserts: []const @import("ir").Lowered.Inserted = &.{},
+    inserts: []const Lowered.Inserted = &.{},
     /// §7.3.6.4 analog variables a digital expression reads
     /// (`Lowered.discrete_reads`).
     reads: []const []const u8 = &.{},
     /// The device's §5.10 held variables: the `Instance` fields a read
     /// variable's value can be copied from.
-    held: []const @import("ir").Lowered.HeldVar = &.{},
+    held: []const Lowered.HeldVar = &.{},
     /// §6.3.4 model parameters and those the discrete source depends on.
     /// Only the selected real values need transport: the digital engine can
     /// already evaluate its integral parameters and their explicit cards.
-    params: []const @import("ir").Lowered.ParamInfo = &.{},
+    params: []const Lowered.ParamInfo = &.{},
     param_reads: []const []const u8 = &.{},
 };
 
@@ -401,8 +402,6 @@ pub const renderRunner = tb_runner.renderRunner;
 pub const memBytes = tb_runner.memBytes;
 pub const renderVpiLib = tb_runner.renderVpiLib;
 
-const tb_runner_text = @import("tb/runner_text.zig");
-
 const zigbuild = @import("zigbuild");
 pub const BuildOptions = zigbuild.BuildOptions;
 pub const BuildResult = zigbuild.BuildResult;
@@ -417,6 +416,5 @@ const tb_test = @import("tb/test.zig");
 test {
     _ = tb_directive;
     _ = tb_runner;
-    _ = tb_runner_text;
     _ = tb_test;
 }

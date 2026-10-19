@@ -15,6 +15,7 @@ const gen_instance = @import("instance.zig");
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const family = @import("family.zig");
+const gen_mask = @import("mask.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -87,7 +88,7 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
     // without a probe) never touches `place`.
     const at_def = decl or self.probe.place.items[self.plan.slot[i]].at_def;
     try self.ind(depth);
-    var m: ?u64 = null;
+    var m: ?[]const u64 = null;
     if (at_def) {
         if (self.an.vty[i] == .real) {
             // Zig types it from the expression; `lane_masks` counts it.
@@ -418,7 +419,7 @@ fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         if (!slotted(self, inst)) continue;
         const i = @backingInt(self.an.i_res[@backingInt(inst)]);
         try self.ind(d2);
-        var m: ?u64 = null;
+        var m: ?[]const u64 = null;
         if (par) {
             if (self.an.vty[i] == .real)
                 try self.b("const c{d} = ", .{k})
@@ -446,7 +447,7 @@ fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         gen_unit.probeDef(self, self.plan.slot[i], false);
         try gen_unit.writeSlotRef(self, i);
         if (gen_unit.slotMask(self, i)) |mk|
-            try self.b(" = zTo(S, 0x{x}, c{d});\n", .{ mk, k })
+            try self.b(" = zTo(S, 0x{f}, c{d});\n", .{ gen_mask.hex(mk, false), k })
         else
             try self.b(" = c{d};\n", .{k});
         k += 1;

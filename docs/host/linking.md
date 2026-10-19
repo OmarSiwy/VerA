@@ -140,7 +140,7 @@ builtins or `std.math`, so a GPU result may differ slightly from the CPU's
 `amdgcn-amdhsa` with the LLVM backend.
 
 `tests/status_gpu.zig` is the pattern: a `callconv(.kernel)` export that
-runs `evalQ` and `updateState` over a dense `RefFamily`
+runs `evalQ` and `updateState` over a `RefFamily`
 (`tests/say_gpu.zig` does the same for `say`). `zig build test` compiles both
 for `nvptx64-cuda` (`sm_70`, to LLVM IR, because the NVPTX backend refuses
 the alias `@export` of a kernel makes; a host rewrites the IR) and for

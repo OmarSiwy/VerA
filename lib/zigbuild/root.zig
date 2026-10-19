@@ -13,7 +13,7 @@ const exe = @import("exe.zig");
 pub const Backend = orchestrator.Backend;
 /// One support module on the compiler command line.
 pub const Module = orchestrator.Module;
-/// What a `.so` build pins in its layout hash, plus where it writes.
+/// How a `.so` build compiles and where it writes.
 pub const Options = orchestrator.Options;
 /// The generated device text and its per-unit ranges.
 pub const Output = orchestrator.Output;

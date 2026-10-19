@@ -15,7 +15,6 @@ const fold_k = @import("kernels").fold;
 /// reach them through `frontend.constfold`.
 pub const Const = fold_k.Const;
 pub const wrap32 = fold_k.wrap32;
-pub const ipow32 = fold_k.ipow32;
 pub const unary = fold_k.unary;
 pub const binary = fold_k.binary;
 pub const MathFn = fold_k.MathFn;

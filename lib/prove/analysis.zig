@@ -115,16 +115,17 @@ wide_w: []u32 = &.{},
 /// Invariant: nothing calls `Mir.setAlias` after `build`/`buildStructure`.
 alias: []Mir.Value = &.{},
 
-/// Per Value: which unknowns its derivative can be nonzero in. Bit `u` set
-/// means `∂value/∂x[u]` may be nonzero; no bit at all is `dFree`. This is the
-/// structural Jacobian: a clear column is a stamp the host can drop at compile
-/// time. Sound in one direction: a set bit is always safe, so every rule
-/// over-approximates. When an unknown index reaches 64 the table folds
-/// (`deps_folded`): unknown `u` sets bit `u & 63`, so `dFree` stays exact,
-/// and `unknownDeps` answers all bits.
+/// Words per Value in every dependency column: `max(1, ceil(n_u / 64))`,
+/// `n_u` the unknown count (`Lowered.nodes`, or past the highest probe).
+dep_words: u32 = 1,
+/// Per Value, `dep_words` words (`deps[v * dep_words ..][0..dep_words]`):
+/// which unknowns its derivative can be nonzero in. Bit `u` (word `u / 64`,
+/// bit `u % 64`) set means `∂value/∂x[u]` may be nonzero; no bit at all is
+/// `dFree`. This is the structural Jacobian: a clear column is a stamp the
+/// host can drop at compile time. Exact at any unknown count, and sound in
+/// one direction: a set bit is always safe, so every rule over-approximates.
+/// `xdeps`, `pdeps` and `acdyn` have the same shape.
 deps: []u64 = &.{},
-/// Some unknown index is ≥ 64; see `deps`.
-deps_folded: bool = false,
 /// Which unknowns the value can vary with (`xDep`): `deps`, plus what passes
 /// a `dstop`, plus what steers a value without entering its derivative (a
 /// select's condition, an array index, the branches that pick a phi's
@@ -138,6 +139,8 @@ pdeps: []u64 = &.{},
 /// whose small-signal response depends on frequency (`op.acDynamic`). A
 /// subset of `deps`, and empty when the module calls no such operator.
 acdyn: []u64 = &.{},
+/// `dep_words` zero words: `acDynDeps`' answer when `acdyn` is empty.
+dep_zero: []const u64 = &.{},
 /// §3.2.2 per Value: the `Lowered.mem_arrays` row an array version belongs to
 /// (an `anew`, a `store`, or a phi over them), `none_u32` for every scalar.
 /// Its `vty` is the element type. Every version of one array is one storage.
@@ -901,7 +904,7 @@ test "a dstop clears the derivative bits and keeps the value varying" {
     const an = try build(arena.allocator(), &mir, &lowered);
     try std.testing.expect(an.dFree(stopped) and an.xDep(stopped));
     // The product keeps its other operand's lane, and varies through both.
-    try std.testing.expectEqual(@as(u64, 0b10), an.unknownDeps(prod));
+    try std.testing.expectEqualSlices(u64, &.{0b10}, an.unknownDeps(prod));
     try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@backingInt(prod)]);
 }
 
@@ -925,9 +928,9 @@ test "a ?: steered by a probe varies with no derivative lane; one on a constant 
     const an = try build(arena.allocator(), &mir, &lowered);
     // The taken arm's derivative is a constant's: no lane. Its value is 2 or
     // 3 as x moves: it varies.
-    try std.testing.expectEqual(@as(u64, 0), an.unknownDeps(sel));
+    try std.testing.expectEqualSlices(u64, &.{0}, an.unknownDeps(sel));
     try std.testing.expect(an.xDep(sel) and an.pointDep(sel));
-    try std.testing.expectEqual(@as(u64, 0b1), an.unknownDeps(g));
+    try std.testing.expectEqualSlices(u64, &.{0b1}, an.unknownDeps(g));
     try std.testing.expect(an.dFree(fixed) and !an.xDep(fixed));
 }
 
@@ -1000,9 +1003,9 @@ test "acdyn: an absdelay's input deps reach the value, a direct path does not" {
     defer arena.deinit();
     const an = try build(arena.allocator(), &mir, &lowered);
     // x[0] reaches `sum` only through the delay, x[1] only directly.
-    try std.testing.expectEqual(@as(u64, 0b11), an.unknownDeps(sum));
-    try std.testing.expectEqual(@as(u64, 0b01), an.acDynDeps(sum));
-    try std.testing.expectEqual(@as(u64, 0), an.acDynDeps(va));
+    try std.testing.expectEqualSlices(u64, &.{0b11}, an.unknownDeps(sum));
+    try std.testing.expectEqualSlices(u64, &.{0b01}, an.acDynDeps(sum));
+    try std.testing.expectEqualSlices(u64, &.{0}, an.acDynDeps(va));
 }
 
 /// Returns the emitted type of `v`. Requires `build`, not `buildStructure`.
@@ -1021,31 +1024,178 @@ pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
 /// iterates rather than sweeping once: a loop-carried phi needs the round
 /// after its body.
 fn buildDeps(self: *Analysis) Error!void {
-    // An unknown index ≥ 64 folds (see `deps`). Detected before the fixpoint
-    // so the loop below never has to think about it.
-    var v0: u32 = 0;
-    while (v0 < self.nv) : (v0 += 1) {
-        const d = self.mir.valueDef(@fromBackingInt(@intCast(v0)));
-        if (d == .block_param and d.block_param >= 64) self.deps_folded = true;
+    // One bit per unknown; a probe past `Lowered.nodes` (a hand-built test
+    // MIR) still gets its own bit.
+    var n_u: usize = self.lowered.nodes.len;
+    for (0..self.nv) |v| {
+        const d = self.mir.valueDef(@fromBackingInt(@intCast(v)));
+        if (d == .block_param) n_u = @max(n_u, @as(usize, d.block_param) + 1);
     }
-    self.deps = try self.fixDeps(.deriv);
+    self.dep_words = @intCast(@max(1, std.math.divCeil(usize, n_u, 64) catch unreachable));
+    const zero = try self.arena.alloc(u64, self.dep_words);
+    @memset(zero, 0);
+    self.dep_zero = zero;
     // Its own column always: a `?:`, an array index or a branch can steer a
     // value without entering its derivative, and nearly every module has one.
     try self.buildSteer();
-    self.xdeps = try self.fixDeps(.value);
+    const g = try self.buildDepGraph();
+    self.deps = try self.fixDeps(g, .deriv);
+    self.xdeps = try self.fixDeps(g, .value);
     self.pdeps = self.xdeps;
     for (0..self.mir.insts.len) |i| {
         if (!readsInstance(self, @fromBackingInt(@intCast(@as(u32, @intCast(i)))))) continue;
-        self.pdeps = try self.fixDeps(.point);
+        self.pdeps = try self.fixDeps(g, .point);
         break;
     }
     // After `deps`, which an operator's `acdyn` reads.
     for (0..self.mir.insts.len) |i| {
         const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (self.mir.instOp(inst) != .call or !op_kind.acDynamic(Mir.callee.opKind(self.mir.instData(inst).call.callee))) continue;
-        self.acdyn = try self.fixDeps(.ac_dyn);
+        self.acdyn = try self.fixDeps(g, .ac_dyn);
         break;
     }
+}
+
+/// `fixDeps`' input, decoded from the MIR once so a sweep reads flat rows
+/// instead of re-decoding every instruction (decoding per Value per sweep
+/// measured 9.4 ms of `build`'s 11.4 on psp103). Per Value:
+/// its rule (`kind`) and its operands, alias-resolved, in
+/// `ops[off[v]..off[v + 1]]`; the first `n_d[v]` enter the derivative, the
+/// rest only steer the value. An alias reads its target as one derivative
+/// operand, so it settles to the target's bits in every column.
+const DepGraph = struct {
+    kind: []Kind,
+    n_d: []u32,
+    off: []u32,
+    ops: []u32,
+
+    /// How a Value combines its operands' bits (see `fixDeps`).
+    const Kind = enum(u8) {
+        /// The union of its operands: every value but the four below.
+        plain,
+        /// §4.4 a probe: its unknown's bit, none in `acdyn`.
+        probe,
+        /// A call that reads per-instance state (`readsInstance`): `pdeps`
+        /// sets its bit 0 and ignores the arguments.
+        instance_call,
+        /// A `$prev`/charge path latch: `pdeps` sets bit 0 as well.
+        latch,
+        /// A frequency-dependent operator (`op.acDynamic`): `acdyn` takes its
+        /// first argument's whole `deps`.
+        ac_dynamic,
+    };
+};
+
+/// Builds the `DepGraph` the four columns share: counted, then filled.
+fn buildDepGraph(self: *const Analysis) Error!DepGraph {
+    const a = self.arena;
+    const nv = self.nv;
+    var g: DepGraph = .{
+        .kind = try a.alloc(DepGraph.Kind, nv),
+        .n_d = try a.alloc(u32, nv),
+        .off = try a.alloc(u32, nv + 1),
+        .ops = &.{},
+    };
+    var n: u32 = 0;
+    for (0..nv) |v| {
+        g.off[v] = n;
+        n += self.depRow(@intCast(v), &g, &.{});
+    }
+    g.off[nv] = n;
+    g.ops = try a.alloc(u32, n);
+    for (0..nv) |v| _ = self.depRow(@intCast(v), &g, g.ops[g.off[v]..g.off[v + 1]]);
+    return g;
+}
+
+/// Value `v`'s row of `g`: sets `kind[v]` and `n_d[v]`, writes its operands
+/// to `out` (empty: count only) and returns how many it wrote or counted.
+fn depRow(self: *const Analysis, v: u32, g: *DepGraph, out: []u32) u32 {
+    const Row = struct {
+        out: []u32,
+        alias: []const Mir.Value,
+        n: u32 = 0,
+        fn put(r: *@This(), x: Mir.Value) void {
+            if (r.out.len != 0) r.out[r.n] = @backingInt(r.alias[@backingInt(x)]);
+            r.n += 1;
+        }
+    };
+    var r: Row = .{ .out = out, .alias = self.alias };
+    g.kind[v] = .plain;
+    const val: Mir.Value = @fromBackingInt(v);
+    if (self.rv(val) != val) {
+        r.put(val);
+    } else switch (self.mir.valueDef(val)) {
+        .block_param => g.kind[v] = .probe,
+        .undef, .float_const, .int_const, .str_const, .param_ref => {},
+        .inst_result => |inst| {
+            // A `dstop` operand steers its value but enters no derivative.
+            var steer_first: ?Mir.Value = null;
+            switch (self.mir.instData(inst)) {
+                .branch, .jump, .anew => {},
+                // A call inherits from its arguments and nothing else. That
+                // holds for all of §4.5 (each operator propagates the
+                // derivative of its argument) and for ch9, where a systf's
+                // partials arrive through `SystfHost.call`. A call cannot read
+                // a probe its arguments do not name: codegen spells a probe in
+                // one place only (`renderValueRef`'s `block_param` arm).
+                // Without this rule every `$temperature`-dependent parameter
+                // would carry a derivative.
+                .call => |c| {
+                    if (self.readsInstance(inst)) {
+                        g.kind[v] = .instance_call;
+                    } else if (op_kind.acDynamic(Mir.callee.opKind(c.callee))) g.kind[v] = .ac_dynamic;
+                    for (c.args) |x| r.put(x);
+                },
+                .unary => |u| {
+                    if (u.op == .path_prev or u.op == .path_acc) g.kind[v] = .latch;
+                    if (u.op == .dstop) steer_first = u.operand else r.put(u.operand);
+                },
+                .binary => |b| {
+                    r.put(b.lhs);
+                    r.put(b.rhs);
+                },
+                // §4.2.12: the condition selects between arms rather than
+                // entering the derivative, so `S.sel` lets the taken arm's
+                // derivative ride through. Which arm is taken still moves
+                // with the condition: it steers.
+                .ternary => |t| {
+                    r.put(t.then_val);
+                    r.put(t.else_val);
+                    steer_first = t.cond;
+                },
+                // §3.2.2 an array version carries the union of what was
+                // stored into it; a fresh one (zero, or the held `Instance`
+                // copy) is constant. The index steers, for `select`'s reason:
+                // it picks an element, and the picked element's derivative is
+                // what rides through.
+                .load => |l| {
+                    r.put(l.arr);
+                    steer_first = l.index;
+                },
+                .store => |st| {
+                    r.put(st.arr);
+                    r.put(st.value);
+                    steer_first = st.index;
+                },
+                .phi => |d| for (0..d.count) |k| r.put(self.mir.phiPair(inst, @intCast(k)).value),
+            }
+            g.n_d[v] = r.n;
+            if (steer_first) |x| r.put(x);
+            // A join is a select on the edge that reached it: the edge's
+            // branches (`steer_pool`) steer it as a condition does.
+            if (self.mir.instOp(inst) == .phi) {
+                const b = self.def_block[v];
+                if (b != none_u32) for (self.steer_pool[self.steer_off[b]..self.steer_off[b + 1]]) |c| r.put(c);
+            }
+            // A guarded row (`Mir.guard_of`) is steered by its guard's
+            // conditions as a select is by its own.
+            var it = self.mir.guardConds(inst);
+            while (it.next()) |c| r.put(c);
+            return r.n;
+        },
+    }
+    g.n_d[v] = r.n;
+    return r.n;
 }
 
 /// Which column `fixDeps` fills: `deps`, `xdeps`, `acdyn` or `pdeps`.
@@ -1121,119 +1271,82 @@ fn readsInstance(self: *const Analysis, inst: Mir.Inst) bool {
     };
 }
 
-/// The lattice's fixpoint for column `which`.
-fn fixDeps(self: *const Analysis, which: DepCol) Error![]u64 {
-    const col = try self.arena.alloc(u64, self.nv);
+/// The lattice's fixpoint for column `which` over `g`, swept in value order
+/// until nothing changes. Per column, a Value's bits are:
+///   deriv  `probe`: its unknown's bit; else its derivative operands'.
+///   value  `probe`: its bit; else every operand's.
+///   point  as `value`, plus bit 0 for an `instance_call` (over its steering
+///          operands only) and a `latch`.
+///   ac_dyn `probe`: none; `ac_dynamic`: its first argument's `deps`; else
+///          its derivative operands'.
+fn fixDeps(self: *const Analysis, g: DepGraph, which: DepCol) Error![]u64 {
+    // One word, the common case, gets a body with the width known: the
+    // generic one costs 1.8x there (psp103 `build`: 9.4 ms against 5.3).
+    return if (self.dep_words == 1) self.fixDepsWide(g, which, 1) else self.fixDepsWide(g, which, 0);
+}
+
+/// `fixDeps` at `words_ct` words a value, or `dep_words` when it is 0.
+fn fixDepsWide(self: *const Analysis, g: DepGraph, which: DepCol, comptime words_ct: u32) Error![]u64 {
+    const w: usize = if (words_ct != 0) words_ct else self.dep_words;
+    std.debug.assert(w == self.dep_words);
+    const col = try self.arena.alloc(u64, @as(usize, self.nv) * w);
     @memset(col, 0);
+    // The row being built: derivative operands' union, then steering ones'.
+    const d = (try self.arena.alloc(u64, w))[0..w];
+    const s = (try self.arena.alloc(u64, w))[0..w];
     var changed = true;
     while (changed) {
         changed = false;
-        var v: u32 = 0;
-        while (v < self.nv) : (v += 1) {
-            const now = self.defDeps(@fromBackingInt(@intCast(v)), col, which) | self.guardDeps(@fromBackingInt(@intCast(v)), col, which);
-            if (now == col[v]) continue;
-            col[v] = now;
+        for (0..self.nv) |v| {
+            const row = g.ops[g.off[v]..g.off[v + 1]];
+            @memset(d, 0);
+            @memset(s, 0);
+            for (row[0..g.n_d[v]]) |o| orInto(d, col[@as(usize, o) * w ..][0..w]);
+            if (which.steered()) for (row[g.n_d[v]..]) |o| orInto(s, col[@as(usize, o) * w ..][0..w]);
+            switch (g.kind[v]) {
+                .probe => {
+                    @memset(d, 0);
+                    if (which != .ac_dyn) {
+                        const u = self.mir.valueDef(@fromBackingInt(@intCast(v))).block_param;
+                        d[u / 64] = @as(u64, 1) << @intCast(u % 64);
+                    }
+                },
+                // Bit 0 marks "reads the instance": `pointDep` asks only
+                // whether any bit is set.
+                .instance_call => if (which == .point) {
+                    @memset(d, 0);
+                    d[0] = 1;
+                },
+                .latch => if (which == .point) {
+                    d[0] |= 1;
+                },
+                .ac_dynamic => if (which == .ac_dyn) {
+                    if (g.n_d[v] == 0) @memset(d, 0) else @memcpy(d, self.deps[@as(usize, row[0]) * w ..][0..w]);
+                },
+                .plain => {},
+            }
+            orInto(d, s);
+            const at = col[v * w ..][0..w];
+            if (std.mem.eql(u64, at, d)) continue;
+            @memcpy(at, d);
             changed = true;
         }
     }
     return col;
 }
 
-/// A guarded row (`Mir.guard_of`) is steered by its guard's conditions as a
-/// select is by its own.
-fn guardDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCol) u64 {
-    if (!which.steered()) return 0;
-    const def = self.mir.valueDef(self.rv(val));
-    if (def != .inst_result) return 0;
-    var acc: u64 = 0;
-    var g = self.mir.guardConds(def.inst_result);
-    while (g.next()) |c| acc |= self.depsIn(col, c);
-    return acc;
-}
-
-/// One step of the lattice: `val`'s bits given the current answer for its
-/// operands in `col`. Every rule is "union of the operands whose derivative
-/// the contract propagates"; the `steered` columns add what decides which
-/// operand is taken. In `acdyn` a probe starts with no bits and a
-/// frequency-dependent operator takes its input's whole `deps`, since every
-/// derivative through it is scaled by its H(jω).
-fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCol) u64 {
-    switch (self.mir.valueDef(self.rv(val))) {
-        // §4.4 access function: the probe is x[u], so its derivative is the
-        // one unit vector.
-        .block_param => |u| return if (which == .ac_dyn) 0 else @as(u64, 1) << @intCast(u & 63),
-        .undef, .float_const, .int_const, .str_const, .param_ref => return 0,
-        .inst_result => |inst| {
-            switch (self.mir.instData(inst)) {
-                .branch, .jump => return 0, // no result to speak of
-                // A call inherits from its arguments and nothing else. That
-                // holds for all of §4.5 (each operator propagates the
-                // derivative of its argument) and for ch9, where a systf's
-                // partials arrive through `SystfHost.call`. A call cannot read
-                // a probe its arguments do not name: codegen spells a probe in
-                // one place only (`renderValueRef`'s `block_param` arm).
-                // Without this rule every `$temperature`-dependent parameter
-                // would carry a derivative.
-                .call => |c| {
-                    if (which == .point and self.readsInstance(inst)) return 1;
-                    if (which == .ac_dyn and op_kind.acDynamic(Mir.callee.opKind(c.callee)))
-                        return if (c.args.len == 0) 0 else self.depsIn(self.deps, c.args[0]);
-                    var acc: u64 = 0;
-                    for (c.args) |arg| acc |= self.depsIn(col, arg);
-                    return acc;
-                },
-                .unary => |u| {
-                    if (which == .point and (u.op == .path_prev or u.op == .path_acc)) return 1 | self.depsIn(col, u.operand);
-                    return if (which != .value and which != .point and u.op == .dstop) 0 else self.depsIn(col, u.operand);
-                },
-                .binary => |b| return self.depsIn(col, b.lhs) | self.depsIn(col, b.rhs),
-                // §4.2.12: the condition selects between arms rather than
-                // entering the derivative, so `S.sel` lets the taken arm's
-                // derivative ride through and `deps` ignores it. Which arm is
-                // taken still moves with the condition, so a conditional over
-                // two constants varies when its condition does (`steered`).
-                .ternary => |t| {
-                    const arms = self.depsIn(col, t.then_val) | self.depsIn(col, t.else_val);
-                    return if (which.steered()) arms | self.depsIn(col, t.cond) else arms;
-                },
-                // §3.2.2 an array version carries the union of what was stored
-                // into it; a fresh one (zero, or the held `Instance` copy) is
-                // constant. The index enters only the `steered` columns, for
-                // `select`'s reason: it picks an element, and the picked
-                // element's derivative is what rides through.
-                .anew => return 0,
-                .load => |l| {
-                    const arr = self.depsIn(col, l.arr);
-                    return if (which.steered()) arr | self.depsIn(col, l.index) else arr;
-                },
-                .store => |st| {
-                    const both = self.depsIn(col, st.arr) | self.depsIn(col, st.value);
-                    return if (which.steered()) both | self.depsIn(col, st.index) else both;
-                },
-                // A join is a select on the edge that reached it: the edge's
-                // branches (`steer_pool`) steer it as a condition does.
-                .phi => |d| {
-                    var acc: u64 = 0;
-                    for (0..d.count) |k| acc |= self.depsIn(col, self.mir.phiPair(inst, @intCast(k)).value);
-                    if (!which.steered()) return acc;
-                    const b = self.def_block[@backingInt(self.i_res[@backingInt(inst)])];
-                    if (b == none_u32) return acc;
-                    for (self.steer_pool[self.steer_off[b]..self.steer_off[b + 1]]) |c| acc |= self.depsIn(col, c);
-                    return acc;
-                },
-            }
-        },
-    }
+fn orInto(acc: []u64, x: []const u64) void {
+    for (acc, x) |*a, b| a.* |= b;
 }
 
 /// Returns whether `v` is independent of every §4.4 probe, so its derivative
-/// vanishes structurally (`deps[v] == 0`). Resolves the alias first.
+/// vanishes structurally (no bit of its `deps` row). Resolves the alias first.
 /// Conservative: `false` is always sound. Worth knowing because
 /// `@setFloatMode(.strict)` forbids folding a multiply by a literal zero, so a
 /// dual holding `splat(0)` would pay full-width arithmetic at every use.
 /// Requires `build`; so do `xDep`, `pointDep`, `unknownDeps` and `acDynDeps`.
 pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
-    return self.depsOf(v) == 0;
+    return isZero(self.depsIn(self.deps, v));
 }
 
 /// Returns whether `v`'s value varies with some §4.4 probe. `!dFree` implies
@@ -1241,7 +1354,7 @@ pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
 /// is zero, and for a select, join or array read steered by a varying
 /// condition or index over arms that do not vary (`xdeps`).
 pub fn xDep(self: *const Analysis, v: Mir.Value) bool {
-    return self.depsIn(self.xdeps, v) != 0;
+    return !isZero(self.depsIn(self.xdeps, v));
 }
 
 /// Returns whether `v` can differ between two points of a batch that share
@@ -1249,31 +1362,30 @@ pub fn xDep(self: *const Analysis, v: Mir.Value) bool {
 /// state (a held variable, `$mfactor`, a path latch; contract.zig
 /// `batch_inst`).
 pub fn pointDep(self: *const Analysis, v: Mir.Value) bool {
-    return self.depsIn(self.pdeps, v) != 0;
+    return !isZero(self.depsIn(self.pdeps, v));
 }
 
-/// The raw word, folded or not: what the fixpoint and `dFree` read.
-fn depsOf(self: *const Analysis, v: Mir.Value) u64 {
+fn depsIn(self: *const Analysis, col: []const u64, v: Mir.Value) []const u64 {
+    const w = self.dep_words;
+    return col[@as(usize, @backingInt(self.rv(v))) * w ..][0..w];
+}
+
+fn isZero(mask: []const u64) bool {
+    for (mask) |x| if (x != 0) return false;
+    return true;
+}
+
+/// Returns which unknowns `v`'s derivative can be nonzero in: `dep_words`
+/// words, borrowed from `deps` (see there for the bit layout).
+pub fn unknownDeps(self: *const Analysis, v: Mir.Value) []const u64 {
     return self.depsIn(self.deps, v);
 }
 
-fn depsIn(self: *const Analysis, col: []const u64, v: Mir.Value) u64 {
-    return col[@backingInt(self.rv(v))];
-}
-
-/// Returns which unknowns `v`'s derivative can be nonzero in. All ones when
-/// the table is folded (an unknown index ≥ 64), so consumers fall back to a
-/// dense Jacobian without a second code path.
-pub fn unknownDeps(self: *const Analysis, v: Mir.Value) u64 {
-    if (self.deps_folded) return std.math.maxInt(u64);
-    return self.depsOf(v);
-}
-
 /// Returns the unknowns whose derivative reaches `v` through a
-/// frequency-dependent operator (`acdyn`), folded as `unknownDeps` is.
-pub fn acDynDeps(self: *const Analysis, v: Mir.Value) u64 {
-    if (self.acdyn.len == 0) return 0;
-    if (self.deps_folded) return if (self.depsIn(self.acdyn, v) == 0) 0 else std.math.maxInt(u64);
+/// frequency-dependent operator (`acdyn`), shaped as `unknownDeps`; all
+/// zero when the module calls no such operator.
+pub fn acDynDeps(self: *const Analysis, v: Mir.Value) []const u64 {
+    if (self.acdyn.len == 0) return self.dep_zero;
     return self.depsIn(self.acdyn, v);
 }
 
@@ -1392,29 +1504,24 @@ fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error!FoldColumn {
 /// the one constant kernel's (`opcode.fold`); this only decides which values
 /// are leaves.
 fn foldStep(self: *const Analysis, v: Mir.Value, col: *const FoldColumn, resolve_params: bool) ?Const {
-    const at = struct {
-        fn f(c: *const FoldColumn, x: Mir.Value) ?Const {
-            return c.get(x);
-        }
-    }.f;
     switch (self.mir.valueDef(self.rv(v))) {
         .float_const => |x| return .{ .real = x },
         .int_const => |x| return .{ .int = x },
         // Only a Model default may look through a parameter: everywhere
         // else the value is whatever the host overrode it with.
-        .param_ref => |p| return if (resolve_params) at(col, self.lowered.params.items[p].default) else null,
+        .param_ref => |p| return if (resolve_params) col.get(self.lowered.params.items[p].default) else null,
         .inst_result => |inst| switch (self.mir.instData(inst)) {
-            .unary => |u| return Mir.opcode.fold(u.op, &.{at(col, u.operand) orelse return null}),
+            .unary => |u| return Mir.opcode.fold(u.op, &.{col.get(u.operand) orelse return null}),
             .binary => |bn| return Mir.opcode.fold(bn.op, &.{
-                at(col, bn.lhs) orelse return null,
-                at(col, bn.rhs) orelse return null,
+                col.get(bn.lhs) orelse return null,
+                col.get(bn.rhs) orelse return null,
             }),
             // §4.2.12 `?:`. Lazy, as the kernel's `fold` is: only the taken
             // arm has to be foldable, so `w > 0 ? 1/w : 0` folds for w = 0
             // instead of declining on a division it never performs.
             .ternary => |d| {
-                const c = at(col, d.cond) orelse return null;
-                return at(col, if (c.isTrue()) d.then_val else d.else_val);
+                const c = col.get(d.cond) orelse return null;
+                return col.get(if (c.isTrue()) d.then_val else d.else_val);
             },
             // §9.15 `$simparam` in `Lowered.simparamAnswer`'s order. A host
             // field follows `.param_ref`'s rule: only a Model default may
@@ -1432,7 +1539,7 @@ fn foldStep(self: *const Analysis, v: Mir.Value, col: *const FoldColumn, resolve
                 switch (self.lowered.simparamAnswer(arg.str_const, d.args.len > 1)) {
                     .host => |h| return if (resolve_params) .{ .real = h.default } else null,
                     .value => |x| return .{ .real = x },
-                    .fallback => return at(col, d.args[1]),
+                    .fallback => return col.get(d.args[1]),
                     .runtime, .unknown => return null,
                 }
             },
@@ -1528,6 +1635,29 @@ test "analysis: CFG facts agree with their naive definitions on random structure
             return buf[0..0];
         }
 
+        /// Whether `b` reaches a block with no successor (the exit) without
+        /// passing through `avoid`: false makes `avoid` post-dominate `b`.
+        fn reachesExit(m: *const Mir, seen: []bool, stack: []u32, b: u32, avoid: u32) bool {
+            if (b == avoid) return false;
+            @memset(seen, false);
+            seen[b] = true;
+            stack[0] = b;
+            var sp: usize = 1;
+            while (sp > 0) {
+                sp -= 1;
+                var buf: [2]u32 = undefined;
+                const ss = succs(m, stack[sp], &buf);
+                if (ss.len == 0) return true;
+                for (ss) |s| {
+                    if (s == avoid or seen[s]) continue;
+                    seen[s] = true;
+                    stack[sp] = s;
+                    sp += 1;
+                }
+            }
+            return false;
+        }
+
         /// Blocks reachable from the entry without passing through `skip`
         /// (`skip` past the last block skips nothing).
         fn reach(m: *const Mir, out: []bool, stack: []u32, skip: u32) void {
@@ -1566,7 +1696,7 @@ test "analysis: CFG facts agree with their naive definitions on random structure
         var arena: std.heap.ArenaAllocator = .init(gpa);
         defer arena.deinit();
         const aa = arena.allocator();
-        const an = try buildStructure(aa, &mir, &lowered);
+        const an = try build(aa, &mir, &lowered);
         const nb = mir.blockCount();
         try std.testing.expectEqual(nb, an.nb);
 
@@ -1665,33 +1795,129 @@ test "analysis: CFG facts agree with their naive definitions on random structure
             try std.testing.expectEqual(owner[b], an.loop_of[b]);
             try std.testing.expectEqual(owner[b] != none_u32, an.inLoop(@intCast(b)));
         }
+
+        // Immediate post-dominators: every block here reaches the exit, so
+        // `x` post-dominates `b` iff `b` cannot reach it avoiding `x`, and
+        // `ipdom[b]` (`nb`: the virtual exit) is the nearest strict one. An
+        // unreachable block is cut off from the reverse walk and flows to the
+        // virtual exit.
+        const pd = try aa.alloc(bool, @as(usize, nb) * nb);
+        for (0..nb) |x| for (0..nb) |b| {
+            pd[x * nb + b] = x == b or !Naive.reachesExit(&mir, tmp, stack, @intCast(b), @intCast(x));
+        };
+        try std.testing.expectEqual(nb, an.ipdom[nb]);
+        for (0..nb) |b| {
+            const ip = an.ipdom[b];
+            if (!live[b]) {
+                try std.testing.expectEqual(nb, ip);
+                continue;
+            }
+            try std.testing.expect(ip != b);
+            if (ip != nb) try std.testing.expect(pd[ip * nb + b]);
+            for (0..nb) |d| if (d != b and pd[d * nb + b]) {
+                try std.testing.expect(ip != nb);
+                try std.testing.expect(pd[d * nb + ip]);
+            };
+        }
     }
 }
 
-test "analysis: an unknown at index 64 folds the table and keeps dFree exact" {
+test "analysis: the per-block pools are the chain, filtered" {
+    // b0: p = V(a); live = -p; dead = -p (aliased to live); br p b1 b1'.
+    // b1: phi live, phi dead (aliased); jump b2.
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
     const lowered: Lowered = .{};
-    _ = try mir.addBlock(a);
-    const far = try mir.addBlockParam(a, 64);
-    const near = try mir.addBlockParam(a, 1);
-    const prod = try mir.emit(a, .entry, .fmul, &.{ far, .f_two });
-    const sum = try mir.emit(a, .entry, .fadd, &.{ near, .f_one });
-    const k = try mir.emit(a, .entry, .fadd, &.{ .f_one, .f_two });
+    const b0 = try mir.addBlock(a);
+    const b1 = try mir.addBlock(a);
+    const b2 = try mir.addBlock(a);
+    const b3 = try mir.addBlock(a);
+    const p = try mir.addBlockParam(a, 0);
+    const live = try mir.emit(a, b0, .fneg, &.{p});
+    const dead = try mir.emit(a, b0, .fneg, &.{p});
+    mir.setAlias(dead, live);
+    _ = try mir.emitBranch(a, b0, p, b1, b2);
+    _ = try mir.emitJump(a, b1, b3);
+    _ = try mir.emitJump(a, b2, b3);
+    const ph = try mir.emitPhi(a, b3, &.{ .{ .block = b1, .value = live }, .{ .block = b2, .value = p } });
+    const ph_dead = try mir.emitPhi(a, b3, &.{ .{ .block = b1, .value = p }, .{ .block = b2, .value = p } });
+    mir.setAlias(ph_dead, p);
 
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
     const an = try build(arena.allocator(), &mir, &lowered);
-    try std.testing.expect(an.deps_folded);
-    // Unknown 64 sets bit 64 & 63 = 0: a raw word stays nonzero exactly when
-    // the value depends on something, so `dFree` is still exact.
-    try std.testing.expectEqual(@as(u64, 1), an.deps[@backingInt(prod)]);
+    const inst = struct {
+        fn of(m: *const Mir, v: Mir.Value) Mir.Inst {
+            return m.valueDef(v).inst_result;
+        }
+    }.of;
+    // b0's window is its whole chain; its statements skip the aliased row
+    // and the terminator.
+    try std.testing.expectEqual(@as(usize, 3), an.blockInstsFlat(0).len);
+    try std.testing.expectEqualSlices(Mir.Inst, &.{inst(&mir, live)}, an.stmt_pool[an.stmt_off[0]..an.stmt_off[1]]);
+    try std.testing.expectEqualSlices(Mir.Inst, &.{inst(&mir, ph)}, an.phi_pool[an.phi_off[3]..an.phi_off[4]]);
+    try std.testing.expectEqual(an.stmt_off[3], an.stmt_off[4]);
+    // b3 is b0's only merge-block dominator child; b1 and b2 are not merges.
+    try std.testing.expectEqualSlices(u32, &.{3}, an.mk_pool[an.mk_off[0]..an.mk_off[1]]);
+    try std.testing.expectEqual(an.mk_off[1], an.mk_off[an.nb]);
+    try std.testing.expectEqual(@as(u32, 0), an.def_block[@backingInt(live)]);
+    try std.testing.expectEqual(@as(u32, 3), an.def_block[@backingInt(ph)]);
+}
+
+test "wideWidth: a `$wide` root's width reaches a select over it" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var lowered: Lowered = .{};
+    defer lowered.wide_nodes.deinit(a);
+    try lowered.wide_nodes.append(a, .{ .op = .leaf_int, .width = 40 });
+    _ = try mir.addBlock(a);
+    const w = try mir.emitCall(a, .entry, try mir.internString(a, "$wide"), &.{.zero});
+    const p = try mir.addBlockParam(a, 0);
+    const sel = try mir.emit(a, .entry, .select, &.{ p, w, w });
+    const r = try mir.emit(a, .entry, .fneg, &.{p});
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    try std.testing.expectEqual(VTy.wide, an.tyOf(w));
+    try std.testing.expectEqual(@as(u32, 40), an.wideWidth(w));
+    try std.testing.expectEqual(@as(u32, 40), an.wideWidth(sel));
+    try std.testing.expectEqual(@as(u32, 0), an.wideWidth(r));
+}
+
+test "analysis: dependency masks are exact past 64 unknowns" {
+    // 70 unknowns, so two words a value. `far` reads unknown 67 only: word 1
+    // bit 3. A delay over it puts the same bit in `acdyn`.
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var lowered: Lowered = .{};
+    defer lowered.nodes.deinit(a);
+    for (0..70) |_| try lowered.nodes.append(a, .{ .name = "n", .kind = .net, .disc = "", .dir = .unspecified });
+    _ = try mir.addBlock(a);
+    const far = try mir.addBlockParam(a, 67);
+    const near = try mir.addBlockParam(a, 1);
+    const prod = try mir.emit(a, .entry, .fmul, &.{ far, .f_two });
+    const sum = try mir.emit(a, .entry, .fadd, &.{ near, prod });
+    const k = try mir.emit(a, .entry, .fadd, &.{ .f_one, .f_two });
+    const dly = try mir.emitCall(a, .entry, try mir.internString(a, "absdelay"), &.{ far, try mir.addFloatConst(a, 1e-9) });
+    const stopped = try mir.emit(a, .entry, .dstop, &.{sum});
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    try std.testing.expectEqual(@as(u32, 2), an.dep_words);
+    try std.testing.expectEqualSlices(u64, &.{ 0, 1 << 3 }, an.unknownDeps(prod));
+    try std.testing.expectEqualSlices(u64, &.{ 1 << 1, 1 << 3 }, an.unknownDeps(sum));
+    try std.testing.expectEqualSlices(u64, &.{ 0, 0 }, an.unknownDeps(k));
+    try std.testing.expectEqualSlices(u64, &.{ 0, 1 << 3 }, an.acDynDeps(dly));
+    try std.testing.expectEqualSlices(u64, &.{ 0, 0 }, an.acDynDeps(prod));
     try std.testing.expect(!an.dFree(prod) and !an.dFree(sum) and an.dFree(k));
-    // The bit index is no longer the unknown, so every answer is all ones.
-    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), an.unknownDeps(sum));
-    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), an.unknownDeps(k));
-    try std.testing.expectEqual(@as(u64, 0), an.acDynDeps(prod));
+    // A `dstop` keeps the value varying in both words, with no derivative.
+    try std.testing.expect(an.dFree(stopped) and an.xDep(stopped) and an.pointDep(stopped));
+    try std.testing.expectEqualSlices(u64, &.{ 1 << 1, 1 << 3 }, an.xdeps[@backingInt(stopped) * 2 ..][0..2]);
 }
 
 test foldConst {

@@ -36,6 +36,12 @@ pub const State = struct {
     /// `controlStatic`'s predecessor worklist; nested walks share it above a
     /// base mark.
     stack: std.ArrayList(Mir.Block) = .empty,
+    /// Blocks and values a walk that answered static already judged (a sealed
+    /// block with every deciding branch static; a value with static operands).
+    /// Kept across walks, since neither can change once judged, so a chain of
+    /// n `if`s judges each block and value once rather than once per `if`.
+    static_blocks: std.AutoHashMapUnmanaged(Mir.Block, void) = .empty,
+    static_values: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty,
 };
 
 /// §6.6: "All expressions in generate schemes shall be constant expressions,
@@ -250,7 +256,14 @@ pub fn isStaticValue(self: *Lower, v: Mir.Value) Oom!bool {
     st.seen.clearRetainingCapacity();
     st.blocks.clearRetainingCapacity();
     st.stack.clearRetainingCapacity();
-    return staticWalk(self, v, &st.seen, &st.blocks);
+    if (!try staticWalk(self, v, &st.seen, &st.blocks)) return false;
+    // Only a whole walk that answered static proves its blocks: a `false`
+    // anywhere may have been met after a block was provisionally passed.
+    var it = st.blocks.keyIterator();
+    while (it.next()) |blk| try st.static_blocks.put(self.arena, blk.*, {});
+    var vt = st.seen.keyIterator();
+    while (vt.next()) |sv| try st.static_values.put(self.arena, sv.*, {});
+    return true;
 }
 
 /// The calls whose value is fixed for the whole simulation: A.8.2's
@@ -269,6 +282,7 @@ fn staticWalk(
     blocks: *std.AutoHashMapUnmanaged(Mir.Block, void),
 ) Oom!bool {
     const v = self.mir.resolveAlias(v0);
+    if (self.control_state.static_values.contains(v)) return true;
     // A value already on the walk is being decided by the rest of it: a loop
     // phi reaching itself adds no dependence of its own.
     if ((try seen.getOrPut(self.arena, v)).found_existing) return true;
@@ -334,6 +348,7 @@ fn controlStatic(
     const b = &self.builder;
     while (stack.items.len > base) {
         const blk = stack.pop().?;
+        if (self.control_state.static_blocks.contains(blk)) continue;
         if ((try blocks.getOrPut(self.arena, blk)).found_existing) continue;
         const i = @backingInt(blk);
         // Unsealed: more predecessors may still arrive (a loop's back edge).

@@ -254,6 +254,15 @@ pub const Sense = struct {
 /// One term of a triggered process: it resumes at `pc` on `edge`.
 pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };
 
+// Rows the wake loops walk: `wakeWatchers` (Watcher), `wakeTerms` (Susp,
+// Rec). Each is read whole; 3 of Watcher's 12 bytes and 3 of Susp's 24 are
+// padding no narrower range removes.
+comptime {
+    std.debug.assert(@sizeOf(Watcher) == 12);
+    std.debug.assert(@sizeOf(Susp) == 24);
+    std.debug.assert(@sizeOf(Rec) == 24);
+}
+
 /// What `State.next` returns for a settle event.
 pub const settle_pc: u32 = std.math.maxInt(u32);
 
@@ -318,7 +327,7 @@ const EventSelect = fn (*State) Error!?u32;
 const Term = struct { susp: u32, gen: u32, edge: Edge, select: ?*const EventSelect = null, rec: u32 = no_rec };
 /// §9.7.2 a constant select term's bits: `width` of them from bit `shift`
 /// of plane word `word` on, and their value when last tested.
-const Rec = struct { word: u32, shift: u32, width: u32, v: u64, x: u64 };
+const Rec = struct { word: u32, shift: u6, width: u7, v: u64, x: u64 };
 /// `Term.rec` of a term that watches its whole slot.
 const no_rec = std.math.maxInt(u32);
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
@@ -549,9 +558,22 @@ pub const View = struct {
         }
         inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
         if (@as(u8, @bitCast(reach)) == 0) return;
-        if (@reduce(.Or, @as(@Vector(n, u64), d)) != 0) try self.s.wakeOf(reach, slot, before, logic.low(peek(k, self.v, self.x, off)));
+        var moved: u64 = 0;
+        for (d) |e| moved |= e;
+        if (moved != 0) try self.s.wakeOf(reach, slot, before, logic.low(peek(k, self.v, self.x, off)));
     }
 };
+
+/// §9.6/§9.7.7 a `repeat` count of `w` bits (`exec` `.repeat_start`): x, z
+/// or a signed count below 0 is 0 times, at any width; past 64 bits it
+/// saturates, as 2^64 passes never end.
+pub fn repeatCount(a: anytype, comptime w: u32, comptime signed: bool) u64 {
+    const c = logic.wide(a);
+    for (c.x) |x| if (x != 0) return 0;
+    if (signed and (c.v[(w - 1) / 64] >> @intCast((w - 1) % 64)) & 1 != 0) return 0;
+    for (c.v[1..]) |v| if (v != 0) return std.math.maxInt(u64);
+    return c.v[0];
+}
 
 /// One run of a native design. Under the `fifo` schedule it is `vera
 /// --run`'s queue discipline with only the process bodies compiled: the
@@ -824,7 +846,7 @@ pub const State = struct {
                 } else if (row.quiet) {
                     if (self.held(row.slot)) continue;
                     if (row.n != 1) {
-                        self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                        poke(two, self.v.ptr, self.x.ptr, row.off, .{ .v = w[0..row.n], .x = w[row.n..][0..row.n] }, w[2 * row.n ..]);
                     } else if (self.two) {
                         // `Phase(true).nba` let no x into the row.
                         poke(true, self.v.ptr, self.x.ptr, row.off, W{ .v = row.one[0], .x = 0 }, row.one[2]);
@@ -962,11 +984,6 @@ pub const State = struct {
         return .{ .s = self, .v = self.v.ptr, .x = self.x.ptr, .dirty = self.dirty.ptr };
     }
 
-    /// The bits `m` of the words from `off` become `v`/`x`'s.
-    fn merge(self: *State, off: u32, v: []const u64, x: []const u64, m: []const u64) void {
-        poke(two, self.v.ptr, self.x.ptr, off, .{ .v = v, .x = x }, m);
-    }
-
     /// `waiters.store` of the bits `m` of `slot`, whose words start at `off`:
     /// nothing happens unless the value changes; then every waiter it
     /// matches wakes, of those `reach` names. `a` is a `logic.T`, `m` the
@@ -1011,6 +1028,7 @@ pub const State = struct {
     /// `put` of a real (§4.8, `waiters.store`): it changes when its value
     /// does, so -0.0 over 0.0 is no change and a NaN always is one. No
     /// change still stores the bits (VD-032): only the event is suppressed.
+    /// `m` is ignored: a real is stored whole.
     pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
         _ = m;
         if (self.held(slot)) return;
@@ -1182,12 +1200,7 @@ pub const State = struct {
         var m: u64 = 0;
         if (slot + 1 >= self.part_start.len) return 0;
         for (self.parts[self.part_start[slot]..self.part_start[slot + 1]]) |p| if (p.range != null) {
-            const lo: i64 = @as(i64, p.lo) - 64 * @as(i64, @intCast(j));
-            const hi = lo + p.width;
-            if (hi <= 0 or lo >= 64) continue;
-            const a: u7 = @intCast(@max(lo, 0));
-            const b: u7 = @intCast(@min(hi, 64));
-            m |= (if (b == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(b)) - 1) & ~((@as(u64, 1) << @intCast(a)) - 1);
+            m |= logic.span(j, p.lo, @as(i64, p.lo) + p.width);
         };
         return m;
     }
@@ -1195,6 +1208,7 @@ pub const State = struct {
     /// `exec` `.override_on` of a forced select: `parts[k]`, bits
     /// [lo, lo + width) of `slot`, is held by the force whose process is pcs
     /// [start, end), replacing the force of the same select before it.
+    /// Asserts `k` is one of `slot`'s selects.
     pub fn overrideBits(self: *State, slot: u32, k: u32, lo: u32, width: u32, start: u32, end: u32) Error!void {
         std.debug.assert(k >= self.part_start[slot] and k < self.part_start[slot + 1]);
         const p = &self.parts[k];
@@ -1204,7 +1218,8 @@ pub const State = struct {
     }
 
     /// `waiters.releaseBits`: `parts[k]`, a select of `slot`, is its
-    /// drivers' again; the design re-resolves the net.
+    /// drivers' again; the design re-resolves the net. Asserts `k` is one of
+    /// `slot`'s selects.
     pub fn releaseBits(self: *State, slot: u32, k: u32) Error!void {
         std.debug.assert(k >= self.part_start[slot] and k < self.part_start[slot + 1]);
         const p = &self.parts[k];
@@ -1273,6 +1288,9 @@ pub const State = struct {
     /// its outermost activation. Asserts it pairs with an `enter` of `sub`
     /// whose `fill.len` was `n`.
     pub fn leave(self: *State, sub: u32, lo: u32, n: u32) void {
+        std.debug.assert(self.depth > 0);
+        std.debug.assert(self.active[sub] > 0);
+        std.debug.assert(self.saved.items.len >= 2 * n);
         self.depth -= 1;
         self.active[sub] -= 1;
         if (n != 0) {
@@ -1589,7 +1607,7 @@ pub const State = struct {
         // `dropRec` returns it without failing.
         try self.free_recs.ensureTotalCapacity(self.gpa, self.recs.items.len);
         const r = &self.recs.items[k];
-        r.* = .{ .word = off + lo / 64, .shift = lo % 64, .width = width, .v = 0, .x = 0 };
+        r.* = .{ .word = off + lo / 64, .shift = @intCast(lo % 64), .width = @intCast(width), .v = 0, .x = 0 };
         const now = self.bits(r.*);
         r.v = now.v;
         r.x = now.x;
@@ -1600,11 +1618,11 @@ pub const State = struct {
 
     /// A select term's bits now.
     fn bits(self: *const State, r: Rec) W {
-        const sh: u6 = @intCast(r.shift);
+        const sh = r.shift;
         var v = self.v[r.word] >> sh;
         var x: u64 = if (two) 0 else self.x[r.word] >> sh;
-        if (sh != 0 and r.shift + r.width > 64) {
-            const up: u6 = @intCast(64 - r.shift);
+        if (sh != 0 and @as(u32, sh) + r.width > 64) {
+            const up: u6 = @intCast(64 - @as(u32, sh));
             v |= self.v[r.word + 1] << up;
             if (!two) x |= self.x[r.word + 1] << up;
         }
@@ -1865,14 +1883,6 @@ pub const State = struct {
         if (a.x != 0) return 0;
         return (if (signed) scale.signedDelay(@bitCast(a.v)) else scale.unsignedDelay(a.v)) catch |e|
             self.fail("digital delay cannot be represented: {t}", .{e});
-    }
-
-    /// §9.6 a `repeat` count (`exec` `.repeat_start`): x/z is 0 times.
-    pub fn repeatCount(self: *State, a: W, comptime w: u32, comptime signed: bool) Error!u64 {
-        if (a.x != 0) return 0;
-        if (signed and logic.asInt(a, w, true).? < 0)
-            return self.fail("negative repeat counts are not implemented; IEEE1364-2005 does not define this case explicitly", .{});
-        return a.v;
     }
 
     /// §17.4.2 `$stop`: a batch run has nothing to suspend into, so it ends
@@ -2211,9 +2221,15 @@ test "§9.7.1 delays: an x is no delay, a negative integer an unsigned time; §9
     try testing.expectError(error.Failed, s.ticks(.{ .v = std.math.maxInt(u64), .x = 0 }, true, scale));
     try testing.expectEqual(@as(u64, 1500), try s.realTicks(1.5, scale));
     try testing.expectError(error.Failed, s.realTicks(-1.0, scale));
-    try testing.expectEqual(@as(u64, 0), try s.repeatCount(.{ .v = 3, .x = 2 }, 8, false));
-    try testing.expectEqual(@as(u64, 255), try s.repeatCount(.{ .v = 255, .x = 0 }, 8, false));
-    try testing.expectError(error.Failed, s.repeatCount(.{ .v = 255, .x = 0 }, 8, true));
+    try testing.expectEqual(@as(u64, 0), repeatCount(W{ .v = 3, .x = 2 }, 8, false));
+    try testing.expectEqual(@as(u64, 255), repeatCount(W{ .v = 255, .x = 0 }, 8, false));
+    try testing.expectEqual(@as(u64, 0), repeatCount(W{ .v = 255, .x = 0 }, 8, true));
+    try testing.expectEqual(@as(u64, std.math.maxInt(u64)), repeatCount(W{ .v = std.math.maxInt(u64), .x = 0 }, 64, false));
+    const Wide2 = logic.Wide(2);
+    try testing.expectEqual(@as(u64, 2), repeatCount(Wide2{ .v = .{ 2, 0 }, .x = .{ 0, 0 } }, 70, false));
+    try testing.expectEqual(@as(u64, std.math.maxInt(u64)), repeatCount(Wide2{ .v = .{ 0, 1 }, .x = .{ 0, 0 } }, 70, false));
+    try testing.expectEqual(@as(u64, 0), repeatCount(Wide2{ .v = .{ 1, 1 << 5 }, .x = .{ 0, 0 } }, 70, true));
+    try testing.expectEqual(@as(u64, 0), repeatCount(Wide2{ .v = .{ 2, 0 }, .x = .{ 0, 1 } }, 70, false));
 }
 
 test "a saved tick boundary restores the clock, the values and the suspensions" {
@@ -2238,4 +2254,82 @@ test "a saved tick boundary restores the clock, the values and the suspensions" 
     try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
     // Bytes that end early are refused, not read past.
     try testing.expectError(error.Failed, s.restore(buf[0 .. n - 1]));
+}
+
+/// One 128-bit slot: words 0 and 1 of each plane.
+const wide_slot: Design = .{
+    .v = &.{ 0, 0 },
+    .x = &.{ 0, 0 },
+    .slots = 1,
+    .fan_start = &.{},
+    .fan = &.{},
+    .code_len = 0,
+    .repeats = 0,
+    .order = &.{},
+};
+
+test "§9.7.2 a select term across a word boundary reads both words; a 64-bit one its whole word" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &wide_slot);
+    // Bits 60..67: word 0's top four, word 1's bottom four.
+    const id = try s.park(6);
+    try s.watchBits(id, 0, 0, 60, 8, .posedge);
+    // Bit 64 moves the selected bits but not their least significant (60).
+    try s.putWord(Reach.all, 0, 0, 1, W{ .v = 1, .x = 0 }, 1);
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    try testing.expectEqual(W{ .v = 0x10, .x = 0 }, s.bits(s.recs.items[0]));
+    try s.putWord(Reach.all, 0, 0, 0, W{ .v = 1 << 60, .x = 0 }, 1 << 60);
+    try testing.expectEqual(@as(?u32, 6), try s.next(no_limit));
+    // Width 64 from bit 64: all of word 1.
+    const all = try s.park(7);
+    try s.watchBits(all, 0, 0, 64, 64, .any);
+    try testing.expectEqual(W{ .v = 1, .x = 0 }, s.bits(s.recs.items[s.terms[0].items[s.terms[0].items.len - 1].rec]));
+    try s.putWord(Reach.all, 0, 0, 1, W{ .v = 1 << 63, .x = 0 }, 1 << 63);
+    try testing.expectEqual(@as(?u32, 7), try s.next(no_limit));
+}
+
+test "a node's store wakes on a change in any word of a wide value, and on none without one" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &wide_slot);
+    const v = s.view();
+    const same: logic.Wide(2) = .{ .v = .{ 0, 0 }, .x = .{ 0, 0 } };
+    var id = try s.park(3);
+    try s.watch(id, 0, .any);
+    try v.putNode(Reach.all, 0, 0, same, &.{});
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    // Only the high word moves: still a change of the slot.
+    try v.putNode(Reach.all, 0, 0, logic.Wide(2){ .v = .{ 0, 0 }, .x = .{ 0, 4 } }, &.{});
+    try testing.expectEqual(@as(?u32, 3), try s.next(no_limit));
+    try testing.expectEqual(@as(u64, 4), s.x[1]);
+    id = try s.park(4);
+    try s.watch(id, 0, .any);
+    try v.putNode(Reach.all, 0, 0, logic.Wide(2){ .v = .{ 2, 0 }, .x = .{ 0, 4 } }, &.{});
+    try testing.expectEqual(@as(?u32, 4), try s.next(no_limit));
+}
+
+test "the 2-state phase refuses an x or z store only where the mask selects it" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    const P = Phase(true);
+    try P.set(s, 0, W{ .v = 5, .x = 2 }, @as(u64, 0b101));
+    try testing.expectEqual(@as(u64, 5), s.v[0]);
+    try testing.expectError(error.Rerun, P.set(s, 0, W{ .v = 5, .x = 2 }, @as(u64, 0b111)));
+    try testing.expectError(error.Rerun, P.put(s, Reach.all, 0, 0, logic.Wide(2){ .v = .{ 0, 0 }, .x = .{ 0, 1 } }, [2]u64{ 0, 1 }));
+    // The 4-state phase stores it.
+    try Phase(false).set(s, 0, W{ .v = 0, .x = 2 }, @as(u64, 2));
+    try testing.expectEqual(@as(u64, 2), s.x[0]);
+}
+
+fn initOnce(gpa: std.mem.Allocator, d: *const Design) !void {
+    // `State` frees nothing itself (`initIn`): its arena does.
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    _ = try testState(arena.allocator(), d);
+}
+
+test "State.initIn fails cleanly at every allocation" {
+    try testing.checkAllAllocationFailures(testing.allocator, initOnce, .{&wide_slot});
 }

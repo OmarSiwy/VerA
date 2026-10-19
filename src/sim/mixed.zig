@@ -219,6 +219,12 @@ const Mon = struct {
             observed_event: bool = false,
         },
     },
+
+    // Budget: every analog step walks `mons` reading `v0` and the tag; the
+    // largest payload (absdelta, 4 f64 + 3 bools) sets 40 + tag 8 + v0 8.
+    comptime {
+        std.debug.assert(@sizeOf(Mon) == 56);
+    }
 };
 
 fn State(comptime A: type) type {
@@ -334,11 +340,7 @@ fn State(comptime A: type) type {
         }
 
         fn monValue(s: *Self, j: usize) !f64 {
-            return (try s.monArg(j, 0)).?;
-        }
-
-        fn monArg(s: *Self, j: usize, k: usize) !?f64 {
-            return s.monArgAt(j, k, null);
+            return (try s.monArgAt(j, 0, null)).?;
         }
 
         fn monArgAt(s: *Self, j: usize, k: usize, t: ?f64) !?f64 {
@@ -520,7 +522,7 @@ fn State(comptime A: type) type {
         /// cross() is inactive, meaning that it does not generate an event at
         /// threshold crossings and does not act to control the timestep."
         fn active(s: *Self, enable: u8, j: usize) !bool {
-            return ((try s.monArg(j, enable)) orelse 1) != 0;
+            return ((try s.monArgAt(j, enable, null)) orelse 1) != 0;
         }
 
         /// One analog step toward `t_end`, which lies before the next digital

@@ -118,19 +118,21 @@ fn parseUnary(self: *Parser) Error!Ast.ExprId {
 /// `base[msb:lsb]`.
 pub fn parsePostfix(self: *Parser) Error!Ast.ExprId {
     var e = try parsePrimary(self);
-    while (self.peek() == .lbracket) e = try parseSelect(self, e);
+    // Each select nests the tree one level, as an operator does.
+    const base = self.depth;
+    defer self.depth = base;
+    while (self.peek() == .lbracket) {
+        self.nest();
+        e = try parseSelectAt(self, e, self.pos);
+    }
     return e;
 }
 
 /// One select on `base`, `[i]`, `[msb:lsb]` or IEEE 1364-2005 §5.2.1's
-/// `[base +: width]` / `[base -: width]`, the cursor on the `[`.
-pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
-    return parseSelectAt(self, base, self.pos);
-}
-
-/// `parseSelect` with the `.index` node's token `tok`: a branch terminal's
-/// is its name's, as for a bit-select (`parseNetRef`).
-fn parseSelectAt(self: *Parser, base: Ast.ExprId, tok: u32) Error!Ast.ExprId {
+/// `[base +: width]` / `[base -: width]`, the cursor on the `[`. The
+/// `.index` node is reported at `tok`: the `[` itself, or a branch
+/// terminal's name, as for a bit-select (`parseNetRef`).
+pub fn parseSelectAt(self: *Parser, base: Ast.ExprId, tok: u32) Error!Ast.ExprId {
     _ = try self.expect(.lbracket);
     var idx = try parseExpr(self);
     if (self.eat(.colon)) { // A.8.3 analog_range_expression

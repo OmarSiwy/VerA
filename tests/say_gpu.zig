@@ -7,7 +7,7 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
+const S = contract.RefFamily(f64, &.{ 0, 1 }, .{});
 
 export fn say_ops_kernel(x: *const [n_u]f64, m: *const D.Model, inst: contract.InstancePtr(D), buf: *[64]f64, len: *usize) callconv(.kernel) void {
     var out: contract.Say = .{ .buf = buf };

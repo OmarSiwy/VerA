@@ -473,7 +473,7 @@ pub export fn vpi_put_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int 
 pub export fn vpi_remove_cb(cb_obj: vpiHandle) c_int {
     if (root.refused("vpi_remove_cb")) return 0;
     const cb = asCb(cb_obj) orelse {
-        root.fail("BADHANDLE", "vpi_remove_cb: {s} is not a live callback handle", .{if (cb_obj == null) "NULL" else "that handle"});
+        root.fail("BADHANDLE", "vpi_remove_cb: {s} is not a live callback handle", .{root.describe(cb_obj)});
         return 0;
     };
     _ = live.remove(@intFromPtr(cb));
@@ -491,7 +491,7 @@ pub export fn vpi_remove_cb(cb_obj: vpiHandle) c_int {
 pub export fn vpi_get_cb_info(obj: vpiHandle, cb_data_p: ?*CbData) void {
     if (root.refused("vpi_get_cb_info")) return;
     const cb = asCb(obj) orelse {
-        root.fail("BADHANDLE", "vpi_get_cb_info: {s} is not a live callback handle", .{if (obj == null) "NULL" else "that handle"});
+        root.fail("BADHANDLE", "vpi_get_cb_info: {s} is not a live callback handle", .{root.describe(obj)});
         return;
     };
     const out = cb_data_p orelse {
@@ -510,14 +510,20 @@ pub export fn vpi_get_cb_info(obj: vpiHandle, cb_data_p: ?*CbData) void {
     if (out.value) |v| v.format = cb.value_format;
 }
 
+/// Frees the dead registrations, keeping the live ones in order: one pass,
+/// where removing each in place was quadratic in the registry.
 fn sweep() void {
     if (depth != 0) return;
-    var i: usize = 0;
-    while (i < cbs.items.len) {
-        if (cbs.items[i].dead) {
-            destroy(cbs.orderedRemove(i));
-        } else i += 1;
+    var kept: usize = 0;
+    for (cbs.items) |cb| {
+        if (cb.dead) {
+            destroy(cb);
+            continue;
+        }
+        cbs.items[kept] = cb;
+        kept += 1;
     }
+    cbs.shrinkRetainingCapacity(kept);
 }
 
 // ---------------------------------------------------------------------------
@@ -578,17 +584,24 @@ fn lhsOf(from: ?*const root.Obj) ?*const root.Obj {
     return null;
 }
 
-/// Every live callback of `reason`, in registration order. Only the ones
-/// registered BEFORE this dispatch began: a callback registered from inside
-/// one is for a later occurrence (p02_07's heir must not see the change whose
-/// dispatch registered it).
-fn fireAll(reason: c_int) void {
+/// Every live callback of `reason`, in registration order, with `from` as
+/// `call` reads it. Only the ones registered BEFORE this dispatch began: a
+/// callback registered from inside one is for a later occurrence (p02_07's
+/// heir must not see the change whose dispatch registered it).
+fn fireAll(reason: c_int, from: ?*const root.Obj) void {
     const n = cbs.items.len;
     for (0..n) |i| {
         const cb = cbs.items[i];
-        if (!cb.dead and cb.reason == reason) _ = call(cb, cb.index, null);
+        if (!cb.dead and cb.reason == reason) _ = call(cb, cb.index, from);
     }
     sweep();
+}
+
+/// Whether any live callback has `reason`, so `onTchk` searches the design
+/// for its timing check only when someone will hear it.
+fn wanted(reason: c_int) bool {
+    for (cbs.items) |cb| if (!cb.dead and cb.reason == reason) return true;
+    return false;
 }
 
 /// §12.31.4 cbEndOfCompile — "End of simulation data structure compilation
@@ -597,40 +610,35 @@ pub fn endOfCompile() void {
     // The build's last step before it is "end": the registered systfs'
     // compiletf/sizetf/derivtf at each call site (§12.32.1, §12.33.1).
     @import("systf.zig").buildCalls();
-    fireAll(cbEndOfCompile);
+    fireAll(cbEndOfCompile, null);
 }
 
 /// §12.31.4 cbStartOfSimulation — "beginning of time 0 simulation cycle".
 pub fn startOfSimulation() void {
-    fireAll(cbStartOfSimulation);
+    fireAll(cbStartOfSimulation, null);
 }
 
 /// §12.31.4 cbEndOfSimulation — "e.g., $finish system task executed".
 pub fn endOfSimulation() void {
-    fireAll(cbEndOfSimulation);
+    fireAll(cbEndOfSimulation, null);
 }
 
 /// IEEE 1364-2005 §27.33.3 cbStartOfReset: a §12.36 vpiReset is about to
 /// take the run back to time 0 (`run.simulate`).
 pub fn startOfReset() void {
-    fireAll(cbStartOfReset);
+    fireAll(cbStartOfReset, null);
 }
 
 /// IEEE 1364-2005 §27.33.3 cbEndOfReset: the run is back at time 0, before
 /// it goes on (or ends, for a stop_value of 0).
 pub fn endOfReset() void {
-    fireAll(cbEndOfReset);
+    fireAll(cbEndOfReset, null);
 }
 
 /// IEEE 1364-2005 §27.33.3 cbInteractiveScopeChange: "obj shall be a handle
 /// to the new scope".
 pub fn interactiveScopeChange(scope: *const root.Obj) void {
-    const n = cbs.items.len;
-    for (0..n) |i| {
-        const cb = cbs.items[i];
-        if (!cb.dead and cb.reason == cbInteractiveScopeChange) _ = call(cb, cb.index, scope);
-    }
-    sweep();
+    fireAll(cbInteractiveScopeChange, scope);
 }
 
 /// `digital.Run.tchk_hook`: timing check `check` of the run reported a
@@ -639,11 +647,7 @@ pub fn interactiveScopeChange(scope: *const root.Obj) void {
 /// field shall be a handle to the timing check": the §11.6.15 object built
 /// from the same command (`src_tok`) in the same instance.
 pub fn onTchk(r: *digital.Run, check: u32) void {
-    const n = cbs.items.len;
-    const wanted = for (cbs.items) |cb| {
-        if (!cb.dead and cb.reason == cbTchkViolation) break true;
-    } else false;
-    if (!wanted) return;
+    if (!wanted(cbTchkViolation)) return;
     const site = r.tchkSite(check);
     const d = &root.design.?;
     const tchk = for (d.objects) |*o| {
@@ -651,16 +655,12 @@ pub fn onTchk(r: *digital.Run, check: u32) void {
         const owner = o.owner.get() orelse continue;
         if (d.scopes[owner].engine == site.scope) break o;
     } else return;
-    for (0..n) |i| {
-        const cb = cbs.items[i];
-        if (!cb.dead and cb.reason == cbTchkViolation) _ = call(cb, cb.index, tchk);
-    }
-    sweep();
+    fireAll(cbTchkViolation, tchk);
 }
 
 /// IEEE 1364-2005 §27.33.3 cbError: "Simulation run-time error occurred".
 pub fn runError() void {
-    fireAll(cbError);
+    fireAll(cbError, null);
 }
 
 /// IEEE 1364-2005 §27.33.3 cbPLIError: "Simulation run-time error occurred
@@ -668,7 +668,7 @@ pub fn runError() void {
 /// cbPLIError callback calls that fails fires none.
 pub fn pliError() void {
     if (active == cbPLIError) return;
-    fireAll(cbPLIError);
+    fireAll(cbPLIError, null);
 }
 
 /// The earliest tick a live time callback is due at that is strictly after
@@ -925,7 +925,7 @@ fn fireStmt(_: *digital.Run, pc: u32) digital.Error!void {
 /// `reason` registered before this dispatch began. These persist: §12.31.3
 /// ties them to a kind of solution, not to one.
 pub fn fireAnalog(reason: c_int) void {
-    fireAll(reason);
+    fireAll(reason, null);
 }
 
 /// acbConvergenceTest, "prior acceptance of the analog solution for the
@@ -1301,4 +1301,29 @@ test "IEEE 1364-2005 §27.8/§27.29 and §12.6: no save or restart; info into no
     try std.testing.expectEqual(cbEndOfCompile, info.reason);
     try std.testing.expectEqual(@as(c_int, 0), info.index);
     try std.testing.expect(info.time == null and info.value == null);
+}
+
+var swept: [4]u8 = undefined;
+var swept_n: usize = 0;
+fn noteTag(d: *CbData) callconv(.c) c_int {
+    swept[swept_n] = d.user_data[0];
+    swept_n += 1;
+    return 0;
+}
+
+test "§12.34: removals outside a dispatch free at once, and the survivors keep their order" {
+    reset();
+    defer reset();
+    var tags = "ABCD".*;
+    var hs: [4]vpiHandle = undefined;
+    for (&hs, 0..) |*h, i| {
+        const d: CbData = .{ .reason = cbEndOfCompile, .cb_rtn = noteTag, .obj = null, .time = null, .value = null, .index = 0, .user_data = tags[i..].ptr };
+        h.* = vpi_register_cb(&d);
+    }
+    try std.testing.expectEqual(@as(c_int, 1), vpi_remove_cb(hs[1]));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_remove_cb(hs[3]));
+    try std.testing.expectEqual(@as(usize, 2), cbs.items.len);
+    swept_n = 0;
+    fireAll(cbEndOfCompile, null);
+    try std.testing.expectEqualStrings("AC", swept[0..swept_n]);
 }

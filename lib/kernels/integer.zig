@@ -41,6 +41,12 @@ pub const Literal = struct {
     /// The value plane then the unknown plane, equal halves.
     planes: []u64,
 
+    // Passed by value through every interpreter operator: one slice, a
+    // width and two flags, no padding beyond the slice's alignment.
+    comptime {
+        std.debug.assert(@sizeOf(Literal) == 24);
+    }
+
     /// Returns the value plane, least significant word first. It can be
     /// longer than `width` needs: a `parse`d unsized decimal keeps the words
     /// it reserved, all zero above its value.
@@ -73,7 +79,9 @@ pub const Literal = struct {
     pub fn asExactInt(self: Literal) ?i64 {
         if (self.width <= 64) return self.asInt();
         if (self.hasUnknown()) return null;
-        const words = self.values();
+        // Declared words only: a `parse`d unsized decimal reserves spare
+        // zero words past them, which a negative value does not fill.
+        const words = self.values()[0..wordCount(self.width)];
         const low: i64 = @bitCast(words[0]);
         if (low < 0 and !self.signed) return null;
         const fill: u64 = if (low < 0) std.math.maxInt(u64) else 0;
@@ -93,7 +101,7 @@ pub const Literal = struct {
         const negative = self.signed and self.bit(self.width - 1) == .one;
         const fill: u64 = if (negative) std.math.maxInt(u64) else 0;
         const outside: i128 = if (negative) std.math.minInt(i128) else std.math.maxInt(i128);
-        const v = self.values();
+        const v = self.values()[0..wordCount(self.width)];
         var bits: u128 = v[0];
         if (self.width > 64) bits |= @as(u128, v[1]) << 64;
         if (self.width < 128 and negative) bits |= @as(u128, std.math.maxInt(u128)) << @intCast(self.width);
@@ -533,10 +541,6 @@ pub const Literal = struct {
     /// decides it, even beside X/Z.
     pub fn truth(self: Literal) Bit {
         return self.reduce(.or_bits);
-    }
-
-    fn logicalNot(self: Literal) Bit {
-        return invert(self.truth());
     }
 
     /// Applies `&&` or `||` to the two truth values (IEEE 1364-2005 §5.1.9).
@@ -1113,7 +1117,7 @@ test "four-state scalar operators exhaust IEEE1364 truth tables" {
         const neg = try lhs.bitwiseNot(allocator);
         defer allocator.free(neg.planes);
         try std.testing.expectEqual(invert(a), neg.bit(0));
-        try std.testing.expectEqual(invert(a), lhs.logicalNot());
+        try std.testing.expectEqual(invert(a), invert(lhs.truth()));
         for (truth_states, 0..) |b, bi| {
             var b_storage: [2]u64 = undefined;
             const rhs = testScalar(&b_storage, b);
@@ -1196,7 +1200,7 @@ test "packed reductions exhaust four-bit vectors and equality known mismatch win
     try std.testing.expectEqual(Bit.one, a.equality(.not_equal, b));
     try std.testing.expectEqual(Bit.one, a.truth());
     try std.testing.expectEqual(Bit.x, b.truth());
-    try std.testing.expectEqual(Bit.zero, a.logicalNot());
+    try std.testing.expectEqual(Bit.zero, invert(a.truth()));
 }
 
 test "packed bitwise operations match scalar oracle across partial and multiple words" {
@@ -2048,6 +2052,20 @@ test "asIndex keeps values past i64 and saturates past i128 by sign" {
     try std.testing.expectEqual(@as(?i128, std.math.maxInt(i128)), (try parse(a, "200'h1_0000_0000_0000_0000_0000_0000_0000_0000")).asIndex());
 }
 
+test "asIndex/asExactInt read only the declared words of an unsized decimal" {
+    // 2^129 - 1 is 129 one bits, a signed -1. Leading zeros make `parse`
+    // reserve a fourth word past the value's three; its zeros are not data.
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    for ([_][]const u8{ "680564733841876926926749214863536422911", "00000000000000000000680564733841876926926749214863536422911" }) |text| {
+        const v = try parse(a, text);
+        try std.testing.expectEqual(@as(u32, 129), v.width);
+        try std.testing.expectEqual(@as(?i128, -1), v.asIndex());
+        try std.testing.expectEqual(@as(?i64, -1), v.asExactInt());
+    }
+}
+
 test "§2.6.1 an unsized literal's width: the 64-bit floor, then its value's bits" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -2206,6 +2224,21 @@ fn testOneAllocation(allocator: std.mem.Allocator) !void {
     defer allocator.free(shifted.planes);
     const merged = try count.conditional(allocator, a, count);
     defer allocator.free(merged.planes);
+}
+
+fn testParseAllocation(allocator: std.mem.Allocator, text: []const u8) !void {
+    const v = try parse(allocator, text);
+    allocator.free(v.planes);
+}
+
+test "parse frees its planes, digit copy and big-integer scratch on every allocation failure" {
+    // Past `dc_digits`, with a `_`: the digit copy, then divide and conquer.
+    const gpa = std.testing.allocator;
+    const text = try gpa.alloc(u8, 2 * dc_digits + 9);
+    defer gpa.free(text);
+    for (text, 0..) |*c, i| c.* = '1' + @as(u8, @intCast(i % 9));
+    text[5] = '_';
+    try std.testing.checkAllAllocationFailures(gpa, testParseAllocation, .{text});
 }
 
 test "an allocation failure in a one-allocation operation leaks nothing" {

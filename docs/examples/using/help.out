@@ -83,7 +83,7 @@ usage: vera [options] FILE.va
                           module definitions the .va can instantiate
   --no-std-defs           do not prepend the annex D prelude
   --std=SPEC              source language, a `begin_keywords specifier:
-                          1364-1995|1364-2001|1364-2005|VAMS-2.3|VAMS-2023
+                          1364-1995|1364-2001|1364-2005|VAMS-2023
                           (default; 1364-2005 under -Dlanguage=verilog).
                           A 1364 language frees every AMS keyword as an
                           identifier and refuses AMS constructs (E0242)

@@ -14,6 +14,7 @@ const gen_file = @import("file.zig");
 const gen_instance = @import("instance.zig");
 const gen_unit = @import("unit.zig");
 const family = @import("family.zig");
+const gen_mask = @import("mask.zig");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
 const assert = std.debug.assert;
@@ -31,7 +32,7 @@ pub const Jac = struct {
     /// Structural Jacobian columns per residual row: `pat[react][ru]` has bit
     /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
     /// it writes each row. The host reads the emitted constant to drop
-    /// structurally-zero stamps at compile time.
+    /// structurally-zero stamps at compile time. `Gen.mw` words per row.
     pat: [2][]u64 = .{ &.{}, &.{} },
     /// Which residual rows each half ever writes: bit `ru` of `rows[react]` is
     /// set when the emitted `eval` (resp. `q`) contains any `res[ru] = ...`.
@@ -39,29 +40,34 @@ pub const Jac = struct {
     /// row with a clear pattern (an independent current source), and a host
     /// that read a clear pattern as "identically zero" would drop it.
     /// Set beside `pat` in `patRow`, which every `res[...]` writer goes through.
-    rows: [2]u64 = .{ 0, 0 },
+    rows: [2][]u64 = .{ &.{}, &.{} },
     /// Which half of `pat` the current `emitStamps` writes.
     react: bool = false,
+    /// Set once `emitDispatchers` has allocated the evidence; `patRow` records
+    /// nothing before.
+    on: bool = false,
     /// Per residual row, either half: the columns whose partial reaches it
     /// through a frequency-dependent operator (`Analysis.acDynDeps`), the
-    /// source of `ac_dyn_slots`. `patRow` fills it from `cur_dyn`.
+    /// source of `ac_dyn_slots`. `patRow` fills it from `cur_dyn`. `Gen.mw`
+    /// words per row.
     dpat: []u64 = &.{},
-    /// `acDynDeps` of the contribution `emitStamps` is writing.
-    cur_dyn: u64 = 0,
+    /// `acDynDeps` of the contribution `emitStamps` is writing; empty for none.
+    cur_dyn: []const u64 = &.{},
     /// Unknowns whose derivative lane `eval`/`q` may read: the mask behind the
     /// emitted `deriv_reads`. Syntactic, so a superset: every `x[u]`
     /// `renderValueRef` writes, every `.ddxAt(u)`, and every dispatcher term
-    /// with a non-constant coefficient. See `emitDerivReads`.
-    deriv_reads: u64 = 0,
+    /// with a non-constant coefficient. See `emitDerivReads`. Allocated by
+    /// `alloc`, before any unit is rendered.
+    deriv_reads: []u64 = &.{},
     /// The lanes a §4.5.14 `ddx` reads BY INDEX (`.ddxAt(u)`): the emitted
     /// `ddx_reads`, and a subset of `deriv_reads` by construction.
-    ddx_reads: u64 = 0,
-    /// The dispatcher's constant-coefficient terms, per half:
-    /// `lin[react][row * n_u + col]` is the exact coefficient of `x[col]` in
-    /// `res[row]` as far as the stamps are linear. Only the columns OUTSIDE
-    /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
-    /// Empty above 64 unknowns, where neither decl is emitted.
-    lin: [2][]f64 = .{ &.{}, &.{} },
+    ddx_reads: []u64 = &.{},
+    /// The dispatcher's constant-coefficient terms, per half and row:
+    /// `lin[react][row]` holds the exact coefficient of each `x[col]` in
+    /// `res[row]` as far as the stamps are linear (`plan_jac.lookup`). Only
+    /// the columns OUTSIDE `deriv_reads` leave as `jac_const`; inside, the
+    /// lane carries them.
+    lin: [2][]plan_jac.LinRow = .{ &.{}, &.{} },
     /// The constants of a collapsible switch row that hold only under its
     /// guard (`emitSwitchRow`), eval half; `plan/jac.zig` merges them into
     /// `jac_const` with a `.when`. Arena list.
@@ -72,23 +78,41 @@ pub const Jac = struct {
 // Dispatchers: §5.6 residual assembly, §1.3.1.2 reference directions
 // =======================================================================
 
+/// Past this many words an n_u × n_u bit table (`jac_pattern`, `q_pattern`,
+/// `q_site_pattern`) is not emitted, and a host takes every row's lanes from
+/// `deriv_reads` (`contract.rowMask`). ponytail: n² bits; 2^16 words is
+/// 2048 unknowns. Sparse row lists are the upgrade if a bigger device needs
+/// per-row lanes.
+const max_table_words = 1 << 16;
+
+/// Whether the n_u × n_u pattern tables are emitted (`max_table_words`).
+fn tables(self: *const Gen) bool {
+    return @as(usize, self.names.n_u) * self.mw <= max_table_words;
+}
+
+/// Allocates the lane masks the renderer writes (`deriv_reads`,
+/// `ddx_reads`) on the arena. Runs once, after `Gen.mw` is known and before
+/// any unit is rendered.
+pub fn alloc(self: *Gen) Error!void {
+    self.jac.deriv_reads = try gen_mask.zero(self.arena, self.mw);
+    self.jac.ddx_reads = try gen_mask.zero(self.arena, self.mw);
+}
+
 /// Emits `eval`, and `q`/`evalQ`/the charge-site tables when any charge site
 /// exists, then the pattern tables, `display` and (optionally) `vpiContribs`.
-/// Allocates `jac.pat`, `jac.dpat` and `jac.lin` on the arena. Runs once
-/// per device; asserts the evidence is still empty.
+/// Allocates `jac.pat`, `jac.dpat`, `jac.rows` and `jac.lin` on the arena.
+/// Runs once per device; asserts the evidence is still empty.
 pub fn emitDispatchers(self: *Gen) Error!void {
-    assert(self.jac.pat[0].len == 0 and self.jac.rows[0] == 0 and self.jac.guarded.items.len == 0);
-    self.jac.pat[0] = try self.arena.alloc(u64, self.names.n_u);
-    self.jac.pat[1] = try self.arena.alloc(u64, self.names.n_u);
-    @memset(self.jac.pat[0], 0);
-    @memset(self.jac.pat[1], 0);
-    self.jac.dpat = try self.arena.alloc(u64, self.names.n_u);
-    @memset(self.jac.dpat, 0);
-    self.jac.rows = .{ 0, 0 };
-    if (self.names.n_u <= 64) for (&self.jac.lin) |*l| {
-        l.* = try self.arena.alloc(f64, self.names.n_u * self.names.n_u);
-        @memset(l.*, 0);
-    };
+    assert(!self.jac.on and self.jac.guarded.items.len == 0);
+    const n = self.names.n_u;
+    self.jac.on = true;
+    for (&self.jac.pat, &self.jac.rows, &self.jac.lin) |*p, *r, *l| {
+        if (tables(self)) p.* = try gen_mask.zero(self.arena, n * self.mw);
+        r.* = try gen_mask.zero(self.arena, self.mw);
+        l.* = try self.arena.alloc(plan_jac.LinRow, n);
+        @memset(l.*, .empty);
+    }
+    if (tables(self) or self.acdyn.len != 0) self.jac.dpat = try gen_mask.zero(self.arena, n * self.mw);
 
     try emitEval(self);
     const any_q = anyQ(self);
@@ -175,10 +199,10 @@ pub fn anyQ(self: *const Gen) bool {
 fn qPattern(self: *Gen) void {
     for (self.qs.stamps) |st| {
         const k = self.qs.sites[st.slot];
-        const bits = self.an.unknownDeps(self.lowered.charge_sites.items[k].final);
-        if (self.jac.pat[1].len != 0) self.jac.pat[1][st.row] |= bits;
-        self.jac.dpat[st.row] |= self.an.acDynDeps(self.lowered.charge_sites.items[k].final);
-        self.jac.rows[1] |= uBit(st.row);
+        const site = self.lowered.charge_sites.items[k].final;
+        if (self.jac.pat[1].len != 0) gen_mask.orIn(rowOf(self, self.jac.pat[1], st.row), family.mask(self, site));
+        if (self.jac.dpat.len != 0) gen_mask.orIn(rowOf(self, self.jac.dpat, st.row), family.acDyn(self, site));
+        gen_mask.set(self.jac.rows[1], st.row);
     }
 }
 
@@ -242,50 +266,49 @@ fn emitQSites(self: *Gen) Error!void {
     , .{});
     for (self.qs.sites, 0..) |k, j| try self.w("{s}{}", .{ if (j == 0) " " else ", ", self.lowered.charge_sites.items[k].lte });
     try self.w(" }};\n\n", .{});
-    if (self.names.n_u > 64) return;
-    try self.w("/// Bit `cu` of `q_site_pattern[k]` is set when `∂q[k]/∂x[cu]` can be nonzero.\npub const q_site_pattern = [n_q]u64{{\n", .{});
-    for (self.qs.sites) |k| try self.w("    0x{x:0>16},\n", .{self.an.unknownDeps(self.lowered.charge_sites.items[k].final)});
+    if (!tables(self)) return;
+    var tb: [16]u8 = undefined;
+    try self.w("/// Bit `cu` of `q_site_pattern[k]` is set when `∂q[k]/∂x[cu]` can be nonzero.\npub const q_site_pattern = [n_q]{s}{{\n", .{gen_mask.typeName(&tb, self.names.n_u)});
+    for (self.qs.sites) |k| try self.w("    0x{f},\n", .{gen_mask.hex(family.mask(self, self.lowered.charge_sites.items[k].final), true)});
     try self.w("}};\n\n", .{});
 }
 
 /// Emits the §5.6 structural Jacobian: which columns of each residual row can
 /// be nonzero, as a comptime constant so the host can drop the structurally
-/// zero stamps. Omitted above 64 unknowns (`Analysis.deps` is one u64 per
-/// value); a host that finds no declaration scatters densely.
+/// zero stamps, and which rows each half writes. The column tables only up
+/// to `max_table_words`.
 fn emitPattern(self: *Gen, any_q: bool) Error!void {
-    if (self.names.n_u > 64) return;
-    try self.w(
-        \\/// §5.6 structural Jacobian: bit `cu` of `jac_pattern[ru]` is set
-        \\/// when `∂eval(x)[ru]/∂x[cu]` can be nonzero. A clear bit is a
-        \\/// stamp with no physics behind it, and the host may drop it at
-        \\/// compile time. Over-approximate: a set bit costs a stamp that
-        \\/// happens to be zero, never a missing matrix entry.
-        \\
-    , .{});
-    try emitPatternRows(self, "jac_pattern", self.jac.pat[0]);
+    if (tables(self)) {
+        try self.w(
+            \\/// §5.6 structural Jacobian: bit `cu` of `jac_pattern[ru]` is set
+            \\/// when `∂eval(x)[ru]/∂x[cu]` can be nonzero. A clear bit is a
+            \\/// stamp with no physics behind it, and the host may drop it at
+            \\/// compile time. Over-approximate: a set bit costs a stamp that
+            \\/// happens to be zero, never a missing matrix entry.
+            \\
+        , .{});
+        try emitPatternRows(self, "jac_pattern", self.jac.pat[0]);
+    }
     try emitWrittenRows(self, "jac_rows", "eval", self.jac.rows[0]);
     if (!any_q) return;
-    try self.w("/// Same, for `q`'s reactive residual (`dQ/dx`).\n", .{});
-    try emitPatternRows(self, "q_pattern", self.jac.pat[1]);
+    if (tables(self)) {
+        try self.w("/// Same, for `q`'s reactive residual (`dQ/dx`).\n", .{});
+        try emitPatternRows(self, "q_pattern", self.jac.pat[1]);
+    }
     try emitWrittenRows(self, "q_rows", "q", self.jac.rows[1]);
 }
 
 /// Emits `ac_dyn_slots` and `acDyn` (`contract.acDynSlots`) when a
-/// frequency-dependent operator reaches a residual row. Above 64 unknowns
-/// `dpat` is folded, so a reached row lists every column.
+/// frequency-dependent operator reaches a residual row.
 fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
     const n = self.names.n_u;
-    // Counted first: one slot per set column bit, or a whole row when folded.
-    var n_slots: usize = 0;
-    for (self.jac.dpat) |m| n_slots += if (n > 64)
-        (if (m != 0) n else 0)
-    else if (n == 64) @popCount(m) else @popCount(m & ((@as(u64, 1) << @intCast(n)) - 1));
-    var slots: std.ArrayList(u32) = try .initCapacity(self.arena, n_slots);
-    for (self.jac.dpat, 0..) |m, r| for (0..n) |c| {
-        const hit = if (n > 64) m != 0 else (m >> @intCast(c)) & 1 != 0;
-        if (hit) slots.appendAssumeCapacity(@intCast(r * n + c));
+    if (self.jac.dpat.len == 0) return;
+    // A mask has no bit at or past `n`, so its count is its slot count.
+    var slots: std.ArrayList(u32) = try .initCapacity(self.arena, gen_mask.count(self.jac.dpat));
+    for (0..n) |r| for (0..n) |c| {
+        if (gen_mask.has(rowOf(self, self.jac.dpat, @intCast(r)), c)) slots.appendAssumeCapacity(@intCast(r * n + c));
     };
-    std.debug.assert(slots.items.len == n_slots);
+    std.debug.assert(slots.items.len == slots.capacity);
     if (slots.items.len == 0) return;
     try self.w(
         \\/// §4.5.7/§4.5.11/§4.5.12 the slots `row * n_u + col` whose small-signal
@@ -340,7 +363,8 @@ fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
 /// is zero at every bias, so a host may drop it whole. The host cannot infer
 /// this from the pattern: a term with no unknown in it (an independent
 /// current source) writes its row with a clear pattern.
-fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: u64) Error!void {
+fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: []const u64) Error!void {
+    var tb: [16]u8 = undefined;
     try self.w(
         \\/// §5.6 which residual rows `{s}` ever WRITES: bit `ru` set means
         \\/// `res[ru]` is assigned somewhere in it. A CLEAR bit is the only
@@ -348,15 +372,16 @@ fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: u64) Er
         \\/// not, because a term that depends on no unknown writes the row
         \\/// with an empty column mask. Over-approximate the same way: a set
         \\/// bit costs a stamp that happens to be zero.
-        \\pub const {s}: u64 = 0x{x:0>16};
+        \\pub const {s}: {s} = 0x{f};
         \\
         \\
-    , .{ half, name, mask });
+    , .{ half, name, gen_mask.typeName(&tb, self.names.n_u), gen_mask.hex(mask, true) });
 }
 
 fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
-    try self.w("pub const {s} = [n_u]u64{{\n", .{name});
-    for (rows, 0..) |m, i| try self.w("    0x{x:0>16}, // {s}\n", .{ m, self.names.u_names[i] });
+    var tb: [16]u8 = undefined;
+    try self.w("pub const {s} = [n_u]{s}{{\n", .{ name, gen_mask.typeName(&tb, self.names.n_u) });
+    for (0..self.names.n_u) |i| try self.w("    0x{f}, // {s}\n", .{ gen_mask.hex(rowOf(self, rows, @intCast(i)), true), self.names.u_names[i] });
     try self.w("}};\n\n", .{});
 }
 
@@ -526,7 +551,7 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // `lin` is a replay, not an accumulation: `evalQ` re-emits the same
     // stamps, and adding them twice would double every coefficient. The
     // guarded stamps are eval-only (`emitSwitchRow`), so eval resets them.
-    @memset(self.jac.lin[@intFromBool(react)], 0);
+    for (self.jac.lin[@intFromBool(react)]) |*l| l.clearRetainingCapacity();
     if (!react) self.jac.guarded.clearRetainingCapacity();
     // One core evaluation per residual, not one per contribution: LLVM does
     // not merge them (see `plan_core.plan`'s header).
@@ -543,7 +568,7 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
 
     for (self.lowered.contributions.items, 0..) |c, i| {
         const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
-        self.jac.cur_dyn = contribDyn(self, i, c, react);
+        self.jac.cur_dyn = try contribDyn(self, i, c, react);
         // §5.6.1.3 a `.flow` entry whose branch row is runtime-selected is
         // consumed by that row (`I_b − value`); its KCL current is the ±I_b
         // the potential entry already stamps. Stamping the value here too
@@ -618,10 +643,10 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
             assert(!react); // splitContribution never runs on an indirect
             try self.ind(2);
             try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
-            try stamp(self, 2, c.hi, .add, "ib", uBit(u), u);
-            try stamp(self, 2, c.lo, .sub, "ib", uBit(u), u);
+            try stamp(self, 2, c.hi, .add, "ib", try bits(self, &.{u}, &.{}), u);
+            try stamp(self, 2, c.lo, .sub, "ib", try bits(self, &.{u}, &.{}), u);
             try self.ind(2);
-            patRow(self, @intCast(u), self.an.unknownDeps(val));
+            patRow(self, @intCast(u), family.mask(self, val));
             linClear(self, u);
             try rowSet(self, u);
             try self.b("c", .{});
@@ -638,15 +663,15 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 // row with no `x` in it. See `flowOnlySignalFlowNet`.
                 if (!react) {
                     try self.ind(2);
-                    patRow(self, n, uBit(n) | self.an.unknownDeps(val));
+                    patRow(self, n, try bits(self, &.{n}, &.{family.mask(self, val)}));
                     linClear(self, n);
-                    linTerm(self, n, n, 1);
+                    try linTerm(self, n, n, 1);
                     try rowSet(self, n);
                     try self.b("x[@intFromEnum(U.{s})].sub(c)", .{self.names.u_names[n]});
                     try rowEnd(self);
                 } else {
                     try self.ind(2);
-                    patRow(self, n, self.an.unknownDeps(val));
+                    patRow(self, n, family.mask(self, val));
                     linClear(self, n);
                     try rowSet(self, n);
                     try self.b("c.neg()", .{});
@@ -654,15 +679,15 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 }
             } else {
                 // §1.3.1.2: the value flows INTO hi and OUT OF lo.
-                try stamp(self, 2, c.hi, .add, "c", self.an.unknownDeps(val), null);
-                try stamp(self, 2, c.lo, .sub, "c", self.an.unknownDeps(val), null);
+                try stamp(self, 2, c.hi, .add, "c", family.mask(self, val), null);
+                try stamp(self, 2, c.lo, .sub, "c", family.mask(self, val), null);
                 // §5.6.6: the model also reads `I(hi,lo)`, so this current is
                 // an unknown whose row is `x[u] − Σ contributions`. Accumulated
                 // here (contributions to one branch are one sum, §5.6.1) and
                 // closed with the `+ x[u]` term after the loop.
                 if (self.topo.freeFlowOf(c.hi, c.lo)) |f| {
                     assert(f.sourced);
-                    try stamp(self, 2, @intCast(f.u), .sub, "c", self.an.unknownDeps(val), null);
+                    try stamp(self, 2, @intCast(f.u), .sub, "c", family.mask(self, val), null);
                 }
             },
             .potential => {
@@ -674,11 +699,11 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     const u = self.names.branch_u[i];
                     try self.ind(2);
                     try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
-                    try stamp(self, 2, c.hi, .add, "ib", uBit(u), u);
-                    try stamp(self, 2, c.lo, .sub, "ib", uBit(u), u);
+                    try stamp(self, 2, c.hi, .add, "ib", try bits(self, &.{u}, &.{}), u);
+                    try stamp(self, 2, c.lo, .sub, "ib", try bits(self, &.{u}, &.{}), u);
                     try self.ind(2);
-                    patRow(self, @intCast(u), nodeBit(c.hi) | nodeBit(c.lo) | self.an.unknownDeps(val));
-                    linBranch(self, u, c.hi, c.lo);
+                    patRow(self, @intCast(u), try bits(self, &.{ c.hi, c.lo }, &.{family.mask(self, val)}));
+                    try linBranch(self, u, c.hi, c.lo);
                     try rowSet(self, u);
                     try nodeVoltage(self, c.hi);
                     try self.b(".sub(", .{});
@@ -690,7 +715,7 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     // §5.6.1.2 the reactive part of a branch relation is a
                     // flux: v − dφ/dt = 0 ⇒ q on this row is −φ.
                     try self.ind(2);
-                    patRow(self, @intCast(u), self.an.unknownDeps(val));
+                    patRow(self, @intCast(u), family.mask(self, val));
                     linClear(self, u);
                     try rowSet(self, u);
                     try self.b("c.neg()", .{});
@@ -702,7 +727,7 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
         try self.b("}}\n", .{});
     }
 
-    self.jac.cur_dyn = 0;
+    self.jac.cur_dyn = &.{};
 
     // §5.4.2 the branch-flow unknowns no branch row defines (`FreeFlow`).
     // Both rows are purely resistive: a §5.6.6 implicit sum's reactive half
@@ -715,8 +740,8 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
             // Closes `res[u] = x[u] − Σ contributions`, whose `−Σ` half the
             // contribution loop accumulated.
             try self.ind(1);
-            patRow(self, @intCast(f.u), uBit(f.u));
-            linTerm(self, f.u, f.u, 1);
+            patRow(self, @intCast(f.u), try bits(self, &.{f.u}, &.{}));
+            try linTerm(self, f.u, f.u, 1);
             try rowSet(self, f.u);
             try self.b("res[@intFromEnum(U.{0s})].add(x[@intFromEnum(U.{0s})])", .{self.names.u_names[f.u]});
             try rowEnd(self);
@@ -724,11 +749,11 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
             // §5.4.2.1 "The branch potential of a flow probe is zero (0)",
             // the ammeter of Figure 5-1. Its current enters KCL at both ends,
             // which makes it a short rather than an observation.
-            try stamp(self, 1, f.hi, .add, try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
-            try stamp(self, 1, f.lo, .sub, try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
+            try stamp(self, 1, f.hi, .add, try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), try bits(self, &.{f.u}, &.{}), f.u);
+            try stamp(self, 1, f.lo, .sub, try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), try bits(self, &.{f.u}, &.{}), f.u);
             try self.ind(1);
-            patRow(self, @intCast(f.u), nodeBit(f.hi) | nodeBit(f.lo));
-            linBranch(self, f.u, f.hi, f.lo);
+            patRow(self, @intCast(f.u), try bits(self, &.{ f.hi, f.lo }, &.{}));
+            try linBranch(self, f.u, f.hi, f.lo);
             try rowSet(self, f.u);
             try nodeVoltage(self, f.hi);
             try self.b(".sub(", .{});
@@ -754,8 +779,8 @@ fn emitStamps(self: *Gen, react: bool) Error!u32 {
         stamps += 1;
         try self.ind(1);
         // Reads the finished res[port], so this row's columns are that row's.
-        patRow(self, pp.u, patOf(self, pp.port) | (if (react) 0 else uBit(pp.u)));
-        self.jac.dpat[pp.u] |= self.jac.dpat[pp.port];
+        patRow(self, pp.u, try bits(self, if (react) &.{} else &.{pp.u}, &.{try patOf(self, pp.port)}));
+        if (self.jac.dpat.len != 0) gen_mask.orIn(rowOf(self, self.jac.dpat, pp.u), rowOf(self, self.jac.dpat, pp.port));
         try linPortProbe(self, pp.u, pp.port, !react);
         if (react) {
             try rowSet(self, pp.u);
@@ -852,7 +877,7 @@ fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, r
             try guardTerm(self, u, c.hi, 1, k);
             try guardTerm(self, u, c.lo, -1, k);
         }
-    } else self.jac.deriv_reads |= uBit(u) | nodeBit(c.hi) | nodeBit(c.lo);
+    } else gen_mask.orIn(self.jac.deriv_reads, try bits(self, &.{ u, c.hi, c.lo }, &.{}));
     linDynamic(self, u);
     const d: u32 = if (split) 4 else 2;
     if (split) {
@@ -871,10 +896,10 @@ fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, r
         try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
         // Guarded: the constant is `guardTerm`'s, not an unconditional `lin`.
         const col: ?u32 = if (guard == null) u else null;
-        try stamp(self, d, c.hi, .add, "ib", uBit(u), col);
-        try stamp(self, d, c.lo, .sub, "ib", uBit(u), col);
+        try stamp(self, d, c.hi, .add, "ib", try bits(self, &.{u}, &.{}), col);
+        try stamp(self, d, c.lo, .sub, "ib", try bits(self, &.{u}, &.{}), col);
         try self.ind(d);
-        patRow(self, @intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | switchRowDeps(self, i, c, react));
+        patRow(self, @intCast(u), try bits(self, &.{ u, c.hi, c.lo }, &.{try switchRowDeps(self, i, c, react)}));
         try rowSet(self, u);
         try self.b("S.sel(", .{});
         try coreRef(self, flag);
@@ -888,7 +913,7 @@ fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, r
         try rowEnd(self);
     } else {
         try self.ind(d);
-        patRow(self, @intCast(u), uBit(u) | switchRowDeps(self, i, c, react));
+        patRow(self, @intCast(u), try bits(self, &.{u}, &.{try switchRowDeps(self, i, c, react)}));
         try rowSet(self, u);
         try self.b("S.sel(", .{});
         try coreRef(self, flag);
@@ -906,9 +931,9 @@ fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, r
         try self.b("const flow = ", .{});
         try switchOpen(self, partner, react);
         try self.b(";\n", .{});
-        const bits = switchRowDeps(self, i, c, react);
-        try stamp(self, 3, c.hi, .add, "flow", bits, null);
-        try stamp(self, 3, c.lo, .sub, "flow", bits, null);
+        const deps = try switchRowDeps(self, i, c, react);
+        try stamp(self, 3, c.hi, .add, "flow", deps, null);
+        try stamp(self, 3, c.lo, .sub, "flow", deps, null);
         try self.ind(2);
         try self.b("}}\n", .{});
     }
@@ -924,11 +949,10 @@ pub fn collapsible(self: *const Gen, i: usize) bool {
 }
 
 /// Returns the `cpairs` index whose card-only flag guards contribution `i`'s
-/// constants (`emitSwitchRow`), or null. Above 64 unknowns there is no
-/// table to put them in.
+/// constants (`emitSwitchRow`), or null.
 fn guardOf(self: *const Gen, i: usize) ?u32 {
     const u = self.names.branch_u[i];
-    if (u == none_u32 or self.names.n_u > 64) return null;
+    if (u == none_u32) return null;
     for (self.topo.cpairs, 0..) |p, k| if (p.flow_u == u) return if (p.card) @intCast(k) else null;
     return null;
 }
@@ -1021,10 +1045,10 @@ const StampSign = enum { add, sub };
 /// `bits` in the row pattern. `col` names the unknown when `val` is exactly `x[col]` (a ±1 term
 /// whose coefficient `Gen.jac.lin` records), and is null for a core value, whose
 /// lanes `renderValueRef` already marked. Ground has no row and writes nothing.
-pub fn stamp(self: *Gen, depth: u32, node: u32, sign: StampSign, val: []const u8, bits: u64, col: ?u32) Error!void {
+pub fn stamp(self: *Gen, depth: u32, node: u32, sign: StampSign, val: []const u8, deps: []const u64, col: ?u32) Error!void {
     if (node == Lower.ground) return; // §1.3.1.1 ground has no equation
-    patRow(self, node, bits);
-    if (col) |k| linTerm(self, node, k, switch (sign) {
+    patRow(self, node, deps);
+    if (col) |k| try linTerm(self, node, k, switch (sign) {
         .add => 1,
         .sub => -1,
     });
@@ -1048,34 +1072,61 @@ fn rowEnd(self: *Gen) Error!void {
 }
 
 /// Records that row `node` of the half being emitted (`jac.react`) gained a
-/// term whose derivative lives in `bits`, and that the row is written at all
+/// term whose derivative lives in `deps`, and that the row is written at all
 /// (`rows`). Ground has no row. Every `res[...]` writer calls this.
-fn patRow(self: *Gen, node: u32, bits: u64) void {
-    if (node == Lower.ground) return;
-    if (self.jac.pat[@intFromBool(self.jac.react)].len == 0) return;
-    self.jac.pat[@intFromBool(self.jac.react)][node] |= bits;
+fn patRow(self: *Gen, node: u32, deps: []const u64) void {
+    if (node == Lower.ground or !self.jac.on) return;
+    const half = self.jac.pat[@intFromBool(self.jac.react)];
+    if (half.len != 0) gen_mask.orIn(rowOf(self, half, node), deps);
     // A superset: a stamp of `x[u]` itself (an `ib`) is marked when the
     // contribution reaches `u` through an operator too.
-    self.jac.dpat[node] |= self.jac.cur_dyn & bits;
-    self.jac.rows[@intFromBool(self.jac.react)] |= uBit(node);
+    if (self.jac.cur_dyn.len != 0 and self.jac.dpat.len != 0) for (rowOf(self, self.jac.dpat, node), self.jac.cur_dyn, deps) |*d, c, b| {
+        d.* |= c & b;
+    };
+    gen_mask.set(self.jac.rows[@intFromBool(self.jac.react)], node);
+}
+
+/// Row `r` of a per-row mask table (`jac.pat`, `jac.dpat`): `Gen.mw` words.
+fn rowOf(self: *const Gen, table: anytype, r: u32) @TypeOf(table) {
+    return table[r * self.mw ..][0..self.mw];
+}
+
+/// Returns, from the arena, the mask of unknowns `us` (ground skipped,
+/// `none_u32` every unknown) ORed with `deps`.
+pub fn bits(self: *const Gen, us: []const u32, deps: []const []const u64) Error![]const u64 {
+    const m = try gen_mask.zero(self.arena, self.mw);
+    for (us) |u| {
+        if (u == Lower.ground) continue;
+        if (u == none_u32) {
+            for (0..self.names.n_u) |k| gen_mask.set(m, @intCast(k));
+            continue;
+        }
+        gen_mask.set(m, u);
+    }
+    for (deps) |d| gen_mask.orIn(m, d);
+    return m;
 }
 
 /// Records that row `row` of the half being emitted gains `k · x[col]`. The
 /// `lin*` writers mirror the `res[...]` text beside them as `patRow` does:
 /// only a ±1 on an unknown is recorded; every other term is a core value
 /// whose lanes are already marked.
-fn linTerm(self: *Gen, row: u32, col: u32, k: f64) void {
+fn linTerm(self: *Gen, row: u32, col: u32, k: f64) Error!void {
     if (row == Lower.ground or col == Lower.ground) return;
     const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
-    l[row * self.names.n_u + col] += k;
+    for (l[row].items) |*t| if (t.col == col) {
+        t.k += k;
+        return;
+    };
+    try l[row].append(self.arena, .{ .col = col, .k = 0 + k });
 }
 
 /// Records that row `row` is assigned a term with no recorded unknown in it.
 fn linClear(self: *Gen, row: u32) void {
     const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
-    @memset(l[row * self.names.n_u ..][0..self.names.n_u], 0);
+    l[row].clearRetainingCapacity();
     // Its guarded constants go with the assignment too.
     if (self.jac.react) return;
     var k: usize = 0;
@@ -1086,10 +1137,10 @@ fn linClear(self: *Gen, row: u32) void {
 
 /// Records that row `row` is assigned `V(hi) − V(lo) − <core value>`: §5.6's branch
 /// relation, and §5.4.2.1's zero-potential flow probe.
-fn linBranch(self: *Gen, row: u32, hi: u32, lo: u32) void {
+fn linBranch(self: *Gen, row: u32, hi: u32, lo: u32) Error!void {
     linClear(self, row);
-    linTerm(self, row, hi, 1);
-    linTerm(self, row, lo, -1);
+    try linTerm(self, row, hi, 1);
+    try linTerm(self, row, lo, -1);
 }
 
 /// Records §5.4.3 `res[u] = x[u] − res[port]` (eval) or `−res[port]` (q):
@@ -1097,9 +1148,10 @@ fn linBranch(self: *Gen, row: u32, hi: u32, lo: u32) void {
 fn linPortProbe(self: *Gen, u: u32, port: u32, with_x: bool) Error!void {
     const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
-    const n = self.names.n_u;
-    for (0..n) |c| l[u * n + c] = -l[port * n + c];
-    if (with_x) l[u * n + u] += 1;
+    assert(u != port);
+    l[u].clearRetainingCapacity();
+    for (l[port].items) |t| try l[u].append(self.arena, .{ .col = t.col, .k = -t.k });
+    if (with_x) try linTerm(self, u, u, 1);
     // The port row's guarded constants are copied too, under the same guard
     // (`emitSwitchRow`): they are eval-only, and each is appended once per row.
     if (self.jac.react) return;
@@ -1116,8 +1168,8 @@ fn linPortProbe(self: *Gen, u: u32, port: u32, with_x: bool) Error!void {
 fn linDynamic(self: *Gen, row: u32) void {
     const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
-    for (l[row * self.names.n_u ..][0..self.names.n_u], 0..) |k, c| {
-        if (k != 0) self.jac.deriv_reads |= uBit(@intCast(c));
+    for (l[row].items) |t| {
+        if (t.k != 0) gen_mask.set(self.jac.deriv_reads, t.col);
     }
 }
 
@@ -1128,24 +1180,25 @@ fn linDynamic(self: *Gen, row: u32) void {
 /// core or unit, `ddx` marks `ddx_reads`, and the dispatcher marks every
 /// unknown under a runtime-selected row. An unmarked unknown is read only in
 /// the dispatcher's unconditional ±1 stamps, which `lin` replays exactly.
-/// Omitted above 64 unknowns, where the defaults (every lane) are correct.
-pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
-    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.jac.deriv_reads, self.jac.ddx_reads, limit_writes, .{ self.jac.lin[0], self.jac.lin[1] }, self.jac.guarded.items) orelse return;
+pub fn emitDerivReads(self: *Gen, limit_writes: []const u64) Error!void {
+    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.jac.deriv_reads, self.jac.ddx_reads, limit_writes, .{ self.jac.lin[0], self.jac.lin[1] }, self.jac.guarded.items);
+    var tb: [16]u8 = undefined;
+    const ty = gen_mask.typeName(&tb, self.names.n_u);
     try self.w(
         \\/// Unknowns whose derivative lane `eval`/`q` read. Every other
         \\/// column's partials are constants, listed in `jac_const`; see
         \\/// `contract.derivReads`.
-        \\pub const deriv_reads: u64 = 0x{x:0>16};
+        \\pub const deriv_reads: {s} = 0x{f};
         \\
         \\/// The lanes §4.5.14 `ddx` reads by unknown index through `ddxAt`;
         \\/// see `contract.ddxReads`.
-        \\pub const ddx_reads: u64 = 0x{x:0>16};
+        \\pub const ddx_reads: {s} = 0x{f};
         \\
         \\/// The exact constant partials of the columns outside `deriv_reads`:
         \\/// `g` of `eval`, `c` of `q`. Sorted by (row, col); absent is 0.
         \\pub const jac_const = [_]contract.JacConst(U){{
         \\
-    , .{ jc.mask, self.jac.ddx_reads });
+    , .{ ty, gen_mask.hex(jc.mask, true), ty, gen_mask.hex(self.jac.ddx_reads, true) });
     for (jc.entries) |e| {
         try self.w("    .{{ .row = .{s}, .col = .{s}, .g = {s}, .c = {s}", .{
             self.names.u_names[e.row], self.names.u_names[e.col], try gen_file.fmtF64(self, e.g), try gen_file.fmtF64(self, e.c),
@@ -1157,47 +1210,32 @@ pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
     try family.emitLaneMasks(self, jc.mask);
 }
 
-/// Returns the column bit of unknown `u`. Above 63 it returns every bit, the
-/// dense fallback `emitPattern` also takes.
-pub fn uBit(u: u32) u64 {
-    return if (u >= 64) std.math.maxInt(u64) else @as(u64, 1) << @intCast(u);
-}
-
-/// Same, for a node that may be ground (no unknown, no column).
-fn nodeBit(node: u32) u64 {
-    return if (node == Lower.ground) 0 else uBit(node);
-}
-
-/// The columns accumulated so far on row `u` of the half being emitted.
-fn patOf(self: *const Gen, u: u32) u64 {
+/// The columns accumulated so far on row `u` of the half being emitted;
+/// every column before the dispatchers allocate the patterns.
+fn patOf(self: *const Gen, u: u32) Error![]const u64 {
     const half = self.jac.pat[@intFromBool(self.jac.react)];
-    return if (half.len == 0) std.math.maxInt(u64) else half[u];
+    return if (half.len == 0) bits(self, &.{none_u32}, &.{}) else rowOf(self, half, u);
 }
 
 /// Returns the columns contribution `i`'s rows reach through a
 /// frequency-dependent operator: its value's, and a §5.6.5 switch partner's,
-/// whose value the same row selects (`switchRowDeps`).
-fn contribDyn(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
-    if (self.an.acdyn.len == 0) return 0;
-    var acc = self.an.acDynDeps(if (react) c.react_val else c.resist_val);
-    if (plan_topo.switchFlowOf(self.input(), i)) |j| {
-        const f = self.lowered.contributions.items[j];
-        acc |= self.an.acDynDeps(if (react) f.react_val else f.resist_val);
-    }
-    return acc;
+/// whose value the same row selects (`switchRowDeps`). Empty for none.
+fn contribDyn(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) Error![]const u64 {
+    if (self.acdyn.len == 0) return &.{};
+    const own = family.acDyn(self, if (react) c.react_val else c.resist_val);
+    const j = plan_topo.switchFlowOf(self.input(), i) orelse return own;
+    const f = self.lowered.contributions.items[j];
+    return bits(self, &.{}, &.{ own, family.acDyn(self, if (react) f.react_val else f.resist_val) });
 }
 
 /// Returns the columns of the row `emitSwitchRow` emits. The `S.sel` arm is
 /// chosen at run time, so the row carries every arm's columns: its own
 /// value, the switch partner's, and `ib`.
-fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
-    var acc = uBit(self.names.branch_u[i]) |
-        self.an.unknownDeps(if (react) c.react_val else c.resist_val);
-    if (plan_topo.switchFlowOf(self.input(), i)) |j| {
-        const f = self.lowered.contributions.items[j];
-        acc |= self.an.unknownDeps(if (react) f.react_val else f.resist_val);
-    }
-    return acc;
+fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) Error![]const u64 {
+    const own = family.mask(self, if (react) c.react_val else c.resist_val);
+    const j = plan_topo.switchFlowOf(self.input(), i) orelse return bits(self, &.{self.names.branch_u[i]}, &.{own});
+    const f = self.lowered.contributions.items[j];
+    return bits(self, &.{self.names.branch_u[i]}, &.{ own, family.mask(self, if (react) f.react_val else f.resist_val) });
 }
 
 fn nodeVoltage(self: *Gen, node: u32) Error!void {
@@ -1211,12 +1249,4 @@ pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
     if (v == .f_zero) return null;
     const k = self.core.lo_idx[@backingInt(v)];
     return if (k == none_u32) null else k;
-}
-
-test uBit {
-    try std.testing.expectEqual(@as(u64, 1), uBit(0));
-    try std.testing.expectEqual(@as(u64, 1) << 63, uBit(63));
-    // Past the mask, the dense fallback: every column.
-    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), uBit(64));
-    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), uBit(none_u32));
 }

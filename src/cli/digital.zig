@@ -236,20 +236,16 @@ fn emitDevice(
         const wd = f.work_dir orelse if (f.osdi) ".zig-cache/vera-tb" else return missing(err, "--emit-so", "--work-dir DIR");
         const dyn = f.dyn orelse return missing(err, "--emit-so", "--dyn PATH");
         const tree = std.fs.path.dirname(std.fs.path.dirname(f.contract.?) orelse ".") orelse ".";
-        const at = struct {
-            fn path(a: std.mem.Allocator, r: []const u8, rel: []const u8) ![]const u8 {
-                return std.fs.path.join(a, &.{ r, rel });
-            }
-        };
+        const join = std.fs.path.join;
         // build.zig's `module_specs` rows for `sim` and what it imports.
         const modules = [_]vera.orchestrator.Module{
             .{ .name = "contract", .root = f.contract.? },
             .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
-            .{ .name = "sim", .root = try at.path(arena, tree, "src/sim/root.zig"), .deps = &.{ "contract", "base", "diag", "frontend", "kernels" } },
-            .{ .name = "base", .root = try at.path(arena, tree, "lib/base/root.zig") },
-            .{ .name = "diag", .root = try at.path(arena, tree, "lib/diag.zig") },
-            .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{ "base", "diag", "kernels" } },
-            .{ .name = "kernels", .root = try at.path(arena, tree, "lib/kernels/root.zig"), .deps = &.{"contract"} },
+            .{ .name = "sim", .root = try join(arena, &.{ tree, "src/sim/root.zig" }), .deps = &.{ "contract", "base", "diag", "frontend", "kernels" } },
+            .{ .name = "base", .root = try join(arena, &.{ tree, "lib/base/root.zig" }) },
+            .{ .name = "diag", .root = try join(arena, &.{ tree, "lib/diag.zig" }) },
+            .{ .name = "frontend", .root = try join(arena, &.{ tree, "lib/frontend/root.zig" }), .deps = &.{ "base", "diag", "kernels" } },
+            .{ .name = "kernels", .root = try join(arena, &.{ tree, "lib/kernels/root.zig" }), .deps = &.{"contract"} },
         };
         var o: vera.orchestrator.Options = .{
             .work_dir = wd,
@@ -319,7 +315,7 @@ const device_check =
     \\const contract = @import("contract");
     \\const D = @import("device");
     \\const n_u = @typeInfo(D.U).@"enum".field_names.len;
-    \\const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+    \\const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
     \\comptime {
     \\    contract.validate(D);
     \\    contract.validateHost(struct {}, D);
@@ -399,11 +395,6 @@ fn libraries(
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Tests, over real files in a temporary directory: `libraries` resolves real
-// paths, and a device emit reads its source back through `libraries`.
-// ---------------------------------------------------------------------------
-
 /// The compiler cache the prebuilt digital engine lives in, shared by every
 /// work directory: `vera-engine` in Zig's global cache directory
 /// (`ZIG_GLOBAL_CACHE_DIR`, else `XDG_CACHE_HOME/zig`, else
@@ -422,6 +413,11 @@ fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, wo
         return std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
     return std.fs.path.join(arena, &.{ global, "vera-engine" });
 }
+
+// ---------------------------------------------------------------------------
+// Tests, over real files in a temporary directory: `libraries` resolves real
+// paths, and a device emit reads its source back through `libraries`.
+// ---------------------------------------------------------------------------
 
 const testing = std.testing;
 

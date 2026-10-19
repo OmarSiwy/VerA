@@ -10,8 +10,8 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &.{0}, .{ .dense = true });
-const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &.{0}, .{});
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 fn sim(initial: bool) contract.SimState {
     return .{ .t = 0, .dt = 0, .kind = .dc, .initial_step = initial, .analog_initial = initial };
@@ -30,7 +30,7 @@ test "IEEE 1364 §5.4 a wide reg an analog initial block assigns is held whole" 
     var m: D.Model = .{};
     var inst: D.Instance = .{};
     var st = D.initState(&m, &inst);
-    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), &m);
+    if (@hasDecl(D, "setup")) D.setup(S0, &m);
     if (@hasDecl(D, "setupInstance")) D.setupInstance(&m, &inst);
     const xv: [n_u]f64 = @splat(0.0);
     _ = D.eval(S, &xv, &m, &inst, sim(true));

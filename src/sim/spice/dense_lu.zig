@@ -34,7 +34,10 @@ const singular_tol: f64 = std.math.floatEps(f64) * std.math.floatEps(f64);
 /// `error.Singular` when a pivot falls below eps^2, with `a` and `x`
 /// partial. Asserts that `a` holds n² values and `b`, `x` n each. O(n³).
 pub fn factorizeSolveNeg(n: usize, a: []f64, b: []const f64, x: []f64) Error!void {
-    for (x[0..n], b[0..n]) |*xi, bi| xi.* = -1 * bi;
+    std.debug.assert(a.len >= n * n);
+    std.debug.assert(b.len >= n);
+    std.debug.assert(x.len >= n);
+    for (x[0..n], b[0..n]) |*xi, bi| xi.* = -bi;
     if (n >= blocked_min) {
         try eliminateBlocked(n, a, &.{}, x, .solve);
         return backSubstitute(n, a, x);
@@ -44,7 +47,7 @@ pub fn factorizeSolveNeg(n: usize, a: []f64, b: []const f64, x: []f64) Error!voi
         const max_row = pivotRow(n, a, k);
         if (@abs(a[max_row * n + k]) < singular_tol) return error.Singular;
         if (max_row != k) {
-            swapRowsSimd(a, n, k, max_row);
+            swapRows(a, n, k, max_row);
             std.mem.swap(f64, &x[k], &x[max_row]);
         }
         const pivot = a[k * n + k];
@@ -53,7 +56,7 @@ pub fn factorizeSolveNeg(n: usize, a: []f64, b: []const f64, x: []f64) Error!voi
         for (k + 1..n) |ii| {
             const factor = a[ii * n + k] * inv_pivot;
             const row_i = a[ii * n ..][0..n];
-            elimRowSimd(row_i, row_k, factor, k + 1, n);
+            elimRow(row_i, row_k, factor, k + 1, n);
             x[ii] -= factor * x[k];
         }
     }
@@ -67,11 +70,13 @@ pub fn factorizeSolveNeg(n: usize, a: []f64, b: []const f64, x: []f64) Error!voi
 /// with `a` and `piv` partial. Asserts that `a` holds n² values and `piv`
 /// n. O(n³).
 pub fn factorize(n: usize, a: []f64, piv: []u32) Error!void {
+    std.debug.assert(a.len >= n * n);
+    std.debug.assert(piv.len >= n);
     if (n >= blocked_min) return eliminateBlocked(n, a, piv, &.{}, .factor);
     for (0..n) |k| {
         const max_row = pivotRow(n, a, k);
         piv[k] = @intCast(max_row);
-        if (max_row != k) swapRowsSimd(a, n, k, max_row);
+        if (max_row != k) swapRows(a, n, k, max_row);
 
         const pivot = a[k * n + k];
         if (@abs(pivot) < singular_tol) return error.Singular;
@@ -81,7 +86,7 @@ pub fn factorize(n: usize, a: []f64, piv: []u32) Error!void {
             const factor = a[ii * n + k] * inv_pivot;
             a[ii * n + k] = factor;
             const row_i = a[ii * n ..][0..n];
-            elimRowSimd(row_i, row_k, factor, k + 1, n);
+            elimRow(row_i, row_k, factor, k + 1, n);
         }
     }
 }
@@ -91,6 +96,8 @@ pub fn factorize(n: usize, a: []f64, piv: []u32) Error!void {
 /// alias. Asserts that `lu` holds n² values and `piv`, `b`, `x` n each.
 /// O(n²).
 pub fn solveFactoredT(n: usize, lu: []const f64, piv: []const u32, b: []const f64, x: []f64) void {
+    std.debug.assert(lu.len >= n * n);
+    std.debug.assert(piv.len >= n);
     if (x.ptr != b.ptr) @memcpy(x[0..n], b[0..n]);
 
     for (0..n) |i| {
@@ -112,7 +119,7 @@ pub fn solveFactoredT(n: usize, lu: []const f64, piv: []const u32, b: []const f6
 
 /// Writes the stacked-real admittance [G, -ωC; ωC, G] of G + jωC into `a`
 /// (row-major, stride nn = 2n) from n x n row-major G and C. Asserts that
-/// `a` holds nn² values.
+/// nn = 2n and that `a` holds nn² values.
 pub fn buildComplexAdmittance(
     n: usize,
     nn: usize,
@@ -121,56 +128,29 @@ pub fn buildComplexAdmittance(
     omega: f64,
     a: []f64,
 ) void {
-    const neg_omega = -omega;
-    const omega_v: V = @splat(omega);
-    const neg_omega_v: V = @splat(neg_omega);
+    std.debug.assert(nn == 2 * n);
+    std.debug.assert(a.len >= nn * nn);
     for (0..n) |row| {
         const g_row = g_dense[row * n ..][0..n];
-        const c_row = c_mat[row * n ..][0..n];
-        const a_tl = a[row * nn ..];
-        const a_bl = a[(n + row) * nn ..];
-
-        var col: usize = 0;
-        while (col + W <= n) : (col += W) {
-            const gv: V = g_row[col..][0..W].*;
-            const cv: V = c_row[col..][0..W].*;
-
-            const p_tl: *[W]f64 = a_tl[col..][0..W];
-            p_tl.* = gv;
-            const p_tr: *[W]f64 = a_tl[n + col ..][0..W];
-            p_tr.* = neg_omega_v * cv;
-            const p_bl: *[W]f64 = a_bl[col..][0..W];
-            p_bl.* = omega_v * cv;
-            const p_br: *[W]f64 = a_bl[n + col ..][0..W];
-            p_br.* = gv;
-        }
-        while (col < n) : (col += 1) {
-            const g_val = g_row[col];
-            const c_val = c_row[col];
-            a_tl[col] = g_val;
-            a_tl[n + col] = neg_omega * c_val;
-            a_bl[col] = omega * c_val;
-            a_bl[n + col] = g_val;
+        const a_tl = a[row * nn ..][0..nn];
+        const a_bl = a[(n + row) * nn ..][0..nn];
+        @memcpy(a_tl[0..n], g_row);
+        @memcpy(a_bl[n..], g_row);
+        for (c_mat[row * n ..][0..n], a_tl[n..], a_bl[0..n]) |c, *tr, *bl| {
+            tr.* = -omega * c;
+            bl.* = omega * c;
         }
     }
 }
 
-/// x[i] - sum over j in [start, end) of lu[j*n + i] * x[j]: W-lane
-/// partial sums, one reduce, then the scalar tail.
+/// x[i] - sum over j in [start, end) of lu[j*n + i] * x[j], in index
+/// order.
 inline fn subtractColumnDot(n: usize, lu: []const f64, x: []const f64, i: usize, start: usize, end: usize) f64 {
-    var acc: V = @splat(0.0);
-    var j = start;
-    // ponytail: strided column gather; keep a transposed factor copy
-    // if this ever shows up in a profile.
-    while (j + W <= end) : (j += W) {
-        var col_vals: [W]f64 = undefined;
-        inline for (0..W) |w| col_vals[w] = lu[(j + w) * n + i];
-        const cv: V = col_vals;
-        const xv: V = x[j..][0..W].*;
-        acc += cv * xv;
-    }
-    var sum = x[i] - @reduce(.Add, acc);
-    while (j < end) : (j += 1) sum -= lu[j * n + i] * x[j];
+    // ponytail: a strided scalar walk; it beats a W-lane gather up to
+    // n = 32 and loses about 25% from n = 64. Keep a transposed factor copy
+    // if large noise systems show up in a profile.
+    var sum = x[i];
+    for (start..end) |j| sum -= lu[j * n + i] * x[j];
     return sum;
 }
 
@@ -198,7 +178,7 @@ fn eliminateBlocked(n: usize, a: []f64, piv: []u32, x: []f64, comptime mode: Mod
         // updates of rows k0..k-1, which are final by then.
         for (k0 + 1..kb) |k| {
             const row = a[k * n ..][0..n];
-            for (k0..k) |kk| elimRowSimd(row, a[kk * n ..][0..n], row[kk], kb, n);
+            for (k0..k) |kk| elimRow(row, a[kk * n ..][0..n], row[kk], kb, n);
         }
         for (kb..n) |i| panelUpdate(a[i * n ..][0..n], a, n, k0, kb);
     }
@@ -212,7 +192,7 @@ inline fn panelStep(n: usize, a: []f64, piv: []u32, x: []f64, k: usize, kb: usiz
     if (mode == .factor) piv[k] = @intCast(max_row);
     if (@abs(a[max_row * n + k]) < singular_tol) return false;
     if (max_row != k) {
-        swapRowsSimd(a, n, k, max_row);
+        swapRows(a, n, k, max_row);
         if (mode == .solve) std.mem.swap(f64, &x[k], &x[max_row]);
     }
     const inv_pivot = @as(f64, 1.0) / a[k * n + k];
@@ -220,7 +200,7 @@ inline fn panelStep(n: usize, a: []f64, piv: []u32, x: []f64, k: usize, kb: usiz
     for (k + 1..n) |ii| {
         const factor = a[ii * n + k] * inv_pivot;
         a[ii * n + k] = factor;
-        elimRowSimd(a[ii * n ..][0..n], row_k, factor, k + 1, kb);
+        elimRow(a[ii * n ..][0..n], row_k, factor, k + 1, kb);
         if (mode == .solve) x[ii] -= factor * x[k];
     }
     return true;
@@ -228,8 +208,10 @@ inline fn panelStep(n: usize, a: []f64, piv: []u32, x: []f64, k: usize, kb: usiz
 
 /// row[kb..n] -= row[kk] * a[kk, kb..n] for kk in [k0, kb), term by
 /// term in increasing kk, which rounds like `kb - k0` separate
-/// `elimRowSimd` calls. Four independent vector chains hide the
-/// subtract latency.
+/// `elimRow` calls. Four independent vector chains hide the
+/// subtract latency and keep the row in registers across the panel: the
+/// plain form, one `elimRow` per kk, measured 30% slower from n = 40
+/// (the vectorizer does not vectorize the outer j loop).
 inline fn panelUpdate(row: []f64, a: []const f64, n: usize, k0: usize, kb: usize) void {
     var j = kb;
     while (j + 4 * W <= n) : (j += 4 * W) {
@@ -276,40 +258,27 @@ fn pivotRow(n: usize, a: []const f64, k: usize) usize {
     return max_row;
 }
 
-/// U x = y in place: per row, W-lane partial sums, one reduce, the
-/// scalar tail, then the divide.
+/// U x = y in place, each row's sum in index order.
 fn backSubstitute(n: usize, a: []const f64, x: []f64) void {
     var ki: usize = n;
     while (ki > 0) {
         ki -= 1;
         const row = a[ki * n ..][0..n];
-        var acc: V = @splat(@as(f64, 0));
-        var j = ki + 1;
-        while (j + W <= n) : (j += W) {
-            const av: V = row[j..][0..W].*;
-            const xv: V = x[j..][0..W].*;
-            acc += av * xv;
-        }
-        var sum = x[ki] - @reduce(.Add, acc);
-        while (j < n) : (j += 1) sum -= row[j] * x[j];
+        var sum = x[ki];
+        for (row[ki + 1 ..], x[ki + 1 .. n]) |av, xv| sum -= av * xv;
         x[ki] = sum / row[ki];
     }
 }
 
 /// row_i[start..n] -= factor * row_k[start..n].
-inline fn elimRowSimd(row_i: []f64, row_k: []const f64, factor: f64, start: usize, n: usize) void {
-    const fv: V = @splat(factor);
-    var j = start;
-    while (j + W <= n) : (j += W) {
-        const kv: V = row_k[j..][0..W].*;
-        const p: *[W]f64 = row_i[j..][0..W];
-        const cur: V = p.*;
-        p.* = cur - fv * kv;
-    }
-    while (j < n) : (j += 1) row_i[j] -= factor * row_k[j];
+inline fn elimRow(row_i: []f64, row_k: []const f64, factor: f64, start: usize, n: usize) void {
+    for (row_i[start..n], row_k[start..n]) |*a, b| a.* -= factor * b;
 }
 
-fn swapRowsSimd(a: []f64, n: usize, r1: usize, r2: usize) void {
+/// Swaps rows r1 and r2 of the n-wide matrix `a`. Explicit vectors: the
+/// 0.18 vectorizer leaves the plain two-way swap scalar (1.3 against 0.8
+/// cycles/element at n = 16..1024, x86_64_v3).
+fn swapRows(a: []f64, n: usize, r1: usize, r2: usize) void {
     var j: usize = 0;
     while (j + W <= n) : (j += W) {
         const p1: *[W]f64 = a[r1 * n + j ..][0..W];
@@ -403,6 +372,15 @@ test "factorizeSolveNeg and factorize refuse a singular matrix, and n = 0 is a n
     try factorize(0, &.{}, &.{});
 }
 
+test "a NaN right-hand side is no singular matrix: it reaches x" {
+    // The Newton gates, not the factor, refuse a NaN step.
+    var a = [_]f64{ 2, 1, 1, 3 };
+    var x: [2]f64 = undefined;
+    try factorizeSolveNeg(2, &a, &.{ std.math.nan(f64), 1 }, &x);
+    try testing.expect(std.math.isNan(x[0]));
+    try testing.expect(std.math.isNan(x[1]));
+}
+
 test "factorizeSolveNeg's residual is backward-stable at every size, blocked or not" {
     var prng: std.Random.DefaultPrng = .init(0x5eed);
     const rnd = prng.random();
@@ -478,7 +456,7 @@ test buildComplexAdmittance {
     }
     var a: [18 * 18]f64 = undefined;
     const omega = 2.5;
-    for (1..10) |n| {
+    for (0..10) |n| {
         const nn = 2 * n;
         buildComplexAdmittance(n, nn, g[0 .. n * n], c[0 .. n * n], omega, a[0 .. nn * nn]);
         for (0..n) |r| for (0..n) |col| {

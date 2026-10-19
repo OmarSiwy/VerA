@@ -65,9 +65,13 @@ pub const Bag = struct {
     suppressed: u32 = 0,
     /// Dropped because an identical (code, file, span.start) was already present.
     deduped: u32 = 0,
-    /// Kept rows by rendered severity; a `--deny`ed warning counts as an error.
+    /// Collected diagnostics by rendered severity, kept or dropped at the cap
+    /// (not deduped or allowed ones); a `--deny`ed warning counts as an error.
     err_count: u32 = 0,
     warn_count: u32 = 0,
+    /// The `.run` errors among `err_count`: raised after the design compiled,
+    /// so `render`'s "could not compile" summary leaves them out.
+    run_err_count: u32 = 0,
 
     /// Allocates nothing; every table grows in `arena` on first use, so a
     /// compilation that reports nothing costs no memory here.
@@ -156,7 +160,7 @@ pub const Bag = struct {
     /// compilation unit before any `include. Panics past 65,536 files
     /// (`FileId` is a u16).
     pub fn addFile(self: *Bag, name: []const u8, text: []const u8) Allocator.Error!diag_location.FileId {
-        const id: diag_location.FileId = @fromBackingInt(@intCast(@as(u16, @intCast(self.files.items.len))));
+        const id: diag_location.FileId = @fromBackingInt(@as(u16, @intCast(self.files.items.len)));
         try self.files.append(self.arena, .{ .name = name, .text = text });
         return id;
     }
@@ -210,7 +214,8 @@ pub const Bag = struct {
     }
 
     /// Span-currency (stripped) offset → offset in `sourceText`. Identity when
-    /// nothing was stripped from `id`.
+    /// nothing was stripped from `id`; saturates at `maxInt(u32)`, so an
+    /// offset past the text maps past it rather than overflowing.
     pub fn toSourceOffset(self: *const Bag, id: diag_location.FileId, off: u32) u32 {
         const marks = self.fileMarks(id);
         if (marks.len == 0 or off < marks[0].out) return off;
@@ -220,7 +225,7 @@ pub const Bag = struct {
                 return m.out <= o;
             }
         }.f) - 1;
-        return marks[lo].src + (off - marks[lo].out);
+        return marks[lo].src +| (off - marks[lo].out);
     }
 
     /// The no-include, no-macro case: spans index straight into `text`.
@@ -236,9 +241,9 @@ pub const Bag = struct {
         return self.map.resolve(span.start);
     }
 
-    /// Did anything at `deny`/`forbid` level land? This, not `count()`, is
-    /// what decides whether the compilation failed — a bag holding only
-    /// warnings is a successful compilation.
+    /// Did anything at `deny`/`forbid` level land, even past the cap? This,
+    /// not `count()`, is what decides whether the compilation failed — a bag
+    /// holding only warnings is a successful compilation.
     pub fn failed(self: *const Bag) bool {
         return self.err_count != 0;
     }
@@ -489,20 +494,19 @@ pub const Builder = struct {
         self.n_notes += 1;
     }
 
-    /// Commits the diagnostic. Honours the lint level, the cap and the dedupe
-    /// set; a dropped diagnostic is counted, never silent. Returns
+    /// Commits the diagnostic. Honours the lint level, the dedupe set and the
+    /// cap; a dropped diagnostic is counted, never silent. Returns
     /// `OutOfMemory` if any earlier builder call failed to allocate.
     pub fn emit(self: *Builder) Allocator.Error!void {
         if (self.oom) return error.OutOfMemory;
         const bag = self.bag;
 
-        const level = bag.levels.get(self.code);
-        if (level == .allow) return;
-
-        if (bag.records.items.len >= max_entries) {
-            bag.suppressed += 1;
-            return;
-        }
+        const severity: Severity = switch (bag.levels.get(self.code)) {
+            .allow => return,
+            .warn => severityOf(self.code),
+            // `--deny=W0650` promotes the warning to a hard error.
+            .deny, .forbid => .err,
+        };
 
         // `file` is in the key because a preprocessor span is file-local.
         // ponytail: linear scan, bounded by `max_entries`.
@@ -513,12 +517,19 @@ pub const Builder = struct {
             }
         }
 
-        const severity: Severity = switch (level) {
-            .allow => unreachable,
-            .warn => severityOf(self.code),
-            // `--deny=W0650` promotes the warning to a hard error.
-            .deny, .forbid => .err,
-        };
+        // Counted before the cap: an error the cap drops still fails the
+        // compilation and still counts in the summary.
+        switch (severity) {
+            .err => {
+                bag.err_count += 1;
+                if (self.stage == .run) bag.run_err_count += 1;
+            },
+            .warning => bag.warn_count += 1,
+        }
+        if (bag.records.items.len >= max_entries) {
+            bag.suppressed += 1;
+            return;
+        }
 
         // The cap above bounds the rows, so the first one reserves them all
         // at once instead of growing through copies the arena keeps. A no-op
@@ -537,10 +548,5 @@ pub const Builder = struct {
             .labels = self.labels,
             .notes = self.notes,
         });
-
-        switch (severity) {
-            .err => bag.err_count += 1,
-            .warning => bag.warn_count += 1,
-        }
     }
 };

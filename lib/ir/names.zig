@@ -12,14 +12,13 @@
 //! the `Model` fields of a §7.3 discrete input (`snapField`, `wordField`,
 //! `xzField`), which lowering declares and the testbench writes, and the
 //! §5.10 held `Instance` field (`heldField`), which codegen declares and the
-//! testbench reads. Clauses: §1.3.1.1, §2.7,
-//! §2.8.1, §4.4, §4.5, §5.6, §5.10, §7.3.1, §7.3.2, §8.5.3.6, §9.17.
+//! testbench reads.
 //!
-//! LRM clauses this file's code cites: §2.8, §3.6.1.2, §5.6.7, §9.4.
+//! LRM clauses this file's code cites: §1.3.1.1, §2.8.1, §3.6.1.2, §4.4,
+//! §4.5, §5.6, §5.6.7, §5.10, §7.3.1, §7.3.2, §8.5.3.6, §9.4, §9.17.
 
 const std = @import("std");
 const Mir = @import("mir.zig");
-const Lower = @import("lowered.zig");
 const Lowered = @import("lowered.zig");
 const opdb = @import("op.zig");
 
@@ -118,7 +117,8 @@ pub fn sanitize(buf: []u8, name: []const u8) error{NoSpaceLeft}![]const u8 {
 }
 
 /// `sanitize` into a buffer from `a` sized for `name` (3n + 1 bytes), so a
-/// name of any length fits (VAMS 2.8, VD-054; #29).
+/// name of any length fits (VAMS 2.8, VD-054; #29). The result is a prefix of
+/// that buffer, so `a.free` cannot take it: `a` should be an arena.
 pub fn sanitizeAlloc(a: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![]const u8 {
     return sanitize(try a.alloc(u8, 3 * name.len + 1), name) catch unreachable;
 }
@@ -165,7 +165,8 @@ pub fn xzField(a: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![
 /// excludes it (a held variable is not an emitted source unit), and no
 /// enumerated unit can spell that segment, so the two name spaces cannot
 /// meet. A leaf is injective and a module variable's name is unique in its
-/// scope, so the whole key is.
+/// scope, so the whole key is. Leaves its two sanitized leaves allocated in
+/// `a` beside the result: `a` should be an arena.
 pub fn heldField(a: std.mem.Allocator, module: []const u8, name: []const u8) std.mem.Allocator.Error![]u8 {
     return a.print("{s}__held__{s}", .{ try sanitizeAlloc(a, module), try sanitizeAlloc(a, name) });
 }
@@ -199,7 +200,8 @@ pub fn unitName(
 }
 
 /// `unitName` into a buffer from `a` sized for this name, so a module name
-/// of any length fits (VAMS 2.8, VD-054; #29).
+/// of any length fits (VAMS 2.8, VD-054; #29). The result is a prefix of
+/// that buffer, so `a.free` cannot take it: `a` should be an arena.
 pub fn unitNameAlloc(a: std.mem.Allocator, module: []const u8, unit: Unit) std.mem.Allocator.Error![]const u8 {
     // The module at 3x, the role and target between `__`s, and a u32's digits.
     const n = 3 * module.len + 2 + @tagName(unit.role).len + 2 + unit.target.len + 2 + 10;
@@ -207,7 +209,7 @@ pub fn unitNameAlloc(a: std.mem.Allocator, module: []const u8, unit: Unit) std.m
 }
 
 /// Writes §5.6 contribution `c`'s unit target, `V_<hi>_<lo>` or `I_<hi>_<lo>`.
-fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.Writer.Error!void {
+fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: Lowered.Contribution) std.Io.Writer.Error!void {
     // §4.4: the two access roles are closed even when a user nature renames
     // the access identifier (§3.6.1.2), so V/I is the canonical spelling.
     try w.writeAll(switch (c.access) {
@@ -218,7 +220,7 @@ fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.
         try w.writeByte('_');
         // §1.3.1.1 ground is not a `nodes` row. "0" cannot collide: a real
         // net's leading digit is escaped.
-        if (n == Lower.ground) try w.writeByte('0') else try sanitizeInto(w, lowered.nodeName(n));
+        if (n == Lowered.ground) try w.writeByte('0') else try sanitizeInto(w, lowered.nodeName(n));
     }
 }
 
@@ -345,7 +347,7 @@ test "inserting a contribution for a different target renames nothing" {
 
     // I(drain,source) and V(gate,gnd)
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
-    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lower.ground });
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lowered.ground });
 
     var before: std.ArrayList([]const u8) = .empty;
     try names(&f, &before);
@@ -559,7 +561,7 @@ test "contribution targets: ground is 0, a net is sanitized, a `_`-join collisio
 
     // I(<net "0">) and V(a_b, c), V(a, b_c): the last two join to the same
     // `V_a_b_c`, and `disambig` keeps their names apart.
-    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = Lower.ground });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = Lowered.ground });
     try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = 2 });
     try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 3, .lo = 4 });
 
@@ -571,4 +573,38 @@ test "contribution targets: ground is 0, a net is sanitized, a `_`-join collisio
     try std.testing.expectEqualStrings("mymod__analog__V_a_b_c", got.items[1]);
     try std.testing.expectEqualStrings("mymod__analog__V_a_b_c__1", got.items[2]);
     assertCanonicalOrder(try enumerateUnits(a, &f.mir, &f.lowered), &f.lowered, 3);
+}
+
+test "the allocating spellers fail cleanly at every allocation" {
+    // Their contract is an arena (each leaves scratch or a prefix behind),
+    // so the arena over the failing allocator is what must free everything.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&nets);
+    defer f.deinit();
+    const a = f.alloc();
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
+    _ = try f.mir.emitCall(a, .entry, try f.mir.internString(a, "slew"), &.{});
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const Lowered) !void {
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            defer arena.deinit();
+            const aa = arena.allocator();
+            const units = try enumerateUnits(aa, mir, lowered);
+            try std.testing.expectEqual(@as(usize, 2), units.len);
+            for (units) |u| _ = try unitNameAlloc(aa, mir.name, u);
+            try std.testing.expectEqualStrings("mZ5f__held__x", try heldField(aa, "m_", "x"));
+            _ = try snapField(aa, "x");
+            _ = try wordField(aa, "x", 1);
+            _ = try xzField(aa, "x");
+        }
+    }.run, .{ &f.mir, &f.lowered });
+}
+
+test "unitNameAlloc sizes the worst name it can be given" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    // Every module byte escaped to three, the longest role, the widest ordinal.
+    const name = try unitNameAlloc(arena.allocator(), "_._", .{ .role = .analog_op, .target = "t", .disambig = std.math.maxInt(u32) });
+    try std.testing.expectEqualStrings("Z5fZ2eZ5f__analog_op__t__4294967295", name);
 }

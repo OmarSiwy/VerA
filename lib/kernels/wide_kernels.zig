@@ -1,6 +1,6 @@
 // IEEE 1364-2005 §5.1, §5.4 and §5.5 integer arithmetic at any width — EMITTED
 // VERBATIM into every device whose analog context computes a `reg` wider than
-// 32 bits (`codegen.wide_txt` is `@embedFile` of this file), and `@import`ed
+// 32 bits (`kernel_text.wide_txt` is `@embedFile` of this file), and `@import`ed
 // by `kernels/test.zig`, so the numerics the tests check are the numerics the
 // device runs. Verilog-AMS §7.3.1 gives the analog context read access to a
 // discrete bit grouping; a `reg` the analog context assigns is computed with
@@ -55,14 +55,12 @@ pub fn zwZero(comptime n: u32) ZW(n) {
     return if (comptime zwNative(n)) 0 else zwstd.mem.zeroes([zwLimbs(n)]u32);
 }
 
-/// `x`'s low `n` bits (n <= 64): an analog integer or real-pattern operand.
+/// `x`'s 64-bit pattern at `n` bits, cut or zero-extended: an analog integer
+/// or real-pattern operand.
 pub fn zwLeaf(comptime n: u32, x: i64) ZW(n) {
     const u: u64 = @bitCast(x);
     if (comptime zwNative(n)) return @truncate(u);
-    var r = zwZero(n);
-    r[0] = @truncate(u);
-    if (comptime zwLimbs(n) > 1) r[1] = @truncate(u >> 32);
-    return zwL.norm(n, r);
+    return zwL.norm(n, zwL.from64(n, u));
 }
 
 /// The value whose 32-bit words, least significant first, are the low 32
@@ -280,14 +278,13 @@ pub fn zwFromReal(comptime n: u32, x: f64) ZW(n) {
     if (!zwstd.math.isFinite(x)) return zwZero(n);
     const r = @round(x);
     const mag = @abs(r);
-    var v = zwZero(n);
+    var v: ZW(n) = undefined;
     if (mag < 0x1p63) {
-        v = zwFromLimbs(n, zwL.norm(n, zwL.from64(n, @intFromFloat(mag))));
+        v = zwLeaf(n, @intFromFloat(mag));
     } else {
         const fr = zwstd.math.frexp(mag);
-        const m: u64 = @intFromFloat(fr.significand * 0x1p53);
         const sh: u64 = @intCast(fr.exponent - 53);
-        v = zwShl(n, zwFromLimbs(n, zwL.norm(n, zwL.from64(n, m))), 64, sh);
+        v = zwShl(n, zwLeaf(n, @intFromFloat(fr.significand * 0x1p53)), 64, sh);
     }
     return if (r < 0) zwNeg(n, v) else v;
 }

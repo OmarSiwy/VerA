@@ -662,6 +662,10 @@ pub const Run = struct {
     /// reset elaborates again (`reset`).
     source: []const u8 = "",
     opts: Options = .{},
+    /// `slot`'s answers by (scope, expression), direct-mapped, from the end
+    /// of `elaborate`: every name is bound by then, so an answer never goes
+    /// stale. Empty while elaborating.
+    slot_memo: []SlotMemo = &.{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -1013,6 +1017,15 @@ pub const Run = struct {
     /// the scope before it, and the last is a declared name in the scope the
     /// final instance minted.
     pub fn slot(self: *Run, e: Ast.ExprId) Error!u32 {
+        if (self.slot_memo.len == 0) return self.resolveSlot(e);
+        const key = @backingInt(e) *% 0x9e3779b1 ^ self.scope *% 0x85ebca6b;
+        const m = &self.slot_memo[key >> (32 - memo_bits)];
+        if (m.scope == self.scope and m.e == e) return m.at;
+        const at = try self.resolveSlot(e);
+        m.* = .{ .scope = self.scope, .e = e, .at = at };
+        return at;
+    }
+    fn resolveSlot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
@@ -1294,6 +1307,21 @@ pub const Sub = struct {
     resident: u32 = 0,
     ranges: std.ArrayList(struct { start: u32, end: u32 }) = .empty,
 };
+
+/// One `Run.slot_memo` entry; `scope` maxInt(u32) is empty.
+const SlotMemo = struct {
+    scope: u32 = std.math.maxInt(u32),
+    e: Ast.ExprId = .none,
+    at: u32 = 0,
+
+    // Budget: 4096 rows of 12 B, 48 KiB, inside L2.
+    comptime {
+        std.debug.assert(@sizeOf(SlotMemo) == 12);
+    }
+};
+
+/// log2 of `Run.slot_memo`'s length: 4096 entries, 48 KiB.
+const memo_bits = 12;
 
 /// A module's §19.8 time scale, and its unit as a power of ten of a second.
 const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
@@ -1703,6 +1731,8 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try tchk.arm(&r);
     try waiters.buildFanout(&r);
     try driver.arm(&r);
+    r.slot_memo = try arena.alloc(SlotMemo, 1 << memo_bits);
+    @memset(r.slot_memo, .{});
     r.diag_stage = .run;
     return r;
 }
@@ -1775,6 +1805,7 @@ test {
     _ = @import("evcd.zig");
     _ = @import("driver.zig");
     _ = tchk;
+    _ = @import("simdig_b_test.zig");
 }
 
 /// Test helper: runs `source` and expects its transcript to be `expected`

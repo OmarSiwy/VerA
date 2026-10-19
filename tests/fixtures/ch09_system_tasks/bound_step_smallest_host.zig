@@ -10,7 +10,7 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 fn boundAt(v: f64) f64 {
     const model: D.Model = .{};

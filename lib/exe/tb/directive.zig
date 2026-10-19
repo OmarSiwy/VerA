@@ -135,12 +135,16 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 try (if (kw == .sweep) &sweeps else if (kw == .psweep) &psweeps else &waves)
                     .append(arena, entry);
             },
-            .temp => d.temp = try number(rest),
+            .temp => {
+                d.temp = try number(rest);
+                if (!std.math.isFinite(d.temp)) return error.BadNumber;
+            },
             .time => {
                 const times = try parseNumbers(arena, rest);
                 assert(times.len != 0); // `parseNumbers` refuses an empty list.
                 // `dt` is the step from the previous time, and `sim.mixed.run`
-                // requires the order. `!(b > a)` also refuses a NaN.
+                // requires the order. A lone NaN has no pair to fail it.
+                for (times) |t| if (!std.math.isFinite(t)) return error.BadSyntax;
                 for (times[0 .. times.len - 1], times[1..]) |a, b| if (!(b > a)) return error.BadSyntax;
                 d.times = times;
             },
@@ -284,7 +288,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             },
             .tran => {
                 const v = try parseNumbers(arena, rest);
-                if (v.len != 2 or !(v[0] > 0) or !(v[1] > 0)) return error.BadSyntax;
+                if (v.len != 2) return error.BadSyntax;
+                for (v) |e| if (!(e > 0) or !std.math.isFinite(e)) return error.BadSyntax;
                 d.tran = .{ v[0], v[1] };
             },
             .onoise => {

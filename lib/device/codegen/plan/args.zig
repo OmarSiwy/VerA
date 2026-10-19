@@ -136,6 +136,10 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         // §3.3 Table 3-3: every piece, and the count.
         .@"$str$cat", .@"$str$repeat" => true,
         .@"$limit$uf" => i < 2,
+        // §9.4.3 the operand a `%d` or radix field prints (`emitCall` renders
+        // it); argument 1 (and 2) are lowering's width record, read at
+        // codegen time.
+        .@"$display$width" => i == 0,
         // §9.15's param_name may be "a string variable", so `emitCall` renders
         // it and the unit has to compute it.
         .@"$simparam$str" => i == 0,
@@ -221,7 +225,6 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$tp_real",
         .@"$tp_wide",
         .@"$limit$old",
-        .@"$display$width",
         .@"$monitor$arm",
         .@"$sscanf$int",
         .@"$sscanf$real",

@@ -31,9 +31,10 @@ pub fn Circuit(comptime D: type) type {
     return struct {
         const Self = @This();
         /// The value family of the value-only hooks: no lanes.
-        pub const Val = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
-        /// `eval`'s family: unknown `u` on lane `u`.
-        pub const Dual = contract.RefFamily(f64, &lane_of, .{ .dense = true });
+        pub const Val = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
+        /// The family of every lane-reading entry point: unknown `u` on lane
+        /// `u`, each value carrying only the partials it can have.
+        pub const Dual = contract.RefFamily(f64, &lane_of, .{});
         const lane_of = blk: {
             var l: [n_u]u32 = undefined;
             for (&l, 0..) |*e, u| e.* = u;
@@ -70,12 +71,6 @@ pub fn Circuit(comptime D: type) type {
         rhs: [n_u]f64 = undefined,
         /// Q(x) at the last `eval`/`evalQ`, one per row.
         q_vec: [n_u]f64 = undefined,
-        /// Index of each row's diagonal in `g_vals`, `i * n_u + i`.
-        diag_slots: [n_u]u32 = blk: {
-            var d: [n_u]u32 = undefined;
-            for (&d, 0..) |*e, i| e.* = i * n_u + i;
-            break :blk d;
-        },
         /// Rows whose tolerance is `abstol` (amperes), not `vntol`.
         current_row: [n_u]bool = blk: {
             var c: [n_u]bool = @splat(false);
@@ -129,58 +124,56 @@ pub fn Circuit(comptime D: type) type {
             self.sim.iteration = it;
         }
 
-        /// The whole local Jacobian: the device's lanes on the columns in
-        /// `deriv_reads`, `jac_const` on the rest (`g`, or `c` when `react`).
-        fn withConst(self: *const Self, rows: [n_u]Dual, react: bool) [n_u]Dual {
-            var out = rows;
+        /// Writes `rows` into `vals` and the row-major `plane`, then
+        /// `jac_const` on its columns (`g`, or `c` when `react`).
+        /// `rows` is indexable by row; each row may be its own sparse type.
+        fn scatter(self: *const Self, rows: anytype, vals: *[n_u]f64, plane: *[n_u * n_u]f64, react: bool) void {
+            inline for (0..n_u) |i| {
+                const T = @TypeOf(rows[i]);
+                const dst = plane[i * n_u ..][0..n_u];
+                vals[i] = rows[i].v;
+                // One run-time loop over the row's lanes, not n_u inline reads.
+                @memset(dst, 0.0);
+                const lanes: [@popCount(T.mask)]f64 = rows[i].d;
+                for (comptime laneColumns(T.mask), lanes) |u, l| dst[u] = l;
+            }
             inline for (comptime contract.jacConst(D)) |e| {
                 if (contract.jacConstApplies(D, e, self.model, Dual.collapse_applied))
-                    out[@backingInt(e.row)].d[@backingInt(e.col)] = if (react) e.c else e.g;
+                    plane[@as(usize, @backingInt(e.row)) * n_u + @backingInt(e.col)] = if (react) e.c else e.g;
             }
-            return out;
+        }
+
+        /// The unknown each lane of a value with mask `m` belongs to, in lane order.
+        fn laneColumns(comptime m: anytype) [@popCount(m)]usize {
+            var cols: [@popCount(m)]usize = undefined;
+            var j: usize = 0;
+            for (0..@bitSizeOf(@TypeOf(m))) |u| if ((m >> u) & 1 != 0) {
+                cols[j] = u;
+                j += 1;
+            };
+            return cols;
         }
 
         /// Stamps every plane at `x`, `c_vals`/`q_vec` too when the device
-        /// has charge. `t` is ignored: the time is in `sim` already.
+        /// has charge, at the time `setSimState` published.
         /// Asserts that `x` holds at least n_u values.
-        pub fn eval(self: *Self, x: []const f64, _: f64) void {
-            const r = self.withConst(D.eval(Dual, x[0..n_u], self.model, self.inst, self.sim), false);
-            for (r, 0..) |row, i| {
-                self.rhs[i] = row.v;
-                @memcpy(self.g_vals[i * n_u ..][0..n_u], &row.d);
-            }
-            if (has_charge) self.evalQ(x, 0);
+        pub fn eval(self: *Self, x: []const f64) void {
+            self.scatter(D.eval(Dual, x[0..n_u], self.model, self.inst, self.sim), &self.rhs, &self.g_vals, false);
+            if (has_charge) self.evalQ(x);
         }
 
         /// Stamps the charge planes only (`c_vals`, `q_vec`); a no-op for a
         /// device without charge. Asserts that `x` holds at least n_u values.
-        pub fn evalQ(self: *Self, x: []const f64, _: f64) void {
+        pub fn evalQ(self: *Self, x: []const f64) void {
             if (!has_charge) return;
-            const qq = self.withConst(contract.qRows(D, Dual, D.q(Dual, x[0..n_u], self.model, self.inst, self.sim)), true);
-            for (qq, 0..) |row, i| {
-                self.q_vec[i] = row.v;
-                @memcpy(self.c_vals[i * n_u ..][0..n_u], &row.d);
-            }
+            self.scatter(contract.qRows(D, Dual, D.q(Dual, x[0..n_u], self.model, self.inst, self.sim)), &self.q_vec, &self.c_vals, true);
         }
 
         /// Writes G + alpha*C into `out` (ESPice `combineGC`), from the
         /// planes of the last `eval`. Asserts that `out` holds n_u² values.
         pub fn combineGC(self: *const Self, alpha: f64, out: []f64) void {
-            // Hand-vectorized: Zig 0.17 ships LLVM's loop vectorizer off.
-            // Per element a multiply then an add, never fused, so the vector
-            // body and the scalar tail give the plain loop's bits.
-            const nn = n_u * n_u;
-            const W = std.simd.suggestVectorLength(f64) orelse 1;
-            const V = @Vector(W, f64);
-            const a: V = @splat(alpha);
-            const o = out[0..nn];
-            var j: usize = 0;
-            while (j + W <= nn) : (j += W) {
-                const g: V = self.g_vals[j..][0..W].*;
-                const c: V = self.c_vals[j..][0..W].*;
-                o[j..][0..W].* = g + a * c;
-            }
-            for (o[j..], self.g_vals[j..], self.c_vals[j..]) |*e, g, c| e.* = g + alpha * c;
+            // Per element a multiply then an add, never fused (strict mode).
+            for (out[0 .. n_u * n_u], &self.g_vals, &self.c_vals) |*o, g, c| o.* = g + alpha * c;
         }
 
         /// Starts a nonlinear solve: §9.15 `$simparam("iteration")` reads 1.
@@ -520,7 +513,7 @@ test "eval fills all four planes, jac_const included, and combineGC adds them" {
     var model: MockJac.Model = .{};
     var inst: MockJac.Instance = .{};
     var ckt: Circuit(MockJac) = .init(&model, &inst);
-    ckt.eval(&.{ 1, 2 }, 0);
+    ckt.eval(&.{ 1, 2 });
     try testing.expectEqual([2]f64{ 2, 6 }, ckt.rhs);
     try testing.expectEqual([2]f64{ 5, 14 }, ckt.q_vec);
     try testing.expectEqual([4]f64{ 2, 11, 0, 3 }, ckt.g_vals);
@@ -545,7 +538,7 @@ const MockWide = struct {
     }
 };
 
-test "combineGC's vector body and tail equal g + alpha·c bit for bit" {
+test "combineGC equals g + alpha·c bit for bit" {
     var model: MockWide.Model = .{};
     var inst: MockWide.Instance = .{};
     var ckt: Circuit(MockWide) = .init(&model, &inst);

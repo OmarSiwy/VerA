@@ -256,8 +256,13 @@ pub fn timeNow(obj: vpiHandle, t: *Time) void {
 fn fillTime(ticks: u64, obj: vpiHandle, t: *Time) void {
     t.high = @truncate(ticks >> 32);
     t.low = @truncate(ticks);
-    const s = if (obj != null) scale(obj) else null;
-    t.real = if (s) |x| x.realAt(ticks) else @floatFromInt(ticks);
+    t.real = if (obj != null) unitsOf(ticks, obj) else @floatFromInt(ticks);
+}
+
+/// `ticks` in the time unit of `obj`'s module, the inverse of `ticksOf`'s
+/// scaled form; in ticks when no digital run gives it a scale.
+pub fn unitsOf(ticks: u64, obj: vpiHandle) f64 {
+    return if (scale(obj)) |s| s.realAt(ticks) else @floatFromInt(ticks);
 }
 
 // ---------------------------------------------------------------------------

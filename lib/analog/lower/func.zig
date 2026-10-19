@@ -137,7 +137,7 @@ pub fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const name = self.file.str(ex.strOf(e));
     const m = self.module orelse return poison;
     for (m.functions) |*fd| {
-        if (!std.mem.eql(u8, self.file.str(fd.name), name)) continue;
+        if (fd.name != ex.strOf(e)) continue; // interned: identity is name equality
         // §7.3.7: "Digital functions cannot be called from within the analog
         // context." The declaration is legal; the call is not, so the diagnostic
         // lands here. Lowered anyway, so uses of the result do not report again.

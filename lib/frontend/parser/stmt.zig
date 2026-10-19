@@ -170,7 +170,7 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
             self.pos += 1;
             // A.6.5 `disable hierarchical_block_identifier` (A.9.3), one
             // flat name, `$root.` included.
-            const name = try parse_hier.parseDottedName(self, false);
+            const name = try parse_hier.parseDottedPath(self, false, null);
             _ = try self.expect(.semicolon);
             return self.file.addStmt(self.arena, .{ .disable = .{ .name = name } }, tok);
         },
@@ -453,8 +453,12 @@ fn parseEvent(self: *Parser) Error!Ast.ExprId {
 /// `.event_or` (§4.2.2 puts them at the `||` level, below everything else).
 fn parseEventExpr(self: *Parser) Error!Ast.ExprId {
     var lhs = try parseEventTerm(self);
+    // Each `or` nests the tree one level, as an operator does.
+    const base = self.depth;
+    defer self.depth = base;
     while (self.peek() == .kw_or or self.peek() == .comma) {
         const tok = self.pos;
+        self.nest();
         self.pos += 1;
         const rhs = try parseEventTerm(self);
         lhs = try self.file.exprs.add(self.arena, .{

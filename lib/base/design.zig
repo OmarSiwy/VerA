@@ -136,4 +136,7 @@ test "SystemParam: Table 9-29's top-level values and allowed values" {
     // "Any" for the coordinates.
     try t.expect(SystemParam.xposition.allows(-1e30) and !SystemParam.xposition.constrained());
     for ([_]SystemParam{ .angle, .hflip, .vflip, .mfactor }) |k| try t.expect(k.constrained());
+    try t.expect(SystemParam.vflip.allows(1) and SystemParam.vflip.allows(-1));
+    // A diagnostic's domain names the parameter it constrains.
+    for (SystemParam.all) |k| try t.expect(!k.constrained() or std.mem.find(u8, k.domain(), k.name()) != null);
 }

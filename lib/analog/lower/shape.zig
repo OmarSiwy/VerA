@@ -29,6 +29,10 @@ pub const Bounds = struct {
     }
 };
 
+comptime {
+    std.debug.assert(@sizeOf(Bounds) == 24); // one per dimension, read per subscript
+}
+
 /// §3.2/§3.2.2/§3.4.4 `{ [msb:lsb] }` — one `Bounds` per declared dimension,
 /// outermost first, so `flag_array[0:8][0:3]` is `{{0,8},{0,3}}`.
 ///

@@ -165,22 +165,13 @@ pub fn bindDefparam(r: *Run, decl: u32, d: Ast.Defparam, children: []const Ast.I
 /// static view of `decl`'s children; null reads the complete hierarchy.
 fn defparamBase(r: *Run, decl: u32, path: []const u8, children: ?[]const Ast.Instance, tok: u32) Error!struct { at: u32, rest: []const u8 } {
     const dot = std.mem.findScalar(u8, path, '.') orelse return .{ .at = decl, .rest = path };
-    const seg = path[0..dot];
-    const bracket = std.mem.findScalar(u8, seg, '[');
-    const name = seg[0 .. bracket orelse seg.len];
-    const index: ?i64 = if (bracket) |at| std.fmt.parseInt(i64, seg[at + 1 .. seg.len - 1], 10) catch null else null;
-    const same = struct {
-        fn f(rr: *const Run, s: u32, n: []const u8, k: ?i64) bool {
-            const info = rr.scope_info.items[s];
-            return info.name != .none and std.mem.eql(u8, rr.file.str(info.name), n) and std.meta.eql(info.index, k);
-        }
-    }.f;
+    const name, const index = segment(path[0..dot]);
     if (children) |list| {
         for (list) |c| if (c.name != .none and std.mem.eql(u8, r.file.str(c.name), name)) return .{ .at = decl, .rest = path };
-    } else for (r.scope_info.items, 0..) |info, s| if (s != decl and info.parent == decl and same(r, @intCast(s), name, index)) return .{ .at = decl, .rest = path };
+    } else for (r.scope_info.items, 0..) |info, s| if (s != decl and info.parent == decl and isScope(r, @intCast(s), name, index)) return .{ .at = decl, .rest = path };
     var s = decl;
     while (true) {
-        if (same(r, s, name, index)) return .{ .at = s, .rest = path[dot + 1 ..] };
+        if (isScope(r, s, name, index)) return .{ .at = s, .rest = path[dot + 1 ..] };
         const info = r.scope_info.items[s];
         // §12.2.1: "a defparam statement in a hierarchy in or under a
         // generate block instance ... or an array of instances ... shall
@@ -190,8 +181,47 @@ fn defparamBase(r: *Run, decl: u32, path: []const u8, children: ?[]const Ast.Ins
         if (isRoot(r, s)) break;
         s = info.parent;
     }
-    for (r.roots) |t| if (same(r, t, name, index)) return .{ .at = t, .rest = path[dot + 1 ..] };
+    for (r.roots) |t| if (isScope(r, t, name, index)) return .{ .at = t, .rest = path[dot + 1 ..] };
     return .{ .at = decl, .rest = path };
+}
+
+/// A hierarchical name segment `name` or `name[k]`; a `k` that is not a
+/// decimal integer reads as no index.
+fn segment(seg: []const u8) struct { []const u8, ?i64 } {
+    const bracket = std.mem.findScalar(u8, seg, '[') orelse return .{ seg, null };
+    return .{ seg[0..bracket], std.fmt.parseInt(i64, seg[bracket + 1 .. seg.len - 1], 10) catch null };
+}
+
+/// Whether scope `s` is named `n`, with array or generate index `k`.
+fn isScope(r: *const Run, s: u32, n: []const u8, k: ?i64) bool {
+    const info = r.scope_info.items[s];
+    return info.name != .none and std.mem.eql(u8, r.file.str(info.name), n) and std.meta.eql(info.index, k);
+}
+
+/// The scope defparam path `rest` names below `at` (its last segment, the
+/// parameter, dropped), in the complete hierarchy; null when a segment
+/// names no scope.
+fn defparamScope(r: *const Run, at: u32, rest: []const u8) ?u32 {
+    var s = at;
+    var it = std.mem.splitScalar(u8, rest[0 .. std.mem.findScalarLast(u8, rest, '.') orelse return s], '.');
+    // ponytail: a scan of every scope per segment; elaboration runs it once
+    // per defparam. A (parent, name, index) map if designs grow huge.
+    next: while (it.next()) |seg| {
+        const name, const index = segment(seg);
+        for (r.scope_info.items, 0..) |info, c| if (c != s and info.parent == s and isScope(r, @intCast(c), name, index)) {
+            s = @intCast(c);
+            continue :next;
+        };
+        return null;
+    }
+    return s;
+}
+
+/// Whether scope `s` is `outer` or lies under it.
+fn within(r: *const Run, s: u32, outer: u32) bool {
+    var at = s;
+    while (at != outer) : (at = r.scope_info.items[at].parent) if (isRoot(r, at)) return false;
+    return true;
 }
 
 /// IEEE 1364-2005 §12.8.2: "It shall be an error if a hierarchical name in a
@@ -203,6 +233,22 @@ pub fn checkDefparams(r: *Run) Error!void {
         const now = try defparamBase(r, b.decl, b.path, null, b.tok);
         if (now.at != b.at or !std.mem.eql(u8, now.rest, b.rest))
             return r.fail(b.tok, "§12.8.2: this defparam's hierarchical name was resolved before the hierarchy was complete and would resolve differently once it is", .{});
+        // §12.2.1: "a defparam statement in a hierarchy in or under a
+        // generate block instance ... or an array of instances ... shall not
+        // change a parameter value outside that hierarchy", however its path
+        // is spelled (`defparamBase` refuses the upward relative form early).
+        const target = defparamScope(r, b.at, b.rest) orelse continue;
+        var s = b.decl;
+        while (true) : (s = r.scope_info.items[s].parent) {
+            const info = r.scope_info.items[s];
+            if ((info.index != null or info.lexical) and !within(r, target, s)) {
+                var name: std.ArrayList(u8) = .empty;
+                try name.appendSlice(r.arena, r.file.str(info.name));
+                if (info.index) |k| try name.print(r.arena, "[{d}]", .{k});
+                return r.fail(b.tok, "§12.2.1: a defparam inside `{s}` cannot change a parameter outside the generate block instance or array element it is in", .{name.items});
+            }
+            if (isRoot(r, s)) break;
+        }
     }
 }
 
@@ -321,7 +367,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             try r.declaredBound(a.lsb, p.main_tok) != try r.declaredBound(b.lsb, p.main_tok))
             return r.fail(p.main_tok, "§12.3.3: the net declaration's range differs from its port declaration's: `{s}`", .{r.file.str(p.name)});
         const bind = if (i < binds.len) binds[i] else PortBind.open;
-        const width = if (p.kind == .wreal) 64 else if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
+        const width = try portWidth(r, p);
         // IEEE 1364-2005 §12.3.3: an output port "declared as a variable"
         // (`output q; reg q;`) is that variable, and it drives the net it
         // is connected to: one driver of it, as a continuous assignment is.
@@ -337,7 +383,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                 }),
                 // §12.3.9.2 a select or concatenation outside: the variable
                 // drives exactly those bits, as a net port's value does.
-                .send => |c| try sendPort(r, e, p, c.operands, c.tok, var_slot, e.values.items[var_slot].width, scope, false),
+                .send => |c| try sendPort(r, e, c.operands, c.tok, var_slot, e.values.items[var_slot].width, scope),
                 .receive => unreachable, // `bindPort` makes `receive` for an input port only
                 .group => unreachable, // `groupPorts` takes an expression-ported module's
 
@@ -352,7 +398,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             const merging = (p.kind == .wreal) != (outer.kind == .wreal);
             if (merging and p.kind == .wreal) try promoteWreal(r, e, bind.collapse);
             if (!merging and outer.resolved.width != width)
-                return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+                return r.fail(p.main_tok, size_mismatch, .{});
             _ = try warnPort(r, p, outer.kind);
             // §12.3.10.1: the merged net takes the dominating type, which in
             // Table 12-1's "int" cells is the port's own (`tri0` inside a
@@ -371,10 +417,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
         // header port into the `Port` (`inout t; tri0 t;` is one `Port`), and
         // §7.9 resolution and `netPull`'s undriven value both read the net type.
         const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
-        if (p.kind != .wreal) if (p.range orelse p.type_range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
-            .msb = try r.declaredBound(range.msb, p.main_tok),
-            .lsb = try r.declaredBound(range.lsb, p.main_tok),
-        });
+        if (p.kind != .wreal) if (p.range orelse p.type_range) |range| try putRange(r, e.nets.items[at].slot, range, p.main_tok);
         switch (bind) {
             // IEEE 1364 §19.9: an unconnected input port declared in an
             // `unconnected_drive` region is pulled to a logic level through a
@@ -407,7 +450,10 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                 try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok });
             },
             .group => unreachable, // `groupPorts` takes an expression-ported module's
-            .send => |c| try sendPort(r, e, p, c.operands, c.tok, e.nets.items[at].slot, width, scope, true),
+            .send => |c| {
+                for (c.operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
+                try sendPort(r, e, c.operands, c.tok, e.nets.items[at].slot, width, scope);
+            },
         }
     }
     // §10.4.2: "It is illegal to declare another object with the same name
@@ -421,19 +467,20 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
 }
 
+const size_mismatch = "§6.5.7.1: the sizes of the port and the net connected to it shall match";
+
 /// §12.3.9.2 an output port's value, slot `src` of `width` bits, bridged
-/// into the operands of the structural net expression it connects to.
+/// into the operands of the structural net expression it connects to (or a
+/// hidden net into a continuous assignment's concatenated target).
 /// §6.5.7.1 joins them highest-order first, so the rightmost operand takes
-/// the port's low bits. `warn`: Table 12-1's net-type cells apply (a net
-/// port; a variable port has no net type to meet).
-fn sendPort(r: *Run, e: *Elab, p: Ast.Port, operands: []const Sink, tok: u32, src: u32, width: u32, scope: u32, warn: bool) Error!void {
-    if (warn) for (operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
+/// the port's low bits.
+fn sendPort(r: *Run, e: *Elab, operands: []const Sink, tok: u32, src: u32, width: u32, scope: u32) Error!void {
     var lo: u32 = 0;
     var k = operands.len;
     while (k != 0) {
         k -= 1;
         const op = operands[k];
-        if (lo + op.width > width) return r.fail(tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+        if (lo + op.width > width) return r.fail(tok, size_mismatch, .{});
         try e.wires.append(r.arena, .{
             .net = op.net,
             .scope = scope,
@@ -442,7 +489,7 @@ fn sendPort(r: *Run, e: *Elab, p: Ast.Port, operands: []const Sink, tok: u32, sr
         });
         lo += op.width;
     }
-    if (lo != width) return r.fail(tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+    if (lo != width) return r.fail(tok, size_mismatch, .{});
 }
 
 /// IEEE 1364-2005 §12.2 the parameters `params` of `scope` (an instance, or a
@@ -920,7 +967,7 @@ fn switchTerminal(r: *Run, e: *Elab, t: Ast.ExprId, tok: u32) Error!struct { net
     const index = try r.declaredBound(ex.rhs(t), tok);
     const width: i64 = e.nets.items[net].resolved.width;
     const range = r.vec_ranges.get(at) orelse VecRange{ .msb = width - 1, .lsb = 0 };
-    const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
+    const pos = range.position(index);
     if (pos < 0 or pos >= width) return r.fail(tok, "a pass switch terminal selects a bit outside its net", .{});
     return .{ .net = net, .bit = @intCast(pos) };
 }
@@ -940,14 +987,7 @@ fn drivenNet(r: *Run, e: *Elab, scope: u32, target: Ast.ExprId, tok: u32, compti
     r.scope = scope;
     if (operands.len == 1 and operands[0].lo == 0 and operands[0].width == e.nets.items[operands[0].net].resolved.width) return operands[0].net;
     const net = try mintNet(r, e, .wire, width, false, .none, tok);
-    var lo: u32 = 0;
-    var k = operands.len;
-    while (k != 0) {
-        k -= 1;
-        const op = operands[k];
-        try e.wires.append(r.arena, .{ .net = op.net, .scope = scope, .source = .{ .bridge = .{ .src = e.nets.items[net].slot, .src_lo = lo, .dst_lo = op.lo, .width = op.width } }, .tok = tok });
-        lo += op.width;
-    }
+    try sendPort(r, e, operands, tok, e.nets.items[net].slot, width, scope);
     return net;
 }
 
@@ -1032,14 +1072,10 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 return r.fail(tok, "§12.4.1: two nested loop generate constructs cannot use the same genvar", .{});
             const at = r.names.get(.{ .scope = scope, .str = gv }) orelse try genvarSlot(r, e, gv, tok);
             try setGenvar(r, e, at, try r.constant(r.file.stmt(f.init).assign.value, tok));
-            const name: Ast.StrId = switch (r.file.stmt(f.body)) {
-                // §12.4.3 an unnamed block's external name, genblk<n>.
-                .block => |b| b.gen_name,
-                else => .none, // else: a lone item is an unnamed generate block
-            };
-            const implicit = switch (r.file.stmt(f.body)) {
-                .block => |b| b.name == .none,
-                else => true, // else: a lone item is an unnamed generate block
+            // §12.4.3 an unnamed block's external name, genblk<n>.
+            const name: Ast.StrId, const implicit = switch (r.file.stmt(f.body)) {
+                .block => |b| .{ b.gen_name, b.name == .none },
+                else => .{ .none, true }, // else: a lone item is an unnamed generate block
             };
             // §12.4.1: "It shall be an error if a genvar value is repeated".
             // A genvar holds 32 bits, so a loop that does not terminate
@@ -1107,10 +1143,7 @@ fn declareNet(r: *Run, e: *Elab, scope: u32, n: Ast.NetDecl) Error!void {
     const count = try declareArray(r, base, n.dims, n.main_tok);
     for (0..count) |k| {
         const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
-        if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
-            .msb = try r.declaredBound(range.msb, n.main_tok),
-            .lsb = try r.declaredBound(range.lsb, n.main_tok),
-        });
+        if (n.range) |range| try putRange(r, e.nets.items[at].slot, range, n.main_tok);
         var net = &e.nets.items[at];
         // §6.1.3: beside a net_decl_assignment the `delay3` "is part of the
         // continuous assignment and is not a net delay", so it times that one
@@ -1292,8 +1325,8 @@ fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
 /// up, each a scope named `u[k]` (the same order the analog elaborator uses).
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u32) Error!void {
     r.scope = scope;
-    const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
     if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
+    const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
     const msb = try r.declaredBound(range.msb, inst.main_tok);
     const lsb = try r.declaredBound(range.lsb, inst.main_tok);
     var k = @min(msb, lsb);
@@ -1336,74 +1369,71 @@ fn arrayConn(r: *Run, e: *Elab, inst: *const Ast.Instance, port: Ast.Port, conn:
 fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u32, index: ?i64) Error!void {
     const arena = r.arena;
     r.scope = scope;
-    {
-        if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
-        const bound = try binding.child(r, scope, inst);
-        const child = try connectable(r, &r.file.modules[bound.def], inst.main_tok);
-        try checkLists(r, child, inst);
-        const binds_out = try arena.alloc(PortBind, child.ports.len);
-        @memset(binds_out, .open);
-        const grouped = !r.mixed and expressionPorts(child);
-        if (grouped) {
-            if (index != null) return r.fail(inst.main_tok, "§12.1.2: an instance array of a module with port expressions is not implemented by digital execution", .{});
-            for (inst.ports, 0..) |conn, i| {
-                const at = if (conn.name != .none)
-                    groupByName(child, conn.name) orelse return r.fail(conn.main_tok, "the instantiated module has no such port", .{})
-                else
-                    nthGroup(child, i) orelse return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
-                binds_out[at] = .{ .group = .{ .conn = conn, .scope = scope } };
-            }
+    const bound = try binding.child(r, scope, inst);
+    const child = try connectable(r, &r.file.modules[bound.def], inst.main_tok);
+    try checkLists(r, child, inst);
+    const binds_out = try arena.alloc(PortBind, child.ports.len);
+    @memset(binds_out, .open);
+    const grouped = !r.mixed and expressionPorts(child);
+    if (grouped) {
+        if (index != null) return r.fail(inst.main_tok, "§12.1.2: an instance array of a module with port expressions is not implemented by digital execution", .{});
+        for (inst.ports, 0..) |conn, i| {
+            const at = if (conn.name != .none)
+                groupByName(child, conn.name) orelse return r.fail(conn.main_tok, "the instantiated module has no such port", .{})
+            else
+                nthGroup(child, i) orelse return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
+            binds_out[at] = .{ .group = .{ .conn = conn, .scope = scope } };
         }
-        for (if (grouped) inst.ports[0..0] else inst.ports, 0..) |conn, i| {
-            // IEEE 1364-2005 §12.3.2/§12.3.6: a header port `.name(expr)` is
-            // connected by its external name, and when its expression is a
-            // concatenation of internal ports every one of them is a slice
-            // of the one connection, leftmost the most significant.
-            if (conn.name != .none and portByName(child, conn.name) == null) {
-                const first = for (child.ports, 0..) |p, k| {
-                    if (p.external_name == conn.name) break k;
-                } else return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
-                if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
-                var total: u32 = 0;
-                var last = first;
-                while (last < child.ports.len and (last == first or child.ports[last].concat_rest)) : (last += 1)
-                    total += try portWidth(r, child.ports[last]);
-                var lo = total;
-                for (child.ports[first..last], first..) |p, k| {
-                    if (p.direction != .input) return r.fail(conn.main_tok, "only an input port may be a concatenation of internal ports", .{});
-                    const w = try portWidth(r, p);
-                    lo -= w;
-                    r.scope = scope;
-                    binds_out[k] = if (conn.expr == .none) .open else .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = total } } };
-                }
-                continue;
-            }
-            const at = if (conn.name == .none) i else portByName(child, conn.name).?;
-            if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
-            // A.1.3: a null port keeps its header position but connects
-            // nothing inside, including across an array of instances.
-            if (child.ports[at].name == .none) continue;
-            r.scope = scope;
-            // A continuous port is the analog solver's on both sides (§7.2.1),
-            // so a mixed design's digital half connects nothing through it,
-            // as the child's own port loop skips it.
-            if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
-            if (index) |k| if (conn.expr != .none) if (try arrayConn(r, e, inst, child.ports[at], conn, k)) |split| {
-                binds_out[at] = split;
-                continue;
-            };
-            binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
-        }
-        const child_scope = try newScope(r, inst.main_tok);
-        try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .def = bound.def, .index = index });
-        try r.binds.put(arena, child_scope, bound.ctx);
-        // §12.4's path is walked by name, so the instance's own identifier has
-        // to outlive the recursion that consumes it. An array element's path
-        // carries its index, which that walk does not read: not registered.
-        if (inst.name != .none) if (index) |k| try selectable(r, scope, inst.name, k, child_scope) else try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
-        try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
-        r.scope = scope;
     }
+    for (if (grouped) inst.ports[0..0] else inst.ports, 0..) |conn, i| {
+        // IEEE 1364-2005 §12.3.2/§12.3.6: a header port `.name(expr)` is
+        // connected by its external name, and when its expression is a
+        // concatenation of internal ports every one of them is a slice
+        // of the one connection, leftmost the most significant.
+        if (conn.name != .none and portByName(child, conn.name) == null) {
+            const first = for (child.ports, 0..) |p, k| {
+                if (p.external_name == conn.name) break k;
+            } else return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
+            if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
+            var total: u32 = 0;
+            var last = first;
+            while (last < child.ports.len and (last == first or child.ports[last].concat_rest)) : (last += 1)
+                total += try portWidth(r, child.ports[last]);
+            var lo = total;
+            for (child.ports[first..last], first..) |p, k| {
+                if (p.direction != .input) return r.fail(conn.main_tok, "only an input port may be a concatenation of internal ports", .{});
+                const w = try portWidth(r, p);
+                lo -= w;
+                r.scope = scope;
+                binds_out[k] = if (conn.expr == .none) .open else .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = total } } };
+            }
+            continue;
+        }
+        const at = if (conn.name == .none) i else portByName(child, conn.name).?;
+        if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
+        // A.1.3: a null port keeps its header position but connects
+        // nothing inside, including across an array of instances.
+        if (child.ports[at].name == .none) continue;
+        r.scope = scope;
+        // A continuous port is the analog solver's on both sides (§7.2.1),
+        // so a mixed design's digital half connects nothing through it,
+        // as the child's own port loop skips it.
+        if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
+        if (index) |k| if (conn.expr != .none) if (try arrayConn(r, e, inst, child.ports[at], conn, k)) |split| {
+            binds_out[at] = split;
+            continue;
+        };
+        binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
+    }
+    const child_scope = try newScope(r, inst.main_tok);
+    try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .def = bound.def, .index = index });
+    try r.binds.put(arena, child_scope, bound.ctx);
+    // §12.4's path is walked by name, so the instance's own identifier has
+    // to outlive the recursion that consumes it. An array element's path
+    // carries its index, which that walk does not read: not registered.
+    if (inst.name != .none) if (index) |k| try selectable(r, scope, inst.name, k, child_scope) else try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
+    try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
+    r.scope = scope;
 }
 
 /// IEEE 1364-2005 §12.2.2 and §12.3.6: an instance's parameter value
@@ -1443,19 +1473,22 @@ fn digitalWrites(r: *Run, m: *const Ast.ModuleDecl) Error!std.AutoHashMapUnmanag
         r: *Run,
         m: *const Ast.ModuleDecl,
         out: *std.AutoHashMapUnmanaged(Ast.StrId, void),
+        // One list for the whole walk: drained before the walk descends.
+        writes: *std.ArrayList(Ast.ExprId),
         pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {}
         pub fn stmt(w: @This(), s: Ast.StmtId) Error!void {
             if (s == .none) return;
-            var writes: std.ArrayList(Ast.ExprId) = .empty;
-            try w.r.file.stmtWrites(w.m.functions, s, w.r.arena, &writes);
-            for (writes.items) |x| {
+            w.writes.clearRetainingCapacity();
+            try w.r.file.stmtWrites(w.m.functions, s, w.r.arena, w.writes);
+            for (w.writes.items) |x| {
                 const t = w.r.file.lvalueBase(x);
                 if (t != .none) try w.out.put(w.r.arena, w.r.file.exprs.strOf(t), {});
             }
             try w.r.file.stmtEdges(s, w);
         }
     };
-    const w: W = .{ .r = r, .m = m, .out = &out };
+    var writes: std.ArrayList(Ast.ExprId) = .empty;
+    const w: W = .{ .r = r, .m = m, .out = &out, .writes = &writes };
     for (m.discrete) |blk| try w.stmt(blk.body);
     return out;
 }
@@ -1506,10 +1539,7 @@ fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     };
     const base: u32 = @intCast(g.items.len);
     try r.bind(v.name, base, v.main_tok);
-    if (v.packed_range) |range| try r.vec_ranges.put(r.arena, base, .{
-        .msb = try r.declaredBound(range.msb, v.main_tok),
-        .lsb = try r.declaredBound(range.lsb, v.main_tok),
-    });
+    if (v.packed_range) |range| try putRange(r, base, range, v.main_tok);
     const count = try declareArray(r, base, v.dims, v.main_tok);
     if (count > std.math.maxInt(u32) - g.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
     const signed = switch (v.storage) {
@@ -1791,10 +1821,7 @@ fn groupPorts(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []
         const range = p.range orelse p.type_range;
         const width = if (range) |rg| try r.declaredWidth(rg, p.main_tok) else 1;
         const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
-        if (range) |rg| try r.vec_ranges.put(r.arena, e.nets.items[at].slot, .{
-            .msb = try r.declaredBound(rg.msb, p.main_tok),
-            .lsb = try r.declaredBound(rg.lsb, p.main_tok),
-        });
+        if (range) |rg| try putRange(r, e.nets.items[at].slot, rg, p.main_tok);
     }
     var i: usize = 0;
     while (i < m.ports.len) {
@@ -1882,7 +1909,7 @@ fn connectGroup(r: *Run, e: *Elab, refs: []const Ast.Port, conn: Ast.PortConn, p
                         .state = .on,
                         .target = .on,
                         .resistive = false,
-                        .delay = try r.declaredDelay3(.{}, conn.main_tok),
+                        .delay = .{},
                     },
                     .scope = scope,
                     .tok = conn.main_tok,
@@ -1902,6 +1929,11 @@ fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
         if (if (p.external_name == .none) p.name == name else p.external_name == name) return k;
     }
     return null;
+}
+
+/// Records `slot`'s declared `[msb:lsb]` (`Run.vec_ranges`).
+fn putRange(r: *Run, slot: u32, range: Ast.Dim, tok: u32) Error!void {
+    try r.vec_ranges.put(r.arena, slot, .{ .msb = try r.declaredBound(range.msb, tok), .lsb = try r.declaredBound(range.lsb, tok) });
 }
 
 /// A port's declared width, evaluated in the scope being elaborated.

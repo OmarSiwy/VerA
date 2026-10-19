@@ -469,13 +469,13 @@ test "codegen: §5.10 stateCtl copies only the written range of a long in-place 
     try std.testing.expect(std.mem.find(u8, src, "    inst.dr__held__hist__dirty = .{ 0, 99 };\n    return .{};") != null);
 }
 
-test "codegen: §3.2 a memory-backed array starts each evaluation through zFill, not @memset" {
+test "codegen: §3.2 a memory-backed array starts each evaluation with @memset" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module zf(p, n);
         \\  inout p, n; electrical p, n;
         \\  integer sp;
-        \\  real st[0:31];
+        \\  (* vera_scratch *) real st[0:31];
         \\  analog begin
         \\    sp = ($abstime < 0.5) ? 1 : 2;
         \\    st[sp] = V(p, n);
@@ -485,37 +485,7 @@ test "codegen: §3.2 a memory-backed array starts each evaluation through zFill,
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.find(u8, src, "zFill(") != null);
-    try std.testing.expect(std.mem.find(u8, src, "@memset(&a") == null);
-}
-
-test "zFill: every element gets the value's bits, small and large, plain and odd lengths" {
-    const T = struct {
-        fn zFill(comptime E: type, comptime n: usize, a: *[n]E, v: E) void {
-            if (@sizeOf([n]E) <= 128) return @memset(a, v);
-            var o = v;
-            const z = @as(*volatile E, &o).*;
-            if (E == f64 or E == i64) {
-                const k = n / 4;
-                const vs: *align(@alignOf(E)) [k]@Vector(4, E) = @ptrCast(a);
-                for (vs) |*e| e.* = @splat(z);
-                for (a[k * 4 ..]) |*e| e.* = z;
-            } else for (a) |*e| {
-                e.* = z;
-            }
-        }
-    };
-    // The kernel text must stay the copy above.
-    try std.testing.expect(std.mem.find(u8, @import("kernel_text.zig").arr_txt, "    const vs: *align(@alignOf(T)) [k]@Vector(4, T) = @ptrCast(a);") != null);
-    var a: [37]f64 = @splat(1.0);
-    T.zFill(f64, 37, &a, -0.0);
-    for (a) |x| try std.testing.expectEqual(@as(u64, 1 << 63), @as(u64, @bitCast(x)));
-    var b: [9]i64 = @splat(3);
-    T.zFill(i64, 9, &b, 0);
-    for (b) |x| try std.testing.expectEqual(@as(i64, 0), x);
-    var c: [21][3]f64 = undefined;
-    T.zFill([3]f64, 21, &c, .{ 1, 2, 3 });
-    for (c) |x| try std.testing.expectEqual([3]f64{ 1, 2, 3 }, x);
+    try std.testing.expect(std.mem.find(u8, src, "@memset(&a") != null);
 }
 
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
@@ -4722,12 +4692,11 @@ test "codegen: §6.5.2.2 `U` is enum(u8) to 256 unknowns and as wide as the coun
     }
 }
 
-test "codegen: a $limit on an unknown past 63 keeps every lane in the live sets" {
-    // `limit_reads`/`limit_writes` are u64 masks, and `U` holds any number of
-    // unknowns. Past bit 63 there is no bit to set, and the masks must stay
-    // supersets ("a missing `writes` bit silently drops a limit"), so the
-    // answer is every bit. The junction is V(a69, n): a69 is unknown
-    // 2 + 69 = 71 (ports first), and the clamp writes it, n being a port.
+test "codegen: a $limit on an unknown past 63 names exactly its unknowns in u72 live sets" {
+    // `limit_reads`/`limit_writes` are `contract.MaskOf(|U|)` masks, so past
+    // 64 unknowns each unknown still has its own bit. The junction is
+    // V(a69, n): a69 is unknown 2 + 69 = 71 (ports first) and n unknown 1;
+    // the clamp reads both and writes a69.
     const gpa = std.testing.allocator;
     var src: std.ArrayList(u8) = .empty;
     defer src.deinit(gpa);
@@ -4740,8 +4709,8 @@ test "codegen: a $limit on an unknown past 63 keeps every lane in the live sets"
     try Harness.run(gpa, src.items, &h);
     defer h.deinit();
     const out = try h.genWith(.{});
-    try std.testing.expect(std.mem.find(u8, out.text, "pub const limit_reads: u64 = 0xffffffffffffffff;") != null);
-    try std.testing.expect(std.mem.find(u8, out.text, "pub const limit_writes: u64 = 0xffffffffffffffff;") != null);
+    try std.testing.expect(std.mem.find(u8, out.text, "pub const limit_reads: u72 = 0x800000000000000002;") != null);
+    try std.testing.expect(std.mem.find(u8, out.text, "pub const limit_writes: u72 = 0x800000000000000000;") != null);
 }
 
 test "codegen: §4.5.7 `delays` reports the delay maxdelay leaves" {
@@ -4816,4 +4785,107 @@ test "codegen: fmtF64 writes every float literal as a Zig float" {
         std.debug.print("missing `{s}`\n", .{want});
         return error.TestUnexpectedResult;
     };
+}
+
+test "codegen: limit_reads is every lane for a core re-entry and the clamp's unknowns otherwise" {
+    const gpa = std.testing.allocator;
+    // §9.17.1 `$discontinuity(-1)` under a core-computed condition: `limit`
+    // re-enters the core, which is seeded from every entry of `old`.
+    var core: Harness = undefined;
+    try Harness.run(gpa,
+        \\module dc(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    if (V(p,n) >= 0.0) $discontinuity(0);
+        \\    else $discontinuity(-1);
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    , &core);
+    defer core.deinit();
+    const a = try core.genWith(.{});
+    try std.testing.expect(std.mem.find(u8, a.text, "pub const limit_reads: u64 = 0xffffffffffffffff;") != null);
+    // A clamp on literal arguments reads only its own junction, a (2) and
+    // n (1), and writes a, the internal net.
+    var lit: Harness = undefined;
+    try Harness.run(gpa,
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n, a;
+        \\  analog begin
+        \\    I(p, a) <+ V(p, a);
+        \\    I(a, n) <+ 1e-14 * (exp($limit(V(a, n), "pnjlim", 0.025, 0.6) / 0.025) - 1.0);
+        \\  end
+        \\endmodule
+    , &lit);
+    defer lit.deinit();
+    const b = try lit.genWith(.{});
+    try std.testing.expect(std.mem.find(u8, b.text, "pub const limit_reads: u64 = 0x6;") != null);
+    try std.testing.expect(std.mem.find(u8, b.text, "pub const limit_writes: u64 = 0x4;") != null);
+}
+
+test "codegen: a lane-free version of an x-dependent array is read through zStrip" {
+    // The storage is typed by the union of its versions (0x1, a later store
+    // of V(p)); a read of the version holding only constants has no lanes,
+    // so it is stripped rather than narrowed by a `zTo` that refuses (#89).
+    const gpa = std.testing.allocator;
+    var h: Harness = undefined;
+    try Harness.run(gpa,
+        \\module md(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  (* vera_scratch *) real st[0:2];
+        \\  real y;
+        \\  integer k;
+        \\  analog begin
+        \\    k = ($abstime < 0.5) ? 1 : 2;
+        \\    st[k] = 3.0;
+        \\    y = st[k];
+        \\    st[k] = V(p);
+        \\    I(p, n) <+ y * V(p, n) + st[k];
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(gpa);
+    try std.testing.expect(std.mem.find(u8, src, "zStrip(S, zArrLd(") != null);
+}
+
+test "codegen: a long constant sum is one literal, with no unread `tN` local" {
+    // Every partial sum folds (`UnitPlan.literal`), so none is hoisted into a
+    // local its folded user would leave unread: Zig rejects an unused local.
+    const gpa = std.testing.allocator;
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(gpa);
+    try src.appendSlice(gpa, "module ls(p, n);\n  inout p, n; electrical p, n;\n  real r;\n  analog begin\n    r = 1.0");
+    for (0..1000) |_| try src.appendSlice(gpa, " + 1.0");
+    try src.appendSlice(gpa, ";\n    $strobe(\"%g\", r);\n    I(p, n) <+ r * V(p, n);\n  end\nendmodule\n");
+    var h: Harness = undefined;
+    try Harness.run(gpa, src.items, &h);
+    defer h.deinit();
+    const out = try h.genDisplay(h.arena_state.allocator());
+    try std.testing.expect(std.mem.find(u8, out, "S.con(1001.0)") != null);
+    try std.testing.expect(std.mem.find(u8, out, "const t0 = S.con(2.0)") == null);
+    try std.testing.expect(std.mem.find(u8, out, "= S.con(258.0)") == null);
+}
+
+test "codegen: a display of a constant branch flow reads the core cache it declares" {
+    // `I(p, n)` is the contribution's value, a folded literal the core
+    // returns; the display unit reads it as `c.f0`, so it must declare `c`.
+    const gpa = std.testing.allocator;
+    var h: Harness = undefined;
+    try Harness.run(gpa,
+        \\module cs(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    I(p, n) <+ 1.0e-3;
+        \\    $strobe("%g", I(p, n));
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const out = try h.genDisplay(h.arena_state.allocator());
+    const at = std.mem.find(u8, out, "__display__tasks(comptime").?;
+    const body = out[at..];
+    const read = std.mem.find(u8, body, "c.f0").?;
+    const decl = std.mem.find(u8, body, "const c = ").?;
+    try std.testing.expect(decl < read);
 }

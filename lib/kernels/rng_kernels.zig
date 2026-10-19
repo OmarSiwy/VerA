@@ -1,5 +1,5 @@
 // §9.13 probabilistic distribution kernels — EMITTED VERBATIM into every device
-// that calls one of Table 9-10's 17 names (`codegen.rng_txt` is `@embedFile` of
+// that calls one of Table 9-10's 17 names (`kernel_text.rng_txt` is `@embedFile` of
 // this file) and `@import`ed by codegen.zig's tests, on the same terms as
 // `str_kernels.zig` and `table_kernels.zig`: one source, so what the tests
 // exercise is byte-for-byte what the device runs.

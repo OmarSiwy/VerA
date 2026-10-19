@@ -7,12 +7,12 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
+const S = contract.RefFamily(f64, &.{ 0, 1 }, .{});
 
 fn run(x: *const [n_u]f64, m: *const D.Model, inst: *D.Instance, st: *D.State, out: *[n_u]f64) void {
     const sim: contract.SimState = .{ .t = 1e-9, .dt = 1e-9, .kind = .tran };
     const r = D.evalQ(S, x, m, inst, sim);
-    inline for (r.res, 0..) |e, u| out[u] = e.v + e.d[0];
+    inline for (r.res, 0..) |e, u| out[u] = e.v + e.ddxAt(0);
     _ = D.updateState(S, m, inst, x.*, st, sim);
     out[0] += @floatFromInt(inst.vera_status__);
     // `contract.gm`'s Table 4-15 functions reach log1p, whose std body

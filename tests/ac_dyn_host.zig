@@ -19,7 +19,7 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
+const Dual = contract.RefFamily(f64, &lanes, .{});
 const lanes: [n_u]u8 = std.simd.iota(u8, n_u);
 const C = std.math.Complex;
 
@@ -40,7 +40,7 @@ test "acDyn at ω = 0 is the DC partial eval leaves out under .ac" {
     inline for (D.ac_dyn_slots, out) |s, v| {
         const r = s / n_u;
         const u = s % n_u;
-        try std.testing.expectEqual(g_dc[r].d[u], g_ac[r].d[u] + v.re);
+        try std.testing.expectEqual(g_dc[r].ddxAt(u), g_ac[r].ddxAt(u) + v.re);
         try std.testing.expectEqual(@as(f64, 0.0), @abs(v.im));
     }
 }

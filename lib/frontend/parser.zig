@@ -31,8 +31,6 @@ pub const segment_levels = 4096;
 /// Levels the caller's own stack holds before the first segment: half the
 /// 1024 the parser ran on any caller's stack before segments existed.
 pub const caller_levels = 512;
-/// `segment_levels` in `deep_stack.bytes_per_level` units.
-const segment_hint = segment_levels;
 
 /// Parser state for one token stream. Every allocation comes from `arena`;
 /// `src`, `tags` and `starts` are borrowed and must outlive the produced
@@ -44,8 +42,9 @@ pub const Parser = struct {
     starts: []const u32,
     pos: u32 = 0,
     /// AST nesting at the cursor: expression, statement and generate-block
-    /// levels (`enter`), plus one per operator folded into a chain, whose
-    /// tree every later walk recurses down.
+    /// levels (`enter`), plus one per link a loop folds into a left-deep
+    /// chain (a binary operator, a select, an event `or`), whose tree every
+    /// later walk recurses down.
     depth: u32 = 0,
     /// The largest `depth` this parse reached: the nesting hint later stages
     /// size their `deep_stack` by.
@@ -333,6 +332,14 @@ pub const Parser = struct {
     /// lexeme from its start; that is exact because the lexer's `next()` is a
     /// pure function of (src, pos). Cost: one token scan per call.
     pub fn tokenText(self: *const Parser, i: u32) []const u8 {
+        // An identifier or keyword is one §2.8 run (`lexIdentOrKeyword`), so its
+        // end needs no re-lex and no keyword lookup.
+        if (self.tags[i] == .identifier or token.isKeyword(self.tags[i])) {
+            const start = self.starts[i];
+            var end = start;
+            while (end < self.src.len and lexer.isIdentChar(self.src[end])) end += 1;
+            return self.src[start..end];
+        }
         const lx: lexer.Lexer = .{ .src = self.src };
         const text = lx.tokenText(self.starts[i]);
         // §2.8.1: the `\` opens the identifier but is not part of the name.
@@ -528,6 +535,10 @@ pub const Parser = struct {
     /// past `tok`. No earlier row is owned by a declaration at `tok`.
     /// Cost: O(log n) in the file's bindings.
     fn bindingsFrom(self: *const Parser, tok: u32) usize {
+        // Most declarations and statements carry no attribute: then the
+        // newest row is older than `tok`, and so is every other.
+        const rows = self.attr_at.items;
+        if (rows.len == 0 or rows[rows.len - 1] < tok) return rows.len;
         const order = struct {
             fn f(want: u32, at: u32) std.math.Order {
                 return std.math.order(want, at);
@@ -760,7 +771,7 @@ pub const Parser = struct {
     /// `segment_levels` levels (`deep_stack.run`). A segment that cannot be
     /// reserved is E0241, naming the depth reached.
     pub fn segment(self: *Parser, comptime f: anytype, args: anytype) @typeInfo(@TypeOf(f)).@"fn".return_type.? {
-        return self.seg.segment(segment_hint, f, args) catch |e| switch (e) {
+        return self.seg.segment(segment_levels, f, args) catch |e| switch (e) {
             error.DeepStackUnavailable => self.failAt(self.pos, .E0241, "{d} levels deep", .{self.depth}),
             else => |other| other,
         };
@@ -813,8 +824,6 @@ pub const Parser = struct {
     /// Human name of the token at `i`, for the "found ..." half of a message.
     pub fn found(self: *const Parser, i: u32) []const u8 {
         return switch (self.tags[i]) {
-            .eof => "end of file",
-            .invalid => "invalid token",
             .identifier,
             .escaped_identifier,
             .system_identifier,

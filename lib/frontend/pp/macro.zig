@@ -15,6 +15,7 @@ const Rest = Preprocessor.Rest;
 const isSpace = Preprocessor.isSpace;
 const isIdentStart = Preprocessor.isIdentStart;
 const isIdentChar = Preprocessor.isIdentChar;
+const identEnd = Preprocessor.identEnd;
 const escapedEnd = Preprocessor.escapedEnd;
 
 // ---------------------------------------------------------------------------
@@ -403,8 +404,7 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
         }
         if (c == '`') {
             const start = i;
-            i += 1;
-            while (i < body.len and isIdentChar(body[i])) i += 1;
+            i = identEnd(body, i + 1);
             try out.appendSlice(pp.scratch, body[start..i]);
             continue;
         }
@@ -418,10 +418,12 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
         }
         if (isIdentStart(c)) {
             const start = i;
-            while (i < body.len and isIdentChar(body[i])) i += 1;
+            i = identEnd(body, i);
             const word = body[start..i];
             const idx = for (params, 0..) |formal, n| {
-                if (std.mem.eql(u8, formal, word)) break n;
+                // The length test first: most words are no formal, and it
+                // spares the call.
+                if (formal.len == word.len and std.mem.eql(u8, formal, word)) break n;
             } else null;
             try out.appendSlice(pp.scratch, if (idx) |k| args[k] else word);
             // IEEE 1364 §19.3.1 substitutes each actual "literally", and an

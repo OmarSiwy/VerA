@@ -1,6 +1,6 @@
 // §9.5.3 / §9.5.4.2 string formatting and scanning kernels — EMITTED VERBATIM
 // into every device that calls `$sformat`/`$swrite`/`$sscanf` or holds a
-// string (`codegen.str_txt` is `@embedFile` of this file) and `@import`ed by
+// string (`kernel_text.str_txt` is `@embedFile` of this file) and `@import`ed by
 // codegen.zig's tests. One source, so the conversions the tests check are the
 // conversions the device runs.
 //
@@ -343,11 +343,10 @@ pub fn zcAltOk(conv: u8) bool {
 /// digits and 2^1023 needs 309, so 800 holds every finite double with room.
 /// `value = 0.d[0..n] × 10^dp`, which keeps the point out of the digit array.
 //
-// ponytail: one digit-array pass per binary exponent, so the worst case (a
-// denormal, |e| = 1074) is ~1074 passes over ~800 digits — microseconds, on a
-// path that is already writing to a terminal or a file. The upgrade, if a
-// model ever formats reals in a loop, is shifting many bits at a time through
-// u64 limbs instead of one bit at a time through decimal digits.
+// ponytail: one digit-array pass per 59 bits of binary exponent, so the worst
+// case (a denormal, |e| = 1074) is 19 passes over ~770 digits, ~30k cycles.
+// The upgrade, if a model formats extreme reals in a loop, is u64 limbs of
+// 10^19 instead of one decimal digit per byte.
 const zc_digits = 800;
 const ZCDec = struct {
     d: [zc_digits]u8 = @splat(0),
@@ -370,47 +369,54 @@ fn zcTrim(z: *ZCDec) void {
     if (z.n == 0) z.dp = 0;
 }
 
-fn zcMul2(z: *ZCDec) void {
-    var carry: u8 = 0;
+/// `z` times 2^k, k <= 59: `d·2^k + carry` stays below 10·2^59 < 2^63, and
+/// the carry left over is at most 18 new leading digits.
+fn zcMulP2(z: *ZCDec, k: u6) void {
+    var carry: u64 = 0;
     var i = z.n;
     while (i > 0) {
         i -= 1;
-        const t = z.d[i] * 2 + carry;
-        z.d[i] = t % 10;
+        const t = (@as(u64, z.d[i]) << k) + carry;
+        z.d[i] = @intCast(t % 10);
         carry = t / 10;
     }
-    if (carry != 0) { // one new most-significant digit: the run shifts right
-        const keep = @min(z.n, zc_digits - 1);
-        var j = keep;
-        while (j > 0) : (j -= 1) z.d[j] = z.d[j - 1];
-        z.d[0] = carry;
-        z.n = keep + 1;
-        z.dp += 1;
+    var tmp: [20]u8 = undefined;
+    var m: usize = 0;
+    while (carry != 0) : (carry /= 10) {
+        tmp[m] = @intCast(carry % 10);
+        m += 1;
+    }
+    if (m != 0) { // `m` new most-significant digits: the run shifts right
+        const keep = @min(z.n, zc_digits - m);
+        zstd.mem.copyBackwards(u8, z.d[m..][0..keep], z.d[0..keep]);
+        for (0..m) |j| z.d[j] = tmp[m - 1 - j];
+        z.n = keep + m;
+        z.dp += @intCast(m);
     }
     zcTrim(z);
 }
 
-fn zcDiv2(z: *ZCDec) void {
-    var rem: u8 = 0;
+/// `z` over 2^k, k <= 59: `rem·10 + d` stays below 10·2^59. Exact: the
+/// remainder spills at most k digits past the run.
+fn zcDivP2(z: *ZCDec, k: u6) void {
+    const zlow = (@as(u64, 1) << k) - 1;
+    var rem: u64 = 0;
     var w: usize = 0;
     var i: usize = 0;
-    while (i < z.n) : (i += 1) {
-        const cur = rem * 10 + z.d[i];
-        rem = cur % 2;
+    // Quotient digit `i` lands at or before position `i`, so `w <= i`.
+    while ((i < z.n or rem != 0) and w < zc_digits) : (i += 1) {
+        const cur = rem * 10 + (if (i < z.n) z.d[i] else 0);
+        rem = cur & zlow;
         // `zq` and not `q`: this text is embedded at the FILE SCOPE of a
         // device, where `q` is the generated charge function — Zig forbids a
         // local that shadows a declaration, so every name here has to miss the
         // emitter's own (see `naming.zig`).
-        const zq = cur / 2;
+        const zq: u8 = @intCast(cur >> k);
         // A leading zero quotient digit is not stored; it moves the point.
         if (w == 0 and zq == 0) z.dp -= 1 else {
             z.d[w] = zq;
             w += 1;
         }
-    }
-    if (rem != 0 and w < zc_digits) { // halving spills exactly one 5
-        z.d[w] = 5;
-        w += 1;
     }
     z.n = w;
     zcTrim(z);
@@ -443,9 +449,17 @@ fn zcFrom(z: *ZCDec, v: f64) void {
     z.n = k;
     z.dp = @intCast(k);
     zcTrim(z);
-    var j: i32 = 0;
-    while (j < e2) : (j += 1) zcMul2(z);
-    while (j > e2) : (j -= 1) zcDiv2(z);
+    // 59 bits per pass: `zcMulP2`/`zcDivP2`'s bound.
+    while (e2 > 0) {
+        const zsh: u6 = @intCast(@min(e2, 59));
+        zcMulP2(z, zsh);
+        e2 -= zsh;
+    }
+    while (e2 < 0) {
+        const zsh: u6 = @intCast(@min(-e2, 59));
+        zcDivP2(z, zsh);
+        e2 += zsh;
+    }
 }
 
 /// The SHORTEST round-trip decimal of one f64, in the same shape. `%r` wants

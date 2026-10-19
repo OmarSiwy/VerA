@@ -50,9 +50,8 @@
 //! every other q bit 0 V. The operating point reads d[64] as 1, so y is 5 V
 //! through rout into 10 kΩ.
 //!
-//! v_huge, 1202 pins: past 255 no dense lane table fits, so the host runs a
-//! sparse family, one lane per output row, and solves the diagonal system
-//! pin by pin. d[k] is 5 V for k mod 3 = 2 and 0 V otherwise, a bus that
+//! v_huge, 1202 pins: each output row carries one lane, and the host solves
+//! the diagonal system pin by pin. d[k] is 5 V for k mod 3 = 2 and 0 V otherwise, a bus that
 //! never crosses; clk is the same PULSE. q starts 0; after the rising
 //! crossing at 5.5 ns q = d. d[599] is 1 (599 mod 3 = 2), so y is 5 V
 //! through rout into 10 kΩ from the operating point on.
@@ -70,11 +69,11 @@ const Link = struct { a: usize, b: usize, g: f64 };
 
 fn Circuit(comptime D: type) type {
     const n = @typeInfo(D.U).@"enum".field_names.len;
-    // A dense lane is a u8 below `no_lane`: past 255 pins the family is
-    // sparse, each row carrying the lanes of its pattern.
-    const sparse = n > 255;
-    const lanes: [n]u8 = if (sparse) @splat(0) else std.simd.iota(u8, n);
-    const S = contract.RefFamily(f64, &lanes, .{ .dense = !sparse });
+    // Every pin carries a lane; each row holds the lanes of its pattern.
+    // Past 255 pins the system is solved as the diagonal it is.
+    const huge = n > 255;
+    const lanes: [n]u8 = @splat(0);
+    const S = contract.RefFamily(f64, &lanes, .{});
     return struct {
         const Self = @This();
         const Dev = D;
@@ -106,7 +105,7 @@ fn Circuit(comptime D: type) type {
 
         /// Newton at `sim` until no unknown moves more than 1e-12 V.
         fn solve(c: *Self, sim: contract.SimState) !void {
-            if (sparse) return c.solveDiag(sim);
+            if (huge) return c.solveDiag(sim);
             for (0..50) |_| {
                 for (c.src, &c.x) |f, *x| if (f) |v| {
                     x.* = v(sim.t);
@@ -116,7 +115,7 @@ fn Circuit(comptime D: type) type {
                 var f: [n]f64 = undefined;
                 inline for (0..n) |u| {
                     f[u] = r[u].v;
-                    j[u] = r[u].d;
+                    j[u] = contract.denseRow(n, r[u]);
                 }
                 for (0..n) |u| {
                     f[u] += c.g_gnd[u] * c.x[u];

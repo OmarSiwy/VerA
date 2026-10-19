@@ -17,6 +17,7 @@ const gen_state = @import("state.zig");
 const gen_render = @import("render.zig");
 const gen_wide = @import("wide.zig");
 const family = @import("family.zig");
+const gen_mask = @import("mask.zig");
 const Mir = @import("ir").Mir;
 const proof = @import("prove").proof;
 const cg_filters = @import("../cg_filters.zig");
@@ -76,12 +77,12 @@ pub const Hoist = struct {
     idx: std.ArrayList(u32) = .empty,
     // Per real hoist element (indexed by `idx`): its mask, and where it
     // lives, array `h<grp>` at `[pos]`.
-    mask: std.ArrayList(u64) = .empty,
+    mask: std.ArrayList([]u64) = .empty,
     grp: std.ArrayList(u32) = .empty,
     pos: std.ArrayList(u32) = .empty,
     // Per array `h<g>`: it holds every element of mask `gmask[g]` (distinct,
     // in first-use order) and is `glen[g]` long.
-    gmask: std.ArrayList(u64) = .empty,
+    gmask: std.ArrayList([]const u64) = .empty,
     glen: std.ArrayList(u32) = .empty,
 };
 
@@ -524,7 +525,7 @@ pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
 
 /// Returns the mask of value `i`'s slot when it is an element of the real
 /// hoist array (what a write into it widens to), or null for a `const`.
-pub fn slotMask(self: *Gen, i: usize) ?u64 {
+pub fn slotMask(self: *Gen, i: usize) ?[]const u64 {
     if (self.an.vty[i] != .real) return null;
     if (slotArr(self, i) == null) return null;
     return self.hoist.mask.items[slotNum(self, i)];
@@ -533,13 +534,14 @@ pub fn slotMask(self: *Gen, i: usize) ?u64 {
 /// Every real hoist element's mask: the union over the values that share it.
 fn hoistMasks(self: *Gen, n: u32) Error!void {
     self.hoist.mask.clearRetainingCapacity();
-    try self.hoist.mask.appendNTimes(self.arena, 0, n);
+    try self.hoist.mask.ensureTotalCapacityPrecise(self.arena, n);
+    for (0..n) |_| self.hoist.mask.appendAssumeCapacity(try gen_mask.zero(self.arena, self.mw));
     for (self.plan.live.items) |lv| {
         const v = @backingInt(lv);
         if (self.an.vty[v] != .real or self.plan.slot[v] == none_u32) continue;
         const k = self.hoist.idx.items[self.plan.slot[v]];
         if (k == none_u32) continue;
-        self.hoist.mask.items[k] |= family.mask(self, lv);
+        gen_mask.orIn(self.hoist.mask.items[k], family.mask(self, lv));
     }
     for (self.hoist.mask.items) |m| try family.note(self, m);
     // One array per distinct mask: a `@Tuple` with one field per slot is
@@ -555,7 +557,9 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
     self.hoist.glen.clearRetainingCapacity();
     for (self.hoist.mask.items) |m| {
         // ponytail: linear scan; a body has 1-30 distinct masks.
-        const g = std.mem.findScalar(u64, self.hoist.gmask.items, m) orelse blk: {
+        const g = for (self.hoist.gmask.items, 0..) |gm, j| {
+            if (gen_mask.eql(gm, m)) break j;
+        } else blk: {
             try self.hoist.gmask.append(self.arena, m);
             try self.hoist.glen.append(self.arena, 0);
             break :blk self.hoist.gmask.items.len - 1;
@@ -808,7 +812,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         if (ty == .real) {
             for (self.hoist.gmask.items, self.hoist.glen.items, 0..) |m, len, g| {
                 if (g != 0) try self.ind(1);
-                try self.b("var h{d}: [{d}]zOf(S, 0x{x}) = undefined;\n", .{ g, len, m });
+                try self.b("var h{d}: [{d}]zOf(S, 0x{f}) = undefined;\n", .{ g, len, gen_mask.hex(m, false) });
             }
             continue;
         }

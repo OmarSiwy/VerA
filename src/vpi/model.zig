@@ -340,53 +340,62 @@ fn arrayIndex(local: []const u8) ?i64 {
     return std.fmt.parseInt(i64, local[open_at + 1 .. local.len - 1], 10) catch null;
 }
 
-/// The declarations each scope's attribute pass decorates: rows owned by
-/// one of the scopes, neither `.code` nor `.module`, with a source token.
-/// Bucketed by owner in object order, once, rather than found by a scan of
-/// every object per scope. Exact for a pass that runs scope by scope over
-/// the rows that exist before it, because a scope's pass adds only rows it
-/// owns, `.code` rows and ownerless ones.
-pub const Decls = struct {
-    /// Scope `i`'s rows are `rows[first[i]..first[i + 1]]`.
+/// Rows grouped by a dense u32 key: key `k`'s rows are
+/// `rows[first[k]..first[k + 1]]`, in the order they were given.
+pub const Csr = struct {
     first: []u32,
     rows: []u32,
 
-    /// Buckets `objects` by owner in two passes, O(objects). Caller owns the
-    /// result and frees it with `deinit` and the same `gpa`.
-    pub fn init(gpa: std.mem.Allocator, objects: []const Obj, n_scopes: usize) Error!Decls {
-        const first = try gpa.alloc(u32, n_scopes + 1);
+    /// From `(key, row)` pairs, every key below `n_keys`, in two passes,
+    /// O(keys + pairs). Caller owns the result and frees it with `deinit`
+    /// and the same `gpa`.
+    pub fn init(gpa: std.mem.Allocator, n_keys: usize, pairs: []const [2]u32) error{OutOfMemory}!Csr {
+        const first = try gpa.alloc(u32, n_keys + 1);
         errdefer gpa.free(first);
         @memset(first, 0);
-        for (objects) |o| if (isDecl(o, n_scopes)) {
-            first[o.owner.get().? + 1] += 1;
-        };
+        for (pairs) |p| first[p[0] + 1] += 1;
         for (1..first.len) |k| first[k] += first[k - 1];
-        const rows = try gpa.alloc(u32, first[n_scopes]);
+        const rows = try gpa.alloc(u32, pairs.len);
         errdefer gpa.free(rows);
-        const fill = try gpa.dupe(u32, first[0..n_scopes]);
+        const fill = try gpa.dupe(u32, first[0..n_keys]);
         defer gpa.free(fill);
-        for (objects, 0..) |o, at| if (isDecl(o, n_scopes)) {
-            rows[fill[o.owner.get().?]] = @intCast(at);
-            fill[o.owner.get().?] += 1;
-        };
+        for (pairs) |p| {
+            rows[fill[p[0]]] = p[1];
+            fill[p[0]] += 1;
+        }
+        std.debug.assert(first[n_keys] == pairs.len);
         return .{ .first = first, .rows = rows };
     }
 
     /// Frees both tables; `gpa` must be the one `init` used.
-    pub fn deinit(d: *Decls, gpa: std.mem.Allocator) void {
-        gpa.free(d.first);
-        gpa.free(d.rows);
+    pub fn deinit(c: *Csr, gpa: std.mem.Allocator) void {
+        gpa.free(c.first);
+        gpa.free(c.rows);
     }
 
-    /// Scope `i`'s declaration rows, in object order.
-    pub fn of(d: Decls, i: usize) []const u32 {
-        return d.rows[d.first[i]..d.first[i + 1]];
-    }
-
-    fn isDecl(o: Obj, n_scopes: usize) bool {
-        return o.owner != .none and o.owner.get().? < n_scopes and o.kind != .code and o.kind != .module and o.src_tok != 0;
+    /// Key `key`'s rows; none for a key past the table.
+    pub fn of(c: Csr, key: usize) []const u32 {
+        if (key >= c.first.len - 1) return &.{};
+        return c.rows[c.first[key]..c.first[key + 1]];
     }
 };
+
+/// The declarations each scope's attribute pass decorates, keyed by scope:
+/// rows owned by one of the scopes, neither `.code` nor `.module`, with a
+/// source token, in object order. Bucketed once rather than found by a scan
+/// of every object per scope. Exact for a pass that runs scope by scope over
+/// the rows that exist before it, because a scope's pass adds only rows it
+/// owns, `.code` rows and ownerless ones. Caller owns the result
+/// (`Csr.deinit` with the same `gpa`).
+pub fn decls(gpa: std.mem.Allocator, objects: []const Obj, n_scopes: usize) Error!Csr {
+    var pairs: std.ArrayList([2]u32) = .empty;
+    defer pairs.deinit(gpa);
+    for (objects, 0..) |o, at| {
+        const owner = o.owner.get() orelse continue;
+        if (owner < n_scopes and o.kind != .code and o.kind != .module and o.src_tok != 0) try pairs.append(gpa, .{ owner, @intCast(at) });
+    }
+    return .init(gpa, n_scopes, pairs.items);
+}
 
 /// §6.7 full name -> object, for resolving the identifiers of the
 /// behavioural objects. Built in object order, so where a port and a net
@@ -490,7 +499,7 @@ test "IEEE 1364-2005 §26.6.10 addRange: bounds as written, size the element cou
     }
 }
 
-/// Rows for the `Decls` tests: two scopes, and every reason a row is not a
+/// Rows for the `decls` tests: two scopes, and every reason a row is not a
 /// declaration.
 const decl_rows = [_]Obj{
     .{ .kind = .module, .owner = .none, .name = "", .full = "", .src_tok = 1 },
@@ -506,18 +515,57 @@ const decl_rows = [_]Obj{
     .{ .kind = .net, .owner = .of(7), .name = "", .full = "", .src_tok = 7 },
 };
 
-test "Decls: each scope's declaration rows, in object order" {
-    var decls: Decls = try .init(std.testing.allocator, &decl_rows, 2);
-    defer decls.deinit(std.testing.allocator);
-    try std.testing.expectEqualSlices(u32, &.{2}, decls.of(0));
-    try std.testing.expectEqualSlices(u32, &.{ 1, 5 }, decls.of(1));
+test "decls: each scope's declaration rows, in object order" {
+    var d = try decls(std.testing.allocator, &decl_rows, 2);
+    defer d.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u32, &.{2}, d.of(0));
+    try std.testing.expectEqualSlices(u32, &.{ 1, 5 }, d.of(1));
+    try std.testing.expectEqual(@as(usize, 0), d.of(2).len);
 }
 
 fn declsOnce(a: std.mem.Allocator, objects: []const Obj) !void {
-    var d: Decls = try .init(a, objects, 2);
+    var d = try decls(a, objects, 2);
     d.deinit(a);
 }
 
-test "Decls.init frees what it built when an allocation fails" {
+test "decls frees what it built when an allocation fails" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, declsOnce, .{@as([]const Obj, &decl_rows)});
+}
+
+test "Csr: every key's rows in the order given, against a scan of the pairs" {
+    var prng: std.Random.DefaultPrng = .init(0x5eed);
+    const random = prng.random();
+    var pairs: [64][2]u32 = undefined;
+    for (0..40) |round| {
+        // 1..5 keys, 0..64 pairs: empty keys, empty tables and repeats.
+        const n_keys: usize = round % 5 + 1;
+        const n = random.uintLessThan(usize, pairs.len + 1);
+        for (pairs[0..n], 0..) |*p, i| p.* = .{ random.uintLessThan(u32, @intCast(n_keys)), @intCast(i) };
+        var c: Csr = try .init(std.testing.allocator, n_keys, pairs[0..n]);
+        defer c.deinit(std.testing.allocator);
+        for (0..n_keys) |key| {
+            var want: [64]u32 = undefined;
+            var w: usize = 0;
+            for (pairs[0..n]) |p| {
+                if (p[0] != key) continue;
+                want[w] = p[1];
+                w += 1;
+            }
+            try std.testing.expectEqualSlices(u32, want[0..w], c.of(@intCast(key)));
+        }
+        // A key past the table has no rows.
+        try std.testing.expectEqual(@as(usize, 0), c.of(@intCast(n_keys)).len);
+        try std.testing.expectEqual(@as(usize, 0), c.of(std.math.maxInt(u32)).len);
+        try std.testing.expectEqual(@as(usize, 0), c.of(std.math.maxInt(usize)).len);
+    }
+}
+
+fn csrOnce(a: std.mem.Allocator, pairs: []const [2]u32) !void {
+    var c: Csr = try .init(a, 3, pairs);
+    c.deinit(a);
+}
+
+test "Csr.init frees what it built when an allocation fails" {
+    const pairs = [_][2]u32{ .{ 2, 0 }, .{ 0, 1 }, .{ 2, 2 } };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, csrOnce, .{@as([]const [2]u32, &pairs)});
 }

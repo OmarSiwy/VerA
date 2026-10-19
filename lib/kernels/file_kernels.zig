@@ -1,5 +1,5 @@
 // §9.5 file descriptor I/O kernels — EMITTED VERBATIM into a device built with
-// `--display=emit` that calls the §9.5 family (`codegen.file_txt` is
+// `--display=emit` that calls the §9.5 family (`kernel_text.file_txt` is
 // `@embedFile` of this file) and `@import`ed by codegen.zig's tests. One source,
 // so the descriptors the tests check are the descriptors the device opens.
 //
@@ -66,7 +66,7 @@ const ZFSlot = struct {
     /// §9.5.8 "EOF has previously been detected reading fd".
     eof: bool = false,
     /// §9.5.7's errno for the most recent operation on THIS descriptor.
-    err: i64 = 0,
+    err: u8 = 0,
     can_read: bool = false,
     can_write: bool = false,
     /// Table 9-24 "a"/"a+": every write goes to the end of the file, wherever
@@ -92,6 +92,11 @@ const ZFSlot = struct {
     // ponytail: a fixed stack; C promises one pushback and this holds 16.
     back: [16]u8 = undefined,
     nback: u8 = 0,
+
+    // One cache line per channel: `err` is a u8 errno for that reason.
+    comptime {
+        zfstd.debug.assert(@sizeOf(ZFSlot) <= 64);
+    }
 };
 
 /// §9.5.1: "limiting an implementation to at most 31 files opened for output via
@@ -116,7 +121,7 @@ var zf_retired: zfstd.ArrayList([]u8) = .empty;
 /// §9.5.1: "Applications can call $ferror to determine the cause of the most
 /// recent error" — after a FAILED open there is no descriptor to hang that on,
 /// since the fd is 0, so the cause lands here and `$ferror(0, str)` reports it.
-var zf_last_err: i64 = 0;
+var zf_last_err: u8 = 0;
 
 /// §9.5.1.1: "If a file is opened in a write mode in the first analysis and
 /// reopened in that write mode in following analysis, then content written from
@@ -287,7 +292,7 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
 /// A nonzero errno for §9.5.7. The numeric value is deliberately the C one where
 /// there is an obvious match and deliberately NOT asserted by any fixture:
 /// §9.5.7 says only "an error code is returned" and fixes no value.
-fn zfErrno(e: anyerror) i64 {
+fn zfErrno(e: anyerror) u8 {
     return switch (e) {
         error.FileNotFound => 2, // ENOENT
         error.AccessDenied, error.PermissionDenied => 13, // EACCES

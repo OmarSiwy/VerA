@@ -8,7 +8,7 @@ const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");
 const pp_annex_d = @import("annex_d.zig");
 const pp_prelude = @import("prelude.zig");
-const Allocator = Preprocessor.Allocator;
+const Allocator = std.mem.Allocator;
 const diag = @import("diag");
 const Lexer = @import("../lexer.zig");
 const token = @import("../token.zig");
@@ -1763,6 +1763,17 @@ test "§10.3: zero is a transition time, infinity and NaN are not" {
     try expectFail("`default_transition 1e400\n", .E0129);
     try expectFail("`default_transition inf\n", .E0129);
     try expectFail("`default_transition nan\n", .E0129);
+    // §2.6: the operand is one Verilog number. `std.fmt.parseFloat` also
+    // reads C's hex floats and a point with no digit after it (§2.6.2 wants
+    // one on each side), and drops a leading `_` (§2.6.1 forbids it first).
+    for ([_][]const u8{ "0x10", "1.", ".5", "_1", "1e", "-", "4n4" }) |op| {
+        const src = try testing.allocator.print("`default_transition {s}\n", .{op});
+        defer testing.allocator.free(src);
+        try expectFail(src, .E0129);
+    }
+    // A sign is a unary operator on the number, so `+4n` is a time.
+    const plus = (try process(arena, "`default_transition +4n\n", .{ .std_defs = false, .bag = &bag })).directives.transitions;
+    try testing.expectEqual(@as(?f64, 4e-9), plus[0].value);
 }
 
 test "IEEE 1364-2005 §13.4.1: files given together are one text stream" {
@@ -1834,6 +1845,36 @@ test "stringStop ends at the closing quote, an unescaped newline, or the end" {
         .{ .text = "\"a\\\nb\"", .want = 5 },
     };
     for (cases) |c| try testing.expectEqual(c.want, Preprocessor.stringStop(c.text, 0));
+
+    // Oracle: the per-byte loop `stringStop` replaced, on random text dense in
+    // the three bytes it branches on, from the empty body past three vectors.
+    const scalar = struct {
+        fn stop(text: []const u8, start: usize) usize {
+            var i = start + 1;
+            while (i < text.len and text[i] != '"' and text[i] != '\n') {
+                if (text[i] == '\\' and i + 1 < text.len) i += 1;
+                i += 1;
+            }
+            return i;
+        }
+    }.stop;
+    var prng: std.Random.DefaultPrng = .init(0x57a1);
+    const rand = prng.random();
+    var buf: [200]u8 = undefined;
+    for (1..buf.len + 1) |len| {
+        for (0..32) |_| {
+            for (buf[0..len]) |*b| b.* = switch (rand.uintLessThan(u8, 40)) {
+                0 => '"',
+                1, 2 => '\\',
+                3 => '\n',
+                else => 'a',
+            };
+            for (0..@min(len, 4)) |start| {
+                buf[start] = '"';
+                try testing.expectEqual(scalar(buf[0..len], start), Preprocessor.stringStop(buf[0..len], start));
+            }
+        }
+    }
 }
 
 test "Rest reads identifiers and escaped identifiers where the lexer splits them" {

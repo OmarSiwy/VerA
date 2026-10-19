@@ -11,6 +11,7 @@ const plan_args = @import("plan/args.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_dispatch = @import("dispatch.zig");
+const gen_mask = @import("mask.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_render = @import("render.zig");
@@ -463,7 +464,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const u = if (args.len > 1) self.an.foldConst(args[1], true) else null;
             const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
             // The value reads a lane, so record it in `ddx_reads`.
-            self.jac.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
+            // An index outside the unknowns marks every lane: a superset.
+            gen_mask.orIn(self.jac.ddx_reads, try gen_dispatch.bits(self, &.{if (lane >= 0 and lane < self.names.n_u) @intCast(lane) else none_u32}, &.{}));
             try self.b("S.con((", .{});
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
             // Saturating cast: bad MIR must not panic the compiler.
@@ -1122,9 +1124,9 @@ fn emitHostCall(self: *Gen, first: ?Mir.Value, args: []const Mir.Value, host: []
     try self.b(" }};\n", .{});
     try self.b("        var zsp: [{d}]f64 = undefined;\n", .{args.len});
     // `zsr` holds every argument's lanes, the union of theirs.
-    var m: u64 = 0;
-    for (args) |a| m |= family.mask(self, a);
-    const to = try self.arena.print("zTo(S, 0x{x}, ", .{m});
+    const m = try gen_mask.zero(self.arena, self.mw);
+    for (args) |a| gen_mask.orIn(m, family.mask(self, a));
+    const to = try self.arena.print("zTo(S, 0x{f}, ", .{gen_mask.hex(m, false)});
     const end = ")";
     try self.b("        var zsr = {s}S.con({s}){s};\n", .{ to, host, end });
     for (args, 0..) |_, j|
@@ -1258,8 +1260,8 @@ fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKind) 
     // A kernel runs at the result's mask `fm`, as `gen_render.kernelOpen`
     // says; `kS` is its scalar and `in` its input.
     const fm = family.mask(self, self.mir.instResult(inst));
-    const kS = try self.arena.print("zL(S, 0x{x})", .{fm});
-    const in = if (needs_in) try self.arena.print("zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
+    const kS = try self.arena.print("zL(S, 0x{f})", .{gen_mask.hex(fm, false)});
+    const in = if (needs_in) try self.arena.print("zLw(S, 0x{f}, {s})", .{ gen_mask.hex(fm, false), in0 }) else in0;
     switch (k) {
         // §4.5.11 the cascade is linear in the current input, so its
         // Jacobian `b0/a0` is exact.
@@ -1416,8 +1418,8 @@ fn acOpen(self: *Gen, kS: []const u8, ac: []const u8) Error!void {
     try self.b("if (comptime @hasDecl(S.Of(0), \"acMul\")) {s} else zSs({s}, sim.kind, ", .{ ac, kS });
 }
 
-fn opOpen(self: *Gen, m: u64) Error!void {
-    try self.b("zLu(S, 0x{x}, ", .{m});
+fn opOpen(self: *Gen, m: []const u64) Error!void {
+    try self.b("zLu(S, 0x{f}, ", .{gen_mask.hex(m, false)});
 }
 fn opClose(self: *Gen) Error!void {
     try self.b(")", .{});

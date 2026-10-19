@@ -107,6 +107,11 @@ const Bits = struct {
     }
 };
 
+// Passed by value on every read: two borrowed planes, a width and a sign.
+comptime {
+    std.debug.assert(@sizeOf(Bits) == 40);
+}
+
 /// What an object's value is, when it has one.
 const Source = union(enum) {
     bits: Bits,
@@ -409,27 +414,14 @@ fn toReal(b: Bits) f64 {
 /// expression reading the group.
 fn radixString(out: *std.ArrayList(u8), b: Bits, format: c_int) !void {
     switch (format) {
-        vpiBinStrVal => {
-            var i = b.width;
-            while (i > 0) {
-                i -= 1;
-                try out.append(gpa, switch (b.bit(i)) {
-                    .zero => '0',
-                    .one => '1',
-                    .x => 'x',
-                    .z => 'z',
-                });
-            }
-        },
+        vpiBinStrVal => binText(try out.addManyAsSlice(gpa, b.width), b.val, b.unk),
         vpiOctStrVal, vpiHexStrVal => {
             const g: u32 = if (format == vpiOctStrVal) 3 else 4;
-            const groups = (b.width + g - 1) / g;
-            var k = groups;
-            while (k > 0) {
-                k -= 1;
-                const lo = k * g;
-                const hi = @min(lo + g, b.width);
-                try out.append(gpa, groupChar(b, lo, hi));
+            const dst = try out.addManyAsSlice(gpa, (b.width + g - 1) / g);
+            // dst[0] is the most significant group, the only partial one.
+            for (dst, 0..) |*c, j| {
+                const lo = @as(u32, @intCast(dst.len - 1 - j)) * g;
+                c.* = groupChar(b, lo, @min(lo + g, b.width));
             }
         },
         vpiDecStrVal => {
@@ -445,49 +437,119 @@ fn radixString(out: *std.ArrayList(u8), b: Bits, format: c_int) !void {
             // "each 8-bit group of the value of the object is assumed to
             // represent an ASCII character", MSB first. A NUL group prints
             // nothing: it is the padding of a register wider than its text.
+            // An x or z bit reads as 0.
+            try out.ensureUnusedCapacity(gpa, (b.width + 7) / 8);
             var k = (b.width + 7) / 8;
             while (k > 0) {
                 k -= 1;
-                var c: u8 = 0;
                 const lo = k * 8;
-                const hi = @min(lo + 8, b.width);
-                var i = hi;
-                while (i > lo) {
-                    i -= 1;
-                    c = (c << 1) | @intFromBool(b.bit(i) == .one);
-                }
-                if (c != 0) try out.append(gpa, c);
+                const n = @min(8, b.width - lo);
+                const c: u8 = @intCast(field(b.val, lo, n) & ~field(b.unk, lo, n));
+                if (c != 0) out.appendAssumeCapacity(c);
             }
         },
         else => unreachable,
     }
 }
 
-fn groupChar(b: Bits, lo: u32, hi: u32) u8 {
-    var xs: u32 = 0;
-    var zs: u32 = 0;
-    var d: u8 = 0;
-    var i = hi;
-    while (i > lo) {
-        i -= 1;
-        const bit = b.bit(i);
-        d = (d << 1) | @intFromBool(bit == .one);
-        if (bit == .x) xs += 1;
-        if (bit == .z) zs += 1;
+/// Byte `x` spread to eight bytes of 0 or 1, its MSB in the first byte.
+const spread: [256]u64 = blk: {
+    @setEvalBranchQuota(4000);
+    var t: [256]u64 = undefined;
+    for (&t, 0..) |*w, x| {
+        w.* = 0;
+        for (0..8) |j| w.* |= @as(u64, (x >> (7 - j)) & 1) << (8 * j);
     }
-    const n = hi - lo;
-    if (xs == n) return 'x';
-    if (zs == n) return 'z';
-    if (xs != 0) return 'X';
-    if (zs != 0) return 'Z';
-    return "0123456789abcdef"[d];
+    break :blk t;
+};
+
+/// vpiBinStrVal's characters, MSB first: `dst.len` bits of the planes `val`
+/// and `unk` (Figure 12-10), eight per step once the top `dst.len % 8` are
+/// written. A byte of chars is 0x30 + v + 0x4a*u - 3*(v&u): '0', '1', 'z'
+/// (0x7a), 'x' (0x78), with no carry between bytes.
+fn binText(dst: []u8, val: []const u64, unk: []const u64) void {
+    const head = dst.len % 8;
+    for (dst[0..head], 0..) |*c, j| {
+        const i = dst.len - 1 - j;
+        const o: u6 = @truncate(i);
+        const v: u8 = @truncate(val[i / 64] >> o & 1);
+        const u: u8 = @truncate(unk[i / 64] >> o & 1);
+        c.* = "01zx"[v | u << 1];
+    }
+    var k = head;
+    var i = dst.len - head;
+    while (i > 0) : (k += 8) {
+        i -= 8;
+        const o: u6 = @truncate(i);
+        const v = spread[@as(u8, @truncate(val[i / 64] >> o))];
+        const u = spread[@as(u8, @truncate(unk[i / 64] >> o))];
+        std.mem.writeInt(u64, dst[k..][0..8], 0x3030303030303030 +% v +% 0x4a *% u -% 3 *% (v & u), .little);
+    }
+}
+
+/// Bits [lo, lo + n) of `plane`, n in 1..64, as the low bits of a word.
+/// Asserts the plane holds them.
+fn field(plane: []const u64, lo: u32, n: u32) u64 {
+    std.debug.assert(n >= 1 and n <= 64);
+    std.debug.assert((lo + n + 63) / 64 <= plane.len);
+    const w = lo / 64;
+    const o: u6 = @truncate(lo);
+    var x = plane[w] >> o;
+    if (o != 0 and o + n > 64) x |= plane[w + 1] << @intCast(64 - @as(u32, o));
+    return x & lowMask(n);
+}
+
+fn lowMask(n: u32) u64 {
+    return if (n >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(n)) - 1;
+}
+
+/// ORs the `n`-bit `bits` (n in 1..64) into `plane` at bit `lo`, dropping
+/// what falls at or past `width`; `plane` holds `width` bits.
+fn orField(plane: []u64, lo: usize, bits: u64, n: u32, width: u32) void {
+    if (lo >= width) return;
+    const x = bits & lowMask(@intCast(@min(n, width - lo)));
+    const w = lo / 64;
+    const o: u6 = @truncate(lo);
+    plane[w] |= x << o;
+    if (o != 0 and o + n > 64) plane[w + 1] |= x >> @intCast(64 - @as(u32, o));
+}
+
+/// Bits [lo, hi) of `b` as one character: `x`/`z` when every bit is x/z,
+/// `X` when any is x, `Z` when any is z, else the value's hex digit (which
+/// needs hi - lo <= 4).
+fn groupChar(b: Bits, lo: u32, hi: u32) u8 {
+    var all_x = true;
+    var all_z = true;
+    var any_x = false;
+    var any_z = false;
+    var d: u64 = 0;
+    var i = lo;
+    while (i < hi) {
+        const n = @min(hi - i, 64);
+        const m = lowMask(n);
+        const v = field(b.val, i, n);
+        const u = field(b.unk, i, n);
+        all_x = all_x and v & u == m;
+        all_z = all_z and ~v & u == m;
+        any_x = any_x or v & u != 0;
+        any_z = any_z or ~v & u & m != 0;
+        d = v;
+        i += n;
+    }
+    if (all_x) return 'x';
+    if (all_z) return 'z';
+    if (any_x) return 'X';
+    if (any_z) return 'Z';
+    return "0123456789abcdef"[@intCast(d)];
 }
 
 /// Decimal of a fully known value, any width: repeated division of the
 /// magnitude by 10. Signed objects print their sign.
 fn decimal(out: *std.ArrayList(u8), b: Bits) !void {
-    const words = try gpa.alloc(u64, b.val.len);
-    defer gpa.free(words);
+    // Up to 1024 bits on the stack: the common widths never allocate.
+    var stack: [16]u64 = undefined;
+    const words = if (b.val.len <= stack.len) stack[0..b.val.len] else try gpa.alloc(u64, b.val.len);
+    defer if (words.ptr != @as([*]u64, &stack)) gpa.free(words);
     @memcpy(words, b.val);
     // Mask to width, then negate a signed negative value.
     if (b.width % 64 != 0) words[words.len - 1] &= (@as(u64, 1) << @intCast(b.width % 64)) - 1;
@@ -907,16 +969,6 @@ fn toPlanes(v: *const Value, width: u32, planes: []u64) !void {
     const n = planes.len / 2;
     const val = planes[0..n];
     const unk = planes[n..];
-    const set = struct {
-        fn f(vv: []u64, uu: []u64, w: u32, i: u32, b: Int.Bit) void {
-            if (i >= w) return;
-            const o: u6 = @truncate(i);
-            const m = @as(u64, 1) << o;
-            const e = @backingInt(b);
-            if (e & 1 != 0) vv[i / 64] |= m;
-            if (e & 2 != 0) uu[i / 64] |= m;
-        }
-    }.f;
     switch (v.format) {
         vpiIntVal, vpiRealVal, vpiTimeVal => {
             const x: u64 = switch (v.format) {
@@ -932,13 +984,17 @@ fn toPlanes(v: *const Value, width: u32, planes: []u64) !void {
             const fill: u64 = if (v.format != vpiTimeVal and @as(i64, @bitCast(x)) < 0) ~@as(u64, 0) else 0;
             for (val, 0..) |*w, k| w.* = if (k == 0) x else fill;
         },
-        vpiScalarVal => set(val, unk, width, 0, switch (v.value.scalar) {
-            vpi0, vpiL => .zero,
-            vpi1, vpiH => .one,
-            vpiZ => .z,
-            vpiX => .x,
-            else => return badPut("vpiScalarVal outside vpi0/vpi1/vpiX/vpiZ/vpiH/vpiL"),
-        }),
+        vpiScalarVal => {
+            const bit: Int.Bit = switch (v.value.scalar) {
+                vpi0, vpiL => .zero,
+                vpi1, vpiH => .one,
+                vpiZ => .z,
+                vpiX => .x,
+                else => return badPut("vpiScalarVal outside vpi0/vpi1/vpiX/vpiZ/vpiH/vpiL"),
+            };
+            orField(val, 0, @backingInt(bit) & 1, 1, width);
+            orField(unk, 0, @backingInt(bit) >> 1, 1, width);
+        },
         vpiVectorVal => {
             const vec = v.value.vector orelse return badPut("vpiVectorVal with a NULL vector");
             const words = (width + 31) / 32;
@@ -957,22 +1013,17 @@ fn toPlanes(v: *const Value, width: u32, planes: []u64) !void {
                 vpiOctStrVal => 3,
                 else => 4,
             };
-            var i: u32 = 0;
-            var k = s.len;
-            while (k > 0) {
-                k -= 1;
-                const c = s[k];
-                const digit: ?u8 = std.fmt.charToDigit(c, @as(u8, 1) << @intCast(g)) catch null;
-                var j: u32 = 0;
-                while (j < g) : (j += 1) {
-                    const b: Int.Bit = switch (c) {
-                        'x', 'X' => .x,
-                        'z', 'Z', '?' => .z,
-                        else => if (digit) |d| (if ((d >> @intCast(j)) & 1 == 1) .one else .zero) else return badPut("a digit outside the format's radix"),
-                    };
-                    set(val, unk, width, i + j, b);
-                }
-                i += g;
+            const m = lowMask(g);
+            // Every character is checked, those past the width included.
+            for (0..s.len) |k| {
+                const c = s[s.len - 1 - k];
+                const d: u64, const u: u64 = switch (c) {
+                    'x', 'X' => .{ m, m },
+                    'z', 'Z', '?' => .{ 0, m },
+                    else => .{ std.fmt.charToDigit(c, @as(u8, 1) << @intCast(g)) catch return badPut("a digit outside the format's radix"), 0 },
+                };
+                orField(val, k * g, d, g, width);
+                orField(unk, k * g, u, g, width);
             }
         },
         vpiDecStrVal => {
@@ -1000,10 +1051,7 @@ fn toPlanes(v: *const Value, width: u32, planes: []u64) !void {
         vpiStringVal => {
             const s = std.mem.span(v.value.str orelse return badPut("vpiStringVal with a NULL str"));
             // The LAST character is the least significant byte.
-            for (0..s.len) |k| {
-                const c = s[s.len - 1 - k];
-                for (0..8) |j| set(val, unk, width, @intCast(k * 8 + j), if ((c >> @intCast(j)) & 1 == 1) .one else .zero);
-            }
+            for (0..s.len) |k| orField(val, k * 8, s[s.len - 1 - k], 8, width);
         },
         else => return badPut("a value format vpi_put_value does not read"),
     }
@@ -1520,4 +1568,117 @@ test "§12.30: put refusals that need no design" {
     try std.testing.expect(!scheduled(&e));
     try std.testing.expect(asEvent(@ptrCast(@constCast(&e))) == null);
     try std.testing.expect(asEvent(null) == null);
+}
+
+/// The bit-at-a-time spelling `radixString` replaced: the differential
+/// tests' oracle.
+fn radixOracle(out: *std.ArrayList(u8), b: Bits, format: c_int) !void {
+    const g: u32 = switch (format) {
+        vpiBinStrVal => 1,
+        vpiOctStrVal => 3,
+        vpiHexStrVal => 4,
+        else => 8,
+    };
+    var k = (b.width + g - 1) / g;
+    while (k > 0) {
+        k -= 1;
+        var xs: u32 = 0;
+        var zs: u32 = 0;
+        var d: u8 = 0;
+        var i = @min(k * g + g, b.width);
+        while (i > k * g) {
+            i -= 1;
+            const bit = b.bit(i);
+            d = (d << 1) | @intFromBool(bit == .one);
+            xs += @intFromBool(bit == .x);
+            zs += @intFromBool(bit == .z);
+        }
+        const n = @min(k * g + g, b.width) - k * g;
+        if (g == 8) {
+            if (d != 0) try out.append(gpa, d);
+        } else try out.append(gpa, if (xs == n) 'x' else if (zs == n) 'z' else if (xs != 0) 'X' else if (zs != 0) 'Z' else "0123456789abcdef"[d]);
+    }
+}
+
+test "Table 12-4 string formats: widths 0..200 at every offset, against the bit-at-a-time oracle" {
+    var prng: std.Random.DefaultPrng = .init(0x1364);
+    const random = prng.random();
+    var got: std.ArrayList(u8) = .empty;
+    defer got.deinit(gpa);
+    var want: std.ArrayList(u8) = .empty;
+    defer want.deinit(gpa);
+    var planes: [2 * 5]u64 = undefined;
+    for (0..201) |width| {
+        // Dense x/z, sparse, and none; then every value bit set.
+        for (0..4) |round| {
+            for (&planes) |*w| w.* = random.int(u64);
+            const val = planes[0..4];
+            const unk = planes[5..9];
+            switch (round) {
+                0 => {},
+                1 => for (unk) |*u| {
+                    u.* &= random.int(u64) & random.int(u64);
+                },
+                2 => @memset(unk, 0),
+                else => {
+                    @memset(val, ~@as(u64, 0));
+                    @memset(unk, 0);
+                },
+            }
+            // A misaligned start: the planes begin one word in.
+            const b: Bits = .{ .width = @intCast(width), .val = planes[round % 2 ..][0..4], .unk = planes[5 + round % 2 ..][0..4], .signed = false };
+            for ([_]c_int{ vpiBinStrVal, vpiOctStrVal, vpiHexStrVal, vpiStringVal }) |format| {
+                got.clearRetainingCapacity();
+                want.clearRetainingCapacity();
+                try radixString(&got, b, format);
+                try radixOracle(&want, b, format);
+                try std.testing.expectEqualStrings(want.items, got.items);
+            }
+            // A binary string a get wrote, x and z included, puts back the
+            // same planes, masked to the width.
+            got.clearRetainingCapacity();
+            try radixString(&got, b, vpiBinStrVal);
+            try got.append(gpa, 0);
+            var v: Value = std.mem.zeroes(Value);
+            v.format = vpiBinStrVal;
+            v.value.str = got.items.ptr;
+            const n = @max(1, (width + 63) / 64);
+            var back: [8]u64 = undefined;
+            try toPlanes(&v, @intCast(width), back[0 .. 2 * n]);
+            for (0..n) |w| {
+                const m = lowMask(@intCast(@min(64, width - 64 * w)));
+                try std.testing.expectEqual(b.val[w] & m, back[w]);
+                try std.testing.expectEqual(b.unk[w] & m, back[n + w]);
+            }
+        }
+    }
+}
+
+test "§12.30 toPlanes: a vector's words past the width are dropped; a decimal string of any width reads back" {
+    var v: Value = std.mem.zeroes(Value);
+    var planes: [2 * 18]u64 = undefined;
+    // 40 bits: two vecvals, the second's bits past bit 7 cleared.
+    var vec = [2]VecVal{ .{ .aval = -1, .bval = 0x0f }, .{ .aval = -1, .bval = -1 } };
+    v.format = vpiVectorVal;
+    v.value.vector = &vec;
+    try toPlanes(&v, 40, planes[0..2]);
+    try std.testing.expectEqualSlices(u64, &.{ 0xff_ffff_ffff, 0xff_0000_000f }, planes[0..2]);
+    // Decimal through 1100 bits, past `decimal`'s stack words: the put's
+    // planes print back as the same digits, a negative one with its sign.
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    for ([_][:0]const u8{ "0", "123456789012345678901234567890123456789", "-98765432109876543210" }) |text| {
+        v.format = vpiDecStrVal;
+        v.value.str = @constCast(text.ptr);
+        try toPlanes(&v, 1100, &planes);
+        out.clearRetainingCapacity();
+        try radixString(&out, .{ .width = 1100, .val = planes[0..18], .unk = planes[18..], .signed = text[0] == '-' }, vpiDecStrVal);
+        try std.testing.expectEqualStrings(text, out.items);
+    }
+    // An empty decimal string is 0; a lone sign is too.
+    for ([_][:0]const u8{ "", "-" }) |text| {
+        v.value.str = @constCast(text.ptr);
+        try toPlanes(&v, 8, planes[0..2]);
+        try std.testing.expectEqualSlices(u64, &.{ 0, 0 }, planes[0..2]);
+    }
 }

@@ -7,10 +7,10 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = contract.nU(D);
-const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 fn gds(m: *D.Model) f64 {
-    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), m);
+    if (@hasDecl(D, "setup")) D.setup(S0, m);
     var inst: D.Instance = .{};
     if (@hasDecl(D, "setupInstance")) D.setupInstance(m, &inst);
     var x: [n_u]f64 = @splat(0.0);

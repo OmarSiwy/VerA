@@ -243,9 +243,7 @@ pub const Nets = struct {
     }
 };
 
-fn words(w: u32) u32 {
-    return (w + 63) / 64;
-}
+const words = logic.words;
 
 fn int(b: Bit) Int.Bit {
     return @fromBackingInt(@intCast(@backingInt(b)));
@@ -368,11 +366,7 @@ pub fn bridge(s: *State, i: u32) Error!void {
     const planes = t.scratch[0 .. 2 * words(w)];
     fill(planes, w, .z);
     for (0..b.width) |j| {
-        const at = b.src_lo + @as(u32, @intCast(j));
-        const o = b.src_off + at / 64;
-        const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
-        const x: u2 = if (logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
-        setBit(planes, b.dst_lo + @as(u32, @intCast(j)), @fromBackingInt(@intCast(v | x << 1)));
+        setBit(planes, b.dst_lo + @as(u32, @intCast(j)), shown(s, b.src_off, b.src_lo + @as(u32, @intCast(j))));
     }
     return drive(s, i, planes, false);
 }
@@ -532,7 +526,7 @@ fn resolveJoined(s: *State, start: u32) Error!void {
             }
             if (acc.none()) for (group, paths) |z, p| {
                 const n = t.nets[z.net];
-                if (n.kind == .trireg) acc = acc.combine(dnet.crossed(.of(shown(s, n, z.bit), n.charge, n.charge), z, y, p));
+                if (n.kind == .trireg) acc = acc.combine(dnet.crossed(.of(shown(s, n.off, z.bit), n.charge, n.charge), z, y, p));
             };
             const n = t.nets[y.net];
             const res = t.res[t.nat[y.net]..][0 .. 2 * words(n.width)];
@@ -556,9 +550,9 @@ fn resolveJoined(s: *State, start: u32) Error!void {
     }
 }
 
-/// Bit `at` of what net `n` shows.
-fn shown(s: *const State, n: Net, at: u32) Int.Bit {
-    const o = n.off + at / 64;
+/// Bit `at` of the value whose first word is word `off` of the planes.
+pub fn shown(s: *const State, off: u32, at: u32) Int.Bit {
+    const o = off + at / 64;
     const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
     const x: u2 = if (logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
     return @fromBackingInt(@intCast(v | x << 1));
@@ -812,4 +806,21 @@ test "the all-strong plane fold is Signal's fold across word boundaries" {
             if (kind == .trireg) try std.testing.expectEqual(f2, f1);
         };
     }
+}
+
+test "§6.5.7.1 a port window passes its source bits, z and x included, and shown reads them back" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var d = root.one_slot;
+    // Slot 0 is the 4-bit net at word 0; word 1 is the source: 1, z, 1, 0 from bit 3 down.
+    d.v = &.{ 0, 0b1010 };
+    d.x = &.{ 0, 0b0100 };
+    d.nets = &.{.{ .kind = .wire, .slot = 0, .off = 0, .width = 4, .drivers = &.{0}, .strong = false }};
+    d.drivers = &.{.{ .net = 0, .source = .{ .bridge = .{ .src_off = 1, .src_lo = 0, .dst_lo = 0, .width = 4 } } }};
+    const s = try root.testState(arena.allocator(), &d);
+    try bridge(s, 0);
+    try std.testing.expectEqual(@as(u64, 0b1010), s.v[0]);
+    try std.testing.expectEqual(@as(u64, 0b0100), s.x[0]);
+    const want = [_]Int.Bit{ .zero, .one, .z, .one };
+    for (want, 0..) |b, i| try std.testing.expectEqual(b, shown(s, 0, @intCast(i)));
 }

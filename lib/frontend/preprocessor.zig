@@ -6,9 +6,7 @@
 //! each output offset back to its file, include or macro origin.
 
 const std = @import("std");
-/// The allocator type every pp/ file and caller names; re-exported so they
-/// need not import `std` for it.
-pub const Allocator = std.mem.Allocator;
+const Allocator = std.mem.Allocator;
 const diag = @import("diag");
 const deep_stack = @import("base").deep_stack;
 /// Annex E.2 `.MODEL`/`.SUBCKT` reader; its modules follow the prelude.
@@ -964,11 +962,11 @@ pub fn stringStop(text: []const u8, start: usize) usize {
     // lexer rejects escaped newlines and `substitute` crosses bare ones; share
     // one scan only if those rules converge.
     var i = start + 1;
-    while (i < text.len and text[i] != '"' and text[i] != '\n') {
-        if (text[i] == '\\' and i + 1 < text.len) i += 1;
-        i += 1;
+    while (true) {
+        i = findStop(text, i, "\"\n\\");
+        if (i == text.len or text[i] != '\\') return i;
+        i = @min(i + 2, text.len);
     }
-    return i;
 }
 
 /// Cursor over the tail of a directive line.
@@ -1011,6 +1009,7 @@ pub const Rest = struct {
 // would.
 pub const isSpace = @import("lexer.zig").isSpace;
 pub const isIdentChar = @import("lexer.zig").isIdentChar;
+pub const identEnd = @import("lexer.zig").identEnd;
 pub const escapedEnd = @import("lexer.zig").escapedEnd;
 
 /// Reports whether `c` may start a §2.8 simple identifier. Admits `$`, which

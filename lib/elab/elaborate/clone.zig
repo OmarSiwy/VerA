@@ -23,7 +23,7 @@ const sep = elaborate.sep;
 /// parameter is local: the device's model card is the top's parameter list,
 /// and a child's value is fixed at elaboration. Reports E0921 on a §3.4.4
 /// array size mismatch.
-pub inline fn cloneParams(
+pub fn cloneParams(
     self: *Flatten,
     params: []const Ast.ParamDecl,
     aliases: []const Ast.AliasParam,
@@ -43,6 +43,7 @@ pub inline fn cloneParams(
         }
         out.is_local = true;
         try self.params.append(self.ctx.arena, out);
+        try elab_names.syncParamValues(self);
         if (out.dims.len != 0) try checkArraySize(self, out, over.contains(p.name));
     }
     for (aliases) |al| {
@@ -62,6 +63,7 @@ pub inline fn cloneParams(
                 .is_local = true,
                 .main_tok = 0,
             });
+            try elab_names.syncParamValues(self);
         } else try self.aliasparams.append(self.ctx.arena, .{
             .alias = elab_names.flat(self, al.alias),
             .target = elab_names.flat(self, al.target),

@@ -13,6 +13,7 @@ const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
+const gen_mask = @import("mask.zig");
 const gen_file = @import("file.zig");
 const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
@@ -163,14 +164,14 @@ pub fn emitNoiseCore(self: *Gen) Error!void {
     // `ddx` marks `jac.ddx_reads` as its text is emitted, so a mask cleared
     // around the slice says whether the PSD arguments read a lane (#32).
     const ddx_before = self.jac.ddx_reads;
-    self.jac.ddx_reads = 0;
+    self.jac.ddx_reads = try gen_mask.zero(self.arena, self.mw);
     self.noise_core = try gen_unit.sliceCore(self, "noise", keep,
         \\/// §4.6.4 the PSD arguments the core computes, and only what they read:
         \\/// `noisePsd` evaluates them at the operating point `x`.
         \\
     );
-    self.noise_reads_ddx = self.jac.ddx_reads != 0;
-    self.jac.ddx_reads |= ddx_before;
+    self.noise_reads_ddx = !gen_mask.isZero(self.jac.ddx_reads);
+    gen_mask.orIn(self.jac.ddx_reads, ddx_before);
 }
 
 /// Emits `noiseTablePoints`: the knots of every §4.6.4.3 table as the model

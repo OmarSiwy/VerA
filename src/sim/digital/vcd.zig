@@ -57,6 +57,12 @@ const Code = struct {
     last: []u64,
     /// An event's code: triggered in this time step (§18.2.2).
     fired: bool = false,
+
+    // Budget: `changes` walks every code each dumped step.
+    comptime {
+        std.debug.assert(@sizeOf(Code) == 24);
+        std.debug.assert(@sizeOf(Var) == 48);
+    }
 };
 
 /// Why a dump stops; `message` gives each non-memory, non-writer one's text.

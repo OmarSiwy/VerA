@@ -350,9 +350,7 @@ pub const ScopeLists = struct {
     }
 };
 
-/// The builders' error set, shared with the model so a builder call needs no
-/// mapping.
-pub const Error = root.Error;
+const Error = root.Error;
 
 /// One scope's worth of building: where new rows go, how a name in this
 /// scope resolves, and the path new named objects hang under.
@@ -718,7 +716,7 @@ pub const Builder = struct {
             const terms = try b.arena.alloc(Ast.ExprId, 1 + g.ins.len);
             terms[0] = g.out;
             @memcpy(terms[1..], g.ins);
-            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms, &.{}, &.{
+            const at = try b.primitive(vpiGate, gateType(g.kind), @tagName(g.kind)["g_".len..], terms, &.{}, &.{
                 .{ .prop = root.vpiArray, .value = @intFromBool(g.range != null) },
                 .{ .prop = vpiStrength0, .value = drive(g.strength0) },
                 .{ .prop = vpiStrength1, .value = drive(g.strength1) },
@@ -1531,24 +1529,6 @@ fn drive(s: Ast.Strength) c_int {
     return @as(c_int, 1) << @intCast(@backingInt(s));
 }
 
-/// A gate's vpiDefName: its keyword (A.3.4).
-fn gateName(k: Ast.GateKind) []const u8 {
-    return switch (k) {
-        .g_and => "and",
-        .g_nand => "nand",
-        .g_nor => "nor",
-        .g_or => "or",
-        .g_xor => "xor",
-        .g_xnor => "xnor",
-        .g_buf => "buf",
-        .g_not => "not",
-        .g_bufif0 => "bufif0",
-        .g_bufif1 => "bufif1",
-        .g_notif0 => "notif0",
-        .g_notif1 => "notif1",
-    };
-}
-
 /// §11.6.14 the UDP definitions of `file`, design-wide (the diagram's
 /// circled arrow): each with its io decls (the output, then the inputs) and
 /// its table entries, whose vpiSize is "number of symbol entries" — one per
@@ -1847,8 +1827,8 @@ test "Annex G vpiPrimType: gates 1-12, switches 13-24, each once; a gate's vpiDe
     var gates: u32 = 0;
     for (std.enums.values(Ast.GateKind)) |k| {
         gates |= @as(u32, 1) << @intCast(gateType(k));
-        // The tags are the keywords behind a `g_` prefix.
-        try std.testing.expectEqualStrings(@tagName(k)[2..], gateName(k));
+        // `module` spells a gate's vpiDefName as its tag behind `g_` (A.3.4).
+        try std.testing.expect(std.mem.startsWith(u8, @tagName(k), "g_"));
     }
     try std.testing.expectEqual(@as(u32, 0x1FFE), gates);
     var switches: u32 = 0;

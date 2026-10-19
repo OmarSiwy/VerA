@@ -109,7 +109,7 @@ pub const Net = struct {
     /// §3.8's capacitive state. The decay countdown restarts on each entry into
     /// it, so the transition is what is watched, not the state.
     capacitive: bool = false,
-    /// A MOS switch's data terminal is this net, so `signal` is read.
+    /// A MOS switch's data terminal or a `%v` (§17.1.1.5) reads this net's `signal`.
     strength_read: bool = false,
     /// The first of this net's entries in `Run.signals`, one per declared bit
     /// (a wreal promoted to 64 bits keeps its declared count; it never
@@ -178,7 +178,7 @@ pub const Tran = struct {
 /// §7.11/§7.12 a signal that crossed `hops` pass switches, `resistive` of
 /// them resistive: supply becomes strong at the first switch, and each
 /// resistive one reduces by Table 7-8.
-pub fn reduceSignal(sig: Signal, hops: u32, resistive: u32) Signal {
+fn reduceSignal(sig: Signal, hops: u32, resistive: u32) Signal {
     if (hops == 0) return sig;
     const one = struct {
         fn side(v: i8, k: u32) i8 {
@@ -306,6 +306,13 @@ pub const Slice = struct { lo: u32, total: u32 };
 /// as wide as the array gives it its bit `lane` (§7.1.6), a scalar one is
 /// broadcast, and it drives bit `out_bit` of a vector output net.
 pub const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId, lane: ?u32 = null, lanes: u32 = 1, out_bit: ?u32 = null };
+
+comptime {
+    // `Gate` is `Source`'s widest arm: its two `?u32` (8 bytes each) set
+    // the 48-byte `Source` inside `Driver`.
+    std.debug.assert(@sizeOf(Gate) == 40);
+    std.debug.assert(@sizeOf(Source) == 48);
+}
 
 /// §7.8.5: "a gate transmits a logic value, not a connection": every primitive
 /// but the MOS switches reads a z input as x, unlike the expression operators.
@@ -454,6 +461,11 @@ pub const Signal = struct {
     lo: i8 = 0,
     hi: i8 = 0,
 
+    // Budget: one per net bit (`Run.signals`).
+    comptime {
+        std.debug.assert(@sizeOf(Signal) == 2);
+    }
+
     /// What a driver holding `b` at `(s0, s1)` asserts. An `x` spans both
     /// sides, an ambiguous range rather than a value, and a `z` asserts
     /// nothing, which is why an undriven net reads z. A
@@ -552,6 +564,34 @@ pub const Signal = struct {
         return .x;
     }
 };
+
+/// §7.9/§7.10 the resolution of drivers that all assert one strength on
+/// both sides and no H/L, on a net type with no wired logic and no pull of
+/// its own, written to `out` 64 bits a word. At one strength the fold of
+/// `Signal.combine` reduces to: any x, or a 0 beside a 1, is x; else a 0 or
+/// a 1 is that value; else z. `ids` index `drivers`, and each one's
+/// `current` has as many plane words as `out`.
+pub fn foldUniform(out: Int.Literal, drivers: []const Driver, ids: []const u32) void {
+    const words = out.values().len;
+    for (0..words) |w| {
+        var any0: u64 = 0;
+        var any1: u64 = 0;
+        var anyx: u64 = 0;
+        for (ids) |d| {
+            const cur = drivers[d].current;
+            std.debug.assert(cur.planes.len == out.planes.len);
+            const v = cur.values()[w];
+            const u = cur.unknowns()[w];
+            any0 |= ~v & ~u;
+            any1 |= v & ~u;
+            anyx |= v & u;
+        }
+        const x = anyx | (any0 & any1);
+        const m = wordMask(out.width, w);
+        out.values()[w] = (x | any1) & m;
+        out.unknowns()[w] = (x | ~(any0 | any1)) & m;
+    }
+}
 
 /// §3.7/§7.9: what the net type itself contributes, at the level clause 7
 /// gives it: `undriven`'s value, at the strength that lets a driver argue
@@ -1434,4 +1474,35 @@ test wordMask {
     try std.testing.expectEqual(@as(u64, 1), wordMask(1, 0));
     try std.testing.expectEqual(@as(u64, 1), wordMask(65, 1));
     try std.testing.expectEqual((@as(u64, 1) << 36) - 1, wordMask(100, 1));
+}
+
+test foldUniform {
+    // Differential against the per-bit `Signal.combine` fold `resolve` runs
+    // otherwise: every driver count to 4, every strength but highz, widths
+    // across the word boundaries, and random 0/1/x/z bits.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var prng: std.Random.DefaultPrng = .init(0x7e9);
+    const rand = prng.random();
+    for ([_]u32{ 1, 63, 64, 65, 130 }) |width| for (1..5) |count| for (1..8) |level| {
+        const s: Ast.Strength = @fromBackingInt(@intCast(level));
+        var drivers: [4]Driver = undefined;
+        for (drivers[0..count]) |*d| {
+            d.* = .{ .net = 0, .source = .{ .pull = .z }, .sensitivity = &.{}, .current = try filled(a, width, false, .z), .s0 = s, .s1 = s };
+            for (0..width) |i| setBit(d.current, @intCast(i), rand.enumValue(Int.Bit));
+        }
+        const ids = [_]u32{ 0, 1, 2, 3 };
+        // Garbage above the width must not reach the result.
+        const out = try filled(a, width, false, .x);
+        foldUniform(out, drivers[0..count], ids[0..count]);
+        for (0..width) |i| {
+            var acc: Signal = .{};
+            for (drivers[0..count]) |d| acc = acc.combine(.of(d.current.bit(@intCast(i)), d.s0, d.s1));
+            try std.testing.expectEqual(acc.combine(netPull(.wire)).collapse(), out.bit(@intCast(i)));
+        }
+        const last = out.values().len - 1;
+        try std.testing.expectEqual(@as(u64, 0), out.values()[last] & ~wordMask(width, last));
+        try std.testing.expectEqual(@as(u64, 0), out.unknowns()[last] & ~wordMask(width, last));
+    };
 }

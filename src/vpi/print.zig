@@ -50,10 +50,12 @@ var log_file: ?Io.File = null;
 /// unless `path` says otherwise. The LRM names no file; a host picks one
 /// (tests/vpi_host.zig: the application's name with `.log`).
 pub fn setLogFile(path: []const u8) error{OutOfMemory}!void {
+    // The copy first: on failure the old name stays named.
+    const name = try gpa.dupeSentinel(u8, path, 0);
     if (log_file) |f| f.close(io());
     log_file = null;
     if (log_name) |n| gpa.free(n);
-    log_name = try gpa.dupeSentinel(u8, path, 0);
+    log_name = name;
 }
 
 /// §12.25's buffer: "This routine shall overwrite the returned value on
@@ -319,7 +321,7 @@ pub export fn vpi_flush() c_int {
 /// error when a user channel it names is not open.
 pub export fn vpi_mcd_flush(mcd: c_uint) c_int {
     if (root.refused("vpi_mcd_flush")) return 1;
-    if (mcd & 0x8000_0000 != 0) {
+    if (mcd & fd_bit != 0) {
         root.fail("BADMCD", "vpi_mcd_flush: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
         return 1;
     }
@@ -337,7 +339,7 @@ const EOF: c_int = -1;
 fn emit(mcd: c_uint, format: [*c]const u8, ap: *va.List) c_int {
     // IEEE 1364-2005 §27.26: the most significant bit marks "a file descriptor
     // instead of an mcd", and vpi_mcd_printf "shall not write to" one.
-    if (mcd & 0x8000_0000 != 0) {
+    if (mcd & fd_bit != 0) {
         root.fail("BADMCD", "vpi_mcd_printf: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
         return EOF;
     }
@@ -431,7 +433,9 @@ fn expand(w: *Io.Writer, fmt: []const u8, ap: *va.List) Io.Writer.Error!void {
             } else {
                 var p: usize = 0;
                 while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) p = p *| 10 +| (fmt[i] - '0');
-                s.prec = p;
+                // C's precision is an `int`; past INT_MAX is undefined, and
+                // clamped here so the arithmetic on it stays in range.
+                s.prec = @min(p, std.math.maxInt(c_int));
             }
         }
         var len: Length = .none;
@@ -831,4 +835,21 @@ test "§12.25/IEEE 1364-2005 §27.23: names and flushes of descriptors that are 
     // vpi_mcd_printf writes to no fd, and needs a format.
     try std.testing.expectEqual(EOF, vpi_mcd_printf(fd_bit, "x"));
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+test "C conversions: a precision past INT_MAX is clamped, not trapped" {
+    var b: [512]u8 = undefined;
+    // %g strips the zeros a huge precision asks for; %f cannot fit them in
+    // the buffer, which fails the format (0) rather than the process.
+    try expectFormat("1|", formatted(&b, "%.99999999999999999999g|", @as(f64, 1.0)), &b);
+    try std.testing.expectEqual(@as(usize, 0), formatted(&b, "%.99999999999999999999f", @as(f64, 1.0)));
+    try std.testing.expectEqual(@as(usize, 0), formatted(&b, "%99999999999999999999d", @as(c_int, 1)));
+}
+
+test "setLogFile: renaming the log keeps one name, owned once" {
+    try setLogFile("a.log");
+    try setLogFile("b.log");
+    try std.testing.expectEqualStrings("b.log", std.mem.span(vpi_mcd_name(4)));
+    gpa.free(log_name.?);
+    log_name = null;
 }

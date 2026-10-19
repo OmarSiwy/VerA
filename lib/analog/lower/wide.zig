@@ -369,7 +369,7 @@ fn leafOf(b: *Build, e: Ast.ExprId, st: T) Oom!u32 {
     const ex = &l.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal => return literal(b, e, st),
-        .ident => if (try identNode(b, e, l.file.str(ex.strOf(e)), st)) |n| return n,
+        .ident => if (try identNode(b, l.file.str(ex.strOf(e)), st)) |n| return n,
         .index => if (b.sels.get(e)) |s| return selectNode(b, try baseNode(b, s.name), l.reg_ranges.get(s.name).?.width, s.lo, s.width),
         .unary => switch (ex.unOp(e)) {
             .logical_not => return b.node(.{ .op = .lnot, .width = 1, .a = try any(b, ex.lhs(e)) }),
@@ -457,9 +457,8 @@ fn real(b: *Build, e: Ast.ExprId) Oom!u32 {
 // ---- operands -----------------------------------------------------------------
 
 /// A name's node at its type `st`, or null for an analog operand (`opaque`).
-fn identNode(b: *Build, e: Ast.ExprId, name: []const u8, st: T) Oom!?u32 {
+fn identNode(b: *Build, name: []const u8, st: T) Oom!?u32 {
     const l = b.l;
-    _ = e;
     if (l.in_d2a_body and l.out.discrete_snaps.contains(name)) return null;
     if (l.vars.get(name)) |slot| switch (slot.ty) {
         .wide => return try b.node(.{ .op = .leaf_wide, .width = st.w, .signed = st.s, .arg = try b.arg(try l.builder.readVariable(slot.place, l.cur)) }),
@@ -480,7 +479,7 @@ fn identNode(b: *Build, e: Ast.ExprId, name: []const u8, st: T) Oom!?u32 {
 /// The whole `reg` `name` (a variable or a discrete input) at its own type.
 fn baseNode(b: *Build, name: []const u8) Oom!u32 {
     const rr = b.l.reg_ranges.get(name).?;
-    return (try identNode(b, .none, name, .{ .w = rr.width, .s = rr.signed })).?;
+    return (try identNode(b, name, .{ .w = rr.width, .s = rr.signed })).?;
 }
 
 /// §5.5.3 the literal a `reg` the analog context never assigns was given,
@@ -496,9 +495,9 @@ fn constReg(b: *Build, name: []const u8, st: T) Oom!u32 {
 fn inputNode(b: *Build, name: []const u8, st: T) Oom!u32 {
     const l = b.l;
     const words = l.out.discrete_words.get(name) orelse 1;
-    if (words == 1) return b.node(.{ .op = .leaf_int, .width = st.w, .signed = st.s, .arg = try b.arg(lower_expr.regWordValue(l, name, 0)) });
-    const first = try b.arg(lower_expr.regWordValue(l, name, 0));
-    for (1..words) |k| _ = try b.arg(lower_expr.regWordValue(l, name, @intCast(k)));
+    if (words == 1) return b.node(.{ .op = .leaf_int, .width = st.w, .signed = st.s, .arg = try b.arg(try lower_expr.regWordValue(l, name, 0)) });
+    const first = try b.arg(try lower_expr.regWordValue(l, name, 0));
+    for (1..words) |k| _ = try b.arg(try lower_expr.regWordValue(l, name, @intCast(k)));
     return b.node(.{ .op = .leaf_words, .width = st.w, .signed = st.s, .arg = first });
 }
 

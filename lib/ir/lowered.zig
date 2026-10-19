@@ -14,17 +14,18 @@
 //! never imports lowering.
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4,
-//! §1.3.4.1, §2.7, §2.8.1, §2.9, §2.9.2, §3.1, §3.2, §3.2.2, §3.4, §3.4.2,
-//! §3.4.5, §3.4.7, §3.6, §3.6.1.2, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.3,
+//! §1.3.4.1, §2.7, §2.8.1, §2.8.3, §2.9, §2.9.2, §3.1, §3.2, §3.2.2, §3.4,
+//! §3.4.2, §3.4.5, §3.4.7, §3.6, §3.6.1.2, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.3,
 //! §3.6.3.2, §3.6.5, §3.9, §3.12, §4.2, §4.2.12, §4.4, §4.5.2, §4.5.3, §4.5.15,
 //! §4.6.3, §4.6.4, §4.6.4.1, §4.6.4.2, §4.6.4.3, §4.6.4.6, §5.2.1, §5.4.1,
 //! §5.4.2, §5.4.3, §5.5.2, §5.5.3, §5.6, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.8.2,
-//! §5.10, §5.10.3.3, §5.10.4, §6, §6.2, §6.3.4, §6.5, §6.5.2, §6.5.2.2, §6.6,
-//! §6.7, §7.2.4, §7.3.1, §7.3.2, §7.3.3, §7.3.4, §7.3.6.1, §7.3.6.4, §7.3.6.5,
-//! §7.4.4, §7.8.4, §8, §8.5, §8.5.3.6, §9.4, §9.4.1, §9.5, §9.5.1, §9.5.3,
-//! §9.5.4.2, §9.5.8, §9.7.3, §9.12, §9.13, §9.13.1, §9.15, §9.16, §9.17,
-//! §9.17.1, §9.17.3, §9.18, §9.19, §9.21, §10.3, §11.6.6, §11.6.7.
-//! IEEE 1364-2005 clauses cited: §5.4, §5.5.1, §19.8.
+//! §5.10, §5.10.3.3, §5.10.4, §6, §6.3.4, §6.5, §6.5.2, §6.5.2.2, §6.6, §6.7,
+//! §7.2.4, §7.3.1, §7.3.2, §7.3.3, §7.3.4, §7.3.6.1, §7.3.6.4, §7.3.6.5,
+//! §7.4.4, §7.8.4, §8, §8.5, §8.5.3.6, §9.4, §9.4.1, §9.5.1, §9.5.3,
+//! §9.5.4.2, §9.5.8, §9.7.3, §9.12, §9.13, §9.13.1, §9.15, §9.17.1, §9.17.3,
+//! §9.18, §9.19, §9.21, §10.3, §11.6.6, §11.6.7, §12.32.
+//! IEEE 1364-2005 clauses cited: §4.8.2, §5.1.5, §5.1.7, §5.1.8, §5.1.9,
+//! §5.1.11, §5.1.12, §5.1.13, §5.4, §5.5, §5.5.1, §19.8.
 
 const std = @import("std");
 const base = @import("base");
@@ -712,9 +713,6 @@ pub const ParamOverride = base.ParamOverride;
 pub const DisciplineResolution = base.DisciplineResolution;
 /// Reports whether a §9.15 simulation parameter is answered at run time.
 pub const simparamIsRuntime = simparam.simparamIsRuntime;
-/// Returns the `Model` field that answers a §9.15 simulation parameter the
-/// card supplies (`tnom`), or null.
-pub const simparamHostField = simparam.simparamHostField;
 /// The §9.15 simulation parameters a host supplies, in `Model` field order.
 pub const host_simparams = simparam.host_simparams;
 /// §10.3 one `default_transition event (`Preprocessor.DefaultTransition`).
@@ -1011,9 +1009,19 @@ test VecRange {
 }
 
 test nodeName {
-    // §1.3.1.1 the reference node is no row, and prints as `gnd`.
-    const l: Lowered = .{};
+    // §1.3.1.1 the reference node is no row, and prints as `gnd`; a row
+    // prints its own name.
+    var l: Lowered = .{};
+    defer l.nodes.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("gnd", l.nodeName(ground));
+    try l.nodes.append(std.testing.allocator, .{ .name = "d", .kind = .net, .disc = "", .dir = .unspecified });
+    try std.testing.expectEqualStrings("d", l.nodeName(0));
+}
+
+test tokenSpan {
+    // Before lowering sets `token_span`, every token points at the end of `src`.
+    const l: Lowered = .{ .src = "module m;" };
+    try std.testing.expectEqual(diag.Span{ .start = 9, .end = 9 }, l.tokenSpan(3));
 }
 
 test simparamAnswer {
@@ -1034,4 +1042,8 @@ test simparamAnswer {
     }
     try t.expectEqual(SimparamAnswer.fallback, l.simparamAnswer("minr", true));
     try t.expectEqual(SimparamAnswer.unknown, l.simparamAnswer("minr", false));
+    // IEEE 1364 §19.8: `timeUnit` is known only under a `timescale.
+    try t.expectEqual(SimparamAnswer.fallback, l.simparamAnswer("timeUnit", true));
+    const ts: Lowered = .{ .timescale = .{ .unit = 1e-6, .precision = 1e-9 } };
+    try t.expectEqual(@as(f64, 1e-6), ts.simparamAnswer("timeUnit", true).value);
 }

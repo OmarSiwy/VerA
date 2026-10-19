@@ -80,8 +80,6 @@ fn kindOrdinal(k: Kind) u8 {
     };
 }
 
-const Row = struct { flow: bool, hi: i32, lo: i32, flow_u: i32 };
-
 /// One attached device library (VerA #84): its call table mapped onto the
 /// call objects of its design, the §12.22.2 outputs its calls put, the
 /// solution it holds and the walk `run` takes over it. The host owns it, at
@@ -96,7 +94,9 @@ pub const Binding = struct {
     /// the installed design it stands in for.
     design: ?root.Design = null,
     owns: bool = false,
-    rows: []Row = &.{},
+    /// Per `Lib.row`: the unknown that is a potential source's flow, -1
+    /// for none. The row's other fields (kind, terminals) are unread.
+    flow_u: []i32 = &.{},
     /// How many unknowns `Lib.x` holds (`Lib.n_u`): 0 for a host that binds
     /// VerA only for the calls and keeps its solution to itself.
     n_x: usize = 0,
@@ -191,16 +191,16 @@ pub const Binding = struct {
         if (b.owns) systf.buildCalls();
         if (n_calls != 0) l.systf(b, deviceCall, deviceOut);
         const n = l.n_rows();
-        b.rows = try gpa.alloc(Row, n);
+        b.flow_u = try gpa.alloc(i32, n);
         const n_vals = n + l.n_shares();
         b.now_vals = try gpa.alloc(f64, 2 * n_vals);
         b.prev_react = try gpa.alloc(f64, n_vals);
         b.n_x = l.n_u();
         b.ac_x = try gpa.alloc(f64, 2 * b.n_x);
-        for (b.rows, 0..) |*r, k| {
+        for (b.flow_u, 0..) |*u, k| {
             var m: [4]i32 = undefined;
             l.row(k, &m);
-            r.* = .{ .flow = m[0] == 1, .hi = m[1], .lo = m[2], .flow_u = m[3] };
+            u.* = m[3];
         }
         if (!b.owns) installed = b;
     }
@@ -222,7 +222,7 @@ pub const Binding = struct {
         b.arg_values.deinit(gpa);
         for (b.derivs.items) |dv| gpa.destroy(dv);
         b.derivs.deinit(gpa);
-        gpa.free(b.rows);
+        gpa.free(b.flow_u);
         gpa.free(b.now_vals);
         gpa.free(b.prev_react);
         gpa.free(b.ac_x);
@@ -343,9 +343,9 @@ pub const Binding = struct {
     }
 
     fn refreshRows(b: *Binding, l: Lib) void {
-        if (b.vals_fresh or b.rows.len == 0) return;
+        if (b.vals_fresh or b.flow_u.len == 0) return;
         l.rows(b.now_vals.ptr);
-        if (b.now_vals.len > 2 * b.rows.len) l.shares(b.now_vals[2 * b.rows.len ..].ptr);
+        if (b.now_vals.len > 2 * b.flow_u.len) l.shares(b.now_vals[2 * b.flow_u.len ..].ptr);
         b.vals_fresh = true;
     }
 
@@ -543,9 +543,9 @@ pub fn sameTime(a: f64, b: f64) bool {
 
 /// `Binding.run`'s failures: `NoLibrary`, not attached; `BackupExhausted`,
 /// see `run`; `Singular`, an AC point whose small-signal system has no
-/// solution. `DidNotConverge` is never returned today: `attempt` discards
+/// solution. A solve that does not converge is no error: `attempt` discards
 /// `Lib.solve`'s result.
-pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted, Singular };
+pub const Error = error{ NoLibrary, BackupExhausted, Singular };
 
 // ---------------------------------------------------------------------------
 // §12.10 values
@@ -582,13 +582,13 @@ fn quantityValue(q: *const root.Obj) ValueError!Value {
     const bi = bound() orelse return error.NoAnalysis;
     const l = bi.lib orelse return error.NoAnalysis;
     const d = &root.design.?;
-    const rows = bi.rows;
+    const flow_u = bi.flow_u;
     const b = root.coldOf(&d.objects[root.coldOf(q).branch orelse return error.NoAnalysis]);
     // The library is outside data: every slot read below is checked against
     // what it published, before the solution is.
     if (!holds(bi, b.hi_row) or !holds(bi, b.lo_row)) return error.NoSolution;
-    if (b.contrib_pot) |k| if (k >= rows.len or (rows[k].flow_u >= 0 and @as(usize, @intCast(rows[k].flow_u)) >= bi.n_x)) return error.NoSolution;
-    if (b.contrib_flow != null and rows.len == 0) return error.NoSolution;
+    if (b.contrib_pot) |k| if (k >= flow_u.len or (flow_u[k] >= 0 and @as(usize, @intCast(flow_u[k])) >= bi.n_x)) return error.NoSolution;
+    if (b.contrib_flow != null and flow_u.len == 0) return error.NoSolution;
     if (!bi.have_solution) return error.NoAnalysis;
     const ac = freq != 0;
     const x = if (ac) bi.ac_x.ptr else l.x();
@@ -601,16 +601,15 @@ fn quantityValue(q: *const root.Obj) ValueError!Value {
     if (b.flow_unknowable) return error.Unknowable;
     const sign: f64 = if (b.flow_neg) -1 else 1;
     if (b.contrib_pot) |k| {
-        const r = rows[k];
-        if (r.flow_u < 0) return error.Unknowable;
-        const u: usize = @intCast(r.flow_u);
+        if (flow_u[k] < 0) return error.Unknowable;
+        const u: usize = @intCast(flow_u[k]);
         return .{ .re = sign * x[u], .im = if (ac) sign * xi[u] else 0 };
     }
     if (b.contrib_flow) |row| {
         if (ac) return error.SmallSignal;
         bi.refreshRows(l);
         // A share's values follow the rows'.
-        const k = if (b.contrib_share) |sh| rows.len + sh else row;
+        const k = if (b.contrib_share) |sh| flow_u.len + sh else row;
         if (2 * k + 1 >= bi.now_vals.len) return error.Unknowable;
         var v = bi.now_vals[2 * k];
         if (delta > 0) v += (bi.now_vals[2 * k + 1] - bi.prev_react[k]) / delta;
@@ -676,17 +675,14 @@ pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void 
             // Table 12-2. The strings live in THIS routine's buffer — "different
             // from the buffer which vpi_get_str() shall use" and "overwritten
             // with each call".
-            var chose: c_int = v.format;
-            const a = analogString(&analog_buf[0], re, v.format, &chose) orelse return;
-            const b = analogString(&analog_buf[1], im, v.format, &chose) orelse return;
             // vpiStringVal: "The call shall reset the format field to
             // vpiExpStrVal or vpiDecStrVal to the selected format." The real
             // part's choice is the one reported.
-            if (v.format == vpiStringVal) {
-                var ignored: c_int = 0;
-                _ = analogString(&analog_buf[1], im, vpiStringVal, &ignored);
-                v.format = chose;
-            }
+            var chose: c_int = v.format;
+            var im_chose: c_int = v.format;
+            const a = analogString(&analog_buf[0], re, v.format, &chose) orelse return;
+            const b = analogString(&analog_buf[1], im, v.format, &im_chose) orelse return;
+            v.format = chose;
             v.real.str = a;
             v.imaginary.str = b;
         },
@@ -946,10 +942,7 @@ fn position(obj: u32, h: vpiHandle) ?c_int {
     const d = &root.design.?;
     const o = root.asObj(h) orelse return null;
     if (o == &d.objects[obj]) return 0;
-    for (d.objects[obj].lists) |l| if (l.tag == code.vpiArgument) {
-        for (l.items, 0..) |a, j| if (&d.objects[a] == o) return @intCast(j + 1);
-    };
-    return null;
+    return @intCast(argPosition(obj, o) orelse return null);
 }
 
 /// §12.22.1 `vpi_handle_multi(vpiDerivative, ref1, ref2)`: the partial of
@@ -1308,4 +1301,38 @@ test "Binding: two libraries at once, each call in its own design, each (library
     try std.testing.expectEqual(@as(f64, 1), p[0]);
     // Outside any call the routines answer for A, on the installed design.
     try std.testing.expect(bound().? == &a);
+}
+
+test "§12.10 vpiStringVal: the real part's %g choice is the format reported, whatever the imaginary part chose" {
+    root.close();
+    defer root.close();
+    const a = std.testing.allocator;
+    // A potential quantity (object 0) of a branch (object 1) from unknown 0
+    // to ground.
+    const objs = try a.alloc(root.Obj, 2);
+    objs[0] = .{ .kind = .quantity, .owner = .none, .name = "", .full = "", .cold = 0 };
+    objs[1] = .{ .kind = .branch, .owner = .none, .name = "b", .full = "b", .cold = 1 };
+    const colds = try a.alloc(root.Cold, 2);
+    colds[0] = .{ .branch = 1 };
+    colds[1] = .{ .hi_row = 0 };
+    root.design = .{ .gpa = a, .arena = .init(a), .objects = objs, .cold = colds, .scopes = &.{}, .top_modules = &.{}, .by_name = .empty, .iters = .empty };
+    // An AC point whose phasor is 2.5 + 1e-7 j: %g spells the real part as a
+    // decimal and the imaginary part with an exponent.
+    var ac_x = [2]f64{ 2.5, 1e-7 };
+    var b: Binding = .{ .lib = OneCall.lib, .n_x = 1, .ac_x = &ac_x, .have_solution = true };
+    installed = &b;
+    defer installed = null;
+    setPoint(.{ .kind = .ac }, 0, 0, 1e3);
+    defer setPoint(null, 0, 0, 0);
+    var v: AnalogValue = .{ .format = vpiStringVal, .real = .{ .real = 0 }, .imaginary = .{ .real = 0 } };
+    vpi_get_analog_value(root.handleOf(&root.design.?.objects[0]), &v);
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    try std.testing.expectEqualStrings("2.5", std.mem.span(v.real.str));
+    try std.testing.expectEqualStrings("1e-07", std.mem.span(v.imaginary.str));
+    try std.testing.expectEqual(vpiDecStrVal, v.format);
+    // The real-only formats keep their format.
+    v.format = vpiRealVal;
+    vpi_get_analog_value(root.handleOf(&root.design.?.objects[0]), &v);
+    try std.testing.expectEqual(@as(f64, 1e-7), v.imaginary.real);
+    try std.testing.expectEqual(vpiRealVal, v.format);
 }

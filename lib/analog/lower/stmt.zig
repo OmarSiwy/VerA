@@ -190,7 +190,6 @@ fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
         try self.stmt_state.named_blocks.append(self.arena, .{ .name = self.file.str(b.name), .exit = e });
         break :blk e;
     };
-    // ponytail: the only statement-list caller keeps its source-order loop here.
     for (b.body) |s| try lowerStmt(self, s);
     if (exit) |e| {
         const popped = self.stmt_state.named_blocks.pop().?;

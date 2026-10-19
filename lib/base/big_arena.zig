@@ -335,3 +335,28 @@ test "big arena: a seeded random op sequence keeps `blocks` equal to the live la
         try std.testing.expect(std.mem.allEqual(u8, live, fill));
     }
 }
+
+test "big arena: a full `blocks` map that cannot grow refuses the block, and a remap keeps it" {
+    var failing: std.testing.FailingAllocator = .init(std.testing.allocator, .{});
+    var arena: BigArena = .init(failing.allocator());
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Fill the map to its load limit, so the next entry needs a larger table.
+    var first: ?[]u8 = null;
+    while (arena.blocks.count() == 0 or arena.blocks.available != 0) {
+        const m = try a.alloc(u8, large);
+        if (first == null) first = m;
+    }
+    const m = first.?;
+    @memset(m, 0x7e);
+    const count = arena.blocks.count();
+    failing.fail_index = failing.alloc_index; // the table's growth fails
+    try std.testing.expectError(error.OutOfMemory, a.alloc(u8, large));
+    try std.testing.expect(a.remap(m, 2 * large) == null);
+    try std.testing.expectEqual(count, arena.blocks.count());
+    try std.testing.expectEqual(large, arena.blocks.get(@intFromPtr(m.ptr)).?.len);
+    try std.testing.expect(std.mem.allEqual(u8, m, 0x7e));
+    // A resize needs no new entry, so it still works.
+    failing.fail_index = std.math.maxInt(usize);
+    _ = a.resize(m, large + 1);
+}

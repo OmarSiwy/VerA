@@ -13,6 +13,7 @@ const delays = @import("delays.zig");
 const property = @import("property.zig");
 const root = @import("root.zig");
 const coldOf = root.coldOf;
+const Csr = @import("model.zig").Csr;
 const run = @import("run.zig");
 const systf = @import("systf.zig");
 
@@ -87,40 +88,16 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
             _ = object("vpi_iterate", ref);
             return null;
         }
-        const handles = callback.all(d.gpa, ref) catch {
-            fail("NOMEM", "vpi_iterate: out of memory", .{});
-            return null;
-        };
-        if (handles.len == 0) {
-            d.gpa.free(handles);
-            return null;
-        }
-        return newHandleIter(d, handles);
+        return newHandleIter(d, callback.all(d.gpa, ref) catch return oomIter());
     }
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
     if (ref == null) {
         if (obj_type == systf.vpiUserSystf) {
-            const handles = systf.all(d.gpa) catch {
-                fail("NOMEM", "vpi_iterate: out of memory", .{});
-                return null;
-            };
-            if (handles.len == 0) {
-                d.gpa.free(handles);
-                return null;
-            }
-            return newHandleIter(d, handles);
+            return newHandleIter(d, systf.all(d.gpa) catch return oomIter());
         }
         if (obj_type == run.vpiTimeQueue) {
-            const handles = run.timeQueues(d.gpa) catch {
-                fail("NOMEM", "vpi_iterate: out of memory", .{});
-                return null;
-            };
-            if (handles.len == 0) {
-                d.gpa.free(handles);
-                return null;
-            }
-            return newHandleIter(d, handles);
+            return newHandleIter(d, run.timeQueues(d.gpa) catch return oomIter());
         }
         // §11.6.2's circled arrows: disciplines and natures are design-wide.
         // An empty set (a digital design) is NULL with no error (§12.23).
@@ -236,16 +213,10 @@ fn uses(d: *Design, o: *const Obj) vpiHandle {
         last = u;
         out.appendAssumeCapacity(handleOf(&d.objects[u]));
     }
-    if (out.items.len == 0) {
+    return newHandleIter(d, out.toOwnedSlice(d.gpa) catch {
         out.deinit(d.gpa);
-        return null;
-    }
-    const handles = out.toOwnedSlice(d.gpa) catch {
-        out.deinit(d.gpa);
-        fail("NOMEM", "vpi_iterate: out of memory", .{});
-        return null;
-    };
-    return newHandleIter(d, handles);
+        return oomIter();
+    });
 }
 
 fn useFail(o: *const Obj) vpiHandle {
@@ -311,16 +282,10 @@ fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle
         };
         if (hit) out.appendAssumeCapacity(handleOf(&d.objects[i]));
     }
-    if (out.items.len == 0) {
+    return newHandleIter(d, out.toOwnedSlice(d.gpa) catch {
         out.deinit(d.gpa);
-        return null;
-    }
-    const handles = out.toOwnedSlice(d.gpa) catch {
-        out.deinit(d.gpa);
-        fail("NOMEM", "vpi_iterate: out of memory", .{});
-        return null;
-    };
-    return newHandleIter(d, handles);
+        return oomIter();
+    });
 }
 
 fn oomIter() vpiHandle {
@@ -357,46 +322,11 @@ pub const Relations = struct {
     }
 };
 
-/// Rows grouped by a dense u32 key: key `k`'s rows are
-/// `rows[first[k]..first[k + 1]]`, in the order they were given.
-const Csr = struct {
-    first: []u32,
-    rows: []u32,
-
-    /// From `(key, row)` pairs, every key below `n_keys`.
-    fn init(gpa: std.mem.Allocator, n_keys: usize, pairs: []const [2]u32) error{OutOfMemory}!Csr {
-        const first = try gpa.alloc(u32, n_keys + 1);
-        errdefer gpa.free(first);
-        @memset(first, 0);
-        for (pairs) |p| first[p[0] + 1] += 1;
-        for (1..first.len) |k| first[k] += first[k - 1];
-        const rows = try gpa.alloc(u32, pairs.len);
-        errdefer gpa.free(rows);
-        const fill = try gpa.dupe(u32, first[0..n_keys]);
-        defer gpa.free(fill);
-        for (pairs) |p| {
-            rows[fill[p[0]]] = p[1];
-            fill[p[0]] += 1;
-        }
-        return .{ .first = first, .rows = rows };
-    }
-
-    fn deinit(c: *Csr, gpa: std.mem.Allocator) void {
-        gpa.free(c.first);
-        gpa.free(c.rows);
-    }
-
-    fn of(c: Csr, key: u32) []const u32 {
-        if (@as(usize, key) + 1 >= c.first.len) return &.{};
-        return c.rows[c.first[key]..c.first[key + 1]];
-    }
-};
-
 /// `d`'s `Relations`, built on first use; null (and NOMEM recorded) when
 /// they cannot be.
 fn relationsOf(d: *Design) ?*const Relations {
     if (d.relations == null) d.relations = buildRelations(d) catch {
-        fail("NOMEM", "vpi_iterate: out of memory", .{});
+        _ = oomIter();
         return null;
     };
     return &d.relations.?;
@@ -532,23 +462,24 @@ fn mentions(d: *const Design, e: u32, target: *const Obj) bool {
     return false;
 }
 
-/// An iterator over `handles`, which it takes ownership of.
+/// An iterator over `handles`, which it takes ownership of; NULL, with no
+/// error, for none (§12.23).
 fn newHandleIter(d: *Design, handles: []vpiHandle) vpiHandle {
+    if (handles.len == 0) {
+        d.gpa.free(handles);
+        return null;
+    }
     const h = newIter(d, &.{});
     if (asIter(h)) |it| it.handles = handles else d.gpa.free(handles);
     return h;
 }
 
 fn newIter(d: *Design, items: []const u32) vpiHandle {
-    const it = d.gpa.create(Iter) catch {
-        fail("NOMEM", "vpi_iterate: out of memory", .{});
-        return null;
-    };
+    const it = d.gpa.create(Iter) catch return oomIter();
     it.* = .{ .items = items };
     d.iters.put(d.gpa, @intFromPtr(it), it) catch {
         d.gpa.destroy(it);
-        fail("NOMEM", "vpi_iterate: out of memory", .{});
-        return null;
+        return oomIter();
     };
     return @ptrCast(it);
 }
@@ -588,45 +519,4 @@ pub fn destroyIter(d: *Design, it: *Iter) void {
     _ = d.iters.remove(@intFromPtr(it));
     if (it.handles) |hs| d.gpa.free(hs);
     d.gpa.destroy(it);
-}
-
-// ---------------------------------------------------------------------------
-// Tests. The relations over designs are test.zig's.
-// ---------------------------------------------------------------------------
-
-test "Csr: every key's rows in the order given, against a scan of the pairs" {
-    var prng: std.Random.DefaultPrng = .init(0x5eed);
-    const random = prng.random();
-    var pairs: [64][2]u32 = undefined;
-    for (0..40) |round| {
-        // 1..5 keys, 0..64 pairs: empty keys, empty tables and repeats.
-        const n_keys: usize = round % 5 + 1;
-        const n = random.uintLessThan(usize, pairs.len + 1);
-        for (pairs[0..n], 0..) |*p, i| p.* = .{ random.uintLessThan(u32, @intCast(n_keys)), @intCast(i) };
-        var c: Csr = try .init(std.testing.allocator, n_keys, pairs[0..n]);
-        defer c.deinit(std.testing.allocator);
-        for (0..n_keys) |key| {
-            var want: [64]u32 = undefined;
-            var w: usize = 0;
-            for (pairs[0..n]) |p| {
-                if (p[0] != key) continue;
-                want[w] = p[1];
-                w += 1;
-            }
-            try std.testing.expectEqualSlices(u32, want[0..w], c.of(@intCast(key)));
-        }
-        // A key past the table has no rows.
-        try std.testing.expectEqual(@as(usize, 0), c.of(@intCast(n_keys)).len);
-        try std.testing.expectEqual(@as(usize, 0), c.of(std.math.maxInt(u32)).len);
-    }
-}
-
-fn csrOnce(a: std.mem.Allocator, pairs: []const [2]u32) !void {
-    var c: Csr = try .init(a, 3, pairs);
-    c.deinit(a);
-}
-
-test "Csr.init frees what it built when an allocation fails" {
-    const pairs = [_][2]u32{ .{ 2, 0 }, .{ 0, 1 }, .{ 2, 2 } };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, csrOnce, .{@as([]const [2]u32, &pairs)});
 }

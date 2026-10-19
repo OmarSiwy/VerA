@@ -52,20 +52,19 @@ const no_slot: u32 = std.math.maxInt(u32);
 /// `BlockState.slot` of a block whose cells live in `arm_cells`, not the map.
 const arm_slot: u32 = no_slot - 1;
 
-/// The builder's own tables (the map, the predecessor and phi-user pools,
-/// the per-block state) live outside the caller's allocator: lowering passes
-/// its compilation arena, which frees nothing before the compile ends, and
-/// these are scratch for the lowering phase alone. `deinit` frees them.
-/// `gpa` is for the MIR the builder writes into.
-const map_gpa = std.heap.page_allocator;
-
 /// Braun-style SSA builder over one `Mir`. Blocks are created by the caller
 /// (`Mir.addBlock`); the builder records edges, writes and reads, and emits
 /// phis into the Mir as reads require.
 pub const SsaBuilder = struct {
     /// Allocates the phi rows the builder emits into `mir`; never the
-    /// builder's own tables (`map_gpa`).
+    /// builder's own tables (`map`).
     gpa: std.mem.Allocator,
+    /// The builder's own tables (the map, the predecessor and phi-user pools,
+    /// the per-block state), which `deinit` frees. Not `gpa`: lowering passes
+    /// its compilation arena, which frees nothing before the compile ends, and
+    /// these are scratch for the lowering phase alone. A field so a test can
+    /// leak-check them and fail each allocation in turn.
+    map: std.mem.Allocator = std.heap.page_allocator,
     /// The Mir the builder reads blocks from and emits phis into. Borrowed:
     /// it must outlive the builder.
     mir: *Mir,
@@ -245,6 +244,10 @@ pub const SsaBuilder = struct {
         assert(@sizeOf(IncompletePhi) == 12);
         assert(@sizeOf(UserNode) == 8);
         assert(@sizeOf(ArmCell) == 12);
+        // Per block, beside `block_state`; `skipUp` reads 26 of its 36 bytes.
+        assert(@sizeOf(Dom) == 36);
+        assert(@sizeOf(Row) == 12);
+        assert(@sizeOf(JoinRead) == 32);
     }
 
     /// Returns an empty builder writing into `mir`, whose rows (phis) `gpa`
@@ -255,21 +258,21 @@ pub const SsaBuilder = struct {
 
     /// Frees builder scratch only; the MIR it wrote into is untouched.
     pub fn deinit(self: *SsaBuilder) void {
-        self.dir.deinit(map_gpa);
-        self.cells.deinit(map_gpa);
-        self.rows.deinit(map_gpa);
-        self.arm_cells.deinit(map_gpa);
-        self.block_state.deinit(map_gpa);
-        self.pred_pool.deinit(map_gpa);
-        self.incomplete_pool.deinit(map_gpa);
-        self.user_pool.deinit(map_gpa);
-        self.user_head.deinit(map_gpa);
-        self.scratch.deinit(map_gpa);
-        self.phi_work.deinit(map_gpa);
-        self.joins.deinit(map_gpa);
-        self.dom.deinit(map_gpa);
-        self.written.deinit(map_gpa);
-        self.* = .{ .gpa = self.gpa, .mir = self.mir };
+        self.dir.deinit(self.map);
+        self.cells.deinit(self.map);
+        self.rows.deinit(self.map);
+        self.arm_cells.deinit(self.map);
+        self.block_state.deinit(self.map);
+        self.pred_pool.deinit(self.map);
+        self.incomplete_pool.deinit(self.map);
+        self.user_pool.deinit(self.map);
+        self.user_head.deinit(self.map);
+        self.scratch.deinit(self.map);
+        self.phi_work.deinit(self.map);
+        self.joins.deinit(self.map);
+        self.dom.deinit(self.map);
+        self.written.deinit(self.map);
+        self.* = .{ .gpa = self.gpa, .mir = self.mir, .map = self.map };
     }
 
     /// Returns a fresh assignable location (a §3.4.4 variable or a lowered
@@ -293,7 +296,7 @@ pub const SsaBuilder = struct {
         }
 
         const node: u32 = @intCast(self.pred_pool.items.len);
-        try self.pred_pool.append(map_gpa, .{ .block = pred, .next = list_end });
+        try self.pred_pool.append(self.map, .{ .block = pred, .next = list_end });
         const tail = self.block_state.items(.preds_tail)[b];
         if (tail == list_end) {
             self.block_state.items(.preds_head)[b] = node;
@@ -334,7 +337,7 @@ pub const SsaBuilder = struct {
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         const b = try self.ensureState(block);
         const p = @backingInt(place);
-        if (p >= self.written.items.len) try self.written.appendNTimes(map_gpa, .none, p + 1 - self.written.items.len);
+        if (p >= self.written.items.len) try self.written.appendNTimes(self.map, .none, p + 1 - self.written.items.len);
         if (!self.block_state.items(.sealed)[b] or self.block_state.items(.preds_len)[b] != 0) {
             const born = self.dom.items[b].born;
             self.written.items[p] = self.written.items[p].join(.{ .lo = born, .hi = born });
@@ -363,7 +366,7 @@ pub const SsaBuilder = struct {
             }
         }
         const new: u32 = @intCast(self.arm_cells.items.len);
-        try self.arm_cells.append(map_gpa, .{ .place = place, .raw = raw, .next = head.* });
+        try self.arm_cells.append(self.map, .{ .place = place, .raw = raw, .next = head.* });
         self.block_state.items(.arm_head)[b] = new;
         self.block_state.items(.arm_mask)[b] |= armBit(place);
     }
@@ -398,7 +401,7 @@ pub const SsaBuilder = struct {
                 if (self.joins.items.len == base) return v;
                 // The value at the end of the top join's current predecessor.
                 const top = self.joins.items[self.joins.items.len - 1];
-                try self.scratch.append(map_gpa, .{ .block = top.pred, .value = v });
+                try self.scratch.append(self.map, .{ .block = top.pred, .value = v });
             }
             const j = &self.joins.items[self.joins.items.len - 1];
             if (j.node != list_end) {
@@ -500,7 +503,7 @@ pub const SsaBuilder = struct {
             // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
             const phi = try self.mir.emitPhi(self.gpa, block, &.{});
             const node: u32 = @intCast(self.incomplete_pool.items.len);
-            try self.incomplete_pool.append(map_gpa, .{
+            try self.incomplete_pool.append(self.map, .{
                 .place = place,
                 .value = phi,
                 .next = self.block_state.items(.phis_head)[b],
@@ -526,7 +529,7 @@ pub const SsaBuilder = struct {
         assert(slot != arm_slot); // sealed and not single-predecessor
         const cell = try self.cellIndex(place, slot);
         self.cells.items[cell] = pending;
-        try self.joins.append(map_gpa, .{ .block = block, .cell = cell, .top = self.scratch.items.len, .node = self.predsHead(block) });
+        try self.joins.append(self.map, .{ .block = block, .cell = cell, .top = self.scratch.items.len, .node = self.predsHead(block) });
         return null;
     }
 
@@ -550,14 +553,6 @@ pub const SsaBuilder = struct {
         return val;
     }
 
-    /// Load without growing: an unallocated cell reads as absent, exactly like an
-    /// allocated-but-unwritten one. Keeps the read path free of the resize branch.
-    fn defsRaw(self: *const SsaBuilder, place: Place, block: Mir.Block) u32 {
-        const b = @backingInt(block);
-        if (b >= self.block_state.len) return absent;
-        return self.cellRaw(place, b, self.block_state.items(.slot)[b]);
-    }
-
     /// Arms a climb crosses before it memoizes what it found (`climb`). A
     /// shorter climb keeps skipping the memo write, the saving measured above.
     const memo_climb = 64;
@@ -566,7 +561,7 @@ pub const SsaBuilder = struct {
         return @as(u32, 1) << @truncate(@backingInt(place));
     }
 
-    /// `defsRaw` for block row `b`, whose slot the caller has read.
+    /// The raw cell of `place` in block row `b`, whose slot the caller has read.
     fn cellRaw(self: *const SsaBuilder, place: Place, b: u32, slot: u32) u32 {
         const p = @backingInt(place);
         if (slot == no_slot) return absent;
@@ -587,8 +582,11 @@ pub const SsaBuilder = struct {
         return self.cells.items[chunk << chunk_bits | (slot & (chunk_len - 1))];
     }
 
+    /// The cell of (`place`, `block`) without growing anything: a block with
+    /// no row reads as absent, like an unwritten cell. Tests only.
     fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
-        const v = self.defsRaw(place, block);
+        const b = @backingInt(block);
+        const v = if (b >= self.block_state.len) absent else self.cellRaw(place, b, self.block_state.items(.slot)[b]);
         assert(v != pending);
         return if (v == absent) null else @fromBackingInt(@intCast(v - 1));
     }
@@ -618,15 +616,15 @@ pub const SsaBuilder = struct {
         assert(slot < arm_slot);
         const p = @backingInt(place);
         const col = slot >> chunk_bits;
-        if (self.cells.items.len == 0) try self.cells.appendNTimes(map_gpa, absent, chunk_len); // chunk 0
-        if (p >= self.rows.items.len) try self.rows.appendNTimes(map_gpa, .{}, p + 1 - self.rows.items.len);
+        if (self.cells.items.len == 0) try self.cells.appendNTimes(self.map, absent, chunk_len); // chunk 0
+        if (p >= self.rows.items.len) try self.rows.appendNTimes(self.map, .{}, p + 1 - self.rows.items.len);
         var r = self.rows.items[p];
         if (col -% r.base >= r.len) {
             const base = if (r.len == 0) col else if (col < r.base) @min(col, r.base -| r.len) else r.base;
             const end = if (r.len == 0) col + 1 else if (col < r.base) r.base + r.len else @max(col + 1, r.base + 2 * r.len);
             const off = self.dir.items.len;
             if (off + (end - base) > std.math.maxInt(u32)) return error.OutOfMemory;
-            try self.dir.appendNTimes(map_gpa, 0, end - base);
+            try self.dir.appendNTimes(self.map, 0, end - base);
             if (r.len != 0) @memcpy(self.dir.items[off + (r.base - base) ..][0..r.len], self.dir.items[r.off..][0..r.len]);
             r = .{ .base = base, .off = @intCast(off), .len = end - base };
             self.rows.items[p] = r;
@@ -635,7 +633,7 @@ pub const SsaBuilder = struct {
         if (self.dir.items[d] == 0) {
             const chunk = self.cells.items.len >> chunk_bits;
             if (chunk > std.math.maxInt(u32)) return error.OutOfMemory;
-            try self.cells.appendNTimes(map_gpa, absent, chunk_len);
+            try self.cells.appendNTimes(self.map, absent, chunk_len);
             self.dir.items[d] = @intCast(chunk);
         }
         return @as(usize, self.dir.items[d]) << chunk_bits | (slot & (chunk_len - 1));
@@ -647,20 +645,15 @@ pub const SsaBuilder = struct {
         // recurses back in), and a list per phi would allocate per phi.
         const top = self.scratch.items.len;
         defer self.scratch.shrinkRetainingCapacity(top);
-        try self.readPreds(place, block);
-        return self.fillPhi(phi, self.scratch.items[top..]);
-    }
-
-    /// Append `(pred, place's value at the end of pred)` to `scratch` for every
-    /// predecessor edge of `block`, in declaration order.
-    fn readPreds(self: *SsaBuilder, place: Place, block: Mir.Block) Error!void {
+        // `(pred, place's value at the end of pred)` per edge, in declaration order.
         var node = self.predsHead(block);
         while (node != list_end) {
             const pred = self.pred_pool.items[node]; // copy: recursion may realloc
             node = pred.next;
             const v = try self.readFrom(place, pred.block);
-            try self.scratch.append(map_gpa, .{ .block = pred.block, .value = v });
+            try self.scratch.append(self.map, .{ .block = pred.block, .value = v });
         }
+        return self.fillPhi(phi, self.scratch.items[top..]);
     }
 
     fn fillPhi(self: *SsaBuilder, phi: Mir.Value, pairs: []const Mir.PhiPair) Error!Mir.Value {
@@ -733,7 +726,7 @@ pub const SsaBuilder = struct {
                 while (node != list_end) {
                     const u = self.user_pool.items[node];
                     node = u.next;
-                    try self.phi_work.append(map_gpa, u.phi);
+                    try self.phi_work.append(self.map, u.phi);
                 }
                 // ponytail: append-then-reverse, because `user_pool` is singly
                 // linked and cannot be walked backwards. Ceiling is one extra
@@ -756,9 +749,13 @@ pub const SsaBuilder = struct {
         const i = @backingInt(block);
         assert(i < self.mir.blockCount());
         if (self.block_state.len <= i) {
+            assert(self.dom.items.len == self.block_state.len);
+            // Both reserved before either grows, so a failure leaves them parallel.
+            try self.block_state.ensureTotalCapacity(self.map, i + 1);
+            try self.dom.ensureTotalCapacity(self.map, i + 1);
             const born = self.tick();
-            while (self.block_state.len <= i) try self.block_state.append(map_gpa, .{});
-            while (self.dom.items.len <= i) try self.dom.append(map_gpa, .{ .born = born });
+            while (self.block_state.len <= i) self.block_state.appendAssumeCapacity(.{});
+            self.dom.appendNTimesAssumeCapacity(.{ .born = born }, i + 1 - self.dom.items.len);
         }
         return i;
     }
@@ -839,9 +836,9 @@ pub const SsaBuilder = struct {
         const i = @backingInt(value);
         if (i < Mir.Value.first_dynamic) return;
         const slot = i - Mir.Value.first_dynamic;
-        while (self.user_head.items.len <= slot) try self.user_head.append(map_gpa, list_end);
+        if (self.user_head.items.len <= slot) try self.user_head.appendNTimes(self.map, list_end, slot + 1 - self.user_head.items.len);
         const node: u32 = @intCast(self.user_pool.items.len);
-        try self.user_pool.append(map_gpa, .{ .phi = user, .next = self.user_head.items[slot] });
+        try self.user_pool.append(self.map, .{ .phi = user, .next = self.user_head.items[slot] });
         self.user_head.items[slot] = node;
     }
 

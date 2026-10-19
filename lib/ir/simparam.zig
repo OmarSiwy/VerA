@@ -83,6 +83,22 @@ test simparamValueIn {
     try std.testing.expectEqual(@as(?f64, 1.0), simparamValueIn(d, "shrink"));
     // Table 9-27 applies "if they support the parameter"; VerA does not.
     try std.testing.expectEqual(@as(?f64, null), simparamValueIn(d, "gdev"));
+    // A `timescale answers both source rows; nothing else moves with it.
+    const ts: ?Timescale = .{ .unit = 1e-9, .precision = 1e-12 };
+    try std.testing.expectEqual(@as(?f64, 1e-9), simparamValueIn(ts, "timeUnit"));
+    try std.testing.expectEqual(@as(?f64, 1e-12), simparamValueIn(ts, "timePrecision"));
+    try std.testing.expectEqual(simparamValueIn(d, "reltol"), simparamValueIn(ts, "reltol"));
+    // Names are case-sensitive: §9.15 spells `timeUnit`.
+    try std.testing.expectEqual(@as(?f64, null), simparamValueIn(ts, "timeunit"));
+}
+
+test host_simparams {
+    // `Lowered.simparamAnswer` unwraps a host row's default, and a host row
+    // is answered from the card, never from `SimState`.
+    for (host_simparams) |h| {
+        try std.testing.expect(simparamValueIn(null, h.name) != null);
+        try std.testing.expect(!simparamIsRuntime(h.name));
+    }
 }
 
 test simparamHostField {

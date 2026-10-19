@@ -153,6 +153,16 @@ fn constantExpr(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: A
 /// read is appended to it and the walk does not stop at the first. An access
 /// function's operands are nodes, not values, and are not reads.
 fn analogDiscreteNets(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, id: Ast.StmtId, out: ?struct { a: std.mem.Allocator, list: *std.ArrayList(Ast.ExprId) }) Oom!bool {
+    // Only a net or port of no continuous discipline can be such a read
+    // (`discreteName`), and most modules have none: then the walk (13% of a
+    // large compact model's lint) is skipped. One pass, not `discreteName`
+    // per net, which scans the nets again: quadratic in a flattened design.
+    const any = for (module.nets) |n| {
+        if (!discipline_rules.isContinuous(file, n.discipline)) break true;
+    } else for (module.ports) |p| {
+        if (p.kind != .wreal and !discipline_rules.isContinuous(file, p.discipline)) break true;
+    } else false;
+    if (!any) return false;
     const Walk = struct {
         file: *const Ast.SourceFile,
         module: *const Ast.ModuleDecl,
@@ -165,9 +175,9 @@ fn analogDiscreteNets(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl
                 .branch_access, .port_access => return,
                 else => {}, // else: every other expression is walked for reads
             }
-            if (discreteNet(w.file, w.module, e) orelse discretePort(w.file, w.module, e)) |n| {
+            if (ex.tag(e) == .ident and discreteName(w.file, w.module, ex.strOf(e))) {
                 w.hit.* = true;
-                if (w.out) |o| try o.list.append(o.a, n);
+                if (w.out) |o| try o.list.append(o.a, e);
             }
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| try w.expr(c, .read);
@@ -659,15 +669,15 @@ fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: As
     return if (discipline_rules.isContinuous(file, n.discipline)) null else e;
 }
 
-/// `e` if it names a port of `module` that is a net of no continuous
-/// discipline (`input dnet; wire dnet;` declares the port, not a `NetDecl`).
-fn discretePort(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: Ast.ExprId) ?Ast.ExprId {
-    if (e == .none or file.exprs.tag(e) != .ident) return null;
-    const name = file.exprs.strOf(e);
-    for (module.vars) |v| if (v.name == name) return null;
+/// Whether a read of `name` reads a discrete net: a net of `module` with no
+/// continuous discipline, or else a port that is one and no variable
+/// re-declares (`input dnet; wire dnet;` declares the port, not a `NetDecl`).
+fn discreteName(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    if (netOf(module, name)) |n| if (!discipline_rules.isContinuous(file, n.discipline)) return true;
+    for (module.vars) |v| if (v.name == name) return false;
     for (module.ports) |p| if (p.name == name)
-        return if (p.kind != .wreal and !discipline_rules.isContinuous(file, p.discipline)) e else null;
-    return null;
+        return p.kind != .wreal and !discipline_rules.isContinuous(file, p.discipline);
+    return false;
 }
 
 /// Is `name` a net of `module`: a declared net, or a port no variable
@@ -1204,6 +1214,11 @@ test isMixed {
         // What `constEval` folds stays on the fast path: a parameter (§3.4),
         // §4.3 math and a §17.8 conversion.
         .{ .src = "module m; parameter real k = 2.5; real r; initial r = sqrt(k) + $rtoi(2.5); endmodule", .want = false },
+        // §7.3 an analog read of a discrete net is the kernel's value; of a
+        // continuous one, or of a name a variable re-declares, it is not.
+        .{ .src = "module m(d, p); input d; wire d; inout p; electrical p; analog I(p) <+ d; endmodule", .want = true },
+        .{ .src = "module m(d, p); input d; inout p; electrical d, p; analog I(p) <+ V(d); endmodule", .want = false },
+        .{ .src = "module m(d, p); input d; integer d; inout p; electrical p; analog I(p) <+ d; endmodule", .want = false },
     };
     for (cases) |c| {
         var h: Lower.Harness = undefined;

@@ -183,7 +183,7 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
     // A body card may name a model declared after it, or in another file.
     var models: std.ArrayList(ModelCard) = .empty;
     for (cards.items) |card| {
-        var it = tokens(card.text);
+        var it: Tokens = .{ .text = card.text };
         if (!std.mem.eql(u8, it.next() orelse continue, ".model")) continue;
         const name = it.next() orelse continue;
         const type_ = it.next() orelse continue;
@@ -253,7 +253,6 @@ const Reader = struct {
         // The open block's header, so one `.ENDL` never closes is not a
         // silent end of the file.
         var header: Card = undefined;
-        defer if (in_lib != null) r.refusals.add(header, "`.lib` entry has no `.endl`; the cards after it are not read", .{}) catch {};
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |raw| {
             const line = strip(raw);
@@ -319,6 +318,7 @@ const Reader = struct {
             }
             try r.lines.append(r.scratch, .{ .text = try std.ascii.allocLowerString(r.scratch, line), .file = fi, .at = at, .len = card.len });
         }
+        if (in_lib != null) try r.refusals.add(header, "`.lib` entry has no `.endl`; the cards after it are not read", .{});
     }
 
     /// The chain `a -> b -> a` when reading file `fi` (`entry` of it) now
@@ -433,10 +433,6 @@ const Tokens = struct {
     }
 };
 
-fn tokens(text: []const u8) Tokens {
-    return .{ .text = text };
-}
-
 /// One physical line with its comments removed: `*` is a full-line comment, `;`
 /// and `$` start a trailing one.
 fn strip(raw: []const u8) []const u8 {
@@ -476,7 +472,7 @@ fn emitCard(
 ) Allocator.Error!bool {
     // `(` `)` and `,` are noise in a SPICE port list: E.2.2.2's own example
     // writes `.SUBCKT ECPOSC (OUT GND)` with parentheses that carry no meaning.
-    var it = tokens(card.text);
+    var it: Tokens = .{ .text = card.text };
     const kw = it.next() orelse return false;
     const is_model = std.mem.eql(u8, kw, ".model");
     if (!is_model and !std.mem.eql(u8, kw, ".subckt")) return false; // a device card, .tran, .include, ...
@@ -659,7 +655,7 @@ fn emitBody(
     // The V cards an F or H card reads the current of, by name.
     var controls: std.ArrayList([]const u8) = .empty;
     for (body) |card| {
-        var it = tokens(card.text);
+        var it: Tokens = .{ .text = card.text };
         const inst = it.next() orelse continue;
         if (inst[0] != 'f' and inst[0] != 'h') continue;
         _ = it.next() orelse continue;
@@ -668,7 +664,7 @@ fn emitBody(
     }
     var analog: std.ArrayList(u8) = .empty;
     for (body) |card| {
-        var it = tokens(card.text);
+        var it: Tokens = .{ .text = card.text };
         const inst = it.next() orelse continue;
         if (inst[0] == '.') {
             if (std.mem.eql(u8, inst, ".subckt"))
@@ -817,7 +813,10 @@ const Value = union(enum) {
 
     pub fn format(v: Value, w: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (v) {
-            .num => |n| try num(n).format(w),
+            // `{d}`'s plain decimal, except an integral value of 2^31 or
+            // more, which `{d}` would spell as an integer literal too wide
+            // for §3.2's 32-bit integer; `{e}` keeps it real.
+            .num => |n| if (@abs(n) >= 0x1p31 and @trunc(n) == n) try w.print("{e}", .{n}) else try w.print("{d}", .{n}),
             .expr => |e| try w.writeAll(e),
         }
     }
@@ -917,12 +916,12 @@ fn emitModelCard(
         module = m.type_;
         // A bin (`name.N`, picked or named) keeps its bounds to itself.
         const binned = std.mem.findScalar(u8, m.name, '.') != null;
-        var mit = tokens(m.card.text);
+        var mit: Tokens = .{ .text = m.card.text };
         for (0..3) |_| _ = mit.next(); // `.model name type`
         while (mit.next()) |t| {
             const eq = std.mem.findScalar(u8, t, '=') orelse
                 return refusals.add(card, "`{s}`: the field `{s}` of `.model {s}` is not read", .{ inst, t, m.name });
-            if (binned and binBound(t[0..eq]) != null) continue;
+            if (binned and std.meta.stringToEnum(BinBound, t[0..eq]) != null) continue;
             try setOverride(arena, &params, t[0..eq], try paramValue(arena, t, eq, inst, card, refusals, &.{}) orelse return);
         }
     }
@@ -932,11 +931,6 @@ fn emitModelCard(
 
 /// A bin card's four bounds, in the order `pickBin` keeps them.
 const BinBound = enum { lmin, lmax, wmin, wmax };
-
-/// Which of the four bin bounds `key` is, or null.
-fn binBound(key: []const u8) ?BinBound {
-    return std.meta.stringToEnum(BinBound, key);
-}
 
 /// The bin of the binned model `model` that holds the card's L and W
 /// (`emitModelCard`), wrapped in an optional: `.{null}` when `model` is not
@@ -967,11 +961,11 @@ fn pickBin(card: Card, inst: []const u8, model: []const u8, models: []const Mode
         if (!isBinOf(m.name, model)) continue;
         // lmin, lmax, wmin, wmax; a bound the card does not give is open.
         var b = [4]f64{ 0, std.math.inf(f64), 0, std.math.inf(f64) };
-        var mit = tokens(m.card.text);
+        var mit: Tokens = .{ .text = m.card.text };
         for (0..3) |_| _ = mit.next(); // `.model name type`
         while (mit.next()) |t| {
             const eq = std.mem.findScalar(u8, t, '=') orelse continue;
-            const k = binBound(t[0..eq]) orelse continue;
+            const k = std.meta.stringToEnum(BinBound, t[0..eq]) orelse continue;
             b[@backingInt(k)] = spiceNumber(t[eq + 1 ..]) orelse {
                 try refusals.add(card, "`{s}`: the bound `{s}` of the bin `.model {s}` is not a number", .{ inst, t, m.name });
                 return null;
@@ -1087,20 +1081,6 @@ fn exprValue(arena: Allocator, v: []const u8, inst: []const u8, card: Card, refu
         },
     }
 }
-
-/// A card value as Verilog-AMS source: `{d}`'s plain decimal, except an
-/// integral value of 2^31 or more, which `{d}` would spell as an integer
-/// literal too wide for §3.2's 32-bit integer; `{e}` keeps it real.
-fn num(v: f64) Num {
-    return .{ .v = v };
-}
-const Num = struct {
-    v: f64,
-    pub fn format(n: Num, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        if (@abs(n.v) >= 0x1p31 and @trunc(n.v) == n.v) return w.print("{e}", .{n.v});
-        return w.print("{d}", .{n.v});
-    }
-};
 
 /// A device card's one positional value, with nothing after it, or null after
 /// recording why not: a model name (`R1 A B RMOD`), an expression
@@ -1299,7 +1279,7 @@ const ExprParser = struct {
 /// card the subcircuit does not declare is skipped like any unreadable card.
 fn declares(body: []const Card, name: []const u8) bool {
     for (body) |card| {
-        var it = tokens(card.text);
+        var it: Tokens = .{ .text = card.text };
         if (std.mem.eql(u8, it.next() orelse continue, name)) return true;
     }
     return false;
@@ -1926,12 +1906,12 @@ test "E.4.2 a card naming a binned model instantiates the bin that holds its L a
 
 test "a card value at or past 2^31 that is integral is spelled real" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("10000", try std.mem.print(&buf, "{f}", .{num(1e4)}));
-    try std.testing.expectEqualStrings("2147483647", try std.mem.print(&buf, "{f}", .{num(2147483647)}));
-    try std.testing.expectEqualStrings("2.147483648e9", try std.mem.print(&buf, "{f}", .{num(2147483648)}));
-    try std.testing.expectEqualStrings("0.5", try std.mem.print(&buf, "{f}", .{num(0.5)}));
-    try std.testing.expectEqualStrings("-2.147483648e9", try std.mem.print(&buf, "{f}", .{num(-2147483648)}));
-    try std.testing.expectEqualStrings("-0.5", try std.mem.print(&buf, "{f}", .{num(-0.5)}));
+    try std.testing.expectEqualStrings("10000", try std.mem.print(&buf, "{f}", .{Value{ .num = 1e4 }}));
+    try std.testing.expectEqualStrings("2147483647", try std.mem.print(&buf, "{f}", .{Value{ .num = 2147483647 }}));
+    try std.testing.expectEqualStrings("2.147483648e9", try std.mem.print(&buf, "{f}", .{Value{ .num = 2147483648 }}));
+    try std.testing.expectEqualStrings("0.5", try std.mem.print(&buf, "{f}", .{Value{ .num = 0.5 }}));
+    try std.testing.expectEqualStrings("-2.147483648e9", try std.mem.print(&buf, "{f}", .{Value{ .num = -2147483648 }}));
+    try std.testing.expectEqualStrings("-0.5", try std.mem.print(&buf, "{f}", .{Value{ .num = -0.5 }}));
 }
 
 /// Requires every `want` in `text`, printing the text when one is missing.
@@ -1971,7 +1951,7 @@ test "the card text helpers: tightEquals, Tokens, strip, unquote, hasEntry" {
         .{ "a}b c", &.{ "a}b", "c" } },
         .{ " ,() ", &.{} },
     }) |c| {
-        var it = tokens(c[0]);
+        var it: Tokens = .{ .text = c[0] };
         for (c[1]) |want| try std.testing.expectEqualStrings(want, it.next().?);
         try std.testing.expect(it.next() == null);
     }
@@ -1988,7 +1968,7 @@ test "the card text helpers: tightEquals, Tokens, strip, unquote, hasEntry" {
     try std.testing.expect(!hasEntry(".lib file.sp tt\n", "tt"));
 }
 
-test "names: isIdent, isSpiceName, spell and binBound" {
+test "names: isIdent, isSpiceName and spell" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -2000,9 +1980,6 @@ test "names: isIdent, isSpiceName, spell and binBound" {
     try std.testing.expectEqualStrings("\\wire ", try spell(arena, "wire"));
     try std.testing.expectEqualStrings("\\2n ", try spell(arena, "2n"));
     try std.testing.expectEqualStrings("\\a.b ", try spell(arena, "a.b"));
-    try std.testing.expectEqual(@as(?BinBound, .lmin), binBound("lmin"));
-    try std.testing.expectEqual(@as(?BinBound, .wmax), binBound("wmax"));
-    try std.testing.expectEqual(@as(?BinBound, null), binBound("l"));
 }
 
 test "spiceNumber never panics: an exponent past i32 is not a number, a huge one is infinite" {
@@ -2202,6 +2179,39 @@ test "a top-level .LIB block is a library entry, read only when called" {
     try std.testing.expect(std.mem.find(u8, s.text, "hidden") == null);
     try std.testing.expect(std.mem.find(u8, s.text, "lost") == null);
     try expectRefusals(s.refused, &.{"`.lib` entry has no `.endl`"});
+}
+
+/// Synthesizes `netlist` with every `arena` allocation on `gpa`, for
+/// `checkAllAllocationFailures`.
+fn synthesizeAll(gpa: Allocator, netlist: []const u8) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    _ = try synthesize(arena_state.allocator(), netlist, "");
+}
+
+test "synthesize reports every allocation failure as OutOfMemory, the unclosed .LIB refusal's too" {
+    // A model, a subcircuit with a body, an unsupported type, a refused card
+    // and an entry with no `.endl`: every path that allocates on `arena`.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, synthesizeAll, .{
+        \\.MODEL RM R R=1K
+        \\.MODEL SW1 SW
+        \\.SUBCKT S A B
+        \\R1 A B 1K
+        \\S1 A B
+        \\.ENDS
+        \\.LIB OPEN
+    });
+    // The arena above coalesces small allocations, so the unclosed `.lib`
+    // refusal is reached directly: its allocation fails, and `read` must say
+    // so rather than return with the refusal lost.
+    var scratch_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer scratch_state.deinit();
+    var failing: std.testing.FailingAllocator = .init(std.testing.allocator, .{ .fail_index = 0 });
+    var refusals: Refusals = .{ .arena = failing.allocator() };
+    var r: Reader = .{ .arena = failing.allocator(), .scratch = scratch_state.allocator(), .refusals = &refusals };
+    try r.files.append(scratch_state.allocator(), .{ .name = "<spice netlist>", .text = ".lib open\n" });
+    try std.testing.expectError(error.OutOfMemory, r.read(0, null));
+    try std.testing.expectEqual(@as(usize, 0), refusals.list.items.len);
 }
 
 const test_lib =

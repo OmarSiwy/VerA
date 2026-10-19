@@ -26,7 +26,7 @@ pub fn fopen(self: *State, source: []const u8, name: anytype, comptime nw: u32, 
     return system.fopen(system.own, a, source, try State.chars(a, name, nw), m, mcd);
 }
 
-/// `system.fileOp`.
+/// `system.fileOp`; -1 in a `quiet` run, which touches no file.
 pub fn fileOp(self: *const State, f: system.FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
     if (self.quiet) return -1;
     return system.fileOp(system.own, f, x, y, z);

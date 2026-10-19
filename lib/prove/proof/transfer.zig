@@ -357,12 +357,7 @@ test "proof: random distribution names do not prove finite results" {
 
 const Interval = proof_lattice.Interval;
 
-fn member(i: Interval, x: f64) bool {
-    if (i.nonzero and x == 0) return false;
-    const above = x > i.lo or (x == i.lo and !i.lo_open);
-    const below = x < i.hi or (x == i.hi and !i.hi_open);
-    return above and below;
-}
+const member = proof_lattice.member;
 
 /// `member`, with one double of slack past a closed end: exp, log and pow are
 /// faithful (< 1 ulp), not correctly rounded, so a value between two corners

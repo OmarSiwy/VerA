@@ -26,7 +26,6 @@
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const Lower = @import("ir").Lowered;
-const Lowered = @import("ir").Lowered;
 const sim = @import("sim");
 
 // The routine families that live in their own files. Referenced here so their
@@ -78,6 +77,7 @@ test {
     _ = @import("model.zig");
     _ = @import("decompile.zig");
     _ = @import("test.zig");
+    _ = @import("vpi_a_test.zig");
 }
 
 /// A folded constant (§11.6.12 NOTE 1's "the value of the parameter"), as

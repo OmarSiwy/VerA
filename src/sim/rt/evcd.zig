@@ -166,7 +166,7 @@ const Dump = struct {
                 const c = net.contribution(&s.nets, di, bit);
                 if (inside) out = out.combine(c) else in = in.combine(c);
             }
-        } else out = .of(shown(s, p, bit), .strong, .strong);
+        } else out = .of(net.shown(s, p.off, bit), .strong, .strong);
         return .{ in, out };
     }
     pub fn write(d: Dump, bytes: []const u8) Error!void {
@@ -180,11 +180,4 @@ fn checkpoint(s: *State, f: *Live, file: File, keyword: []const u8, as_x: bool, 
 
 fn changes(s: *State, f: *Live, file: File, at: u64) Error!void {
     return devcd.writeChanges(Dump{ .s = s, .f = f, .file = file, .scratch = s.gpa, .keep = s.gpa }, at);
-}
-
-fn shown(s: *const State, p: Port, at: u32) @import("kernels").Integer.Bit {
-    const o = p.off + at / 64;
-    const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
-    const x: u2 = if (root.logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
-    return @fromBackingInt(@intCast(v | x << 1));
 }

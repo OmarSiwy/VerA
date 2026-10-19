@@ -11,7 +11,7 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
+const S = contract.RefFamily(f64, &.{ 0, 1 }, .{});
 
 fn sayAt(v: f64, out: *contract.Say) void {
     var x: [n_u]f64 = @splat(0.0);

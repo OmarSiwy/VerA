@@ -1250,3 +1250,89 @@ test "natureAttrExpr: own, inherited, overridden, through a discipline, and a cy
     try std.testing.expectEqual(null, natureAttrExpr(&f, elec, "abstol")); // a discipline is no nature
     try std.testing.expectEqual(null, natureAttrExpr(&f, loop_a, "abstol")); // the hop limit ends a cycle
 }
+
+test "primTerms names every primitive terminal as VAMS §7.8.5.1 does, numbering unnamed instances per type (VD-115)" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var f: SourceFile = .empty;
+    const e = struct {
+        fn id(n: u32) ExprId {
+            return @fromBackingInt(n);
+        }
+    }.id;
+    // and (o, a, b); and g2 (o2, c, d); buf (x, y, i); bufif0 (q, d, en);
+    // a hoisted `and` (generated, unnamed); and (p, r, s);
+    const gates = [_]GateInst{
+        .{ .kind = .g_and, .out = e(0), .ins = &.{ e(1), e(2) }, .main_tok = 1 },
+        .{ .kind = .g_and, .out = e(3), .ins = &.{ e(4), e(5) }, .name = try f.intern(a, "g2"), .main_tok = 2 },
+        .{ .kind = .g_buf, .out = e(6), .ins = &.{e(8)}, .main_tok = 3 },
+        .{ .kind = .g_buf, .out = e(7), .ins = &.{e(8)}, .main_tok = 3 },
+        .{ .kind = .g_bufif0, .out = e(9), .ins = &.{ e(10), e(11) }, .main_tok = 4 },
+        .{ .kind = .g_and, .out = e(12), .ins = &.{e(13)}, .main_tok = 5, .generated = true },
+        .{ .kind = .g_and, .out = e(14), .ins = &.{e(15)}, .main_tok = 6 },
+    };
+    const pulls = [_]PullInst{.{ .out = e(16), .one = true, .main_tok = 7 }};
+    const switches = [_]SwitchInst{
+        .{ .kind = .nmos, .terms = &.{ e(17), e(18), e(19) }, .main_tok = 8 },
+        .{ .kind = .tran, .terms = &.{ e(20), e(21) }, .main_tok = 9 },
+    };
+    const m: ModuleDecl = .{ .name = try f.intern(a, "m"), .ports = &.{}, .gates = &gates, .pulls = &pulls, .switches = &switches };
+    const Want = struct { []const u8, []const u8, Direction, u32 };
+    const want = [_]Want{
+        .{ "and$1", "out", .output, 0 },    .{ "and$1", "in1", .input, 1 },      .{ "and$1", "in2", .input, 2 },
+        .{ "g2", "out", .output, 3 },       .{ "g2", "in1", .input, 4 },         .{ "g2", "in2", .input, 5 },
+        // One buf, two output rows: `in` is listed once, on the first.
+        .{ "buf$1", "out1", .output, 6 },   .{ "buf$1", "in", .input, 8 },       .{ "buf$1", "out2", .output, 7 },
+        .{ "bufif0$1", "out", .output, 9 }, .{ "bufif0$1", "in", .input, 10 },   .{ "bufif0$1", "enable", .input, 11 },
+        // Hoisted: its type name, not counted, so the next one is `and$2`.
+        .{ "and", "out", .output, 12 },     .{ "and", "in1", .input, 13 },       .{ "and$2", "out", .output, 14 },
+        .{ "and$2", "in1", .input, 15 },    .{ "pullup$1", "out", .output, 16 }, .{ "nmos$1", "source", .output, 17 },
+        .{ "nmos$1", "drain", .input, 18 }, .{ "nmos$1", "gate", .input, 19 },   .{ "tran$1", "source", .inout, 20 },
+        .{ "tran$1", "drain", .inout, 21 },
+    };
+    const got = try primTerms(a, &f, &m);
+    try std.testing.expectEqual(want.len, got.len);
+    for (want, got) |w, g| {
+        try std.testing.expectEqualStrings(w[0], g.inst);
+        try std.testing.expectEqualStrings(w[1], g.port);
+        try std.testing.expectEqual(w[2], g.dir);
+        try std.testing.expectEqual(e(w[3]), g.expr);
+    }
+}
+
+test "setPrimTerm re-points one terminal; a buf's shared input on every output row" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const e = struct {
+        fn id(n: u32) ExprId {
+            return @fromBackingInt(n);
+        }
+    }.id;
+    const in = [_]ExprId{e(8)};
+    var gates = [_]GateInst{
+        .{ .kind = .g_buf, .out = e(6), .ins = &in, .main_tok = 3 },
+        .{ .kind = .g_buf, .out = e(7), .ins = &in, .main_tok = 3 },
+        .{ .kind = .g_and, .out = e(0), .ins = &.{ e(1), e(2) }, .main_tok = 4 },
+    };
+    var pulls = [_]PullInst{.{ .out = e(16), .one = false }};
+    const terms = [_]ExprId{ e(17), e(18), e(19) };
+    var switches = [_]SwitchInst{.{ .kind = .nmos, .terms = &terms }};
+    const t: PrimTerm = .{ .list = .gate, .row = 0, .term = 1, .inst = "buf$1", .range = null, .port = "in", .dir = .input, .expr = e(8), .generated = false, .main_tok = 3 };
+    try setPrimTerm(a, &gates, &pulls, &switches, t, 0, e(99));
+    try std.testing.expectEqual(e(99), gates[0].ins[0]);
+    try std.testing.expectEqual(e(99), gates[1].ins[0]);
+    try std.testing.expectEqual(e(1), gates[2].ins[0]); // another instance
+    try std.testing.expectEqual(e(8), in[0]); // copied, never written through
+    var out = t;
+    out.term = 0;
+    try setPrimTerm(a, &gates, &pulls, &switches, out, 1, e(98));
+    try std.testing.expectEqual(e(6), gates[0].out);
+    try std.testing.expectEqual(e(98), gates[1].out);
+    try setPrimTerm(a, &gates, &pulls, &switches, .{ .list = .pull, .row = 0, .term = 0, .inst = "", .range = null, .port = "out", .dir = .output, .expr = e(16), .generated = false, .main_tok = 0 }, 0, e(97));
+    try std.testing.expectEqual(e(97), pulls[0].out);
+    try setPrimTerm(a, &gates, &pulls, &switches, .{ .list = .switch_, .row = 0, .term = 2, .inst = "", .range = null, .port = "gate", .dir = .input, .expr = e(19), .generated = false, .main_tok = 0 }, 0, e(96));
+    try std.testing.expectEqualSlices(ExprId, &.{ e(17), e(18), e(96) }, switches[0].terms);
+    try std.testing.expectEqual(e(19), terms[2]);
+}

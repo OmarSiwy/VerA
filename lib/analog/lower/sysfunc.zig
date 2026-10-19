@@ -108,7 +108,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const id: ?[]const u8 = if (arg != .none and ex.tag(arg) == .ident) self.file.str(ex.strOf(arg)) else null;
         const ok = if (is_pg)
             id != null and (self.param_index.contains(id.?) or self.consts.contains(id.?))
-        else if (id) |n| isPort(self, n) else arg != .none; // §9.19 port_scalar_expression: an element is judged elsewhere
+        else if (id) |n| portOrdinal(self, n) != null else arg != .none; // §9.19 port_scalar_expression: an element is judged elsewhere
         if (!ok) {
             try self.err(if (arg != .none) ex.mainTok(arg) else ex.mainTok(e), .E0822, "{s}", .{if (is_pg)
                 "$param_given requires a parameter identifier"
@@ -524,14 +524,8 @@ fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
     return true;
 }
 
-/// §9.19's "port identifier": a name in the lowered module's port list.
-fn isPort(self: *const Lower, name: []const u8) bool {
-    const m = self.module orelse return false;
-    for (m.ports) |p| if (std.mem.eql(u8, self.file.str(p.name), name)) return true;
-    return false;
-}
-
-/// Returns `name`'s position in the module's port list, or null.
+/// Returns `name`'s position in the module's port list (§9.19's "port
+/// identifier"), or null.
 fn portOrdinal(self: *const Lower, name: []const u8) ?i64 {
     const m = self.module orelse return null;
     for (m.ports, 0..) |p, k| if (std.mem.eql(u8, self.file.str(p.name), name)) return @intCast(k);

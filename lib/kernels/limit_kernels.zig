@@ -1,5 +1,5 @@
 // §4.5.15 SPICE voltage-limiting kernels — EMITTED VERBATIM into every device
-// that honours a `$limit` call (`codegen.limit_txt` is `@embedFile` of this
+// that honours a `$limit` call (`kernel_text.limit_txt` is `@embedFile` of this
 // file) and `@import`ed by codegen.zig's tests, for the same reason
 // `filter_kernels.zig` is: the numerics the tests check are the numerics the
 // device runs. Until this file existed they were a string literal in

@@ -69,8 +69,8 @@ fn coldStart(ckt: anytype, x: []f64) void {
 /// the matrix G itself.
 const EvalHook = struct {
     /// Stamps every plane of `ckt` at `x`.
-    pub fn assemble(_: EvalHook, ckt: anytype, x: []const f64, t: f64) void {
-        ckt.eval(x, t);
+    pub fn assemble(_: EvalHook, ckt: anytype, x: []const f64) void {
+        ckt.eval(x);
     }
     /// Returns `ckt`'s G plane, which the solve may modify (gmin).
     pub fn vals(_: EvalHook, ckt: anytype) []f64 {
@@ -98,8 +98,8 @@ pub fn solve(ckt: anytype, ws: anytype, x: []f64, kind: contract.AnalysisKind) !
 /// solve that did not converge.
 fn newtonRun(ckt: anytype, ws: anytype, x: []f64, gmin: f64, max_iter: u16, init_fix: bool) converger.Result {
     const opts: converger.Options = .{ .max_iter = max_iter, .gmin = gmin, .init_fix = init_fix };
-    return converger.newton(ckt, ws, x, 0, opts, EvalHook{}) catch
-        converger.Result{ .converged = false, .iterations = 0, .max_dx = 0 };
+    return converger.newton(ckt, ws, x, opts, EvalHook{}) catch
+        converger.Result{ .converged = false, .iterations = 0 };
 }
 
 /// The three rungs, leaving the solution in `x`.

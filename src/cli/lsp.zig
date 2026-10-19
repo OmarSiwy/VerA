@@ -73,6 +73,9 @@ const Server = struct {
     cli: *args.Cli,
     utf16: bool = true,
     shutdown: bool = false,
+    /// `initialize` answered: a second one reads no `.vera-flags`, whose
+    /// flags `cli` already holds and whose bytes it borrows.
+    initialized: bool = false,
     /// URI (gpa-owned key) -> document.
     docs: std.StringHashMapUnmanaged(Doc) = .empty,
     /// `.vera-flags`' bytes, which `cli` borrows; gpa-owned.
@@ -94,7 +97,8 @@ const Server = struct {
 
     fn send(s: *Server, arena: Allocator, msg: anytype) !void {
         var aw: Io.Writer.Allocating = .init(arena);
-        try std.json.Stringify.value(msg, .{ .emit_null_optional_fields = false }, &aw.writer);
+        // An allocating writer fails only when its allocator does.
+        std.json.Stringify.value(msg, .{ .emit_null_optional_fields = false }, &aw.writer) catch return error.OutOfMemory;
         try s.out.print("Content-Length: {d}\r\n\r\n", .{aw.written().len});
         try s.out.writeAll(aw.written());
         try s.out.flush();
@@ -122,7 +126,8 @@ const parse_opts: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
 
 /// Runs one session: reads framed messages from `in` until `exit`, answering
 /// on `out`. `cli` holds the command line's flags; `.vera-flags` is parsed
-/// into it at `initialize`, so it must outlive the call. Returns the process
+/// into it at `initialize`, so it must outlive the call; the strings that
+/// file added to `cli` are freed when the call returns. Returns the process
 /// exit status: 0 after `shutdown` then `exit`, 1 for an `exit` without a
 /// `shutdown`, a closed input, or a malformed frame (reason on `err`).
 pub fn serve(gpa: Allocator, io: Io, cli: *args.Cli, in: *Io.Reader, out: *Io.Writer, err: *Io.Writer) !u8 {
@@ -132,7 +137,10 @@ pub fn serve(gpa: Allocator, io: Io, cli: *args.Cli, in: *Io.Reader, out: *Io.Wr
     defer arena_state.deinit();
 
     while (true) {
-        _ = arena_state.reset(.retain_capacity);
+        // Not `.retain_capacity`: that would pin the largest `didOpen` (up to
+        // `max_message_bytes`) for the session, and its regrow swallows an
+        // allocation failure. One chunk per message is noise beside a lint.
+        _ = arena_state.reset(.free_all);
         const arena = arena_state.allocator();
 
         // Header: `Content-Length: N\r\n`, maybe other fields, then `\r\n`.
@@ -167,7 +175,8 @@ pub fn serve(gpa: Allocator, io: Io, cli: *args.Cli, in: *Io.Reader, out: *Io.Wr
             },
         };
 
-        const msg = std.json.parseFromSliceLeaky(Message, arena, body, parse_opts) catch {
+        const msg = std.json.parseFromSliceLeaky(Message, arena, body, parse_opts) catch |e| {
+            if (e == error.OutOfMemory) return error.OutOfMemory;
             try s.send(arena, .{ .jsonrpc = "2.0", .id = null, .@"error" = .{ .code = -32700, .message = "parse error" } });
             continue;
         };
@@ -195,7 +204,8 @@ fn dispatch(s: *Server, arena: Allocator, method: []const u8, id: ?std.json.Valu
         for (p.capabilities.general.positionEncodings) |e| {
             if (eql(u8, e, "utf-8")) s.utf16 = false;
         }
-        if (p.rootUri) |u| if (uriToPath(arena, u)) |root| try readFlags(s, arena, root);
+        if (!s.initialized) if (p.rootUri) |u| if (try uriToPath(arena, u)) |root| try readFlags(s, arena, root);
+        s.initialized = true;
         try s.reply(arena, id orelse return, .{
             .capabilities = .{
                 .positionEncoding = if (s.utf16) "utf-16" else "utf-8",
@@ -261,27 +271,20 @@ fn dispatch(s: *Server, arena: Allocator, method: []const u8, id: ?std.json.Valu
 /// and the flags before it stay.
 fn readFlags(s: *Server, arena: Allocator, root: []const u8) !void {
     const path = try std.fs.path.join(arena, &.{ root, ".vera-flags" });
-    s.flags_text = vera.Preprocessor.readText(s.io, .cwd(), path, s.gpa) catch return;
-    var words: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, s.flags_text, " \t\r\n");
-    while (it.next()) |w| try words.append(arena, w);
-    var iter: struct {
-        w: []const []const u8,
-        i: usize = 0,
-        pub fn next(self: *@This()) ?[]const u8 {
-            if (self.i == self.w.len) return null;
-            defer self.i += 1;
-            return self.w[self.i];
-        }
-    } = .{ .w = words.items };
+    s.flags_text = vera.Preprocessor.readText(s.io, .cwd(), path, s.gpa) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return, // no `.vera-flags`: the command line's flags alone
+    };
+    var iter = std.mem.tokenizeAny(u8, s.flags_text, " \t\r\n");
     const dirs_before = s.cli.include_dirs.items.len;
     var discard: Io.Writer.Discarding = .init(&.{});
     var why: Io.Writer.Allocating = .init(arena);
     if (try args.parse(s.cli, s.gpa, &iter, &discard.writer, &why.writer) != null)
         try s.showMessage(arena, try arena.print("vera: {s}: {s}", .{ path, std.mem.trimEnd(u8, why.written(), "\n") }));
     for (s.cli.include_dirs.items[dirs_before..]) |*d| if (!std.fs.path.isAbsolute(d.*)) {
+        try s.abs_dirs.ensureUnusedCapacity(s.gpa, 1);
         const abs = try std.fs.path.join(s.gpa, &.{ root, d.* });
-        try s.abs_dirs.append(s.gpa, abs);
+        s.abs_dirs.appendAssumeCapacity(abs);
         d.* = abs;
     };
 }
@@ -312,7 +315,7 @@ fn setText(s: *Server, arena: Allocator, uri: []const u8, text: []const u8) !voi
 fn lintAndPublish(s: *Server, arena: Allocator, uri: []const u8, doc: *Doc) !void {
     var bag: diag.Bag = .init(s.gpa);
     defer bag.deinit(s.gpa);
-    const path = uriToPath(arena, uri);
+    const path = try uriToPath(arena, uri);
     const is_va = if (path) |p| !std.mem.eql(u8, std.fs.path.extension(p), ".v") else true;
     if (ams and is_va) {
         const cli = s.cli;
@@ -480,10 +483,10 @@ fn position(text: []const u8, index: diag.LineIndex, off: u32, utf16: bool) Posi
 
 /// `file://` URI -> path, percent-decoded (`file:///C:/x` -> `C:/x`); null
 /// for any other scheme (`untitled:`).
-fn uriToPath(arena: Allocator, uri: []const u8) ?[]const u8 {
+fn uriToPath(arena: Allocator, uri: []const u8) Allocator.Error!?[]const u8 {
     const prefix = "file://";
     if (!std.mem.startsWith(u8, uri, prefix)) return null;
-    const buf = arena.dupe(u8, uri[prefix.len..]) catch return null;
+    const buf = try arena.dupe(u8, uri[prefix.len..]);
     const p = std.Uri.percentDecodeInPlace(buf);
     if (p.len >= 3 and p[0] == '/' and p[2] == ':') return p[1..]; // a Windows drive
     return p;
@@ -579,6 +582,60 @@ test "exit without shutdown, and a closed input, are status 1" {
     var bad: Io.Reader = .fixed("Content-Type: x\r\n\r\n{}");
     try std.testing.expectEqual(@as(u8, 1), try serve(gpa, std.testing.io, &cli, &bad, &out.writer, &err.writer));
     try std.testing.expectEqualStrings("error: --lsp: a message without a valid Content-Length\n", err.written());
+    // The header's name is case-insensitive; the body's size is bounded.
+    var big: Io.Reader = .fixed("content-length: 268435457\r\n\r\n");
+    try std.testing.expectEqual(@as(u8, 1), try serve(gpa, std.testing.io, &cli, &big, &out.writer, &err.writer));
+    try std.testing.expect(std.mem.endsWith(u8, err.written(), "error: --lsp: a 268435457-byte message is past the 268435456-byte limit\n"));
+}
+
+/// A session over a `.v` document (never linted) under `root`, whose
+/// `.vera-flags` holds `-I inc`: initialize twice, open, change with no
+/// change, change, close, close again, shutdown, exit.
+fn vSession(gpa: Allocator, root_uri: []const u8) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const init_msg = try arena.print("{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"rootUri\":\"{s}\"}}}}", .{root_uri});
+    var input: std.ArrayList(u8) = .empty;
+    for ([_][]const u8{
+        init_msg,
+        init_msg,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///x/top.v","text":"module top; endmodule\n"}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///x/top.v"},"contentChanges":[]}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///x/top.v"},"contentChanges":[{"text":"a"},{"text":"module top2; endmodule\n"}]}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file:///x/top.v"}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file:///x/top.v"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+    }) |m| try input.appendSlice(arena, try frame(arena, m));
+    var in: Io.Reader = .fixed(input.items);
+    var out: Io.Writer.Allocating = .init(arena);
+    var err: Io.Writer.Allocating = .init(arena);
+    var cli: args.Cli = .{};
+    defer cli.deinit(gpa);
+    try std.testing.expectEqual(@as(u8, 0), try serve(gpa, std.testing.io, &cli, &in, &out.writer, &err.writer));
+    try std.testing.expectEqualStrings("", err.written());
+    // `.vera-flags` is read once. (Its strings died with the session.)
+    try std.testing.expectEqual(@as(usize, 1), cli.include_dirs.items.len);
+    // Opened, changed once (the empty change is no edit), closed once: three
+    // publishes, each empty for a `.v` document.
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), "\"diagnostics\":[]"));
+}
+
+test "a session over a .v document: `.vera-flags` read once, leak-free under every allocation failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".vera-flags", .data = "-I inc\n" });
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", arena.allocator());
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, vSession, .{try pathToUri(arena.allocator(), root)});
 }
 
 test position {
@@ -592,15 +649,14 @@ test position {
 }
 
 test "file URIs round-trip, a drive letter and a space included" {
-    const arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    var a = arena_state;
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     try std.testing.expectEqualStrings("file:///home/x%20y/m.va", try pathToUri(arena, "/home/x y/m.va"));
-    try std.testing.expectEqualStrings("/home/x y/m.va", uriToPath(arena, "file:///home/x%20y/m.va").?);
+    try std.testing.expectEqualStrings("/home/x y/m.va", (try uriToPath(arena, "file:///home/x%20y/m.va")).?);
     try std.testing.expectEqualStrings("file:///C%3A/d/m.va", try pathToUri(arena, "C:\\d\\m.va"));
-    try std.testing.expectEqualStrings("C:/d/m.va", uriToPath(arena, "file:///C%3A/d/m.va").?);
-    try std.testing.expectEqual(@as(?[]const u8, null), uriToPath(arena, "untitled:Untitled-1"));
+    try std.testing.expectEqualStrings("C:/d/m.va", (try uriToPath(arena, "file:///C%3A/d/m.va")).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), try uriToPath(arena, "untitled:Untitled-1"));
 }
 
 // The oracle is `renderJson`, which places every span by its own walk: for
@@ -663,7 +719,7 @@ test "parity: the server's diagnostics are `--diagnostics=json`'s, on every fixt
         var it = by_uri.iterator();
         while (it.next()) |e| for (e.value_ptr.items) |d| {
             const code = d.code orelse continue;
-            const file = uriToPath(arena, e.key_ptr.*).?;
+            const file = (try uriToPath(arena, e.key_ptr.*)).?;
             try got.append(arena, try slashed(arena, "{s} {s}:{d}:{d}", .{ code, file, d.range.start.line + 1, d.range.start.character + 1 }));
         };
         // The JSON's spanless rows and prelude rows are not in `want`; the

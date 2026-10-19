@@ -568,6 +568,18 @@ test "%d of a known operand past 64 bits is its whole decimal value (§17.1.1.3)
     try testing.expectEqualStrings("10715086071862673209484250490600018105614048117055336074437503883703510511249361224931983788156958581275946729175531468251871452856923140435984577574698574803934567774824230985421074605062371141877954182153046474983581941267398767559165543946077062914571196477686542167660429831652624386837205668069376", lw.buffered());
 }
 
+fn wideDecimalAllocation(gpa: std.mem.Allocator) !void {
+    var planes: [32]u64 = @splat(0);
+    planes[15] = 1 << 40;
+    var buf: [400]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try value(&w, gpa, lit(&planes, 1001, true), .decimal, null);
+}
+
+test "%d past 64 bits frees its scratch on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, wideDecimalAllocation, .{});
+}
+
 /// The decimal digits of 2^n, by doubling a digit string: an oracle that
 /// shares no arithmetic with `autoWidth`.
 fn digitsOfPow2(n: u32) u32 {

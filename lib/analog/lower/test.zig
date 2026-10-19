@@ -17,20 +17,16 @@
 const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_shape = @import("shape.zig");
-const Ast = @import("frontend").Ast;
 const Mir = @import("ir").Mir;
-const Lexer = @import("frontend").Lexer;
-const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
-const ground = Lower.ground;
 const Access = Lower.Access;
-const Kind = Lower.Kind;
-
-/// The frontend parser namespace the harness drives.
-pub const Parser = @import("frontend").Parser;
 
 /// The one lowering harness (`Lower.Harness`), shared with every `lower/*.zig` test.
 const Harness = Lower.Harness;
+
+test {
+    _ = @import("analog_b_lower_test.zig");
+}
 
 test "§6.3.1 paramset defparams follow final parameter values and freeze the selected generate shape" {
     const source =

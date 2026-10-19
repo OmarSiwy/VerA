@@ -5,7 +5,7 @@
 //! `diag`, `kernels` (the text spliced into every device) and `zigbuild`
 //! (`Output`); the tests also take `frontend` and `analog`, to parse and
 //! lower source, and `dynlib`, to load what they built. Neither the testbench (`exe`) nor `--emit-verilog`
-//! (`verilog`) is reachable from here (fitness R2).
+//! (`verilog`) is reachable from here.
 //!
 //! The three `cg_*` entries are here for their tests alone: `codegen.zig`'s
 //! `test` block does not reach them (`docs/seams/s1-codegen.md` at 6e59b3d4^,

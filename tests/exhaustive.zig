@@ -151,9 +151,9 @@ const os_apis = [_][]const u8{
 /// The files that may name one: each says why in its header.
 const os_allowed = [_][]const u8{"lib/dynlib.zig"};
 
-/// Prints every line of `src` naming an `os_apis` entry without `// os:`,
-/// comment lines aside, and returns how many.
-fn scanOs(path: []const u8, src: []const u8) usize {
+/// Counts every line of `src` naming an `os_apis` entry without `// os:`,
+/// comment lines aside, printing each when `report`.
+fn scanOs(path: []const u8, src: []const u8, report: bool) usize {
     var n: usize = 0;
     var lines = std.mem.splitScalar(u8, src, '\n');
     var line_no: usize = 0;
@@ -162,7 +162,7 @@ fn scanOs(path: []const u8, src: []const u8) usize {
         if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "//")) continue;
         if (std.mem.find(u8, line, "// os:") != null) continue;
         for (os_apis) |api| if (std.mem.find(u8, line, api) != null) {
-            std.debug.print(
+            if (report) std.debug.print(
                 "{s}:{d}: `{s}` is an OS API\n    fix: use the portable `std` API, move it to {s}, " ++
                     "or put `// os: <why every target still builds>` on the line\n",
                 .{ path, line_no, api, os_allowed[0] },
@@ -194,10 +194,10 @@ test "no OS API outside the allowlisted module" {
             if (for (os_allowed) |a| {
                 if (std.mem.eql(u8, a, rel)) break true;
             } else false) continue;
-            found += scanOs(rel, try dir.readFileAlloc(io, e.path, arena, .limited(1 << 24)));
+            found += scanOs(rel, try dir.readFileAlloc(io, e.path, arena, .limited(1 << 24)), true);
         }
     }
-    found += scanOs("tools/contract.zig", try root.readFileAlloc(io, "tools/contract.zig", arena, .limited(1 << 24)));
+    found += scanOs("tools/contract.zig", try root.readFileAlloc(io, "tools/contract.zig", arena, .limited(1 << 24)), true);
     if (found != 0) {
         std.debug.print("portability guard: {d} OS API use(s)\n", .{found});
         return error.PortabilityGuard;
@@ -205,9 +205,9 @@ test "no OS API outside the allowlisted module" {
 }
 
 test "the portability guard sees what it is for" {
-    try std.testing.expectEqual(@as(usize, 1), scanOs("x.zig", "const p = std.posix.getpid();"));
-    try std.testing.expectEqual(@as(usize, 1), scanOs("x.zig", "    \\\\    var ap = @cVaStart();"));
-    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "/// std.posix in prose"));
-    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "const t = std.os.tag; // os: a reason"));
-    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "const io = std.Io.Threaded;"));
+    try std.testing.expectEqual(@as(usize, 1), scanOs("x.zig", "const p = std.posix.getpid();", false));
+    try std.testing.expectEqual(@as(usize, 1), scanOs("x.zig", "    \\\\    var ap = @cVaStart();", false));
+    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "/// std.posix in prose", false));
+    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "const t = std.os.tag; // os: a reason", false));
+    try std.testing.expectEqual(@as(usize, 0), scanOs("x.zig", "const io = std.Io.Threaded;", false));
 }

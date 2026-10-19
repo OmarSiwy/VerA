@@ -376,9 +376,9 @@ fn lowerRegSelect(self: *Lower, e: Ast.ExprId, name: []const u8, src: union(enum
             const k0 = lo / 32;
             const k1 = (lo + width - 1) / 32;
             const s = lo % 32;
-            const w0 = regWordValue(self, name, k0);
+            const w0 = try regWordValue(self, name, k0);
             var v = if (s == 0) w0 else try self.emit(.shr, &.{ w0, try self.mir.addIntConst(self.arena, s) });
-            if (k1 != k0) v = try self.emit(.bitor, &.{ v, try self.emit(.shl, &.{ regWordValue(self, name, k1), try self.mir.addIntConst(self.arena, 32 - s) }) });
+            if (k1 != k0) v = try self.emit(.bitor, &.{ v, try self.emit(.shl, &.{ try regWordValue(self, name, k1), try self.mir.addIntConst(self.arena, 32 - s) }) });
             return .{ .v = try lower_var.analogRead(self, v, width), .ty = .integer };
         },
     }
@@ -399,8 +399,8 @@ pub fn selectPos(r: Lower.RegRange, k: i64) ?u32 {
 }
 
 /// Word `k` of a discrete `reg` input: the `Model` field the host writes it in.
-pub fn regWordValue(self: *Lower, name: []const u8, k: u32) Mir.Value {
-    const key = if (k == 0) name else naming.wordField(self.arena, name, k) catch return .undef;
+pub fn regWordValue(self: *Lower, name: []const u8, k: u32) Oom!Mir.Value {
+    const key = if (k == 0) name else try naming.wordField(self.arena, name, k);
     return self.param_values.items[self.param_index.get(key).?];
 }
 

@@ -335,11 +335,9 @@ pub const Prover = struct {
                 buf[0] = b.cond;
                 break :blk buf[0..1];
             },
-            .jump => buf[0..0],
             .call => |c| c.args,
             // phi operands are (block, value) pairs; callers use `phiPair`.
-            .phi => buf[0..0],
-            .anew => buf[0..0],
+            .jump, .phi, .anew => buf[0..0],
             .load => |l| blk: {
                 buf[0] = l.arr;
                 buf[1] = l.index;
@@ -363,8 +361,10 @@ pub const Prover = struct {
         @memset(self.class_of, none_u32);
 
         const Key = struct { op: Mir.Opcode, a: u32, b: u32, c: u32 };
+        // At most one key per instruction: sized once, never rehashed.
         var map: std.AutoHashMapUnmanaged(Key, u32) = .empty;
         defer map.deinit(self.arena);
+        try map.ensureTotalCapacity(self.arena, @intCast(self.mir.insts.len));
         var n_classes: u32 = 0;
 
         for (0..self.mir.insts.len) |i| {
@@ -655,7 +655,6 @@ pub const Prover = struct {
         // after k rounds, iterating only the natural loop body (`Analysis.loop_of`).
         // Genvar loops (§6.6.1) unroll, so this bites `while` only.
         const nb = self.an.nb;
-        if (nb == 0) return;
         self.visited_block = try self.arena.alloc(bool, nb);
         @memset(self.visited_block, false);
 
@@ -1051,7 +1050,9 @@ pub const Prover = struct {
         iv: proof_lattice.Interval,
         what: []const u8,
     ) diag.Builder {
-        var buf: [96]u8 = undefined;
+        // `{d}` spells a double in full: up to ~345 bytes a bound (4.9e-324),
+        // so two bounds and the text fit in 768.
+        var buf: [768]u8 = undefined;
         var b = self.bag.build(.proof, code, self.span(inst));
         b.msg("{s} is {s}{s}", .{ what, self.describe(operand), ivText(&buf, iv) });
         const def = self.valueSpan(operand);

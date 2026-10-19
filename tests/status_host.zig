@@ -13,8 +13,8 @@ const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
 /// Every unknown in a lane, so a zeroed row is checked in its derivatives too.
-const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
-const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &.{ 0, 1 }, .{});
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 fn x(v: f64) [n_u]f64 {
     var out: [n_u]f64 = @splat(0.0);
@@ -30,7 +30,7 @@ fn sim(initial: bool) contract.SimState {
 fn allZero(r: anytype) bool {
     inline for (r) |e| {
         if (e.v != 0.0) return false;
-        for (e.d) |d| if (d != 0.0) return false;
+        inline for (0..n_u) |u| if (e.ddxAt(u) != 0.0) return false;
     }
     return true;
 }
@@ -44,7 +44,7 @@ fn evalAt(m: *const D.Model, inst: *D.Instance, v: f64, initial: bool) contract.
 /// fresh): `initState` and `setupInstance` both clear a latched status.
 fn start(m: *D.Model, inst: *D.Instance) D.State {
     const st = D.initState(m, inst);
-    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), m);
+    if (@hasDecl(D, "setup")) D.setup(S0, m);
     D.setupInstance(m, inst);
     return st;
 }

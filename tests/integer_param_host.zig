@@ -8,16 +8,16 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 const n_u = @typeInfo(D.U).@"enum".field_names.len;
-const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{});
 
 fn current(word: i64) f64 {
     var model: D.Model = .{};
     model.word = word;
-    D.derive(S.Of(0), &model);
+    D.derive(S, &model);
     var inst: D.Instance = .{};
     var x: [n_u]f64 = @splat(0.0);
     x[@backingInt(D.U.p)] = 0.5;
-    if (@hasDecl(D, "setup")) D.setup(S.Of(0), &model);
+    if (@hasDecl(D, "setup")) D.setup(S, &model);
     const result = D.eval(S, &x, &model, &inst, .{});
     return result[@backingInt(D.U.p)].v;
 }

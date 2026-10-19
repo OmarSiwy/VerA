@@ -24,7 +24,7 @@ pub fn Wide(comptime n: u32) type {
 }
 
 /// The words per plane of a `w`-bit value.
-pub fn words(comptime w: u32) u32 {
+pub fn words(w: u32) u32 {
     return (w + 63) / 64;
 }
 
@@ -70,14 +70,14 @@ pub fn full(comptime w: u32) M(w) {
     return m;
 }
 
-/// A `w`-bit value of all x.
+/// A `w`-bit value of all x; all 0 under `--two-state`.
 pub fn xs(comptime w: u32) T(w) {
-    if (two) return narrow(w, .{ .v = @splat(0), .x = @splat(0) });
-    return narrow(w, .{ .v = wideFull(w), .x = wideFull(w) });
+    const f = if (two) std.mem.zeroes(M(w)) else full(w);
+    return .{ .v = f, .x = f };
 }
 
 /// Bits `[lo, hi)` of word `j`, clamped to the word.
-fn span(j: usize, lo: i64, hi: i64) u64 {
+pub fn span(j: usize, lo: i64, hi: i64) u64 {
     const base: i64 = @intCast(64 * j);
     return below(std.math.clamp(hi - base, 0, 64)) & ~below(std.math.clamp(lo - base, 0, 64));
 }
@@ -110,12 +110,15 @@ fn orAt(dst: []u64, src: []const u64, at: u32) void {
 }
 
 fn anyX(a: anytype) bool {
-    const x = wide(a).x;
-    return @reduce(.Or, @as(@Vector(x.len, u64), x)) != 0;
+    var any: u64 = 0;
+    for (wide(a).x) |x| any |= x;
+    return any != 0;
 }
 
 /// `r` of width `w`, or all x when `unk` (§5.1.5).
 fn orX(comptime w: u32, r: [words(w)]u64, unk: bool) T(w) {
+    // `@Vector`, not a loop: with the last word masked, LLVM's SLP pass
+    // leaves the loop half scalar at 4+ words (tests/codegen_probe/sim-rt.zig).
     const u = 0 -% @as(u64, @intFromBool(unk));
     const V = @Vector(words(w), u64);
     const uv: V = @splat(u);
@@ -137,11 +140,6 @@ pub fn mask(comptime w: u32) u64 {
 /// A `W` from its two planes; the caller keeps bits above the width 0.
 pub inline fn k(v: u64, x: u64) W {
     return .{ .v = v, .x = x };
-}
-
-fn allX(comptime w: u32) W {
-    if (two) return .{ .v = 0, .x = 0 };
-    return .{ .v = mask(w), .x = mask(w) };
 }
 
 /// Bit 0.
@@ -191,6 +189,7 @@ pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) T(w) {
 /// §5.1.10 Table 5-16 `~`: x and z bits invert to x.
 pub inline fn not(a: anytype, comptime w: u32) T(w) {
     if (w <= 64) return .{ .v = (~a.v | a.x) & mask(w), .x = a.x };
+    // `@Vector` for the reason `orX` gives.
     const V = @Vector(words(w), u64);
     var o: T(w) = .{ .v = ~@as(V, a.v) | @as(V, a.x), .x = a.x };
     o.v[words(w) - 1] &= top(w);
@@ -327,13 +326,13 @@ fn big(comptime w: u32, comptime signed: bool, a: anytype, b: anytype, comptime 
 /// (§5.1.5 Table 5-6).
 pub fn pow(a: anytype, comptime w: u32, comptime signed: bool, e: anytype, comptime ew: u32, comptime esigned: bool) T(w) {
     if (w > 64 or ew > 64) return big(w, signed, a, e, ew, esigned, null);
-    if (a.x != 0 or e.x != 0) return allX(w);
+    if (a.x != 0 or e.x != 0) return xs(w);
     const m = mask(w);
     const ev = e.v & mask(ew);
     if (ev == 0) return .{ .v = 1, .x = 0 };
     const negative = esigned and (ev >> (ew - 1)) & 1 == 1;
     const b = a.v & m;
-    if (b == 0) return if (negative) allX(w) else .{ .v = 0, .x = 0 };
+    if (b == 0) return if (negative) xs(w) else .{ .v = 0, .x = 0 };
     if (b == 1 or (signed and b == m)) return .{ .v = if (b == 1 or ev & 1 == 0) 1 else m, .x = 0 };
     if (negative) return .{ .v = 0, .x = 0 };
     var result: u64 = 1;
@@ -353,7 +352,7 @@ pub const Shift = enum { left, right, arithmetic_left, arithmetic_right };
 /// width leaves only the fill (§5.1.12).
 pub inline fn shift(comptime op: Shift, a: anytype, comptime w: u32, comptime signed: bool, b: anytype) T(w) {
     if (comptime w > 64 or wordsOf(@TypeOf(b)) > 1) return shiftWide(op, w, signed, wide(a), wide(b));
-    if (b.x != 0) return allX(w);
+    if (b.x != 0) return xs(w);
     const fill = op == .arithmetic_right and signed;
     if (b.v >= w) return if (fill)
         .{ .v = 0 -% ((a.v >> (w - 1)) & 1) & mask(w), .x = 0 -% ((a.x >> (w - 1)) & 1) & mask(w) }
@@ -370,7 +369,7 @@ pub inline fn shift(comptime op: Shift, a: anytype, comptime w: u32, comptime si
 }
 
 fn shiftWide(comptime op: Shift, comptime w: u32, comptime signed: bool, a: Wide(words(w)), b: anytype) T(w) {
-    if (anyX(b)) return narrow(w, .{ .v = wideFull(w), .x = wideFull(w) });
+    if (anyX(b)) return xs(w);
     var hi: u64 = 0;
     for (b.v[1..]) |v| hi |= v;
     // `Literal.shift`: an amount of at least the width leaves only the fill.
@@ -399,12 +398,6 @@ fn shiftWide(comptime op: Shift, comptime w: u32, comptime signed: bool, a: Wide
         out[n - 1] &= top(w);
     }
     return narrow(w, o);
-}
-
-fn wideFull(comptime w: u32) [words(w)]u64 {
-    var m: [words(w)]u64 = @splat(ones);
-    m[words(w) - 1] = top(w);
-    return m;
 }
 
 /// §5.1.7's four relational operators.
@@ -545,9 +538,12 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
                 const x = y.x | n.x | (y.v ^ n.v);
                 break :blk .{ .v = y.v | x, .x = x };
             }
-            const V = @Vector(y.v.len, u64);
-            const x = @as(V, y.x) | @as(V, n.x) | (@as(V, y.v) ^ @as(V, n.v));
-            break :blk .{ .v = @as(V, y.v) | x, .x = x };
+            var o: @TypeOf(y) = undefined;
+            for (&o.v, &o.x, y.v, y.x, n.v, n.x) |*ov, *ox, yv, yx, nv, nx| {
+                ox.* = yx | nx | (yv ^ nv);
+                ov.* = yv | ox.*;
+            }
+            break :blk o;
         },
     };
 }
@@ -564,14 +560,17 @@ pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
 /// §4.8.2 real to integer (`evaluate.intOfReal`): rounded to nearest, halves
 /// away from zero, as a 64-bit signed value; x when no such integer exists.
 pub inline fn ofReal(r: f64) W {
-    if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return allX(64);
-    return .{ .v = @bitCast(@as(i64, @intFromFloat(@round(r)))), .x = 0 };
+    const t = @round(r);
+    // NaN fails both compares.
+    if (!(t >= -0x1p63 and t < 0x1p63)) return xs(64);
+    return .{ .v = @bitCast(@as(i64, @intFromFloat(t))), .x = 0 };
 }
 
 /// §17.8 `$rtoi`: truncated toward zero, a 32-bit signed value; x when none.
 pub inline fn rtoi(r: f64) W {
-    if (!std.math.isFinite(r) or @abs(r) >= 0x1p31) return allX(32);
-    return .{ .v = @as(u32, @bitCast(@as(i32, @intFromFloat(@trunc(r))))), .x = 0 };
+    const t = @trunc(r);
+    if (!(t >= -0x1p31 and t < 0x1p31)) return xs(32);
+    return .{ .v = @as(u32, @bitCast(@as(i32, @intFromFloat(t)))), .x = 0 };
 }
 
 /// A real as the 64-bit value a real slot holds: its IEEE 754 bits.
@@ -636,7 +635,7 @@ pub inline fn asIndex(a: anytype, comptime w: u32, comptime signed: bool) ?i128 
 /// `exec.position` then `readSelect` of one bit: bit `index` of a vector
 /// declared `[msb:lsb]`, x when the index is x/z or outside it (§5.2.1).
 pub inline fn bitAt(a: anytype, index: ?i128, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
-    const p = pos(index, msb, lsb, w) orelse return allX(1);
+    const p = pos(index, msb, lsb, w) orelse return xs(1);
     const s = wide(a);
     const n: u6 = @intCast(p % 64);
     return .{ .v = (s.v[p / 64] >> n) & 1, .x = (s.x[p / 64] >> n) & 1 };
@@ -1055,6 +1054,8 @@ test "real to integer rounds half away from zero; one with no 64-bit integer is 
     try std.testing.expectEqual(of(0), ofReal(0.49999999999999994));
     // The largest binary64 below 2^63.
     try std.testing.expectEqual(of(0x7fff_ffff_ffff_fc00), ofReal(0x1p63 - 1024));
+    // -2^63 is an i64 (§4.8.2).
+    try std.testing.expectEqual(of(std.math.minInt(i64)), ofReal(-0x1p63));
     const x64: W = .{ .v = std.math.maxInt(u64), .x = std.math.maxInt(u64) };
     for ([_]f64{ 0x1p63, std.math.inf(f64), -std.math.inf(f64), std.math.nan(f64) }) |r|
         try std.testing.expectEqual(x64, ofReal(r));
@@ -1064,8 +1065,11 @@ test "$rtoi truncates toward zero into 32 bits; one with no 32-bit integer is x 
     try std.testing.expectEqual(W{ .v = 2, .x = 0 }, rtoi(2.9));
     try std.testing.expectEqual(W{ .v = 0xffff_fffe, .x = 0 }, rtoi(-2.9));
     try std.testing.expectEqual(W{ .v = 0x7fff_ffff, .x = 0 }, rtoi(2147483647.9));
+    // -2^31 is an i32, and so is what truncates to it.
+    try std.testing.expectEqual(W{ .v = 0x8000_0000, .x = 0 }, rtoi(-0x1p31));
+    try std.testing.expectEqual(W{ .v = 0x8000_0000, .x = 0 }, rtoi(-2147483648.9));
     const x32: W = .{ .v = 0xffff_ffff, .x = 0xffff_ffff };
-    for ([_]f64{ 0x1p31, std.math.inf(f64), std.math.nan(f64) }) |r|
+    for ([_]f64{ 0x1p31, -2147483649.0, std.math.inf(f64), std.math.nan(f64) }) |r|
         try std.testing.expectEqual(x32, rtoi(r));
 }
 
@@ -1109,4 +1113,34 @@ test "casez/casex agree with the per-bit wildcard rule" {
         }
         try std.testing.expectEqual(eq(.case_eq, a, b) == .one, caseMatch(.normal, a, b));
     }
+}
+
+test "span is bits [lo, hi) of word j, clamped: the mask root.forcedBits once built by hand" {
+    for (0..3) |j| for (0..200) |lo| for (0..80) |width| {
+        const a: i64 = @as(i64, @intCast(lo)) - 64 * @as(i64, @intCast(j));
+        const b = a + @as(i64, @intCast(width));
+        var want: u64 = 0;
+        if (b > 0 and a < 64) {
+            const p: u7 = @intCast(@max(a, 0));
+            const q: u7 = @intCast(@min(b, 64));
+            want = (if (q == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(q)) - 1) & ~((@as(u64, 1) << @intCast(p)) - 1);
+        }
+        try std.testing.expectEqual(want, span(j, @intCast(lo), @intCast(lo + width)));
+    };
+}
+
+test "xs and full cover exactly the width, at and across word ends" {
+    inline for (.{ 1, 63, 64, 65, 128, 130 }) |w| {
+        const f = wide(xs(w));
+        var bits: u32 = 0;
+        for (f.v, f.x) |v, x| {
+            try std.testing.expectEqual(v, x);
+            bits += @popCount(v);
+        }
+        try std.testing.expectEqual(@as(u32, w), bits);
+        try std.testing.expectEqual(f.v, wide(T(w){ .v = full(w), .x = full(w) }).v);
+    }
+    // An unknown multi-word amount shifts to all x (§5.1.12).
+    const amount: Wide(2) = .{ .v = .{ 1, 0 }, .x = .{ 0, 1 } };
+    try std.testing.expectEqual(xs(8), shift(.left, W{ .v = 1, .x = 0 }, 8, false, amount));
 }

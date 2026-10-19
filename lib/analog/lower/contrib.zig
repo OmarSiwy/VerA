@@ -50,15 +50,25 @@ pub const State = struct {
     direct: std.AutoHashMapUnmanaged(Key, u32) = .empty,
     /// The `contrib_sharers` rows already recorded.
     sharers: std.AutoHashMapUnmanaged(struct { row: u32, unit: u32 }, void) = .empty,
+    /// The `pairKey` of every `.indirect` row (§5.6.7.2's test per `<+`).
+    indirect: std.AutoHashMapUnmanaged(u64, void) = .empty,
 
     /// `direct`'s key: the target's access, (hi, lo) net pair and branch row.
     pub const Key = struct { access: Access, hi: u32, lo: u32, br: u32 };
+    comptime {
+        assert(@sizeOf(Key) == 16); // hashed per `<+`
+    }
 };
 
 /// The `.direct` contribution entry of a (access, pair, branch), if a `<+`
 /// has made one: `contribIndex`'s lookup, without creating it.
 pub fn directRow(self: *const Lower, key: State.Key) ?u32 {
     return self.contrib_state.direct.get(key);
+}
+
+/// `direct`'s key for the other quantity of `t`'s branch.
+fn oppositeKey(t: Target) State.Key {
+    return .{ .access = if (t.access == .potential) .flow else .potential, .hi = t.hi, .lo = t.lo, .br = t.br };
 }
 
 /// Lowers one `<+`: resolves the branch, splits the rhs into its resistive and
@@ -134,12 +144,14 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // (§5.4.1), so the other access function on it from a DIFFERENT unit is
     // exactly that, whichever of the two blocks lowers first. Inside one unit
     // it is §5.6.1.3's value retention and stays legal (`discardOpposite`).
-    if (target.br != unnamed_branch) for (self.out.contributions.items) |c| {
-        if (c.kind != .direct or c.br != target.br or c.access == target.access or c.unit == self.cur_unit) continue;
-        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0439);
-        b.label(self.tokenSpan(c.tok), "the other module instance contributes the {s} here", .{if (c.access == .potential) "potential" else "flow"});
-        try b.emit();
-        return;
+    if (target.br != unnamed_branch) if (directRow(self, oppositeKey(target))) |row| {
+        const c = self.out.contributions.items[row];
+        if (c.unit != self.cur_unit) {
+            var b = self.errWith(self.file.exprs.mainTok(lhs), .E0439);
+            b.label(self.tokenSpan(c.tok), "the other module instance contributes the {s} here", .{if (c.access == .potential) "potential" else "flow"});
+            try b.emit();
+            return;
+        }
     };
     if (try checkHierParallel(self, lhs, target)) return;
     if (target.access == .flow) try checkMfactorDoubleScaling(self, lhs, rhs);
@@ -502,6 +514,8 @@ pub fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprI
     // §5.6.7.2 incompatible with a direct contribution across the same pair of
     // analog nets — checked on the accumulator ENTRY, since `<+` statements are
     // deduped across statements and across if-arms.
+    // ponytail: O(rows) per indirect statement; key direct pairs like
+    // `State.indirect` if a model writes thousands of them.
     for (self.out.contributions.items) |c| {
         if (c.kind != .direct) continue;
         if (!samePair(c.hi, c.lo, target.hi, target.lo)) continue;
@@ -547,10 +561,17 @@ pub fn checkProbeBranches(self: *Lower) Oom!void {
         const slot = &g.value_ptr[@backingInt(r.access)];
         if (slot.* == none) slot.* = @intCast(i);
     }
+    // The pairs anything is contributed to, directly (§5.6.1) or indirectly
+    // (§5.6.7): §1.3.1's "not a probe". Built at the first pair read both ways.
+    var contributed: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    defer contributed.deinit(self.arena);
     for (reads, 0..) |a, i| {
         const f = first.get(pairKey(a.hi, a.lo)).?;
         if (f[0] == none or f[1] == none or @min(f[0], f[1]) != i) continue;
-        if (contributedOn(self, a.hi, a.lo)) continue;
+        if (contributed.count() == 0) for (self.out.contributions.items) |c| {
+            try contributed.put(self.arena, pairKey(c.hi, c.lo), {});
+        };
+        if (contributed.contains(pairKey(a.hi, a.lo))) continue;
         var d = self.errWith(reads[@max(f[0], f[1])].tok, .E0423);
         d.msg("both quantities of the probe branch (`{s}`, `{s}`) are read", .{
             lower_node.nodeName(self, a.hi), lower_node.nodeName(self, a.lo),
@@ -663,6 +684,8 @@ pub fn checkSourceLoops(self: *Lower) Oom!void {
         // Closed. The loop is this row plus the forest path from a to b; walk
         // that path (breadth-first over the accepted edges) and ask whether any
         // row on it belongs to another instance.
+        // ponytail: O(nodes·edges) per closed loop; an adjacency list if a
+        // design closes many single-instance loops.
         const via = try self.arena.alloc(u32, n_nodes); // edge index that reached the node
         @memset(via, std.math.maxInt(u32));
         var queue: std.ArrayList(u32) = .empty;
@@ -717,15 +740,6 @@ fn find(root: []u32, x: u32) u32 {
     return r;
 }
 
-/// Is anything contributed to this node pair — directly (§5.6.1) or indirectly
-/// (§5.6.7)? That is exactly §1.3.1's test for "not a probe".
-fn contributedOn(self: *const Lower, hi: u32, lo: u32) bool {
-    for (self.out.contributions.items) |c| {
-        if (samePair(c.hi, c.lo, hi, lo)) return true;
-    }
-    return false;
-}
-
 /// §5.6.7.2 "the same pair of analog nets (or any of its parallel branches)" —
 /// unordered, since (a,b) and (b,a) are the same pair with opposite reference
 /// directions (§1.3.1.2).
@@ -734,10 +748,7 @@ fn samePair(a_hi: u32, a_lo: u32, b_hi: u32, b_lo: u32) bool {
 }
 
 fn indirectOn(self: *const Lower, hi: u32, lo: u32) bool {
-    for (self.out.contributions.items) |c| {
-        if (c.kind == .indirect and samePair(c.hi, c.lo, hi, lo)) return true;
-    }
-    return false;
+    return self.contrib_state.indirect.contains(pairKey(hi, lo));
 }
 
 /// A.8.3 `indirect_expression`: a branch/port probe, or ddt/idt/idtmod of one.
@@ -794,6 +805,10 @@ pub const Target = struct {
     /// (`Ast.AnalogBlock.unit`) whose branch this is; for a named branch,
     /// whose `br` is already per instance, the writer.
     unit: u32 = 0,
+
+    comptime {
+        assert(@sizeOf(Target) == 20); // by value through every `<+`
+    }
 };
 
 /// The key a branch reference has in `branches`: `br` for a scalar branch,
@@ -1088,6 +1103,7 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
         .kind = kind,
         .unit = self.cur_unit,
     });
+    if (kind == .indirect) try self.contrib_state.indirect.put(self.arena, pairKey(t.hi, t.lo), {});
     const acc: Accum = .{
         .resist = self.builder.newPlace(),
         .react = self.builder.newPlace(),
@@ -1119,29 +1135,26 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
 /// the cleared `wrote` flag survive as phis, which is the §5.6.5 switch branch:
 /// codegen picks the row's content at run time from both flags.
 fn discardOpposite(self: *Lower, t: Target) Oom!void {
-    const other: Access = if (t.access == .potential) .flow else .potential;
-    for (self.out.contributions.items, self.accum.items, 0..) |c, acc, ci| {
-        if (c.kind != .direct or c.access != other or c.hi != t.hi or c.lo != t.lo) continue;
-        // §5.6.1.3 is stated of "a branch", so only the OTHER quantity of THIS
-        // branch is discarded. A parallel named branch over the same pair is a
-        // different source and keeps what it retained.
-        if (c.br != t.br) continue;
-        // So is a parallel instance over the same pair. §5.4.1 gives branch
-        // identity per module instance, and flattening collapses every
-        // instance's unnamed branch onto the node pair: without this, a load
-        // wired across a source would delete the source.
-        if (c.unit != self.cur_unit) continue;
-        try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
-        try self.builder.writeVariable(acc.react, self.cur, .f_zero);
-        try self.builder.writeVariable(acc.wrote, self.cur, .f_zero);
-        if (self.unit_accum.get(.{ .row = @intCast(ci), .unit = self.cur_unit })) |pa| {
-            try self.builder.writeVariable(pa.resist, self.cur, .f_zero);
-            try self.builder.writeVariable(pa.react, self.cur, .f_zero);
-        }
-        // The discarded charge goes with its sites.
-        for (self.out.charge_sites.items, self.site_places.items) |s, p| {
-            if (s.contrib == ci) try self.builder.writeVariable(p, self.cur, .f_zero);
-        }
+    // §5.6.1.3 is stated of "a branch", so only the OTHER quantity of THIS
+    // branch is discarded: `br` is in the key, and a parallel named branch over
+    // the same pair is a different source that keeps what it retained.
+    const ci = directRow(self, oppositeKey(t)) orelse return;
+    // So is a parallel instance over the same pair. §5.4.1 gives branch
+    // identity per module instance, and flattening collapses every
+    // instance's unnamed branch onto the node pair: without this, a load
+    // wired across a source would delete the source.
+    if (self.out.contributions.items[ci].unit != self.cur_unit) return;
+    const acc = self.accum.items[ci];
+    try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
+    try self.builder.writeVariable(acc.react, self.cur, .f_zero);
+    try self.builder.writeVariable(acc.wrote, self.cur, .f_zero);
+    if (self.unit_accum.get(.{ .row = ci, .unit = self.cur_unit })) |pa| {
+        try self.builder.writeVariable(pa.resist, self.cur, .f_zero);
+        try self.builder.writeVariable(pa.react, self.cur, .f_zero);
+    }
+    // The discarded charge goes with its sites.
+    for (self.out.charge_sites.items, self.site_places.items) |s, p| {
+        if (s.contrib == ci) try self.builder.writeVariable(p, self.cur, .f_zero);
     }
 }
 

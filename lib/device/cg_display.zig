@@ -1720,3 +1720,47 @@ test "PrintArg.scratch sizes the stack field each composed mode needs" {
     try std.testing.expectEqual(@as(?usize, null), at(.bits, .{}));
     try std.testing.expectEqual(@as(?usize, null), at(.chr, .{}));
 }
+
+test "§9.4.3 a %d operand that is a phi prints its value, not a zero of the wrong type" {
+    // bsim4va.va's `default: $strobe("... %d ...", BSIM4dioMod)` under a
+    // card-decided `if`: the operand reaches the print only through
+    // `$display$width`, whose operand the display unit did not plan, so it
+    // rendered as `const t: i64 = S.con(0.0)` and the testbench failed to
+    // compile.
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const src =
+        \\module t(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer diomod = 1;
+        \\  parameter real is = 1e-14;
+        \\  integer m;
+        \\  real x, s;
+        \\  analog begin
+        \\    m = diomod;
+        \\    if ((m != 0) && (m != 1) && (m != 2)) begin
+        \\      m = 1;
+        \\      $strobe("reset");
+        \\    end
+        \\    s = is * 2;
+        \\    x = 0.0;
+        \\    if (s > 0.0) begin
+        \\      case (m)
+        \\        0: x = 1.0;
+        \\        1: x = 2.0;
+        \\        default: $strobe("m = %d not matched", m);
+        \\      endcase
+        \\    end
+        \\    I(p, n) <+ x * V(p, n);
+        \\  end
+        \\endmodule
+        \\
+    ;
+    var h: Harness = undefined;
+    try Harness.run(a, src, &h);
+    const out = try h.genDisplay(a);
+    try std.testing.expect(has(out, "not matched"));
+    try std.testing.expect(!has(out, ": i64 = S.con("));
+}

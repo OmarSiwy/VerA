@@ -17,6 +17,7 @@ const discipline = @import("../discipline_rules.zig");
 const Ast = @import("frontend").Ast;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
+const PathKey = elab_names.PathKey;
 
 /// One segment's answer. `domain == .unspecified` is F.2.2 step 4's
 /// "unknown": nothing below the segment declares a domain.
@@ -62,16 +63,22 @@ fn ofDiscipline(file: *const Ast.SourceFile, d: Ast.StrId, declared: bool) Seg {
 /// (`insert.checkUnbridged`, E0929).
 pub fn up(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net: Ast.StrId, depth: u32) Error!Seg {
     const file = self.ctx.file;
-    const key = try self.ctx.arena.print("{s}{s}", .{ path, file.str(net) });
-    if (self.seg_up.get(key)) |s| return s;
+    if (self.seg_up.getAdapted(PathKey{ .path = path, .local = file.str(net) }, PathKey.Context{})) |s| return s;
     const answer = try compute(self, module, path, net, depth);
-    try self.seg_up.put(self.ctx.arena, key, answer);
+    try self.seg_up.put(self.ctx.arena, try self.ctx.arena.print("{s}{s}", .{ path, file.str(net) }), answer);
     return answer;
 }
 
 fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net: Ast.StrId, depth: u32) Error!Seg {
     const file = self.ctx.file;
-    if (elab_resolve.oocDisciplineBelow(self, path, net) orelse declaredIn(module, net)) |d|
+    // ponytail: a narrow unit (under 16 ports, nets and children) is scanned
+    // per net: building its table cost more than the scans on a 2^10-leaf
+    // binary tree (callgrind). The table is for the wide ones, where the
+    // per-net scan was quadratic.
+    const kid_count = if (self.tree.get(path)) |k| k.items.len else module.instances.len;
+    const index = if (module.ports.len + module.nets.len + kid_count < 16) null else try indexOf(self, module, path, depth);
+    const declared = if (index) |ix| ix.declared.get(net) else declaredIn(module, net);
+    if (elab_resolve.oocDisciplineBelow(self, path, net) orelse declared) |d|
         return ofDiscipline(file, d, true);
     // §3.6.2.4: "If the net is referenced in behavioral code, then it shall
     // be treated as having no discipline with a domain binding of discrete."
@@ -87,20 +94,23 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
         _ = self.seg_on.pop();
     }
     var below: std.ArrayList(Seg) = .empty;
-    if (self.tree.get(path)) |kids| {
-        for (kids.items) |*kid| try visitChild(self, &kid.inst, kid.module, kid.path, net, depth, &below);
-    } else for (module.instances) |*inst| {
-        if (inst.range != null) continue;
-        const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, file.str(inst.name), sep });
-        const m = (if (depth == 0)
-            try elab_insert.moduleOf(self, inst, child_path)
-        else
-            elab_names.findModule(self, inst.module)) orelse continue;
-        try visitChild(self, inst, m, child_path, net, depth, &below);
+    if (index) |ix| {
+        if (ix.ports.get(net)) |list| for (list.items) |c| {
+            const s = try up(self, c.kid.module, c.kid.path, c.port, depth + 1);
+            if (s.domain != .unspecified) try below.append(self.ctx.arena, s);
+        };
+    } else for (try kidsOf(self, module, path, depth)) |kid| {
+        if (kid.module.is_connect) continue;
+        for (kid.module.ports, 0..) |p, pi| {
+            const ci = elab_insert.connIndex(kid.inst, p, pi) orelse continue;
+            if (elab_names.netRefName(self, kid.inst.ports[ci].expr) != net) continue;
+            const s = try up(self, kid.module, kid.path, p.name, depth + 1);
+            if (s.domain != .unspecified) try below.append(self.ctx.arena, s);
+        }
     }
     var domain: Ast.DisciplineDecl.Domain = if (behavioral) .discrete else .unspecified;
     if (!behavioral) for (below.items) |s| {
-        std.debug.assert(s.domain != .unspecified); // `visitChild` keeps known domains only
+        std.debug.assert(s.domain != .unspecified); // only known domains are kept above
         if (s.domain == .continuous) domain = .continuous;
         if (s.domain == .discrete and domain == .unspecified) domain = .discrete;
     };
@@ -114,16 +124,69 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     return .{ .disc = try elab_resolve.levelCandidates(self, cands.items), .domain = domain, .behavioral = behavioral };
 }
 
-/// Appends to `below` the answer of each port of `inst` (elaborated as `m`
-/// at `child_path`) that `net` connects, when it has a domain.
-fn visitChild(self: *Flatten, inst: *const Ast.Instance, m: *const Ast.ModuleDecl, child_path: []const u8, net: Ast.StrId, depth: u32, below: *std.ArrayList(Seg)) Error!void {
-    if (m.is_connect) return;
-    for (m.ports, 0..) |p, pi| {
-        const ci = elab_insert.connIndex(inst, p, pi) orelse continue;
-        if (elab_names.netRefName(self, inst.ports[ci].expr) != net) continue;
-        const s = try up(self, m, child_path, p.name, depth + 1);
-        if (s.domain != .unspecified) try below.append(self.ctx.arena, s);
+/// One child port a net of a level connects to: the child as the walk
+/// elaborated it, and the port's local name.
+pub const PortOn = struct { kid: elaborate.TreeKid, port: Ast.StrId };
+
+/// `indexOf`'s answer for the unit at one path.
+pub const UnitIndex = struct {
+    /// Each net the module declares with a discipline → that discipline: a
+    /// port's, else (no port of that name has one) a net declaration's.
+    declared: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
+    /// Each net → the child ports on it.
+    ports: std.AutoHashMapUnmanaged(Ast.StrId, std.ArrayList(PortOn)) = .empty,
+};
+
+/// The declared disciplines and child ports of the unit at `path` (an
+/// instance of `module`): children in instance order, ports in declaration
+/// order, connect modules skipped (they bridge, so are no segment). Built
+/// once per path and level (`Flatten.seg_index`), so `compute` looks its net
+/// up instead of scanning the module's declarations and every child per net,
+/// which was quadratic in a level's net and instance counts.
+fn indexOf(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, depth: u32) Error!*const UnitIndex {
+    const gop = try self.seg_index.getOrPut(self.ctx.arena, path);
+    if (gop.found_existing) return gop.value_ptr;
+    gop.value_ptr.* = .{};
+    const index = gop.value_ptr;
+    const a = self.ctx.arena;
+    for (module.ports) |p| if (p.discipline != .none) {
+        const d = try index.declared.getOrPut(a, p.name);
+        if (!d.found_existing) d.value_ptr.* = p.discipline;
+    };
+    for (module.nets) |n| if (n.discipline != .none) {
+        const d = try index.declared.getOrPut(a, n.name);
+        if (!d.found_existing) d.value_ptr.* = n.discipline;
+    };
+    for (try kidsOf(self, module, path, depth)) |kid| {
+        if (kid.module.is_connect) continue;
+        for (kid.module.ports, 0..) |p, pi| {
+            const ci = elab_insert.connIndex(kid.inst, p, pi) orelse continue;
+            const n = elab_names.netRefName(self, kid.inst.ports[ci].expr) orelse continue;
+            const list = try index.ports.getOrPut(a, n);
+            if (!list.found_existing) list.value_ptr.* = .empty;
+            try list.value_ptr.append(a, .{ .kid = kid, .port = p.name });
+        }
     }
+    return index;
+}
+
+/// The children of the unit at `path` (an instance of `module`): the ones
+/// the walk that inserts nothing elaborated below `path` (`Flatten.tree`),
+/// else (no `connectrules`) the source instance list, a paramset instance
+/// resolved only at `depth == 0`, where `insert.plan` is planning.
+fn kidsOf(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, depth: u32) Error![]const elaborate.TreeKid {
+    if (self.tree.get(path)) |kids| return kids.items;
+    var kids: std.ArrayList(elaborate.TreeKid) = .empty;
+    for (module.instances) |*inst| {
+        if (inst.range != null) continue;
+        const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, self.ctx.file.str(inst.name), sep });
+        const m = (if (depth == 0)
+            try elab_insert.moduleOf(self, inst, child_path)
+        else
+            elab_names.findModule(self, inst.module)) orelse continue;
+        try kids.append(self.ctx.arena, .{ .inst = inst, .module = m, .path = child_path });
+    }
+    return kids.items;
 }
 
 /// Is `net` read or written by `module`'s digital behavioral code: a
@@ -159,7 +222,7 @@ fn digitalUse(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, net: A
 }
 
 /// The discipline `module` itself declares for `net`, on a port or a net
-/// declaration, if any.
+/// declaration, if any: `UnitIndex.declared`'s answer, by a scan.
 fn declaredIn(module: *const Ast.ModuleDecl, net: Ast.StrId) ?Ast.StrId {
     for (module.ports) |p| if (p.name == net and p.discipline != .none) return p.discipline;
     for (module.nets) |n| if (n.name == net and n.discipline != .none) return n.discipline;
@@ -220,12 +283,14 @@ const cases_src =
 /// `insert.plan` clears it per level.
 fn upOf(fl: *Flatten, f: *fixture.Fixture, module: []const u8) Error!Seg {
     fl.seg_up.clearRetainingCapacity();
+    fl.seg_index.clearRetainingCapacity();
     return up(fl, fixture.moduleNamed(&f.file, module).?, "", fixture.id(&f.file, "s").?, 0);
 }
 
 /// `down` for `module`'s `s` under an upper connection `parent`.
 fn downOf(fl: *Flatten, f: *fixture.Fixture, module: []const u8, parent: Seg) Error!Seg {
     fl.seg_up.clearRetainingCapacity();
+    fl.seg_index.clearRetainingCapacity();
     return down(fl, fixture.moduleNamed(&f.file, module).?, "", fixture.id(&f.file, "s").?, parent);
 }
 
@@ -277,4 +342,36 @@ test down {
     try std.testing.expectEqual(Seg{ .domain = .discrete, .behavioral = true }, try downOf(&fl, &f, "m_beh", cont));
     try std.testing.expectEqual(cont, try downOf(&fl, &f, "m_mixed", dig));
     try std.testing.expectEqual(dig, try downOf(&fl, &f, "m_dig", .{}));
+}
+
+test indexOf {
+    // N mixed nets at one level, each joining an analog and a digital child:
+    // every net resolves continuous and gets one bridge, and the level's
+    // level is indexed once (one `seg_index` row; its childless children
+    // are scanned), not scanned per net.
+    const n = 64;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(std.testing.allocator);
+    try text.appendSlice(std.testing.allocator,
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\connectmodule a2d(el, cm); input el; output cm; ca el; dd cm; endmodule
+        \\connectrules r; connect a2d; endconnectrules
+        \\module din(d); input d; dd d; endmodule
+        \\module la(a); inout a; ca a; endmodule
+        \\module top(p); inout p; ca p;
+        \\
+    );
+    for (0..n) |i| try text.print(std.testing.allocator, "wire w{d}; din d{d}(w{d}); la a{d}(w{d});\n", .{ i, i, i, i, i });
+    try text.appendSlice(std.testing.allocator, "endmodule\n");
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, text.items);
+    var fl = try fixture.flatten(&f);
+    const top = fixture.moduleNamed(&f.file, "top").?;
+    const all = try elab_insert.plan(&fl, top, "", top.instances, &.{});
+    try std.testing.expectEqual(@as(usize, 2 * n + n), all.len);
+    try std.testing.expectEqual(@as(usize, n), fl.inserts.items.len);
+    try std.testing.expectEqual(@as(u32, 1), fl.seg_index.count());
+    try std.testing.expectEqual(@as(usize, 0), f.bag.count());
 }

@@ -19,7 +19,7 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 pub fn Run(comptime D: type) type {
     return struct {
         const n = contract.nU(D);
-        const V = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .dense = true });
+        const V = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{});
 
         /// Runs `steps` committed points and returns the FNV-1a hash of every
         /// output level, ramp end and next event after each; `run(0)` is the

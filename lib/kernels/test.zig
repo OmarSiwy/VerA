@@ -1812,3 +1812,60 @@ test "IEEE 1364 Table 5-6 wide integers: the power edge cases" {
         try std.testing.expect(wide.zwEq(n, wide.zwPow(n, false, wide.zwLeaf(n, 3), 8, false, 4), wide.zwLeaf(n, 81)));
     }
 }
+
+test "IEEE 1364 §5 wide integers: the bitwise, reduction, shift and conversion entry points" {
+    const expect = std.testing.expect;
+    inline for (.{ 40, 200 }) |n| {
+        const one = wide.zwLeaf(n, 1);
+        const top = wide.zwShl(n, one, 32, n - 1);
+        const x = wide.zwOr(n, top, wide.zwLeaf(n, 5)); // 2^(n-1) + 5
+        const ones = wide.zwNot(n, wide.zwZero(n));
+        try expect(wide.zwEq(n, wide.zwAnd(n, x, wide.zwLeaf(n, 7)), wide.zwLeaf(n, 5)));
+        try expect(wide.zwIsZero(n, wide.zwXor(n, x, x)));
+        try expect(wide.zwEq(n, wide.zwXnor(n, x, x), ones));
+        // §5.1.11: every bit one, and the parity of the one bits.
+        try expect(wide.zwAll(n, ones));
+        try expect(!wide.zwAll(n, x));
+        try expect(wide.zwParity(n, ones) == (n % 2 == 1));
+        try expect(wide.zwParity(n, x)); // three one bits: 2^(n-1), 4 and 1
+        try expect(!wide.zwParity(n, wide.zwLeaf(n, 3)));
+        // §5.1.12 `>>>` of a negative pattern fills with ones, `>>` with zeros.
+        try expect(wide.zwEq(n, wide.zwShr(n, true, x, 32, n - 1), ones));
+        try expect(wide.zwEq(n, wide.zwShr(n, false, x, 32, n - 1), one));
+        // A count no u64 holds (a 200-bit 2^150) shifts every bit out.
+        const huge = wide.zwShl(200, wide.zwLeaf(200, 1), 32, 150);
+        try expect(wide.zwIsZero(n, wide.zwShl(n, x, 200, huge)));
+        try expect(wide.zwIsZero(n, wide.zwShr(n, false, x, 200, huge)));
+        try expect(wide.zwEq(n, wide.zwShr(n, true, x, 200, huge), ones));
+    }
+    // §7.3.1 a select reads at most 32 bits, zero- or sign-extended.
+    try std.testing.expectEqual(@as(i64, -3), wide.zwInt(40, true, wide.zwLeaf(40, -3)));
+    try std.testing.expectEqual(@as(i64, (1 << 40) - 3), wide.zwInt(40, false, wide.zwLeaf(40, -3)));
+    // A discrete input's words keep their low 32 bits, cut at the width.
+    try std.testing.expectEqual(@as(wide.ZW(40), 0x05_ffff_ffff), wide.zwWords(40, .{ -1, 0x1_0000_0005 }));
+    try std.testing.expectEqual(@as(wide.ZW(40), (1 << 40) - 1), wide.zwConst(40, .{ 0xffff_ffff, 0xffff_ffff }));
+    try std.testing.expect(wide.zwEq(200, wide.zwWords(200, @splat(-1)), wide.zwNot(200, wide.zwZero(200))));
+}
+
+test "§4.5.7 zAbsdelay: DC and an empty ring pass the input, a short delay interpolates toward it" {
+    var ts: [8]f64 = @splat(0);
+    var vs: [8]f64 = @splat(0);
+    var head: u64 = 0;
+    const vin: Dual = .{ .v = 40.0, .d = 1.0 };
+    // Nothing accepted yet: the input, derivative and all.
+    try std.testing.expectEqual(vin, hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 1.0, 1.0, 0.5));
+    for (0..4) |k| hist_k.zHistPush(&ts, &vs, &head, @floatFromInt(k), 10.0 * @as(f64, @floatFromInt(k)));
+    // A static point (dt <= 0) is the input.
+    try std.testing.expectEqual(vin, hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 4.0, 0.0, 1.5));
+    // Inside the history: the recorded value, a constant.
+    try std.testing.expectEqual(Dual{ .v = 25.0, .d = 0.0 }, hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 4.0, 1.0, 1.5));
+    // td shorter than the step: halfway from the newest sample (30) to the
+    // input (40), carrying half the input's derivative.
+    try std.testing.expectEqual(Dual{ .v = 35.0, .d = 0.5 }, hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 4.0, 1.0, 0.5));
+    // A negative td reads the future: clamped to the input itself.
+    try std.testing.expectEqual(vin, hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 4.0, 1.0, -1.0));
+    // No time since the newest sample: the input, not a 0/0.
+    try std.testing.expectEqual(vin, hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 3.0, 1.0, -0.5));
+    // A NaN delay answers NaN, never a sample from the wrong time.
+    try std.testing.expect(std.math.isNan(hist_k.zAbsdelay(Dual, vin, &ts, &vs, head, 4.0, 1.0, std.math.nan(f64)).v));
+}

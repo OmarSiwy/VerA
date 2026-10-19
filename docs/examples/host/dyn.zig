@@ -19,8 +19,8 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 fn Export(comptime D: type) type {
     return struct {
         const n = contract.nU(D);
-        const S = contract.RefFamily(f64, &std.simd.iota(u8, n), .{ .dense = true });
-        const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .dense = true });
+        const S = contract.RefFamily(f64, &std.simd.iota(u8, n), .{});
+        const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{});
 
         /// The residual `f` and Jacobian `j` (row-major) at `x`, for the
         /// default card, as a DC operating point.
@@ -29,10 +29,10 @@ fn Export(comptime D: type) type {
             if (@hasDecl(D, "derive")) D.derive(Val, &model);
             if (@hasDecl(D, "setup")) D.setup(Val, &model);
             const inst: D.Instance = .{};
-            const rows: [n]S.Of(0) = D.eval(S, x, &model, &inst, .{});
-            for (rows, 0..) |row, r| {
-                f[r] = row.v;
-                j[r] = row.d;
+            const rows = D.eval(S, x, &model, &inst, .{});
+            inline for (0..n) |r| {
+                f[r] = rows[r].v;
+                j[r] = contract.denseRow(n, rows[r]);
             }
         }
     };

@@ -1,5 +1,5 @@
-//! Build orchestration: device.zig in, a generation-versioned lib<name>.so plus
-//! its layout hash out (§8.3 device-side ABI). VerA produces the artifact; the
+//! Build orchestration: device.zig in, a generation-versioned lib<name>.so
+//! out (§8.3 device-side ABI). VerA produces the artifact; the
 //! host owns dlopen, dlclose and state reset, and a fresh path per generation
 //! gives it a fresh inode. Each build is one cold `zig build-lib --listen=-`
 //! child (the compiler server protocol; the build runner's `--listen` serves
@@ -11,7 +11,7 @@
 //! `compileRelease` is the spine: spawn the children, `writeTree`, write the
 //! shims, send every update, collect, link, `publish`. The text written beside
 //! the device is `shim.zig`'s and the child protocol `server.zig`'s; this file
-//! owns the build policy (options, argv, split, layout hash), the on-disk tree
+//! owns the build policy (options, argv, split), the on-disk tree
 //! and `Output`, the device text it takes, which codegen produces.
 
 const std = @import("std");
@@ -70,7 +70,9 @@ pub const Module = struct {
 /// which a file system takes as a name. A hashed stem always holds a `-`,
 /// which no plain name does, so the two forms never collide. Returns `name`
 /// itself (borrowed) when it is kept, else a stem allocated in `a`.
+/// Asserts that `name` is not empty: an empty stem names the directory.
 pub fn fileStem(a: Allocator, name: []const u8) ![]const u8 {
+    assert(name.len > 0);
     const plain = for (name) |c| {
         if (!std.ascii.isAlphanumeric(c) and c != '_') break false;
     } else true;
@@ -86,8 +88,8 @@ pub fn fileStem(a: Allocator, name: []const u8) ![]const u8 {
     return stem;
 }
 
-/// Everything the layout hash pins, plus where to put things. Strings are
-/// borrowed and must outlive the build.
+/// How a `.so` build compiles and where it writes. Strings are borrowed and
+/// must outlive the build.
 pub const Options = struct {
     /// VerA-owned directory: generated device.zig + shim.zig, the compiler
     /// cache, and the versioned artifacts. Created if absent.
@@ -101,7 +103,7 @@ pub const Options = struct {
     /// `dyn`, whose root exposes
     /// `pub fn exportDevice(comptime D: type, comptime name: []const u8) void`,
     /// and may expose `exportDevicePart` for a split build (`contract.DevicePart`).
-    /// Order is hashed into `layout_hash` and fixes argv order.
+    /// Order fixes argv order.
     modules: []const Module,
     /// The compiler to spawn, looked up on `PATH` when bare. It must be the
     /// Zig VerA was built with, or the build fails with `error.ProtocolMismatch`.
@@ -109,15 +111,13 @@ pub const Options = struct {
     /// Keep DWARF in a ReleaseFast/ReleaseSmall build. Off by default: debug
     /// information is about half of a large device's LLVM time, and the
     /// machine code is the same with or without it. Debug and ReleaseSafe
-    /// always keep it (their safety panics print stack traces). Not hashed:
-    /// it changes no type layout.
+    /// always keep it (their safety panics print stack traces).
     debug_info: bool = false,
     /// Build as one object per `Part`, in parallel, then link (`splits`).
     /// Null: only an LLVM build of at least `split_min_bytes` of device text.
     split: ?bool = null,
     /// A `.v` device's prebuilt engine object (`buildEngine`): linked in,
-    /// and the shim declares `vera_prebuilt_engine`. Not hashed: the host's
-    /// ABI is the same either way.
+    /// and the shim declares `vera_prebuilt_engine`.
     engine: ?[]const u8 = null,
     /// `-target` for every compile, e.g. `x86_64-linux-gnu`: a host that
     /// dlopens the library passes its own, so the library links the host's
@@ -127,7 +127,7 @@ pub const Options = struct {
 };
 
 /// Whether a native build passes `-fstrip`: optimized without safety checks,
-/// unless the caller asked for debug information. `tb.buildExe` follows the
+/// unless the caller asked for debug information. `exe.zig`'s `argvHead` follows the
 /// same rule.
 pub fn strip(optimize: std.lang.Optimize, debug_info: bool) bool {
     return !debug_info and (optimize == .fast or optimize == .small);
@@ -138,13 +138,6 @@ const Artifact = struct {
     /// `<work_dir>/lib<name>.<generation>.so`, a fresh inode for the host to
     /// dlopen. Owned by the build's `gpa`; freed by `Result.deinit`.
     so_path: []const u8,
-    /// `layoutHash` of the build options. The host rejects a `.so` whose
-    /// hash differs (§8.3 device ABI).
-    layout_hash: u64,
-    /// The `generation` the build was asked for, the number in `so_path`.
-    generation: u32,
-    /// True when the compiler reused cached output instead of producing new code.
-    cache_hit: bool = false,
 };
 
 /// A build outcome. Both payloads are owned by the caller's `gpa`.
@@ -162,34 +155,6 @@ pub const Result = union(enum) {
     }
 };
 
-/// Returns a hash of the compiler version, optimize mode, backend and module
-/// graph (in order), all of which change type layouts across the dyn ABI.
-/// `work_dir` and `name` do not affect it. The host compares it with the
-/// `.so`'s `arp_layout_hash` before use.
-fn layoutHash(o: Options) u64 {
-    var h: std.hash.Wyhash = .init(0xfa57_0af0_1a40_07);
-    h.update(builtin.zig_version_string);
-    h.update(&.{0});
-    h.update(@tagName(o.optimize));
-    h.update(&.{0});
-    h.update(@tagName(o.backend.forHost()));
-    h.update(&.{0});
-    h.update(o.target orelse "");
-    h.update(&.{0});
-    for (o.modules) |m| {
-        h.update(m.name);
-        h.update(&.{0});
-        h.update(m.root);
-        h.update(&.{0});
-        for (m.deps) |d| {
-            h.update(d);
-            h.update(&.{0});
-        }
-        h.update(&.{1});
-    }
-    return h.final();
-}
-
 /// Writes `data` only if it differs from the file on disk and returns whether
 /// it wrote. `zig` keys its ZIR cache on inode, size and mtime, so rewriting
 /// an identical file would force AstGen to run again.
@@ -204,7 +169,11 @@ fn writeIfChanged(
     if (dir.readFileAlloc(io, sub_path, gpa, .limited(data.len + 1))) |old| {
         defer gpa.free(old);
         if (std.mem.eql(u8, old, data)) return false;
-    } else |_| {}
+    } else |err| switch (err) {
+        error.OutOfMemory => return err,
+        // Absent, unreadable or longer than `data`: write it.
+        else => {},
+    }
     try dir.writeFile(io, .{ .sub_path = sub_path, .data = data });
     return true;
 }
@@ -347,7 +316,10 @@ fn pruneUnits(io: Io, gpa: Allocator, udir: Io.Dir, names: []const []const u8) !
         const live = for (names) |n| {
             if (std.mem.eql(u8, n, stem)) break true;
         } else false;
-        if (!live) try stale.append(gpa, try gpa.dupe(u8, entry.name));
+        if (live) continue;
+        // Room first: a copy made before a failed append would leak.
+        try stale.ensureUnusedCapacity(gpa, 1);
+        stale.appendAssumeCapacity(try gpa.dupe(u8, entry.name));
     }
     for (stale.items) |s| try udir.deleteFile(io, s);
     return stale.items.len;
@@ -471,7 +443,7 @@ fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []c
     if (stripped) a.appendAssumeCapacity("-fstrip");
     a.appendSliceAssumeCapacity(objs);
     if (o.engine) |e| a.appendAssumeCapacity(e);
-    std.debug.assert(a.items.len == a.capacity);
+    assert(a.items.len == a.capacity);
     return a.items;
 }
 
@@ -551,8 +523,8 @@ pub fn buildEngine(gpa: Allocator, io: Io, o: Options, cache_dir: []const u8) !E
     try send(io, &s.child, .update);
     return switch (try s.wait(gpa)) {
         .failed => |b| .{ .failed = b },
-        .ok => |u| .{ .ok = try std.fs.path.join(gpa, &.{
-            cache_dir, "o", &Cache.binToHex(u.digest), "vera_engine" ++ comptime builtin.target.ofmt.fileExt(builtin.target.cpu.arch),
+        .ok => |digest| .{ .ok = try std.fs.path.join(gpa, &.{
+            cache_dir, "o", &Cache.binToHex(digest), "vera_engine" ++ comptime builtin.target.ofmt.fileExt(builtin.target.cpu.arch),
         }) },
     };
 }
@@ -609,12 +581,7 @@ pub fn compileRelease(
 
     if (!split) return switch (try servers[0].wait(gpa)) {
         .failed => |b| .{ .failed = b },
-        .ok => |u| .{ .ok = .{
-            .so_path = try publish(io, gpa, o, u.digest, generation),
-            .layout_hash = layoutHash(o),
-            .generation = generation,
-            .cache_hit = u.cache_hit,
-        } },
+        .ok => |digest| .{ .ok = .{ .so_path = try publish(io, gpa, o, digest, generation) } },
     };
 
     // Each piece analyses the whole device, so a device error arrives once
@@ -622,7 +589,6 @@ pub fn compileRelease(
     const objs = try arena.alloc([]const u8, pieces.len);
     var failed: ?std.zig.ErrorBundle = null;
     errdefer if (failed) |*b| b.deinit(gpa);
-    var cache_hit = true;
     for (servers, pieces, objs) |*s, p, *obj| switch (try s.wait(gpa)) {
         .failed => |b| if (failed == null) {
             failed = b;
@@ -630,11 +596,10 @@ pub fn compileRelease(
             var extra = b;
             extra.deinit(gpa);
         },
-        .ok => |u| {
-            cache_hit = cache_hit and u.cache_hit;
+        .ok => |digest| {
             const t = &builtin.target;
             obj.* = try std.fs.path.join(arena, &.{
-                o.work_dir,                                                                ".zig-cache", "o", &Cache.binToHex(u.digest),
+                o.work_dir,                                                                ".zig-cache", "o", &Cache.binToHex(digest),
                 try arena.print("{s}_{s}{s}", .{ o.name, p, t.ofmt.fileExt(t.cpu.arch) }),
             });
         },
@@ -653,12 +618,7 @@ pub fn compileRelease(
     try send(io, &link.child, .update);
     return switch (try link.wait(gpa)) {
         .failed => |b| .{ .failed = b },
-        .ok => |u| .{ .ok = .{
-            .so_path = try publish(io, gpa, o, u.digest, generation),
-            .layout_hash = layoutHash(o),
-            .generation = generation,
-            .cache_hit = cache_hit and u.cache_hit,
-        } },
+        .ok => |digest| .{ .ok = .{ .so_path = try publish(io, gpa, o, digest, generation) } },
     };
 }
 
@@ -700,78 +660,8 @@ test "Backend.auto is self-hosted only for Debug on x86_64" {
     try std.testing.expectEqual(Backend.llvm, Backend.auto(.fast, .x86_64));
     try std.testing.expectEqual(Backend.llvm, Backend.auto(.debug, .aarch64));
     try std.testing.expectEqual(Backend.llvm, Backend.auto(.debug, .nvptx64));
-}
-
-test "an optimized build strips unless debug information is asked for" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const Case = struct { optimize: std.lang.Optimize, debug_info: bool, strip: bool };
-    for ([_]Case{
-        .{ .optimize = .fast, .debug_info = false, .strip = true },
-        .{ .optimize = .small, .debug_info = false, .strip = true },
-        .{ .optimize = .fast, .debug_info = true, .strip = false },
-        .{ .optimize = .safe, .debug_info = false, .strip = false },
-        .{ .optimize = .debug, .debug_info = false, .strip = false },
-    }) |c| {
-        const argv = try buildArgv(arena.allocator(), .{
-            .work_dir = "w",
-            .name = "dev",
-            .optimize = c.optimize,
-            .backend = .llvm,
-            .modules = &.{},
-            .debug_info = c.debug_info,
-        }, null);
-        const has = for (argv) |a| {
-            if (std.mem.eql(u8, a, "-fstrip")) break true;
-        } else false;
-        try std.testing.expectEqual(c.strip, has);
-    }
-}
-
-test "layoutHash pins optimize, backend and the module graph" {
-    const mods = [_]Module{
-        .{ .name = "contract", .root = "c.zig" },
-        .{ .name = "dyn", .root = "d.zig", .deps = &.{"contract"} },
-    };
-    const base: Options = .{
-        .work_dir = "w",
-        .name = "dev",
-        .optimize = .debug,
-        .backend = .self_hosted,
-        .modules = &mods,
-    };
-
-    try std.testing.expectEqual(layoutHash(base), layoutHash(base));
-
-    var o = base;
-    o.optimize = .fast;
-    try std.testing.expect(layoutHash(o) != layoutHash(base));
-
-    // The hash pins the backend the host builds with, so the two collide
-    // where `forHost` maps both to LLVM.
-    o = base;
-    o.backend = .llvm;
-    try std.testing.expectEqual(Backend.self_hosted.forHost() == .llvm, layoutHash(o) == layoutHash(base));
-
-    const other = [_]Module{
-        .{ .name = "contract", .root = "OTHER.zig" },
-        .{ .name = "dyn", .root = "d.zig", .deps = &.{"contract"} },
-    };
-    o = base;
-    o.modules = &other;
-    try std.testing.expect(layoutHash(o) != layoutHash(base));
-
-    // Order is part of the graph identity.
-    const swapped = [_]Module{ mods[1], mods[0] };
-    o = base;
-    o.modules = &swapped;
-    try std.testing.expect(layoutHash(o) != layoutHash(base));
-
-    // `work_dir` and `name` are placement, not ABI.
-    o = base;
-    o.work_dir = "elsewhere";
-    o.name = "other";
-    try std.testing.expectEqual(layoutHash(base), layoutHash(o));
+    for ([_]std.lang.Optimize{ .safe, .fast, .small }) |m|
+        try std.testing.expectEqual(Backend.llvm, Backend.auto(m, .x86_64));
 }
 
 /// A two-unit device in the shape `codegen.generate` produces: prologue, two
@@ -926,8 +816,6 @@ test "compileRelease builds and versions a device" {
             return error.UnexpectedBuildFailure;
         },
         .ok => |a| {
-            try std.testing.expectEqual(@as(u32, 1), a.generation);
-            try std.testing.expectEqual(layoutHash(o), a.layout_hash);
             try std.testing.expect(std.mem.endsWith(u8, a.so_path, testLib("testdev.1")));
             _ = try Io.Dir.cwd().statFile(io, a.so_path, .{});
         },
@@ -1136,11 +1024,6 @@ test "a split build links one object per part into a library that runs" {
     try std.testing.expectEqual(Backend.self_hosted.forHost() == .llvm, splits(native, .{ .text = big }));
 }
 
-test "Backend.auto keeps LLVM for every optimized mode" {
-    for ([_]std.lang.Optimize{ .safe, .fast, .small }) |m|
-        try std.testing.expectEqual(Backend.llvm, Backend.auto(m, .x86_64));
-}
-
 test strip {
     // Only fast and small drop safety, and only they strip; debug_info vetoes.
     for (std.enums.values(std.lang.Optimize)) |m| {
@@ -1181,44 +1064,6 @@ test fileStem {
     // A hashed stem has a `-`; a kept one cannot.
     try std.testing.expect(std.mem.findScalar(u8, try fileStem(a, plain), '-') == null);
     try std.testing.expect(std.mem.findScalar(u8, dot, '-') != null);
-}
-
-test "layoutHash: dependencies count, field boundaries count, placement does not" {
-    const base_mods = [_]Module{
-        .{ .name = "contract", .root = "c.zig" },
-        .{ .name = "dyn", .root = "d.zig", .deps = &.{"contract"} },
-    };
-    const base: Options = .{ .work_dir = "w", .name = "dev", .optimize = .debug, .backend = .llvm, .modules = &base_mods };
-    const h = layoutHash(base);
-
-    // A dropped dependency is a different graph.
-    const no_dep = [_]Module{ base_mods[0], .{ .name = "dyn", .root = "d.zig" } };
-    var o = base;
-    o.modules = &no_dep;
-    try std.testing.expect(layoutHash(o) != h);
-
-    // The same bytes split differently between name and root, or between a
-    // dependency and the next module, are different graphs.
-    const ab_c = [_]Module{.{ .name = "ab", .root = "c" }};
-    const a_bc = [_]Module{.{ .name = "a", .root = "bc" }};
-    o.modules = &ab_c;
-    const h_ab_c = layoutHash(o);
-    o.modules = &a_bc;
-    try std.testing.expect(layoutHash(o) != h_ab_c);
-    const dep_b = [_]Module{.{ .name = "a", .root = "r", .deps = &.{"b"} }};
-    const then_b = [_]Module{ .{ .name = "a", .root = "r" }, .{ .name = "b", .root = "" } };
-    o.modules = &dep_b;
-    const h_dep_b = layoutHash(o);
-    o.modules = &then_b;
-    try std.testing.expect(layoutHash(o) != h_dep_b);
-
-    // `Options` documents these as unhashed: none changes a type layout.
-    o = base;
-    o.zig_exe = "/opt/zig/zig";
-    o.debug_info = true;
-    o.split = true;
-    o.engine = "vera_engine.o";
-    try std.testing.expectEqual(h, layoutHash(o));
 }
 
 test "splits: an explicit choice wins over the size rule" {
@@ -1472,4 +1317,24 @@ test "a split build that fails returns one report and leaks the others' none" {
     defer r.deinit(gpa);
     try std.testing.expect(r == .failed);
     try std.testing.expect(r.failed.errorMessageCount() > 0);
+}
+
+/// One `writeTree` of `out` over `work` with a stale unit file planted, for
+/// `checkAllAllocationFailures`.
+fn writeTreeOnce(gpa: Allocator, io: Io, dir: Io.Dir, o: Options, out: Output) !void {
+    try dir.writeFile(io, .{ .sub_path = "u/old.zig", .data = "" });
+    _ = try writeTree(io, gpa, o, out);
+}
+
+test "writeTree frees everything and reports OutOfMemory at every allocation" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try std.testing.allocator.dupe(u8, ".zig-cache/tmp/" ++ tmp.sub_path);
+    defer std.testing.allocator.free(work);
+    const o: Options = .{ .work_dir = work, .name = "testdev", .optimize = .debug, .backend = .self_hosted, .modules = &.{} };
+    const out = splitOutput(&.{ "unit_a", "unit_b" });
+    // A first write, so every later run reads the same files back.
+    _ = try writeTree(io, std.testing.allocator, o, out);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, writeTreeOnce, .{ io, tmp.dir, o, out });
 }

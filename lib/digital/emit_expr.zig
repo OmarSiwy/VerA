@@ -2,9 +2,10 @@
 //! over `rt.logic` whose value is what `evaluate.evalContext` computes. The walk is
 //! `evalContext`'s arm for arm, so operand sizing and signedness match it, and
 //! `evalContext` itself folds every constant. IEEE 1364-2005 §5.5.1 Table
-//! 5-22, §5.5.2, §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
-//! concatenation, §4.8 real values, §10.4 function results, §17.2 file input,
-//! §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
+//! 5-22, §5.5.2/§5.5.3, §5.1 operators (§5.1.8, §5.1.13, §5.1.14), §3.3 and
+//! §5.2.1/§5.2.2 selects, §3.9/§4.9 array elements, §4.8 real values, §9.4,
+//! §9.5/§9.5.1 case labels, §10.4 function results, §17.2 file input, §17.6.5,
+//! §17.7.1 `$time`, §17.8, §17.9, §17.10, §17.11 `$clog2`, §4.2.1.4 casts.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("sim").digital.for_emitter.compile;
@@ -14,15 +15,10 @@ const Emitter = emit.Emitter;
 const Error = emit.Error;
 const Type = compile.Type;
 
-/// The natural type of `e` (§5.5.1).
-pub fn natural(self: *Emitter, e: Ast.ExprId) Error!Type {
-    return compile.typeOf(self.r, e);
-}
-
 /// `evaluate.eval(e, 0)`: `e` in its own type, a real as its §4.8.2 64-bit
 /// integer. Returns that type.
 pub fn selfDetermined(self: *Emitter, e: Ast.ExprId) Error!Type {
-    var t = try natural(self, e);
+    var t = compile.typeOf(self.r, e);
     if (t.real) t = .{ .width = 64, .signed = true };
     try value(self, e, t);
     return t;
@@ -30,7 +26,7 @@ pub fn selfDetermined(self: *Emitter, e: Ast.ExprId) Error!Type {
 
 /// `evaluate.truthOf(e)` as a `logic.Bit` (§9.4): a real is true when not 0.
 pub fn truth(self: *Emitter, e: Ast.ExprId) Error!void {
-    if ((try natural(self, e)).real) {
+    if (compile.typeOf(self.r, e).real) {
         try self.print("L.realTruth(", .{});
         try real(self, e);
         return self.print(")", .{});
@@ -44,7 +40,7 @@ pub fn truth(self: *Emitter, e: Ast.ExprId) Error!void {
 pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
-    const n = try natural(self, e);
+    const n = compile.typeOf(self.r, e);
     if (!n.real) {
         try self.print("L.toReal(", .{});
         const t = try selfDetermined(self, e);
@@ -132,7 +128,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
                 .abstime => return self.print("s.abstime({d})", .{r.finest}),
                 .itor => return real(self, args[0]),
                 .bitstoreal => {
-                    const t = try natural(self, args[0]);
+                    const t = compile.typeOf(self.r, args[0]);
                     try self.print("@as(f64, @bitCast(L.word0(", .{});
                     try value(self, args[0], .{ .width = @max(t.width, 64), .signed = t.signed });
                     return self.print(")))", .{});
@@ -184,7 +180,7 @@ const user_fn = "a PLI application's system function, which runs only under a VP
 /// assignment gives it, truncated to the target (§5.5.3).
 pub fn assigned(self: *Emitter, e: Ast.ExprId, target: Type) Error!void {
     if (target.real) return value(self, e, target);
-    const n = try natural(self, e);
+    const n = compile.typeOf(self.r, e);
     const ctx: Type = .{ .width = @max(n.width, target.width), .signed = n.signed };
     try self.print("L.rs(", .{});
     try value(self, e, ctx);
@@ -217,7 +213,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         try real(self, e);
         return self.print(")", .{});
     }
-    if ((try natural(self, e)).real) {
+    if (compile.typeOf(self.r, e).real) {
         try self.print("L.rs(L.ofReal(", .{});
         try real(self, e);
         return self.print("), 64, {d}, {})", .{ w, sg });
@@ -468,11 +464,11 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print("            while (c{d}.next()) |x{d}| switch (x{d}.arg) {{\n", .{ lb, lb, lb });
                     for (args[2..], 0..) |arg, k| {
                         try self.print("            {d} => switch (x{d}.value) {{\n            .bits => |v{d}| {{\n", .{ k, lb, lb });
-                        try emit.assignPlanes(self, arg, try self.arena.print("v{d}", .{lb}));
+                        try emit.assignWord(self, arg, try self.arena.print("L.k(v{d}[0], v{d}[1])", .{ lb, lb }), .{ .width = 64, .signed = true });
                         try self.print("            }},\n            .chars => |t{d}| {{\n", .{lb});
                         try emit.assignChars(self, arg, try self.arena.print("t{d}", .{lb}));
                         try self.print("            }},\n            .real => |f{d}| {{\n", .{lb});
-                        try emit.assignReal(self, arg, try self.arena.print("f{d}", .{lb}));
+                        try emit.assignWord(self, arg, try self.arena.print("L.k(@bitCast(@as(f64, f{d})), 0)", .{lb}), compile.real_type);
                         try self.print("            }},\n            }},\n", .{});
                     }
                     try self.print("            else => unreachable,\n            }};\n", .{});
@@ -517,7 +513,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             // a zero replication contributes no bits.
             var parts: std.ArrayList(Ast.ExprId) = try .initCapacity(self.arena, ex.args(e).len);
             for (ex.args(e)) |arg| if (compile.typeOf(r, arg).width != 0) parts.appendAssumeCapacity(arg);
-            const n = try natural(self, e);
+            const n = compile.typeOf(self.r, e);
             try self.print("L.rs(", .{});
             for (parts.items[1..]) |_| try self.print("L.join(", .{});
             var acc = (try selfDetermined(self, parts.items[0])).width;
@@ -530,7 +526,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             try self.print(", {d}, {d}, {})", .{ n.width, w, sg });
         },
         .multi_concat => {
-            const n = try natural(self, e);
+            const n = compile.typeOf(self.r, e);
             const count = r.replications.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
             try self.print("L.rs(L.rep(", .{});
             const t = try selfDetermined(self, ex.rhs(e));
@@ -538,7 +534,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         },
         // §10.4 a function call: one synchronous activation (`exec.callSync`).
         .call => {
-            const n = try natural(self, e);
+            const n = compile.typeOf(self.r, e);
             try self.print("L.rs(", .{});
             try functionValue(self, e);
             try self.print(", {d}, {d}, {})", .{ n.width, w, sg });

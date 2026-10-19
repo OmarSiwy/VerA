@@ -17,7 +17,7 @@ const lanes = blk: {
     for (&out, 0..) |*lane, i| lane.* = i;
     break :blk out;
 };
-const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
+const Dual = contract.RefFamily(f64, &lanes, .{});
 // The device ABI encodes '[' and ']' as Z5b and Z5d in enum fields.
 const a = @backingInt(D.U.nZ5b0Z5d);
 const b = @backingInt(D.U.nZ5b1Z5d);

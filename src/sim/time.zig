@@ -74,15 +74,15 @@ pub const Scale = struct {
         if (p > u) return error.PrecisionTooCoarse;
         if (g > p) return error.GlobalPrecisionTooCoarse;
         return .{
-            .local_per_unit = power10(@intCast(u - p)),
-            .global_per_local = power10(@intCast(p - g)),
+            .local_per_unit = std.math.pow(u57, 10, @intCast(u - p)),
+            .global_per_local = std.math.pow(u57, 10, @intCast(p - g)),
         };
     }
 
     /// `value` time units as global ticks, exactly; `DelayOverflow` past
     /// 2^64 - 1 ticks.
     pub fn unsignedDelay(self: Scale, value: u64) Error!u64 {
-        return self.globalTicks(try multiply(value, self.local_per_unit));
+        return multiply(try multiply(value, self.local_per_unit), self.global_per_local);
     }
 
     /// Procedural delay: negative integral values are unsigned 64-bit time values
@@ -96,7 +96,7 @@ pub const Scale = struct {
     pub fn realDelay(self: Scale, value: f64) Error!u64 {
         if (!std.math.isFinite(value)) return error.NonFiniteDelay;
         if (value < 0) return error.NegativeRealDelay;
-        return self.globalTicks(try roundedLocal(value, self.local_per_unit));
+        return multiply(try roundedLocal(value, self.local_per_unit), self.global_per_local);
     }
 
     /// Returns `ticks` in the invoking module's time unit, rounded half away
@@ -119,10 +119,6 @@ pub const Scale = struct {
     pub fn realAt(self: Scale, ticks: u64) f64 {
         const local: f64 = @floatFromInt(ticks / self.global_per_local);
         return local / @as(f64, @floatFromInt(self.local_per_unit));
-    }
-
-    fn globalTicks(self: Scale, local: u64) Error!u64 {
-        return multiply(local, self.global_per_local);
     }
 };
 
@@ -174,12 +170,6 @@ pub fn crosses(dir: f64, v0: f64, v1: f64) bool {
     const rise = v0 <= 0 and v1 > 0;
     const fall = v0 >= 0 and v1 < 0;
     return if (dir == 1) rise else if (dir == -1) fall else if (dir == 0) rise or fall else false;
-}
-
-fn power10(exponent: u5) u57 {
-    var value: u57 = 1;
-    for (0..exponent) |_| value *= 10;
-    return value;
 }
 
 fn multiply(value: u64, factor: u57) Error!u64 {

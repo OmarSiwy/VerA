@@ -715,6 +715,44 @@ pub fn constValue(self: *Flatten, e: Ast.ExprId, local: bool, reads: ?[]bool) ?c
     return constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = local, .reads = reads });
 }
 
+/// One `Flatten.param_values` row: a flat parameter's folded value, once
+/// one is known. A default that does not fold is not remembered, since a
+/// parameter appended later may make it fold.
+pub const ParamValue = union(enum) { unknown, folding, done: constfold.Const };
+
+/// Grows `Flatten.param_values` to one row per flat parameter; run after
+/// every append to `Flatten.params`.
+pub fn syncParamValues(self: *Flatten) Error!void {
+    const have = self.param_values.items.len;
+    std.debug.assert(have <= self.params.items.len);
+    try self.param_values.appendNTimes(self.ctx.arena, .unknown, self.params.items.len - have);
+}
+
+/// Flat parameter `i`'s folded value, cached. The parameters before `i` are
+/// folded first, in order, so a default's nested folds find their reads
+/// cached: the stack holds one default's depth, not a chain of them (a
+/// chain of `links` defaults each `d` deep needed `links * d` levels on a
+/// stack the parse reserved for `d`, and overflowed it). A parameter met
+/// again while its own default is folding is a cycle and declines.
+fn paramValue(self: *Flatten, i: usize, depth: u8) ?constfold.Const {
+    const rows = self.param_values.items;
+    std.debug.assert(rows.len == self.params.items.len); // `syncParamValues`
+    switch (rows[i]) {
+        .done => |v| return v,
+        .folding => return null,
+        .unknown => {},
+    }
+    while (self.param_warm < i) {
+        const j = self.param_warm;
+        self.param_warm += 1;
+        _ = paramValue(self, j, depth);
+    }
+    rows[i] = .folding;
+    const v = (ParamEnv{ .self = self, .local = false, .depth = depth }).param(i);
+    rows[i] = if (v) |c| .{ .done = c } else .unknown;
+    return v;
+}
+
 /// `constfold.fold`'s identifiers, answered from the parameters flattened so
 /// far. The bound is written in the instantiating module's local names, while
 /// every value in `self.params` is already flat, so only the first lookup
@@ -737,23 +775,38 @@ const ParamEnv = struct {
         if (ex.tag(e) != .ident or env.depth > 32) return null;
         const name = if (env.local) flat(self, ex.strOf(e)) else ex.strOf(e);
         for (self.params.items, 0..) |p, i| if (p.name == name and p.dims.len == 0) {
-            if (env.reads) |reads| reads[i] = true;
-            if (!p.is_local and p.ty != .string) for (self.ctx.param_overrides) |o| {
-                if (!std.mem.eql(u8, o.name, self.ctx.file.str(name))) continue;
-                // The replaced default supplies an inferred TYPE only. Its
-                // former value dependencies cannot change this card binding
-                // and must not freeze unrelated host fields as shape inputs.
-                const declared = if (p.ty == .unspecified)
-                    constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1 })
-                else
-                    null;
-                return constfold.parameterCardValue(p.ty, declared, o.value);
-            };
-            const declared = constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1, .reads = env.reads }) orelse return null;
-            return constfold.parameterValue(p.ty, declared);
+            // ponytail: a fold that records `reads` (§6.4.2 overload choice)
+            // is not cached, so its chain of defaults still nests on the
+            // stack; the upgrade is caching each parameter's read set.
+            if (env.reads) |reads| {
+                reads[i] = true;
+                return env.param(i);
+            }
+            return paramValue(self, i, env.depth);
         };
         return null;
     }
+
+    /// Flat parameter `i`'s value: a `--param` card value, else its default
+    /// folded with the parameters before it.
+    fn param(env: ParamEnv, i: usize) ?constfold.Const {
+        const self = env.self;
+        const p = self.params.items[i];
+        if (!p.is_local and p.ty != .string) for (self.ctx.param_overrides) |o| {
+            if (!std.mem.eql(u8, o.name, self.ctx.file.str(p.name))) continue;
+            // The replaced default supplies an inferred TYPE only. Its
+            // former value dependencies cannot change this card binding
+            // and must not freeze unrelated host fields as shape inputs.
+            const declared = if (p.ty == .unspecified)
+                constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1 })
+            else
+                null;
+            return constfold.parameterCardValue(p.ty, declared, o.value);
+        };
+        const declared = constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1, .reads = env.reads }) orelse return null;
+        return constfold.parameterValue(p.ty, declared);
+    }
+
     /// Leaves operand signedness unknown.
     pub fn signed(_: ParamEnv, _: Ast.ExprId) ?bool {
         return null;
@@ -885,4 +938,87 @@ test findModule {
     try std.testing.expect(isPrimitive(&fl, resistor));
     try std.testing.expect(!isPrimitive(&fl, &user[1]));
     try std.testing.expectEqual(@as(?*const Ast.ModuleDecl, null), findModule(&fl, try f.file.intern(f.arena.allocator(), "nowhere")));
+}
+
+test "§6.4 a paramset chain that names nothing or closes on itself is E0904, and terminates" {
+    for ([_][]const u8{
+        "paramset a b; parameter real x = 1.0; endparamset paramset b a; parameter real y = 1.0; endparamset",
+        "paramset a nowhere; parameter real x = 1.0; endparamset",
+    }) |chain| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(
+            \\module top(p); inout p; electrical p; a u(p); endmodule
+            \\{s}
+        , .{chain}));
+        try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+        try std.testing.expect(fixture.hasCode(&f.bag, .E0904));
+    }
+}
+
+test "IEEE 1364-2005 §13.2.1.1 of two same-named roots the last is the device, with W1152" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; parameter real first = 1.0; endmodule
+        \\module top(p); inout p; electrical p; parameter real second = 1.0; endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(&f.file.modules[1], d.top);
+    try std.testing.expect(fixture.hasCode(&f.bag, .W1152));
+}
+
+/// Elaborates `text` on a `deep_stack` thread reserved for `depth` levels,
+/// as `compileInArena` runs lowering (and so elaboration) for the parser's
+/// `deepest`.
+fn elaborateDeep(f: *fixture.Fixture, depth: usize) !elaborate.Design {
+    return @import("base").deep_stack.run(depth, elaborate.elaborate, .{f.ctx()});
+}
+
+test "a chain of parameter defaults folds within the stack reserved for one default's depth" {
+    // `q<i> = q<i-1> + 1+1+…` (`d` terms): an instance range reading the
+    // last folds every default of the chain. Folded one inside the next,
+    // the chain needs `links` times the stack reserved for the parse's
+    // deepest expression (one default) and overflowed it (SIGSEGV).
+    const d = 4000;
+    const links = 32;
+    const gpa = std.testing.allocator;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, "module kid(a); inout a; electrical a; endmodule\nmodule top(p); inout p; electrical p;\n");
+    for (0..links) |i| {
+        try text.print(gpa, "parameter integer q{d} = ", .{i});
+        if (i != 0) try text.print(gpa, "q{d} + ", .{i - 1});
+        for (0..d) |k| try text.appendSlice(gpa, if (k == 0) "1" else "+1");
+        try text.appendSlice(gpa, ";\n");
+    }
+    try text.print(gpa, "kid u[q{d}:q{d}](p); endmodule\n", .{ links - 1, links - 1 });
+    var f: fixture.Fixture = .{ .arena = .init(gpa) };
+    defer f.deinit();
+    try fixture.parse(&f, text.items);
+    const design = try elaborateDeep(&f, d + 2);
+    try std.testing.expectEqual(@as(usize, 2), design.units.len);
+    try std.testing.expectEqualStrings(try f.arena.allocator().print("u[{d}].", .{links * d}), design.units[1].path);
+}
+
+test "parameter folds: a forward reference still folds, a cycle declines (E0909)" {
+    // `a` reads `b`, declared after it; `c` and `e` read each other.
+    for ([_]struct { []const u8, bool }{
+        .{ "parameter integer a = b + 1; parameter integer b = 2; kid u[a:a](p);", true },
+        .{ "parameter integer c = e; parameter integer e = c; kid u[c:c](p);", false },
+    }) |case| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(
+            \\module kid(a); inout a; electrical a; endmodule
+            \\module top(p); inout p; electrical p; {s} endmodule
+        , .{case[0]}));
+        if (case[1]) {
+            const d = try elaborate.elaborate(f.ctx());
+            try std.testing.expectEqualStrings("u[3].", d.units[1].path);
+        } else {
+            try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+            try std.testing.expect(fixture.hasCode(&f.bag, .E0909));
+        }
+    }
 }

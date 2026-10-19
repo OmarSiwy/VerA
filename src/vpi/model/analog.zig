@@ -12,7 +12,6 @@
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const Elaborate = @import("vera").Elaborate;
-const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
 const CompileResult = @import("vera").CompileResult;
 const attributes = @import("../attributes.zig");
@@ -383,24 +382,15 @@ fn addAnalog(
         const split = (try splitPath(arena, by_path, flat_name)) orelse continue;
         const pos = try terminalNode(objects, &net_at, arena, res, top_name, b.hi);
         const neg = if (b.lo == .none) null else try terminalNode(objects, &net_at, arena, res, top_name, b.lo);
-        const disc = if (pos) |p| objects.coldOf(p).disc else null;
-        const at: u32 = @intCast(objects.hot.items.len);
         const full = try joinPath(arena, top_name, flat_name);
-        try objects.appendCold(.{ .kind = .branch, .owner = .of(split.scope), .name = split.local, .full = full }, .{
-            .disc = disc,
+        const at = try addBranch(objects, split.scope, split.local, full, .{
+            .disc = if (pos) |p| objects.coldOf(p).disc else null,
             .pos = pos,
             .neg = neg,
-            .flow = at + 1,
-            .pot = at + 2,
-            .hi_row = if (pos) |p| objects.coldOf(p).row orelse Lower.ground else Lower.ground,
-            .lo_row = if (neg) |n| objects.coldOf(n).row orelse Lower.ground else Lower.ground,
+            .hi_row = if (pos) |p| objects.coldOf(p).row orelse Lowered.ground else Lowered.ground,
+            .lo_row = if (neg) |n| objects.coldOf(n).row orelse Lowered.ground else Lowered.ground,
         });
         if (full.len != 0) named.appendAssumeCapacity(at);
-        // §11.6.7: a quantity's nature is the one its branch's discipline
-        // binds on that side.
-        const dobj: ?Cold = if (disc) |di| objects.coldOf(di).* else null;
-        try objects.appendCold(.{ .kind = .quantity, .owner = .of(split.scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.flow else null });
-        try objects.appendCold(.{ .kind = .quantity, .owner = .of(split.scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.pot else null });
         try scopes[split.scope].branches.append(gpa, at);
     }
 
@@ -419,7 +409,7 @@ fn addAnalog(
     defer unnamed.deinit(gpa);
     for (rows, 0..) |c, k| {
         const idx: u32 = @intCast(k);
-        if (c.br != Lower.unnamed_branch) {
+        if (c.br != Lowered.unnamed_branch) {
             // A named branch: the one of this pair its instance declares. Two
             // named branches over one pair are told apart by an id lowering
             // keeps to itself, so this model does not guess between them.
@@ -444,6 +434,22 @@ fn addAnalog(
     return .{ .disciplines = disciplines, .natures = natures };
 }
 
+/// A branch row of `scope` with cold fields `c`, then its flow and potential
+/// quantities (`c.flow`, `c.pot` are set to them), each of the nature its
+/// discipline binds on that side (§11.6.7). Returns the branch row;
+/// invalidates pointers into `objects`.
+fn addBranch(objects: *model.Rows, scope: u32, name: []const u8, full: []const u8, c: Cold) Error!u32 {
+    const at: u32 = @intCast(objects.hot.items.len);
+    var bc = c;
+    bc.flow = at + 1;
+    bc.pot = at + 2;
+    try objects.appendCold(.{ .kind = .branch, .owner = .of(scope), .name = name, .full = full }, bc);
+    const d: ?Cold = if (c.disc) |di| objects.coldOf(di).* else null;
+    try objects.appendCold(.{ .kind = .quantity, .owner = .of(scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (d) |o| o.flow else null });
+    try objects.appendCold(.{ .kind = .quantity, .owner = .of(scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (d) |o| o.pot else null });
+    return at;
+}
+
 /// Does discipline `d` bind nature `at` on either side?
 fn binds(d: *const Cold, at: u32) bool {
     return d.flow == at or d.pot == at;
@@ -461,55 +467,41 @@ fn unnamedBranch(
     by_path: *const std.StringHashMapUnmanaged(u32),
     res: *const CompileResult,
     node_of_row: []const ?u32,
-    c: Lower.Contribution,
+    c: Lowered.Contribution,
     idx: u32,
     unit: u32,
 ) Error!void {
     const lowered = res.lowered;
-    {
-        const scope: u32 = if (unit < res.unit_paths.len)
-            by_path.get(std.mem.trimEnd(u8, res.unit_paths[unit].path, &.{Elaborate.sep})) orelse 0
-        else
-            0;
-        const g = try unnamed.getOrPut(gpa, .{ .scope = scope, .hi = c.hi, .lo = c.lo });
-        if (!g.found_existing) {
-            const at: u32 = @intCast(objects.hot.items.len);
-            const pos = nodeOfRow(node_of_row, c.hi);
-            const neg = nodeOfRow(node_of_row, c.lo);
-            const disc = if (pos) |p| objects.coldOf(p).disc else if (neg) |n| objects.coldOf(n).disc else null;
-            try objects.appendCold(.{
-                .kind = .branch,
-                .owner = .of(scope),
-                // §5.4.2 gives an unnamed branch no name; `vpiName` answers
-                // the empty string, as §11.6.7's unnamed quantity does.
-                .name = "",
-                .full = "",
-            }, .{
-                .disc = disc,
-                .pos = pos,
-                .neg = neg,
-                .flow = at + 1,
-                .pot = at + 2,
-                .hi_row = c.hi,
-                .lo_row = c.lo,
-            });
-            const dobj: ?Cold = if (disc) |di| objects.coldOf(di).* else null;
-            try objects.appendCold(.{ .kind = .quantity, .owner = .of(scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.flow else null });
-            try objects.appendCold(.{ .kind = .quantity, .owner = .of(scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.pot else null });
-            try scopes[scope].branches.append(gpa, at);
-            g.value_ptr.* = at;
-        }
-        // §5.4.1 the instance's own share of a row others share too.
-        const share: ?u32 = for (lowered.contrib_shares.items, 0..) |sh, s| {
-            if (sh.row == idx and sh.unit == unit) break @intCast(s);
-        } else null;
-        try bindRow(objects, g.value_ptr.*, c, idx, share);
+    const scope: u32 = if (unit < res.unit_paths.len)
+        by_path.get(std.mem.trimEnd(u8, res.unit_paths[unit].path, &.{Elaborate.sep})) orelse 0
+    else
+        0;
+    const g = try unnamed.getOrPut(gpa, .{ .scope = scope, .hi = c.hi, .lo = c.lo });
+    if (!g.found_existing) {
+        const pos = nodeOfRow(node_of_row, c.hi);
+        const neg = nodeOfRow(node_of_row, c.lo);
+        // §5.4.2 gives an unnamed branch no name; `vpiName` answers the empty
+        // string, as §11.6.7's unnamed quantity does.
+        const at = try addBranch(objects, scope, "", "", .{
+            .disc = if (pos) |p| objects.coldOf(p).disc else if (neg) |n| objects.coldOf(n).disc else null,
+            .pos = pos,
+            .neg = neg,
+            .hi_row = c.hi,
+            .lo_row = c.lo,
+        });
+        try scopes[scope].branches.append(gpa, at);
+        g.value_ptr.* = at;
     }
+    // §5.4.1 the instance's own share of a row others share too.
+    const share: ?u32 = for (lowered.contrib_shares.items, 0..) |sh, s| {
+        if (sh.row == idx and sh.unit == unit) break @intCast(s);
+    } else null;
+    try bindRow(objects, g.value_ptr.*, c, idx, share);
 }
 
 /// Record contribution row `k` as the source of branch `at`'s potential or
 /// flow; `share`, its `Lowered.contrib_shares` entry when `k` is shared.
-fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32, share: ?u32) Error!void {
+fn bindRow(objects: *model.Rows, at: u32, c: Lowered.Contribution, k: u32, share: ?u32) Error!void {
     const unnamed = objects.hot.items[at].full.len == 0;
     const b = try objects.coldFor(at);
     if (unnamed) {
@@ -533,7 +525,7 @@ fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32, share: 
 /// `addAnalog`); null for ground (§1.3.1.1 has no node row for it) and for a
 /// row no node object carries.
 fn nodeOfRow(node_of_row: []const ?u32, row: u32) ?u32 {
-    if (row == Lower.ground or row >= node_of_row.len) return null;
+    if (row == Lowered.ground or row >= node_of_row.len) return null;
     return node_of_row[row];
 }
 
@@ -541,8 +533,8 @@ fn nodeOfRow(node_of_row: []const ?u32, row: u32) ?u32 {
 /// reference direction is the declaration's, and contributions are
 /// canonicalised to one spelling of the pair, so both orders are the branch.
 fn branchSpans(objects: *const model.Rows, o: *const Cold, hi: u32, lo: u32) bool {
-    const p: u32 = if (o.pos) |n| objects.coldOf(n).row orelse return false else Lower.ground;
-    const n: u32 = if (o.neg) |m| objects.coldOf(m).row orelse return false else Lower.ground;
+    const p: u32 = if (o.pos) |n| objects.coldOf(n).row orelse return false else Lowered.ground;
+    const n: u32 = if (o.neg) |m| objects.coldOf(m).row orelse return false else Lowered.ground;
     return (p == hi and n == lo) or (p == lo and n == hi);
 }
 
@@ -592,7 +584,7 @@ fn addAnalogCode(
     };
     var names = try nameTable(gpa, objects.hot.items);
     defer names.deinit(gpa);
-    var decls: model.Decls = try .init(gpa, objects.hot.items, scopes.len);
+    var decls = try model.decls(gpa, objects.hot.items, scopes.len);
     defer decls.deinit(gpa);
     var attrs: attributes.ByOwner = try .init(gpa, res.file);
     defer attrs.deinit(gpa);

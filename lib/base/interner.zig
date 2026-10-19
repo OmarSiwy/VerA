@@ -10,6 +10,10 @@ const std = @import("std");
 
 /// Handle into the string intern table. LRM §2.8 identifiers, §2.7 strings.
 pub const StrId = enum(u32) { none = std.math.maxInt(u32), _ };
+comptime {
+    // `map`'s 5-byte slot (below) is this id plus the metadata byte.
+    std.debug.assert(@sizeOf(StrId) == 4);
+}
 
 /// Identifier and string intern table. Ids are assigned in insertion order, so
 /// they are deterministic for a given token stream.
@@ -232,4 +236,31 @@ fn internSome(gpa: std.mem.Allocator) !void {
 
 test "StringInterner.intern leaves the table unchanged on OOM" {
     try testing.checkAllAllocationFailures(testing.allocator, internSome, .{});
+}
+
+fn cloneAndOverlay(gpa: std.mem.Allocator) !void {
+    var t: StringInterner = .empty;
+    defer t.deinit(gpa);
+    for ([_][]const u8{ "a", "b", "c" }) |s| _ = try t.intern(gpa, s);
+    var c = try t.clone(gpa);
+    defer c.deinit(gpa);
+    try testing.expectEqual(t.find("c"), c.find("c"));
+    // An overlay's failed add leaves its own rows and the base unchanged.
+    var over: StringInterner = .continuing(&t);
+    defer over.deinit(gpa);
+    for ([_][]const u8{ "b", "d", "e", "d" }) |s| {
+        const before = over.len();
+        _ = over.intern(gpa, s) catch |err| {
+            try testing.expectEqual(before, over.len());
+            try testing.expectEqual(@as(u32, before - t.len()), over.map.count());
+            try testing.expectEqual(@as(?StrId, null), over.find(s));
+            return err;
+        };
+    }
+    try testing.expectEqual(@as(u32, 5), over.len());
+    try testing.expectEqual(@as(u32, 3), t.len());
+}
+
+test "StringInterner.clone and an overlay's intern leak nothing and stay consistent on OOM" {
+    try testing.checkAllAllocationFailures(testing.allocator, cloneAndOverlay, .{});
 }

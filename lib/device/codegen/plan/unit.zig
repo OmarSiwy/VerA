@@ -192,6 +192,22 @@ inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
     return self.file_dep.isSet(@backingInt(self.an.rv(v)));
 }
 
+/// Whether `v` renders as its literal: a lane-free real computed by a pure
+/// op from literals alone (`foldConst` that looks through no parameter).
+/// Such a value is a leaf, read nothing, and has no slot: `render.renderInst`
+/// writes `S.con(<literal>)` at each read.
+pub fn literal(self: *const UnitPlan, v: Mir.Value) bool {
+    const i = @backingInt(v);
+    if (i < Mir.Value.first_dynamic or self.an.vty[i] != .real or !self.an.dFree(v)) return false;
+    const def = self.mir.valueDef(v);
+    if (def != .inst_result) return false;
+    switch (Mir.opClass(self.mir.instOp(def.inst_result))) {
+        .unary, .binary, .ternary => {},
+        .phi, .branch, .jump, .call, .anew, .load, .store => return false,
+    }
+    return self.an.foldConst(v, false) != null;
+}
+
 /// Is this Value a setup root here? Unlike `cached` it is true inside the
 /// common declaration too: `setup` writes the field before any solve, so
 /// every body may read it.
@@ -412,6 +428,13 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
             self.uses_cache = true;
             continue;
         }
+        // A literal is written where it is read (`render.renderInst`). After
+        // the cache test: a cached literal renders as its cache read
+        // (`renderValueRef` asks `cached` first), which needs `c`.
+        if (self.literal(lv)) {
+            self.inlined.set(v);
+            continue;
+        }
         // §3.2.2 an array version is its storage, not a value: `anew` and
         // `store` are statements without a slot, and an array phi is the
         // same storage on every edge.
@@ -458,7 +481,7 @@ fn mark(self: *UnitPlan, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!v
     // A value read from the core's cache or from a setup root's Instance
     // field is a leaf here: its operands were computed there, and pulling
     // them in is the duplication the hoist removes.
-    if (self.cached(v) or self.isRoot(v)) return;
+    if (self.cached(v) or self.isRoot(v) or self.literal(v)) return;
     try work.append(self.arena, v);
 }
 
@@ -516,7 +539,7 @@ fn countUses(self: *UnitPlan, target: Mir.Value) void {
     }
     for (self.live.items) |lv| {
         // A leaf: its operands are not here.
-        if (self.cached(lv) or self.isRoot(lv)) continue;
+        if (self.cached(lv) or self.isRoot(lv) or self.literal(lv)) continue;
         const def = self.mir.valueDef(lv);
         if (def != .inst_result) continue;
         self.addUses(def.inst_result, false);

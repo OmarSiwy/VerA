@@ -10,21 +10,22 @@ const Int = @import("kernels").Integer;
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
-const Inertial = @import("net.zig").Inertial;
-const no_cold = @import("net.zig").no_cold;
-const Bridge = @import("net.zig").Bridge;
-const Gate = @import("net.zig").Gate;
-const gateBit = @import("net.zig").gateBit;
-const Signal = @import("net.zig").Signal;
-const netPull = @import("net.zig").netPull;
-const wiredLogic = @import("net.zig").wiredLogic;
-const filled = @import("net.zig").filled;
-const setBit = @import("net.zig").setBit;
-const wordMask = @import("net.zig").wordMask;
-const Tran = @import("net.zig").Tran;
-const reach = @import("net.zig").reach;
-const switchPaths = @import("net.zig").switchPaths;
-const crossed = @import("net.zig").crossed;
+const net_mod = @import("net.zig");
+const Inertial = net_mod.Inertial;
+const no_cold = net_mod.no_cold;
+const Bridge = net_mod.Bridge;
+const Gate = net_mod.Gate;
+const gateBit = net_mod.gateBit;
+const Signal = net_mod.Signal;
+const netPull = net_mod.netPull;
+const wiredLogic = net_mod.wiredLogic;
+const filled = net_mod.filled;
+const setBit = net_mod.setBit;
+const Tran = net_mod.Tran;
+const reach = net_mod.reach;
+const switchPaths = net_mod.switchPaths;
+const crossed = net_mod.crossed;
+const foldUniform = net_mod.foldUniform;
 const evaluate = @import("evaluate.zig");
 const exec = @import("exec.zig");
 const waiters = @import("waiters.zig");
@@ -51,19 +52,9 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         return waiters.store(self, n.slot, n.resolved.planes);
     }
     const current = self.values[n.slot];
-    // ponytail: one bit at a time; a plane-parallel fold over the 4x4 tables
-    // when a wide bus resolves often enough to matter.
     const tables = wiredLogic(n.kind);
     var floating: u32 = 0;
-    if (plainCopy(self, net)) {
-        // The fold below would reproduce the one driver bit for bit:
-        // `Signal.of` at strong/strong, then `collapse`, is the identity.
-        const src = self.drivers[drivers[0]].current;
-        @memcpy(n.resolved.planes, src.planes);
-        const last = n.resolved.values().len - 1;
-        n.resolved.values()[last] &= wordMask(n.resolved.width, last);
-        n.resolved.unknowns()[last] &= wordMask(n.resolved.width, last);
-    } else for (0..n.resolved.width) |i| {
+    if (uniform(self, net)) foldUniform(n.resolved, self.drivers, drivers) else for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
         var acc: Signal = .{};
         for (drivers) |d| {
@@ -95,18 +86,25 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     try waiters.store(self, n.slot, n.resolved.planes);
 }
 
-/// Whether `n` shows its one driver unchanged: a strong, unambiguous driver
-/// on a net type with no wired logic and no pull of its own (§7.9, §7.10),
-/// whose per-bit `signal` no MOS switch reads.
-fn plainCopy(self: *const Run, net: u32) bool {
+/// Whether `net` resolves plane-wise (`net.foldUniform`): a net type with no
+/// wired logic and no pull of its own (§7.9), whose per-bit `signal` nothing
+/// reads (`Net.strength_read`), driven at one strength on both sides by
+/// every driver, none of them H/L (§7.10.2).
+fn uniform(self: *const Run, net: u32) bool {
     const n = self.nets[net];
-    const plain = switch (n.kind) {
-        .wire, .tri, .uwire => true,
-        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
-    };
-    if (!plain or self.netDrivers(net).len != 1 or n.strength_read) return false;
-    const d = self.drivers[self.netDrivers(net)[0]];
-    return !d.or_z and d.s0 == .strong and d.s1 == .strong;
+    switch (n.kind) {
+        .wire, .tri, .uwire => {},
+        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => return false,
+    }
+    const ids = self.netDrivers(net);
+    if (n.strength_read or ids.len == 0) return false;
+    const s = self.drivers[ids[0]].s0;
+    if (s == .highz) return false;
+    for (ids) |d| {
+        const dr = self.drivers[d];
+        if (dr.or_z or dr.s0 != s or dr.s1 != s or dr.current.planes.len != n.resolved.planes.len) return false;
+    }
+    return true;
 }
 
 /// IEEE 1364-2005 §7.6/§8.5.3.5 "switch processing shall consider all the
@@ -177,17 +175,16 @@ const Switches = struct {
 /// else), when its gate conducts; z when it does not; §7.10.2's H or L when
 /// the gate is x or z. A z on the data is z whatever the gate ("a switch
 /// transmits the z through"), where a switch differs from a bufif.
-pub fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net.zig").Mos, or_z: *bool) Error!Int.Literal {
+pub fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: net_mod.Mos, or_z: *bool) Error!Int.Literal {
     const ex = &self.file.exprs;
     const g = (try evaluate.eval(self, scratch, m.gate, 1)).bit(0);
     var sig: Signal = .of((try evaluate.eval(self, scratch, m.data, 1)).bit(0), .strong, .strong);
     if (ex.tag(m.data) == .ident) if (self.net_of.get(try self.slot(m.data))) |net| {
         sig = self.signals[self.nets[net].signal];
     };
-    const reduce = @import("net.zig").reduce;
     const d = &self.drivers[at];
-    d.s0 = reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
-    d.s1 = reduce(if (sig.hi > 0) @fromBackingInt(@intCast(@as(u8, @intCast(sig.hi)))) else .highz, m.resistive);
+    d.s0 = net_mod.reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
+    d.s1 = net_mod.reduce(if (sig.hi > 0) @fromBackingInt(@intCast(@as(u8, @intCast(sig.hi)))) else .highz, m.resistive);
     const value = sig.collapse();
     const on: Int.Bit = if (m.n_type) .one else .zero;
     const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
@@ -197,7 +194,7 @@ pub fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net
 
 /// What one driver asserts on bit `at`: its value at its strengths, or §7.10.2's
 /// H/L when a gate's control is unknown.
-pub fn contribution(dr: @import("net.zig").Driver, at: u32) Signal {
+pub fn contribution(dr: net_mod.Driver, at: u32) Signal {
     const b = dr.current.bit(at);
     return if (dr.or_z and b != .z) .orZ(b, dr.s0, dr.s1) else .of(b, dr.s0, dr.s1);
 }
@@ -229,7 +226,7 @@ pub fn schedule(self: *Run, from: Int.Literal, from_or_z: bool, to: Int.Literal,
 /// delay, off after the second, and to unknown conduction after the smaller.
 /// A control that returns before its change lands cancels it (§7.14's
 /// inertial reading, as a gate's).
-pub fn switchAfter(self: *Run, at: u32, next: @import("net.zig").Tran.State) Error!void {
+pub fn switchAfter(self: *Run, at: u32, next: Tran.State) Error!void {
     const t = &self.trans[at];
     const settled = if (t.pending != null) t.target else t.state;
     if (settled == next) return;
@@ -287,8 +284,7 @@ pub fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or
 /// z as x (§8.1.6). A combinational table is simply consulted; a sequential
 /// one takes each input that changed since the last evaluation as one event,
 /// in terminal order, and its state follows the entries matched (§8.6).
-pub fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp, width: u32) Error!Int.Literal {
-    const net_mod = @import("net.zig");
+pub fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *net_mod.Udp, width: u32) Error!Int.Literal {
     const bits = try scratch.alloc(Int.Bit, u.ins.len);
     for (u.ins, bits) |in, *b| {
         const w = try evaluate.eval(self, scratch, in, 1);
@@ -312,8 +308,7 @@ pub fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").U
 /// What a `Bridge` driver contributes: its window, z everywhere else.
 pub fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!Int.Literal {
     const out = try filled(scratch, width, false, .z);
-    const from = self.values[b.src];
-    for (0..b.width) |i| setBit(out, b.dst_lo + @as(u32, @intCast(i)), from.bit(b.src_lo + @as(u32, @intCast(i))));
+    evaluate.copyBits(out, b.dst_lo, self.values[b.src], b.src_lo, b.width);
     return out;
 }
 
@@ -482,4 +477,48 @@ test "§7.6 a controlled pass switch with a delay turns on and off after it" {
         \\end
         \\endmodule
     , "z11z\n");
+}
+
+const bus_source =
+    \\`timescale 1ns/1ns
+    \\module leaf(input [3:0] i, output [3:0] o); assign o = i; endmodule
+    \\module m;
+    \\reg [1:0] sel; reg [69:0] d0, d1;
+    \\wire [69:0] bus; wire [3:0] w; wire p;
+    \\assign bus = sel[0] ? d0 : 70'bz;
+    \\assign bus = sel[1] ? d1 : 70'bz;
+    \\assign (weak0, weak1) p = d0[0];
+    \\assign p = sel[1] ? d1[0] : 1'bz;
+    \\leaf u({d0[1:0], d1[1:0]}, w);
+    \\initial begin
+    \\  d0 = {1'b1, 65'b0, 4'b0101}; d1 = {1'b0, 65'b0, 4'b0011}; sel = 1;
+    \\  #1 $display("%b %b %b %b", bus[69], bus[3:0], p, w);
+    \\  sel = 3;
+    \\  #1 $display("%b %b %b", bus[69], bus[3:0], p);
+    \\  force bus[1] = 1'b0; sel = 2;
+    \\  #1 $display("%b %b", bus[69], bus[3:0]);
+    \\  release bus[1];
+    \\  #1 $display("%b %b", bus[69], bus[3:0]);
+    \\  sel = 0;
+    \\  #1 $display("%b %b %b", bus[69], bus[3:0], p);
+    \\end
+    \\endmodule
+;
+const bus_expected = "1 0101 1 0111\nx 0xx1 1\n0 0001\n0 0011\nz zzzz 1\n";
+
+test "§7.9 a bus of tri-state drivers resolves across a word boundary, under a forced select and beside a weaker driver" {
+    try expectRun(bus_source, bus_expected);
+}
+
+fn runBus(gpa: std.mem.Allocator) !void {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var bag = @import("diag").Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    try @import("root.zig").run(arena.allocator(), bus_source, .{}, &bag, &output.writer);
+    try std.testing.expectEqualStrings(bus_expected, output.written());
+}
+
+test "allocation failure anywhere in net resolution, a port window or a forced select cleans up" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, runBus, .{});
 }

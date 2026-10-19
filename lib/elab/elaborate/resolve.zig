@@ -16,7 +16,6 @@ const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
-const declares = @import("instance.zig").declares;
 const PathKey = elab_names.PathKey;
 
 // ---- Annex F.2 discipline resolution ----------------------------------
@@ -244,10 +243,7 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
         if (!self.port_resolved.contains(bound)) return;
         if (discipline.isContinuous(self.ctx.file, declared)) return;
         if (!discipline.isContinuous(self.ctx.file, disc)) return;
-        self.disc_of.putAssumeCapacity(bound, disc);
-        for (self.nets.items) |*n| {
-            if (n.name == bound) n.discipline = disc;
-        }
+        try redecide(self, bound, disc);
         return;
     }
     try self.port_resolved.put(self.ctx.arena, bound, {});
@@ -258,6 +254,16 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
         // is fixed where it was named.
         .main_tok = p.main_tok,
     });
+}
+
+/// Overrules port-resolved net `net`'s discipline with `disc`: `disc_of` now,
+/// the net's declaration rows once, at the end of `resolveMultiCandidates`
+/// (a scan of every row per redecision was quadratic in the net count).
+/// Asserts that `net` already has a discipline.
+fn redecide(self: *Flatten, net: Ast.StrId, disc: Ast.StrId) Error!void {
+    std.debug.assert(self.port_resolved.contains(net));
+    self.disc_of.getPtr(net).?.* = disc;
+    try self.redecided.put(self.ctx.arena, net, {});
 }
 
 /// §7.2.4 keeps a segment's tolerance separate from the single discipline
@@ -300,13 +306,14 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
         if (self.disc_of.get(net) == r) continue;
         // Bullet 3: "the net is of the resolved discipline given by the
         // statement", which "need not be one of the disciplines specified
-        // in the discipline list" (§7.7.2.1). Same two writes as §7.4.4.1's
-        // upgrade in `resolveDiscipline`.
-        self.disc_of.putAssumeCapacity(net, r);
-        for (self.nets.items) |*n| {
-            if (n.name == net) n.discipline = r;
-        }
+        // in the discipline list" (§7.7.2.1). As §7.4.4.1's upgrade in
+        // `resolveDiscipline` is.
+        try redecide(self, net, r);
     }
+    // Every row of a redecided net takes its final answer, in one pass.
+    if (self.redecided.count() != 0) for (self.nets.items) |*n| {
+        if (self.redecided.contains(n.name)) n.discipline = self.disc_of.get(n.name).?;
+    };
     for (self.pending_attributes.items) |a| {
         var local: ?Ast.StrId = null;
         if (self.segs.getPtr(a.net)) |s| {
@@ -773,4 +780,43 @@ test "§7.8 a connect statement's override naming no discipline is E0923" {
     defer good.deinit();
     try fixture.parse(&good, try good.arena.allocator().print(src, .{"ca"}));
     _ = try elaborate.elaborate(good.ctx());
+}
+
+test "§7.4.4.1 continuous wins over discrete on a port-resolved net, on every row of it" {
+    // `w` is declared with no discipline, so its ports decide it: the
+    // discrete `d.x` arrives first and adds a row, the continuous `a.x`
+    // overrules it, and both rows (the declaration and the port-resolved
+    // one) end continuous once the post-pass has run, either arrival order.
+    for ([_]bool{ false, true }) |continuous_first| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f,
+            \\discipline ca; domain continuous; enddiscipline
+            \\discipline dd; domain discrete; enddiscipline
+            \\module top; endmodule
+        );
+        var fl = try fixture.flatten(&f);
+        const a = f.arena.allocator();
+        const w = try f.file.intern(a, "w");
+        const ca = fixture.id(&f.file, "ca").?;
+        const dd = fixture.id(&f.file, "dd").?;
+        try addNet(&fl, .{ .name = w });
+        const x = try f.file.intern(a, "x");
+        const ports = [2]struct { []const u8, Ast.Port }{
+            .{ "d.", .{ .name = x, .discipline = dd } },
+            .{ "a.", .{ .name = x, .discipline = ca } },
+        };
+        for (0..2) |k| {
+            const pp = ports[if (continuous_first) 1 - k else k];
+            try resolveDiscipline(&fl, pp[0], pp[1], w, 0);
+        }
+        try resolveMultiCandidates(&fl);
+        try std.testing.expectEqual(ca, fl.disc_of.get(w).?);
+        try std.testing.expectEqual(@as(usize, 2), fl.nets.items.len);
+        for (fl.nets.items) |n| {
+            if (continuous_first and n.discipline == .none) continue; // nothing overruled the declaration
+            try std.testing.expectEqual(ca, n.discipline);
+        }
+        try std.testing.expect(!fl.had_error);
+    }
 }

@@ -874,6 +874,64 @@ test "a `//! time` grid strictly increases" {
     try testing.expectEqual(@as(usize, 3), (try tb_directive.parse(arena, "//! time 0, 1n, 1.5n\n")).times.len);
 }
 
+test "a time, a temperature and a .tran step are finite" {
+    // `std.fmt.parseFloat` reads `NaN` and `infinity` (`nan` and `inf` end in
+    // a §2.6 scale letter and fail as numbers). None is a §9.10 `$abstime`
+    // or `$temperature`, and a NaN time also slips past the order check.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{
+        "//! time NaN\n",
+        "//! time infinity\n",
+        "//! time 0, infinity\n",
+        "//! tran 1n, infinity\n",
+        "//! tran infinity, 1n\n",
+    }) |line| try testing.expectError(error.BadSyntax, tb_directive.parse(arena, line));
+    for ([_][]const u8{ "//! temp NaN\n", "//! temp infinity\n", "//! temp -infinity\n" }) |line|
+        try testing.expectError(error.BadNumber, tb_directive.parse(arena, line));
+}
+
+test "the operand forms of meta, acstim and acdyn refuse what they cannot read" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{
+        "//! meta net d desc=\"a\" desc=\"b\"\n", // a field twice
+        "//! meta net d desc=\"open\n", // no closing quote
+        "//! meta net d desc=bare\n", // a value is quoted
+        "//! meta net\n", // no name
+        "//! meta port d\n", // not a decl kind
+        "//! acstim (p,n\n", // no `)`
+        "//! acstim (p) mag=1\n", // one terminal
+        "//! acstim p,n\n", // no `(`
+        "//! acstim (p,n) gain=1\n", // an unknown key
+        "//! acdyn (a,b) f=1 re=0\n", // `im` is required
+        "//! noise thermal(a,b)\n", // no `#source`
+        "//! noise thermal(a,b)#x\n", // a source is digits or null
+        "//! noise hum(a,b)#0\n", // not a generator kind
+        "//! noise thermal(a,b)#0 points=\n", // an empty knot list
+    }) |line| try testing.expectError(error.BadSyntax, tb_directive.parse(arena, line));
+}
+
+/// `parse` then `renderRunner`, in an arena over `gpa`.
+fn parseRender(gpa: std.mem.Allocator, src: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena, src);
+    _ = try tb_runner.renderRunner(arena, "oom", d);
+    _ = try tb_runner.renderVpiLib(arena, "oom", d);
+}
+
+test "parse and render report OutOfMemory at every allocation" {
+    try testing.checkAllAllocationFailures(testing.allocator, parseRender, .{
+        "//! param g = 2m\n//! sweep V(a) = 0, 1\n//! psweep r = 1, 2\n//! time 0, 1n\n//! wave V(b) = 0, 1\n" ++
+            "//! noise thermal(a,b)#0 white=1 corr=0:1 points=1:2\n//! acstim (a,b) mag=1\n//! acdyn (a,b) f=1 re=0 im=0\n" ++
+            "//! qsite a+ lte\n//! seed V(a) = 1\n//! meta net a desc=\"x\"\n//! abstol V(a) = 1e-6\n//! limit V(a) = 0 -> V(a) = 1\n",
+    });
+}
+
 test "an exit status is plain decimal digits, as a check count is" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

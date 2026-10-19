@@ -16,6 +16,7 @@ const Gen = cg.Gen;
 const Error = cg.Error;
 // The pure half: which sites are honoured, and the questions both halves ask.
 const plan_limit = @import("codegen/plan/limit.zig");
+const gen_mask = @import("codegen/mask.zig");
 /// A `$limit` algorithm name (§9.17.3).
 pub const Alg = plan_limit.Alg;
 /// One honoured `$limit` site.
@@ -35,26 +36,30 @@ const none_u32 = std.math.maxInt(u32);
 /// Both masks must stay supersets: a missing `reads` bit hands a clamp an
 /// undefined probe, a missing `writes` bit silently drops a limit. `unionSite`
 /// mirrors `emitClamp`/`emitLadder` site for site.
-const Live = struct { reads: u64 = 0, writes: u64 = 0 };
+/// `Gen.mw` words each (`codegen/mask.zig`).
+const Live = struct { reads: []u64, writes: []u64 };
 
-fn ubit(u: u32) u64 {
-    if (u == none_u32) return 0;
-    // Past bit 63 the mask has no bit for `u`; every bit keeps it a superset.
-    return if (u >= 64) std.math.maxInt(u64) else @as(u64, 1) << @intCast(u);
+/// Sets unknown `u` in `m`; `none_u32` (no node) sets nothing.
+fn put(m: []u64, u: u32) void {
+    if (u != none_u32) gen_mask.set(m, u);
 }
 
-fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
-    lv.reads |= ubit(lc.hi) | ubit(lc.lo);
-    lv.writes |= ubit(if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
+fn unionSite(lv: Live, g: *const Gen, lc: LimitCall) void {
+    put(lv.reads, lc.hi);
+    put(lv.reads, lc.lo);
+    put(lv.writes, if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
 }
 
-/// Returns the `limit_reads`/`limit_writes` masks; every bit is set when a
-/// clamp reads the core or `n_u > 64`.
-pub fn liveSets(g: *const Gen) Live {
-    var lv: Live = .{};
-    // A core re-entry is seeded from EVERY entry of `old` (`emit`'s `xr` loop),
-    // and n_u > 64 has no room in the mask; both answer "all of them".
-    if (usesCore(g) or g.names.n_u > 64) lv.reads = ~@as(u64, 0);
+/// Returns the `limit_reads`/`limit_writes` masks, from the arena; every
+/// unknown is read when a clamp reads the core.
+pub fn liveSets(g: *const Gen) Error!Live {
+    const lv: Live = .{ .reads = try gen_mask.zero(g.arena, g.mw), .writes = try gen_mask.zero(g.arena, g.mw) };
+    // A core re-entry is seeded from EVERY entry of `old` (`emit`'s `xr` loop).
+    // One word is all ones, as the `u64` mask always was; a wider one names
+    // the unknowns, since a literal past `u<n_u>` does not fit.
+    if (usesCore(g)) {
+        if (g.mw == 1) lv.reads[0] = std.math.maxInt(u64) else for (0..g.names.n_u) |u| gen_mask.set(lv.reads, @intCast(u));
+    }
     for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
         .fetlimds => {
             const lad = g.limits.ladderOf(i).?;
@@ -64,30 +69,31 @@ pub fn liveSets(g: *const Gen) Live {
             // correction and which the limvds one swaps with the mode).
             const gs = g.limits.calls[lad.gs];
             const gd = g.limits.calls[lad.gd];
-            lv.reads |= ubit(gs.hi) | ubit(gs.lo) | ubit(gd.lo);
-            lv.writes |= ubit(gs.lo) | ubit(gd.lo);
+            for ([_]u32{ gs.hi, gs.lo, gd.lo }) |u| put(lv.reads, u);
+            put(lv.writes, gs.lo);
+            put(lv.writes, gd.lo);
         },
         // The rung reads the bulk and both channel nodes, and writes the bulk.
         .pnjlimds => {
             const r = g.limits.rungOf(i).?;
             if (i != @min(r.bs, r.bd)) continue;
             const bs = g.limits.calls[r.bs];
-            lv.reads |= ubit(bs.hi) | ubit(bs.lo) | ubit(g.limits.calls[r.bd].lo);
-            lv.writes |= ubit(bs.hi);
+            for ([_]u32{ bs.hi, bs.lo, g.limits.calls[r.bd].lo }) |u| put(lv.reads, u);
+            put(lv.writes, bs.hi);
         },
-        .limvds => if (!g.limits.limvdsClaimed(i)) unionSite(&lv, g, lc),
-        .pnjlim, .fetlim, .steplim => unionSite(&lv, g, lc),
+        .limvds => if (!g.limits.limvdsClaimed(i)) unionSite(lv, g, lc),
+        .pnjlim, .fetlim, .steplim => unionSite(lv, g, lc),
     };
     // `seed` corrects the same node `emitClamp` does, but it is ORed in
     // anyway: the host initialises `lim_x` through `seed` and reads it back
     // through `limit`, so a bit in one and not the other is a stale slot.
     // The seed tree writes every node it places, its roots included.
-    for (g.limits.seed_steps) |st| lv.writes |= ubit(st.node);
+    for (g.limits.seed_steps) |st| put(lv.writes, st.node);
     if (!g.limits.seed_tree) for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
-        lv.writes |= ubit(if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
+        put(lv.writes, if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
     };
-    lv.reads |= lv.writes;
+    gen_mask.orIn(lv.reads, lv.writes);
     return lv;
 }
 
@@ -293,7 +299,7 @@ pub fn emit(g: *Gen) Error!void {
     } else if (!any_pnjlim) try g.w("true", .{});
     try g.w(" }};\n}}\n\n", .{});
 
-    const lv = liveSets(g);
+    const lv = try liveSets(g);
     try g.w(
         \\/// Which unknowns `limit` and `seed` touch — `limit_reads` every
         \\/// `cur`/`old` entry the body loads, `limit_writes` every `x` entry it
@@ -303,7 +309,9 @@ pub fn emit(g: *Gen) Error!void {
         \\/// `CKTstate0`, not every node the device touches.
         \\
     , .{});
-    try g.w("pub const limit_reads: u64 = 0x{x};\npub const limit_writes: u64 = 0x{x};\n\n", .{ lv.reads, lv.writes });
+    var tb: [16]u8 = undefined;
+    const ty = gen_mask.typeName(&tb, g.names.n_u);
+    try g.w("pub const limit_reads: {s} = 0x{f};\npub const limit_writes: {s} = 0x{f};\n\n", .{ ty, gen_mask.hex(lv.reads, false), ty, gen_mask.hex(lv.writes, false) });
 
     try emitSeed(g);
 }
@@ -680,12 +688,12 @@ fn seedValue(lc: LimitCall) Mir.Value {
     return if (lc.seed != .undef) lc.seed else lc.argv[1];
 }
 
-test ubit {
-    // No node, no bit.
-    try std.testing.expectEqual(@as(u64, 0), ubit(none_u32));
-    try std.testing.expectEqual(@as(u64, 1), ubit(0));
-    try std.testing.expectEqual(@as(u64, 1) << 63, ubit(63));
-    // Past the mask, every bit: `Live`'s masks must stay supersets.
-    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), ubit(64));
-    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), ubit(255));
+test put {
+    // No node, no bit; past 64 the second word.
+    var m: [2]u64 = @splat(0);
+    put(&m, none_u32);
+    try std.testing.expectEqualSlices(u64, &.{ 0, 0 }, &m);
+    put(&m, 0);
+    put(&m, 64);
+    try std.testing.expectEqualSlices(u64, &.{ 1, 1 }, &m);
 }

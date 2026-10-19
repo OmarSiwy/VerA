@@ -11,6 +11,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
+const gen_mask = @import("mask.zig");
 const gen_file = @import("file.zig");
 const gen_instance = @import("instance.zig");
 const gen_setup = @import("setup.zig");
@@ -157,7 +158,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
             self.uses.x = true;
             // Every probe read needs its lane; `deriv_reads` is this sound
             // superset.
-            self.jac.deriv_reads |= gen_dispatch.uBit(u);
+            gen_mask.set(self.jac.deriv_reads, u);
             try self.b("x[@intFromEnum(U.{s})]", .{self.names.u_names[u]});
         },
         .inst_result => |inst| try renderInst(self, inst),
@@ -200,6 +201,10 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // `f64Const` succeeds only on literals, parameters and arithmetic.
     const res = self.mir.instResult(inst);
     if (res != .undef and self.an.vty[@backingInt(res)] == .real and self.an.dFree(res)) {
+        // A value the analysis folds from literals alone (never through a
+        // parameter) is its literal: `pow(0.5178…, -2)` is no `zPowK` call.
+        // The planner made it a slot-free leaf (`UnitPlan.literal`).
+        if (self.plan.literal(res)) return self.b("S.con({s})", .{try gen_file.fmtF64(self, self.an.foldConst(res, false).?.f)});
         if (try gen_host.f64Const(self, res, 0, true)) |s| return self.b("S.con({s})", .{s});
     }
 
@@ -384,7 +389,7 @@ fn renderSubst(self: *Gen, s: Subst, want: VTy) Error!void {
 
 /// Writes a lazy real `if`'s `then else otherwise)` after its condition. Both
 /// arms widen to the result's mask `m`, the one type the `if` can have.
-fn renderArms(self: *Gen, then: Mir.Value, otherwise: Mir.Value, m: u64) Error!void {
+fn renderArms(self: *Gen, then: Mir.Value, otherwise: Mir.Value, m: []const u64) Error!void {
     for ([_]Mir.Value{ then, otherwise }, 0..) |v, k| {
         if (k != 0) try self.b(" else ", .{});
         try family.openTo(self, m);
@@ -426,7 +431,7 @@ pub fn inPlace(self: *const Gen, id: u32) bool {
 pub fn arrElemTy(self: *Gen, id: u32) Error![]const u8 {
     if (self.lowered.mem_arrays.items[id].ty == .integer) return "i64";
     if (!self.arr_s[id]) return "f64";
-    return family.ofText(self, self.arr_mask[id]);
+    return family.ofText(self, self.arrMask(id));
 }
 
 /// Write a pointer to the storage array version `v` is read from; true when
@@ -464,13 +469,19 @@ fn renderLoad(self: *Gen, inst: Mir.Inst) Error!void {
         try renderVal(self, d.index, .int);
         return self.b(", 0.0))", .{});
     }
-    // The element type is the storage's `zOf`, and so is its zero.
+    // The element type is the storage's `zOf`, and so is its zero. A version
+    // whose elements depend on no unknown is read lane-free: the storage's
+    // mask is the union over every version, and its lanes are zero here, so
+    // `zStrip` drops them exactly instead of narrowing a lane `zTo` refuses.
     const id = self.an.arrOf(self.an.rv(d.arr)).?;
+    const free = gen_mask.isZero(family.mask(self, self.mir.instResult(inst))) and !gen_mask.isZero(self.arrMask(id));
     const tail = try self.arena.dupe(u8, self.out.items[at + "zArrLd(S, ".len ..]);
     self.out.shrinkRetainingCapacity(at);
+    if (free) try self.b("zStrip(S, ", .{});
     try self.b("zArrLd({s}, {s}, ", .{ try arrElemTy(self, id), tail });
     try renderVal(self, d.index, .int);
-    return self.b(", zTo(S, 0x{x}, S.con(0.0)))", .{self.arr_mask[id]});
+    try self.b(", zTo(S, 0x{f}, S.con(0.0)))", .{gen_mask.hex(self.arrMask(id), false)});
+    if (free) try self.b(")", .{});
 }
 
 /// Writes the statement an `anew` or `store` is, at its place in the block.
@@ -488,7 +499,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 float_lanes.instPin(self);
                 if (cow(self, d.array)) return self.b("p{d} = &inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
                 if (plain) return self.b("a{d} = inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
-                return self.b("for (&a{d}, inst.tp{d}_s{d}) |*zd, zs| zd.* = zTo(S, 0x{x}, S.con(zs));\n", .{ d.array, tp.block, tp.slot, self.arr_mask[d.array] });
+                return self.b("for (&a{d}, inst.tp{d}_s{d}) |*zd, zs| zd.* = zTo(S, 0x{f}, S.con(zs));\n", .{ d.array, tp.block, tp.slot, gen_mask.hex(self.arrMask(d.array), false) });
             }
             if (m.uninit) {
                 // `(* vera_scratch = "uninit" *)` (§2.9): `a<id>` stays the
@@ -505,16 +516,14 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 } else if (plain) {
                     try self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.nan(f64))", .{d.array});
                 } else {
-                    try self.b("if (std.debug.runtime_safety) @memset(&a{d}, zTo(S, 0x{x}, S.con(std.math.nan(f64))).scale(std.math.nan(f64)))", .{ d.array, self.arr_mask[d.array] });
+                    try self.b("if (std.debug.runtime_safety) @memset(&a{d}, zTo(S, 0x{f}, S.con(std.math.nan(f64))).scale(std.math.nan(f64)))", .{ d.array, gen_mask.hex(self.arrMask(d.array), false) });
                 }
                 return self.b(" else asm volatile (\"\" : : [p] \"r\" (&a{d}) : .{{ .memory = true }});\n", .{d.array});
             }
-            // §3.2 every evaluation starts it at zero (`zFill`: no
-            // byte-wise compiler_rt `memset` call).
+            // §3.2 every evaluation starts it at zero.
             if (m.held == none_u32) {
-                const ty = try arrElemTy(self, d.array);
-                if (!plain) return self.b("zFill({s}, {d}, &a{d}, zTo(S, 0x{x}, S.con(0.0)));\n", .{ ty, m.len, d.array, self.arr_mask[d.array] });
-                return self.b("zFill({s}, {d}, &a{d}, {s});\n", .{ ty, m.len, d.array, if (m.ty == .integer) "0" else "0.0" });
+                if (!plain) return self.b("@memset(&a{d}, zTo(S, 0x{f}, S.con(0.0)));\n", .{ d.array, gen_mask.hex(self.arrMask(d.array), false) });
+                return self.b("@memset(&a{d}, {s});\n", .{ d.array, if (m.ty == .integer) "0" else "0.0" });
             }
             // §5.10 a held array starts from what the last accepted
             // evaluation left in its `Instance` field.
@@ -522,7 +531,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             float_lanes.instPin(self); // a held array is one instance's
             const f = self.names.held_names[m.held];
             if (plain) return self.b("p{d} = &inst.{s};\n", .{ d.array, f });
-            return self.b("for (&a{d}, inst.{s}) |*zd, zs| zd.* = zTo(S, 0x{x}, S.con(zs));\n", .{ d.array, f, self.arr_mask[d.array] });
+            return self.b("for (&a{d}, inst.{s}) |*zd, zs| zd.* = zTo(S, 0x{f}, S.con(zs));\n", .{ d.array, f, gen_mask.hex(self.arrMask(d.array), false) });
         },
         .store => |d| {
             const id = self.an.arrOf(d.arr).?;
@@ -570,7 +579,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 try renderVal(self, d.value, .real);
                 try self.b(").val()", .{});
             } else {
-                try family.openTo(self, self.arr_mask[id]);
+                try family.openTo(self, self.arrMask(id));
                 try renderVal(self, d.value, .real);
                 try self.b(")", .{});
             }
@@ -747,10 +756,10 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 float_lanes.leadLanes(self, b2);
                 // The last argument drops the ∂/∂y term (and its `ln`) when
                 // the exponent cannot move with the solve.
-                const m = family.mask(self, a) | family.mask(self, b2);
-                try self.b("zPowL(S, 0x{x}, zTo(S, 0x{x}, ", .{ m, m });
+                const m = gen_mask.hex(try gen_mask.join(self.arena, family.mask(self, a), family.mask(self, b2)), false);
+                try self.b("zPowL(S, 0x{f}, zTo(S, 0x{f}, ", .{ m, m });
                 try renderVal(self, a, .real);
-                try self.b("), zTo(S, 0x{x}, ", .{m});
+                try self.b("), zTo(S, 0x{f}, ", .{m});
                 try renderVal(self, b2, .real);
                 try self.b("), {})", .{!self.an.dFree(b2)});
             }
@@ -962,7 +971,7 @@ fn helper1(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
 
 /// Writes a two-operand kernel call at the union of the operands' masks.
 pub fn helper2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!void {
-    const m = family.mask(self, a) | family.mask(self, b2);
+    const m = try gen_mask.join(self.arena, family.mask(self, a), family.mask(self, b2));
     try kernelOpen(self, name, m);
     try kernelArg(self, a, m);
     try self.b(", ", .{});
@@ -972,13 +981,14 @@ pub fn helper2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!
 
 /// Writes `zLu(S, m, name(zL(S, m), `: kernels take one scalar, which a
 /// family is at one mask. `m` is the result's. Close with `kernelClose`.
-fn kernelOpen(self: *Gen, name: []const u8, m: u64) Error!void {
-    try self.b("zLu(S, 0x{x}, {s}(zL(S, 0x{x}), ", .{ m, name, m });
+fn kernelOpen(self: *Gen, name: []const u8, m: []const u64) Error!void {
+    const h = gen_mask.hex(m, false);
+    try self.b("zLu(S, 0x{f}, {s}(zL(S, 0x{f}), ", .{ h, name, h });
 }
 
 /// Writes one real kernel operand, widened to the kernel's mask.
-fn kernelArg(self: *Gen, v: Mir.Value, m: u64) Error!void {
-    try self.b("zLw(S, 0x{x}, ", .{m});
+fn kernelArg(self: *Gen, v: Mir.Value, m: []const u64) Error!void {
+    try self.b("zLw(S, 0x{f}, ", .{gen_mask.hex(m, false)});
     try renderVal(self, v, .real);
     try self.b(")", .{});
 }
@@ -1117,10 +1127,10 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     if (nd == 0 or ncol == 0 or args.len != head + np * ncol)
         return gen_call.abort(self, .E1020, "malformed `$table_model` call reached codegen", .{});
     // The lookup runs at the union of its points' masks.
-    var m: u64 = 0;
-    for (args[7..head]) |v| m |= family.mask(self, v);
+    const m = try gen_mask.zero(self.arena, self.mw);
+    for (args[7..head]) |v| gen_mask.orIn(m, family.mask(self, v));
     const val = "zV"; // a family has no `S.val`
-    const pt = try self.arena.print("zL(S, 0x{x})", .{m});
+    const pt = try self.arena.print("zL(S, 0x{f})", .{gen_mask.hex(m, false)});
     if (site != 0) {
         self.uses.inst = true;
         self.float.pinned = true;
@@ -1128,7 +1138,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
         try renderVal(self, args[6], .real);
         try self.b("); if (!inst.table_ready[{d}]) {{ inst.table_{d} = [_]f64{{", .{ site - 1, site - 1 });
     } else {
-        try self.b("zLu(S, 0x{x}, zTable({s}, {d}, {d}, {d}, {d}, \"{s}\", [_]f64{{", .{ m, pt, np, ncol, nd, dep, ext });
+        try self.b("zLu(S, 0x{f}, zTable({s}, {d}, {d}, {d}, {d}, \"{s}\", [_]f64{{", .{ gen_mask.hex(m, false), pt, np, ncol, nd, dep, ext });
     }
     for (args[head..], 0..) |v, k| {
         if (k != 0) try self.b(", ", .{});
@@ -1138,7 +1148,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     }
     if (site != 0) {
         try self.b("}}; inst.table_ready[{d}] = true; }} break :tbl_{d} ", .{ site - 1, @backingInt(inst) });
-        try self.b("zLu(S, 0x{x}, ", .{m});
+        try self.b("zLu(S, 0x{f}, ", .{gen_mask.hex(m, false)});
         try self.b("zTable({s}, {d}, {d}, {d}, {d}, \"{s}\", inst.table_{d}, [_]{s}{{", .{ pt, np, ncol, nd, dep, ext, site - 1, pt });
     } else try self.b("}}, [_]{s}{{", .{pt});
     for (args[7..head], 0..) |v, k| {
@@ -1164,8 +1174,8 @@ pub fn emitIdx(self: *Gen, args: []const Mir.Value, want: VTy) Error!void {
         break :blk if (def == .int_const) def.int_const else 0;
     };
     // Every real arm widens to the union of the elements'.
-    var m: u64 = 0;
-    for (args[2..]) |v| m |= family.mask(self, v);
+    const m = try gen_mask.zero(self.arena, self.mw);
+    for (args[2..]) |v| gen_mask.orIn(m, family.mask(self, v));
     const widen = want == .real;
     try self.b("switch (", .{});
     try renderVal(self, args[1], .int);
@@ -1181,7 +1191,7 @@ pub fn emitIdx(self: *Gen, args: []const Mir.Value, want: VTy) Error!void {
     // default, which §3.2 makes zero in an analog context. The read must
     // neither alias another element (clamp, wrap) nor abort (§4.3.2
     // reserves "shall report an error" for named cases).
-    if (widen) return self.b(" else => zTo(S, 0x{x}, {s}) }}", .{ m, gen_unit.zeroOf(want) });
+    if (widen) return self.b(" else => zTo(S, 0x{f}, {s}) }}", .{ gen_mask.hex(m, false), gen_unit.zeroOf(want) });
     try self.b(" else => {s} }}", .{gen_unit.zeroOf(want)});
 }
 

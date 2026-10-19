@@ -40,8 +40,7 @@ const constfold = @import("frontend").constfold;
 const diag = @import("diag");
 const assert = std.debug.assert;
 
-/// This file's struct, so `Lower.Lower` also resolves.
-pub const Lower = @This();
+const Lower = @This();
 /// What lowering produces (lowered.zig).
 pub const Lowered = @import("ir").Lowered;
 
@@ -589,7 +588,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         const literal = self.file.exprs.logicValue(e);
         if (!literal.hasUnknown()) continue; // two-state: `lower_expr` or `lower_wide` lowers it
         const span = self.tokenSpan(self.file.exprs.mainTok(e));
-        try self.err(self.file.exprs.mainTok(e), .E0130, "`{s}`: the analog backend cannot execute this {d}-bit {s} literal", .{ self.src[span.start..span.end], literal.width, if (literal.hasUnknown()) "four-state" else "wide" });
+        try self.err(self.file.exprs.mainTok(e), .E0130, "`{s}`: the analog backend cannot execute this {d}-bit four-state literal", .{ self.src[span.start..span.end], literal.width });
     }
     if (self.had_error) return error.DiagnosticsReported;
     const design = try Elaborate.elaborate(.{
@@ -1011,11 +1010,6 @@ pub fn effectPlace(self: *Lower) Oom!Ssa.Place {
 
 /// §2.7 a string literal's integer value: `kernels.fold.strToInt`.
 pub const strToInt = @import("kernels").fold.strToInt;
-
-/// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
-/// defined once, in the shared constant kernel, because codegen spells them
-/// as device text and a fold must agree with the device.
-pub const wrap32 = @import("kernels").fold.wrap32;
 
 /// Returns `tv` converted to a number when it is a string with compile-time
 /// bytes (§2.7 at an operand); everything else is returned untouched, and the
@@ -1513,4 +1507,5 @@ test {
     _ = lower_constfold;
     _ = Lowered;
     _ = lower_test;
+    _ = @import("lower/analog_a_test.zig");
 }

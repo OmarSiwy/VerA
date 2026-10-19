@@ -11,7 +11,7 @@ const Lexer = @import("../lexer.zig");
 const pp_macro = @import("macro.zig");
 const Directive = Preprocessor.Directive;
 const directive_map = Preprocessor.directive_map;
-const isIdentChar = Preprocessor.isIdentChar;
+const identEnd = Preprocessor.identEnd;
 const escapedEnd = Preprocessor.escapedEnd;
 const Error = Preprocessor.Error;
 const Qualifier = Preprocessor.Qualifier;
@@ -54,7 +54,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         return pp_macro.expand(pp, text, at, j, text[body..j]);
     }
 
-    while (j < text.len and isIdentChar(text[j])) j += 1;
+    j = identEnd(text, j);
     if (j == name_start) {
         if (!pp.emitting()) return at + 1;
         return pp.fail(pp.spanAt(at, at + 1), .E0103, "", .{});
@@ -415,6 +415,13 @@ fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
         try b.emit();
         return error.PreprocessFailed;
     }
+    // One §2.6 number, signed: `parseFloat` alone also reads C's `0x10`,
+    // `1.` and `_1`, none of which the lexer makes one number token.
+    const num = if (text[0] == '+' or text[0] == '-') text[1..] else text;
+    var lx: Lexer.Lexer = .{ .src = num };
+    const tag = lx.next().tag;
+    if ((tag != .int_literal and tag != .real_literal) or lx.pos != num.len)
+        return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "`{s}` is not a transition time", .{text});
     const t = Lexer.parseReal(pp.scratch, text) catch |e| {
         if (e == error.OutOfMemory) return error.OutOfMemory;
         return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "`{s}` is not a transition time", .{text});

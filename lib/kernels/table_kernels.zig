@@ -1,5 +1,5 @@
 // §9.21 table-model interpolation kernels — EMITTED VERBATIM into every device
-// that calls `$table_model` (`codegen.table_txt` is `@embedFile` of this file)
+// that calls `$table_model` (`kernel_text.table_txt` is `@embedFile` of this file)
 // and `@import`ed by codegen.zig's tests, for the same reason
 // `filter_kernels.zig` is: the numerics the tests check are the numerics the
 // device runs.

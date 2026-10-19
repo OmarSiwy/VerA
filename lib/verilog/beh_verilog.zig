@@ -30,8 +30,8 @@
 //! `vss*`/`gnd*`/`vgnd`/`vnb`/`vee*`/`avss`/`dvss` ground, the rest analog.
 //! `(* vera_delay = <seconds> *)` on a net's declaration replaces its derived
 //! delay (both edges). On a port, both go on the direction declaration
-//! (`inout`): a port's discipline declaration carries no attribute to it. `--power-pins` moves the supply pins under
-//! `` `ifdef USE_POWER_PINS ``.
+//! (`inout`): a port's discipline declaration carries no attribute to it.
+//! `--power-pins` moves the supply pins under `` `ifdef USE_POWER_PINS ``.
 //!
 //! Refused with a message, never emitted half-right: §5.10 events and held
 //! variables, `I()` probes and `ddt`/`idt` outside a contribution (their
@@ -162,8 +162,8 @@ const Emitter = struct {
                 // flow rows over its pair govern.
                 const kept = staticRetention(self.mir, c.wrote_val) orelse true;
                 if (!kept) continue;
-                const hi_rail = c.hi == Lowered.ground or self.isSupply(pins, c.hi);
-                const lo_rail = c.lo == Lowered.ground or self.isSupply(pins, c.lo);
+                const hi_rail = c.hi == Lowered.ground or self.isSupply(c.hi);
+                const lo_rail = c.lo == Lowered.ground or self.isSupply(c.lo);
                 // A rail against a rail is the supply itself.
                 if (hi_rail and lo_rail) continue;
                 if (hi_rail) return self.refuse("`V({s}, {s}) <+`: a potential contribution drives its first node; write it as `V({s}, {s})` with the value negated", .{ lw.nodeName(c.hi), names[c.lo], names[c.lo], lw.nodeName(c.hi) });
@@ -171,7 +171,7 @@ const Emitter = struct {
                 potential[c.hi] = @intCast(ci);
                 driven[c.hi] = true;
             } else for ([_]u32{ c.hi, c.lo }) |r| {
-                if (r != Lowered.ground and !self.isSupply(pins, r)) driven[r] = true;
+                if (r != Lowered.ground and !self.isSupply(r)) driven[r] = true;
             }
         }
 
@@ -179,7 +179,7 @@ const Emitter = struct {
 
         // The variables: undriven signal ports (inputs), then driven nets (states).
         var vars: std.ArrayList(u32) = .empty;
-        for (0..lw.num_ports) |r| if (!driven[r] and !self.isSupply(pins, @intCast(r))) try vars.append(self.arena, @intCast(r));
+        for (0..lw.num_ports) |r| if (!driven[r] and !self.isSupply(@intCast(r))) try vars.append(self.arena, @intCast(r));
         const n_inputs = vars.items.len;
         for (0..n_nodes) |r| if (driven[r]) try vars.append(self.arena, @intCast(r));
         const nv = vars.items.len;
@@ -198,14 +198,16 @@ const Emitter = struct {
         // then S is its target, else the flow residual.
         const P = try self.arena.alloc(bool, n_masks * states.len);
         assert(n_masks <= @as(usize, 1) << max_vars);
+        // Supplies sit at their rails and the variables are set per run;
+        // every other row is NaN, which `Interp.get` refuses to read.
         const volts = try self.arena.alloc(f64, n_nodes);
+        for (volts, 0..) |*v, r| v.* = if (r < lw.num_ports) switch (pins[r]) {
+            .power => self.o.vdd,
+            .ground => 0,
+            .digital, .analog => std.math.nan(f64),
+        } else std.math.nan(f64);
         var in: Interp = .{ .e = self, .volts = volts, .env = try self.arena.alloc(?Val, Mir.Value.first_dynamic + self.mir.defs.len) };
         for (0..n_masks) |m| {
-            for (0..n_nodes) |r| volts[r] = if (r < lw.num_ports) switch (pins[r]) {
-                .power => self.o.vdd,
-                .ground => 0,
-                .digital, .analog => std.math.nan(f64),
-            } else std.math.nan(f64);
             for (vars.items, 0..) |r, k| volts[r] = if (m >> @intCast(k) & 1 == 1) self.o.vdd else 0;
             try in.run();
             for (states, 0..) |r, si| {
@@ -244,37 +246,35 @@ const Emitter = struct {
         for (states, 0..) |r, si| {
             const bit = @as(usize, 1) << @intCast(n_inputs + si);
             const target = try self.arena.alloc(Bit, n_masks);
+            const fixed = delay_attr.get(names[r]);
             var rise: f64 = 0;
             var fall: f64 = 0;
             for (0..n_masks) |m| {
-                const at = struct {
-                    fn f(a: []const f64, mm: usize, n: usize, i: usize) f64 {
-                        return a[mm * n + i];
-                    }
-                }.f;
+                // This node's row in the run with its own bit as `m`, low, high.
+                const at = m * states.len + si;
+                const lo = (m & ~bit) * states.len + si;
+                const hi = (m | bit) * states.len + si;
                 var f: f64 = undefined;
                 var tau: f64 = 0;
-                if (P[m * states.len + si]) {
-                    f = at(S, m, states.len, si);
-                } else if (P[(m & ~bit) * states.len + si] or P[(m | bit) * states.len + si]) {
+                if (P[at]) {
+                    f = S[at];
+                } else if (P[lo] or P[hi]) {
                     // The secant needs one constitutive law at both ends.
                     return self.refuse("node `{s}`: whether its potential contribution is retained (§5.6.1.3) depends on its own value", .{names[r]});
                 } else {
-                    const s0 = at(S, m & ~bit, states.len, si);
-                    const s1 = at(S, m | bit, states.len, si);
-                    const a = (s1 - s0) / self.o.vdd;
+                    const a = (S[hi] - S[lo]) / self.o.vdd;
                     if (!(a != 0) or !std.math.isFinite(a)) return self.refuse("node `{s}`: its current does not depend on its own potential, so it settles nowhere", .{names[r]});
-                    f = -s0 / a;
-                    tau = @abs((at(Q, m | bit, states.len, si) - at(Q, m & ~bit, states.len, si)) / self.o.vdd / a);
+                    f = -S[lo] / a;
+                    tau = @abs((Q[hi] - Q[lo]) / self.o.vdd / a);
                 }
                 if (!std.math.isFinite(f)) return self.refuse("node `{s}`: its settled potential is not finite", .{names[r]});
                 // Settling at VDD/2 (a comparator with equal inputs) is no logic level.
                 target[m] = if (@abs(f - self.o.vdd / 2) <= 1e-9 * self.o.vdd) .x else if (f > self.o.vdd / 2) .@"1" else .@"0";
-                const d = tau * ln2 + at(TD, m, states.len, si);
+                const d = tau * ln2 + TD[at];
                 // A NaN or infinite charge or td (a `--param c=inf`) has no
                 // delay to print; a `vera_delay` replaces it, so is not asked.
                 // Finite in ns, as `node` prints it.
-                if (target[m] != .x and !delay_attr.contains(names[r]) and !std.math.isFinite(d * 1e9))
+                if (target[m] != .x and fixed == null and !std.math.isFinite(d * 1e9))
                     return self.refuse("node `{s}`: its delay is not finite (tau·ln2 + td = {d} s); give it a (* vera_delay *)", .{ names[r], d });
                 switch (target[m]) {
                     .@"1" => rise = @max(rise, d),
@@ -282,7 +282,7 @@ const Emitter = struct {
                     .x => {},
                 }
             }
-            if (delay_attr.get(names[r])) |d| {
+            if (fixed) |d| {
                 rise = d;
                 fall = d;
             }
@@ -371,15 +371,15 @@ const Emitter = struct {
 
         // Internal nets: every driven row that is not a digital port.
         for (states, live) |r, l| if (l and !(r < lw.num_ports and pins[r] == .digital))
-            try w.print(A, "    wire {f}; // {s}\n", .{ self.net(pins, r), names[r] });
+            try w.print(A, "    wire {f}; // {s}\n", .{ self.net(r), names[r] });
         try w.appendSlice(A, body.items);
         try w.appendSlice(A, "endmodule\n");
         return out.items;
     }
 
-    fn isSupply(self: *const Emitter, pins: []const Pin, r: u32) bool {
-        assert(pins.len == self.lw.num_ports);
-        return r < self.lw.num_ports and (pins[r] == .power or pins[r] == .ground);
+    fn isSupply(self: *const Emitter, r: u32) bool {
+        assert(self.pins.len == self.lw.num_ports);
+        return r < self.lw.num_ports and (self.pins[r] == .power or self.pins[r] == .ground);
     }
 
     fn hidden(self: *const Emitter, p: Pin) bool {
@@ -389,11 +389,11 @@ const Emitter = struct {
     /// The Verilog net that carries row `r`'s bit: a digital or an undriven
     /// port itself, else an internal `vera_n_*` (a driven analog port stays
     /// undriven outside).
-    fn net(self: *const Emitter, pins: []const Pin, r: u32) Name {
-        assert(pins.len == self.lw.num_ports);
+    fn net(self: *const Emitter, r: u32) Name {
+        assert(self.pins.len == self.lw.num_ports);
         assert(self.driven.len == self.lw.nodes.len);
         const n = self.lw.nodes.items(.name)[r];
-        if (r < self.lw.num_ports and (pins[r] == .digital or !self.driven[r])) return ident(n);
+        if (r < self.lw.num_ports and (self.pins[r] == .digital or !self.driven[r])) return ident(n);
         return .{ .prefix = "vera_n_", .text = n };
     }
 
@@ -414,7 +414,6 @@ const Emitter = struct {
         const A = self.arena;
         const lw = self.lw;
         const name = lw.nodes.items(.name)[r];
-        const pins = self.pins;
         const t: Name = .{ .prefix = "vera_t_", .text = name };
         const rise_name: Name = .{ .prefix = "vera_rise_", .text = name };
         const fall_name: Name = .{ .prefix = "vera_fall_", .text = name };
@@ -428,7 +427,7 @@ const Emitter = struct {
             var k = support.len;
             while (k > 0) {
                 k -= 1;
-                try w.print(A, "{f}{s}", .{ self.net(pins, vars[support[k]]), if (k == 0) "" else ", " });
+                try w.print(A, "{f}{s}", .{ self.net(vars[support[k]]), if (k == 0) "" else ", " });
             }
             try w.appendSlice(A, "})\n");
             for (0..@as(usize, 1) << @intCast(support.len)) |sub| {
@@ -446,7 +445,7 @@ const Emitter = struct {
             }
             try w.print(A, "            default: {f} = 1'bx;\n        endcase\n    end\n", .{t});
         }
-        try w.print(A, "    assign #({f}, {f}) {f} = {f};\n", .{ rise_name, fall_name, self.net(pins, r), t });
+        try w.print(A, "    assign #({f}, {f}) {f} = {f};\n", .{ rise_name, fall_name, self.net(r), t });
     }
 };
 
@@ -459,22 +458,18 @@ const Name = struct {
 
     /// Writes the name as an IEEE 1364-2005 §3.7 identifier.
     pub fn format(n: Name, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const plain = for (n.text) |c| {
+            if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '$')) break false;
+        } else true;
         if (n.prefix) |p| {
             assert(p.len > 0);
             // The prefix starts the identifier, so any text of identifier
             // bytes keeps it simple. Any other text escapes the whole name
             // rather than map its bytes onto `_`, which two texts could share.
-            const plain = for (n.text) |c| {
-                if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '$')) break false;
-            } else true;
             if (plain) return w.print("{s}{s}", .{ p, n.text });
             return w.print("\\{s}{s} ", .{ p, n.text });
         }
-        const simple = n.text.len != 0 and !std.ascii.isDigit(n.text[0]) and n.text[0] != '$' and
-            for (n.text) |c| {
-                if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '$')) break false;
-            } else true;
-        if (simple) return w.writeAll(n.text);
+        if (plain and n.text.len != 0 and !std.ascii.isDigit(n.text[0]) and n.text[0] != '$') return w.writeAll(n.text);
         try w.print("\\{s} ", .{n.text});
     }
 };
@@ -504,6 +499,15 @@ fn staticRetention(mir: *const Mir, v: Mir.Value) ?bool {
 /// A MIR value under one assignment: the number, and the longest
 /// `transition`/`absdelay` delay (s) on any path into it.
 const Val = struct { c: Const, d: f64 = 0 };
+comptime {
+    // `Interp.env` holds one `?Val` per MIR value and is cleared every run:
+    // a 24-byte `Const` (16-byte slice payload plus tag), the delay, the
+    // optional's flag padded to 8.
+    if (@sizeOf(usize) == 8) {
+        assert(@sizeOf(Val) == 32);
+        assert(@sizeOf(?Val) == 40);
+    }
+}
 
 /// The later of two delays, NaN if either is: `@max` returns the other
 /// operand of a NaN, which would drop a NaN `td` to 0 ns and print it (#47).
@@ -1101,4 +1105,162 @@ test "emit: a row placed after its block's terminator still runs, before it" {
     try addFlow(&f, 1, 3, try m.emit(a, next, .fsub, &.{ try f.probe(1), scaled }), .f_zero);
 
     try std.testing.expect(std.mem.find(u8, try emitOk(&f, logic), "    wire vera_t_y = 1'b1;\n") != null);
+}
+
+test "emit refuses a vera_pin or vera_delay whose value is not one" {
+    // Only the attribute's value is judged here; `attrs.va` in
+    // test-beh-verilog runs the accepted ones by name.
+    const bad = [_]struct { name: []const u8, value: ?Const, says: []const u8 }{
+        .{ .name = "vera_pin", .value = null, .says = "vera_pin takes" },
+        .{ .name = "vera_pin", .value = .{ .real = 1 }, .says = "vera_pin takes" },
+        .{ .name = "vera_delay", .value = null, .says = "vera_delay takes" },
+        .{ .name = "vera_delay", .value = .{ .str = "1n" }, .says = "vera_delay takes" },
+        .{ .name = "vera_delay", .value = .{ .real = -1e-9 }, .says = "vera_delay takes" },
+        .{ .name = "vera_delay", .value = .{ .real = std.math.nan(f64) }, .says = "vera_delay takes" },
+        // Finite in seconds, infinite in the ns `node` prints.
+        .{ .name = "vera_delay", .value = .{ .real = 1e300 }, .says = "vera_delay takes" },
+    };
+    for (bad) |b| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try buffer(&f);
+        const attrs = [_]Lowered.DeclAttr{.{ .tok = 0, .name = b.name, .value = b.value }};
+        f.lowered.decl_attrs = &attrs;
+        try expectRefused(&f, logic, b.says);
+    }
+    // The neighbours that pass: a zero delay, and an attribute VerA ignores.
+    for ([_]Lowered.DeclAttr{ .{ .tok = 0, .name = "vera_delay", .value = .{ .int = 0 } }, .{ .tok = 0, .name = "other", .value = null } }) |ok| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try buffer(&f);
+        f.lowered.decl_attrs = &.{ok};
+        _ = try emitOk(&f, logic);
+    }
+}
+
+test "emit: a driven analog port stays an undriven inout, its bit an internal net" {
+    // `a` analog; y digital follows it, and I(a) <+ V(a) - V(vdd) drives a high.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    const m = f.alloc();
+    try addFlow(&f, 0, 3, try f.mir.emit(m, .entry, .fsub, &.{ try f.probe(0), try f.probe(2) }), .f_zero);
+    try addFlow(&f, 1, 3, try f.mir.emit(m, .entry, .fsub, &.{ try f.probe(1), try f.probe(0) }), .f_zero);
+    const text = try emitOk(&f, .{ .digital = &.{"y"} });
+    for ([_][]const u8{
+        "    inout  wire a; // analog, undriven\n",
+        "    wire vera_n_a; // a\n",
+        "    wire vera_t_a = 1'b1;\n",
+        "        case ({vera_n_a})\n",
+        "    assign #(vera_rise_a, vera_fall_a) vera_n_a = vera_t_a;\n",
+    }) |want| try std.testing.expect(std.mem.find(u8, text, want) != null);
+}
+
+test "emit: a supply contribution against a supply is the supply itself" {
+    // Metamorphic: the buffer plus V(vdd, vss) <+ 1.8 is the buffer.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try buffer(&f);
+    const want = try emitOk(&f, logic);
+    try f.lowered.contributions.append(f.alloc(), .{ .access = .potential, .hi = 2, .lo = 3, .resist_val = try f.mir.addFloatConst(f.alloc(), 1.8), .wrote_val = .f_one });
+    try std.testing.expectEqualStrings(want, try emitOk(&f, logic));
+}
+
+test "emit: the static callees fold to the values the header gives them" {
+    // I(y) <+ V(y) - k·V(a) with k a callee that is 1 here: the buffer's text.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try buffer(&f);
+    const want = try emitOk(&f, logic);
+    for ([_][]const u8{ "$mfactor", "limexp", "slew" }) |name| {
+        var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer g.deinit();
+        try g.init(&four);
+        g.lowered.num_ports = 4;
+        const b = g.alloc();
+        // limexp(0) = 1, slew(1) = 1.
+        const arg: []const Mir.Value = if (std.mem.eql(u8, name, "limexp")) &.{.f_zero} else if (std.mem.eql(u8, name, "slew")) &.{.f_one} else &.{};
+        const k = try g.call(name, arg);
+        const scaled = try g.mir.emit(b, .entry, .fmul, &.{ k, try g.probe(0) });
+        try addFlow(&g, 1, 3, try g.mir.emit(b, .entry, .fsub, &.{ try g.probe(1), scaled }), .f_zero);
+        try std.testing.expectEqualStrings(want, try emitOk(&g, logic));
+    }
+    // Over a 2 ns transition: absdelay's td adds like transition's, a
+    // negative td adds 0 (not -1 ns), and no td argument adds nothing.
+    for ([_]struct { name: []const u8, td: ?f64, ns: []const u8 }{
+        .{ .name = "absdelay", .td = 2e-9, .ns = "4.000000" },
+        .{ .name = "transition", .td = -1e-9, .ns = "2.000000" },
+        .{ .name = "transition", .td = null, .ns = "2.000000" },
+    }) |c| {
+        var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer g.deinit();
+        try g.init(&four);
+        g.lowered.num_ports = 4;
+        const b = g.alloc();
+        const x = try g.call("transition", &.{ try g.probe(0), try g.mir.addFloatConst(b, 2e-9) });
+        const tr = if (c.td) |td| try g.call(c.name, &.{ x, try g.mir.addFloatConst(b, td) }) else try g.call(c.name, &.{x});
+        try addFlow(&g, 1, 3, try g.mir.emit(b, .entry, .fsub, &.{ try g.probe(1), tr }), .f_zero);
+        const text = try emitOk(&g, logic);
+        const line = try std.fmt.allocPrint(b, "parameter real vera_rise_y = {s}; // ns\n", .{c.ns});
+        try std.testing.expect(std.mem.find(u8, text, line) != null);
+    }
+}
+
+test "emit refuses a node whose law or value it cannot pin down" {
+    const gpa = std.testing.allocator;
+    {
+        // if (V(y) > 0.9) V(y) <+ 1.8; else I(y) <+ V(y): which law holds
+        // depends on y itself, so there is no one secant.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        const b = f.alloc();
+        const on = try f.mir.emit(b, .entry, .fgt, &.{ try f.probe(1), try f.mir.addFloatConst(b, 0.9) });
+        try f.lowered.contributions.append(b, .{ .access = .potential, .hi = 1, .lo = 3, .resist_val = try f.mir.addFloatConst(b, 1.8), .wrote_val = on });
+        try addFlow(&f, 1, 3, try f.probe(1), .f_zero);
+        try expectRefused(&f, logic, "depends on its own value");
+    }
+    {
+        // V(y, vss) <+ inf.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        try f.lowered.contributions.append(f.alloc(), .{ .access = .potential, .hi = 1, .lo = 3, .resist_val = try f.mir.addFloatConst(f.alloc(), std.math.inf(f64)), .wrote_val = .f_one });
+        try expectRefused(&f, logic, "its settled potential is not finite");
+    }
+    {
+        // A phi in the entry block has no edge to read.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        const p = try f.mir.emitPhi(f.alloc(), .entry, &.{});
+        try addFlow(&f, 1, 3, try f.mir.emit(f.alloc(), .entry, .fsub, &.{ try f.probe(1), p }), .f_zero);
+        try expectRefused(&f, logic, "a phi with no operand for the edge taken");
+    }
+    // The 2^20-step bound on a block that never finishes is not run here:
+    // reaching it takes 4 s in Debug.
+}
+
+fn emitUnderFailure(gpa: Allocator, rc: bool) !void {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&.{ "a", "y", "vdd", "vss", "n" });
+    f.lowered.num_ports = 4;
+    const m = f.alloc();
+    // y follows n, n follows a; with `rc`, n is an RC so its delay is non-zero.
+    try addFlow(&f, 1, 3, try f.mir.emit(m, .entry, .fsub, &.{ try f.probe(1), try f.probe(4) }), .f_zero);
+    const q = if (rc) try f.mir.emit(m, .entry, .fmul, &.{ try f.mir.addFloatConst(m, 1e-12), try f.probe(4) }) else .f_zero;
+    try addFlow(&f, 4, 3, try f.mir.emit(m, .entry, .fsub, &.{ try f.probe(4), try f.probe(0) }), q);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var why: []const u8 = "";
+    _ = try emit(arena.allocator(), &f.mir, &f.lowered, logic, &why);
+}
+
+test "emit: an allocation failure anywhere is OutOfMemory, never a refusal or a crash" {
+    for ([_]bool{ false, true }) |rc| try std.testing.checkAllAllocationFailures(std.testing.allocator, emitUnderFailure, .{rc});
 }

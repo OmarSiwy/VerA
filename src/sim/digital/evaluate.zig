@@ -108,7 +108,8 @@ fn selectSlot(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
 pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rg = ex.rhs(e);
-    const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
+    const base_slot = try self.baseSlot(ex.lhs(e));
+    const range = self.vecRange(base_slot);
     // Storage position of the selected value's least significant bit.
     var first: i64 = undefined;
     var count: u32 = 1;
@@ -129,7 +130,7 @@ pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
         },
         else => first = range.position(indexInt(try eval(self, a, rg, 0)) orelse return null), // else: a bit-select's index
     }
-    const width = self.values[try self.baseSlot(ex.lhs(e))].width;
+    const width = self.values[base_slot].width;
     if (first >= width or first <= -@as(i64, count)) return null;
     return .{ .first = first, .count = count };
 }
@@ -360,9 +361,11 @@ fn realOfInt(v: Int.Literal) f64 {
 /// -1.5 is -2), as a 64-bit signed value; a non-finite real has no integer
 /// and is x.
 fn intOfReal(a: std.mem.Allocator, r: f64) Error!Int.Literal {
-    if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return filled(a, 64, true, .x);
+    const n = @round(r);
+    // NaN fails both comparisons; -2^63 itself is an i64.
+    if (!(n >= -0x1p63 and n < 0x1p63)) return filled(a, 64, true, .x);
     const out = try filled(a, 64, true, .zero);
-    out.values()[0] = @bitCast(@as(i64, @intFromFloat(@round(r))));
+    out.values()[0] = @bitCast(@as(i64, @intFromFloat(n)));
     return out;
 }
 
@@ -651,10 +654,11 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
             },
             // §17.8: `$rtoi` truncates toward zero; `$realtobits` is the bits.
             .rtoi => {
-                const r = try evalReal(self, a, ex.args(e)[0]);
+                const t = @trunc(try evalReal(self, a, ex.args(e)[0]));
                 const v = try filled(a, 32, true, .x);
-                if (std.math.isFinite(r) and @abs(r) < 0x1p31) {
-                    v.values()[0] = @as(u32, @bitCast(@as(i32, @intFromFloat(@trunc(r)))));
+                // NaN fails both comparisons; -2^31 itself is an i32.
+                if (t >= -0x1p31 and t < 0x1p31) {
+                    v.values()[0] = @as(u32, @bitCast(@as(i32, @intFromFloat(t))));
                     v.unknowns()[0] = 0;
                 }
                 return normalize(a, v, ty);
@@ -668,20 +672,7 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
                     .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => @as(u32, @bitCast(try @import("system.zig").random(self, a, f.dist().?, ex.args(e), ex.mainTok(e)))),
-                    .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => @bitCast(try @import("system.zig").fileCall(self, a, switch (f) {
-                        .fopen => .fopen,
-                        .fgetc => .fgetc,
-                        .ungetc => .ungetc,
-                        .fgets => .fgets,
-                        .fscanf => .fscanf,
-                        .fread => .fread,
-                        .ftell => .ftell,
-                        .fseek => .fseek,
-                        .rewind => .rewind,
-                        .feof => .feof,
-                        .ferror => .ferror,
-                        else => .sscanf,
-                    }, ex.args(e), ex.mainTok(e))),
+                    inline .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => |g| @bitCast(try @import("system.zig").fileCall(self, a, @field(@import("system.zig").FileFn, @tagName(g)), ex.args(e))),
                     .q_full => @intCast(try @import("system.zig").queueFull(self, a, ex.args(e))),
                     .time, .stime => blk: {
                         const units = self.timeOf(self.scope).scale.unitsAt(self.scheduler.now);
