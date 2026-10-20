@@ -4,6 +4,12 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+### Fixed
+
+- VerA's own test suite passes on Windows: bit masks of width 64 (`span`, driven-part masks) were built behind a branch that Windows' Debug build still range-checked, so `zig build test` panicked there ("integer does not fit in destination type").
+- The flake's source package builds again: its configure step read test fixtures the package does not ship.
+- Cached test devices (`-Dva-cache`) are regenerated when `tools/contract.zig` changes, so a release's version bump no longer leaves stale devices failing the version check. v0.11.1's changelog row for `zig build test` recorded such a stale local run (FAIL); the tree passed.
+
 ## v0.11.1 — 2026-10-20
 
 | Measure | Number | Remaining to v1.0.0 | Command |

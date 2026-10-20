@@ -523,6 +523,9 @@ fn genRun(b: *Build, gen: Gen, src: []const u8) *Run {
     const run = b.addSystemCommand(&.{b.fmt("./{s}", .{copy})});
     run.step.dependOn(&usf.step);
     addIncludes(b, run, src);
+    // The device embeds contract.zig's `vera_version` and targets its
+    // contract: a release bump or a contract edit regenerates it.
+    run.addFileInput(b.path("tools/contract.zig"));
     return run;
 }
 

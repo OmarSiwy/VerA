@@ -198,7 +198,7 @@ fn selectWord(bits: compile.Bits, w: usize) u64 {
     const hi = @min(@as(u64, bits.lo) + bits.width, base + 64);
     if (lo >= hi) return 0;
     const n = hi - lo;
-    const ones = if (n == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(n)) - 1;
+    const ones = std.math.shl(u64, 1, n) -% 1;
     return ones << @intCast(lo - base);
 }
 
