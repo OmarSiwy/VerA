@@ -4,6 +4,27 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+## v0.11.4 — 2026-10-20
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2750 / 2750 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **383 / 808 — 47.4%** | 4 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 3 · 1 · 0 · 421 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
 ### Changed
 
 - `--emit-osdi` merges a 0 V short's two nodes (`V(a, b) <+ 0`, as PSP, BSIM and HiSIM write their switched-off parasitics) as an OSDI collapsible pair, the way OpenVAF does, instead of keeping the short's branch current as an unknown. That unknown was a zero-diagonal row that SPARSE 1.3 pivoted around: a 51-stage PSP103 ring oscillator spent 13.8 s in matrix factorization and now spends 2.4 ms (OpenVAF: 3.5 ms), and the device's Jacobian entries drop from 92 to 57. Results match OpenVAF's to 1e-13 V.
