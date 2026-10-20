@@ -4,6 +4,7 @@
 // hide an incorrect real result. System-style counterparts are isolated in
 // audit_system_math_result_type_division.va so their failures do not mask this.
 //! lrm 4.3.1
+//! lrm 4.3.1:1001
 //! lrm 4.2.4
 //! checks 6
 `include "check.vh"

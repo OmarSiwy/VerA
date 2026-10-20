@@ -119,16 +119,20 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// `analog_statement`, so a trigger outside an event control is refused, as
 /// `disable` (E0401) is.
 fn lowerEventTrigger(self: *Lower, tok: u32, target: Ast.ExprId) Oom!void {
-    if (self.file.exprs.tag(target) != .ident) return self.err(tok, .E0235, "§5.10.4: an indexed or hierarchical named event trigger in an analog block", .{});
-    const name = self.file.str(self.file.exprs.strOf(target));
+    const tag = self.file.exprs.tag(target);
+    if (tag != .ident and tag != .index) return self.err(tok, .E0235, "§5.10.4: a hierarchical named event trigger in an analog block", .{});
     if (!self.in_event_stmt) {
         var b = self.errWith(tok, .E0434);
         b.help("only `@(<event>) -> ev;` is legal", .{});
         return b.emit();
     }
-    const place = self.events.get(name) orelse
-        return self.err(tok, .E0705, "`{s}`", .{name});
-    try self.builder.writeVariable(place, self.cur, .one);
+    // §5.10.4 Syntax 5-21 `-> hierarchical_event_identifier { [ expression ] }`:
+    // the element the subscript selects is raised, and no other.
+    const r = try @import("event.zig").eventRef(self, target) orelse return;
+    for (r.places, r.conds) |p, c| {
+        const v = if (c == .one) Mir.Value.one else try self.emit(.select, &.{ c, .one, try self.builder.readVariable(p, self.cur) });
+        try self.builder.writeVariable(p, self.cur, v);
+    }
 }
 
 /// A.6.5 `disable_statement`. It is an alternative of A.6.4

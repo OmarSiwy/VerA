@@ -42,6 +42,7 @@
 // 24 ($limit and $discontinuity(-1), ch09 177-184), 27 (keywords, annex_b).
 //
 //! lrm 10.5
+//! lrm 10.5:2
 //! checks 12
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "constants.vams"

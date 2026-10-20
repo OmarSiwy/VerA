@@ -52,10 +52,20 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
+    // `--verdicts=F`: one `<verdict>\t<path under tests/fixtures>` row per
+    // case, `harness.writeVerdicts`'s format, so `tools/conformance.py
+    // metric` reads a digital case's verdict as it reads a .va fixture's.
+    var verdicts_path: ?[]const u8 = null;
     var native_flags: ?[]const []const u8 = null;
     var snapshot = false;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
+        if (std.mem.startsWith(u8, a, "--verdicts=")) {
+            // Absolute: the cases run from the suite's scratch tree.
+            verdicts_path = try Io.Dir.cwd().realPathFileAlloc(io, ".", arena_state.allocator());
+            verdicts_path = try std.fs.path.resolve(arena_state.allocator(), &.{ verdicts_path.?, a["--verdicts=".len..] });
+            continue;
+        }
         if (std.mem.eql(u8, a, "--native") or std.mem.eql(u8, a, "--native=fifo")) {
             native_flags = &.{"--schedule=fifo"};
             continue;
@@ -111,16 +121,22 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     var ran: usize = 0;
     var failed: usize = 0;
     var xfailed: usize = 0;
+    var rows: Io.Writer.Allocating = .init(gpa);
+    defer rows.deinit();
     for (cases) |case| {
         if (filter) |f| if (std.mem.find(u8, case, f) == null) continue;
-        _ = arena_state.reset(.retain_capacity);
+        var case_arena: std.heap.ArenaAllocator = .init(gpa);
+        defer case_arena.deinit();
         ran += 1;
-        switch (try digitalVerdict(arena_state.allocator(), io, exe, case, w)) {
+        const v = try digitalVerdict(case_arena.allocator(), io, exe, case, w);
+        switch (v) {
             .pass => {},
             .fail => failed += 1,
             .xfail => xfailed += 1,
         }
+        if (verdicts_path != null) try rows.writer.print("{t}\t{s}.v\n", .{ v, case });
     }
+    if (verdicts_path) |path| try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = rows.written() });
     if (ran == 0) {
         try w.print("devices: nothing matched `{s}`\n", .{filter orelse ""});
         return 1;

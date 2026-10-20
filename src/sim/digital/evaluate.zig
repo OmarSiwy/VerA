@@ -279,7 +279,7 @@ fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
             const planes = try a.alloc(u64, 2);
             planes[0] = @bitCast(n.value);
             planes[1] = 0;
-            const width = if (n.width == 0) 32 else n.width;
+            const width = compile.literalWidth(n);
             if (width < 64) planes[0] &= (@as(u64, 1) << @intCast(width)) - 1;
             break :blk .{ .width = width, .signed = n.signed, .sized = n.width != 0, .planes = planes };
         },
@@ -358,14 +358,37 @@ fn realOfInt(v: Int.Literal) f64 {
 }
 
 /// §4.8.2 real-to-integer: "rounded off to the nearest integer" (35.5 is 36,
-/// -1.5 is -2), as a 64-bit signed value; a non-finite real has no integer
-/// and is x.
-fn intOfReal(a: std.mem.Allocator, r: f64) Error!Int.Literal {
+/// -1.5 is -2), as a signed value at least 64 bits wide and as wide as the
+/// integer needs (2.0**64 is 66 bits), so a wide target takes it whole; a
+/// non-finite real has no integer and is x.
+pub fn intOfReal(a: std.mem.Allocator, r: f64) Error!Int.Literal {
     const n = @round(r);
-    // NaN fails both comparisons; -2^63 itself is an i64.
-    if (!(n >= -0x1p63 and n < 0x1p63)) return filled(a, 64, true, .x);
-    const out = try filled(a, 64, true, .zero);
-    out.values()[0] = @bitCast(@as(i64, @intFromFloat(n)));
+    if (!std.math.isFinite(n)) return filled(a, 64, true, .x);
+    // -2^63 itself is an i64.
+    if (n >= -0x1p63 and n < 0x1p63) {
+        const out = try filled(a, 64, true, .zero);
+        out.values()[0] = @bitCast(@as(i64, @intFromFloat(n)));
+        return out;
+    }
+    // |n| >= 2^63: an f64 integer is its 53-bit mantissa shifted left.
+    const fr = std.math.frexp(@abs(n)); // |n| = fr.significand * 2^fr.exponent
+    const mant: u64 = @intFromFloat(std.math.ldexp(fr.significand, 53));
+    const shift: u32 = @intCast(fr.exponent - 53);
+    const out = try filled(a, @intCast(fr.exponent + 1), true, .zero);
+    const v = out.values();
+    v[shift / 64] |= mant << @intCast(shift % 64);
+    if (shift % 64 != 0 and shift / 64 + 1 < v.len) v[shift / 64 + 1] |= mant >> @intCast(64 - shift % 64);
+    if (n < 0) {
+        // Two's complement over the whole width; bits above it stay 0.
+        var carry: u1 = 1;
+        for (v) |*w| {
+            const sum = @addWithOverflow(~w.*, @as(u64, carry));
+            w.* = sum[0];
+            carry = sum[1];
+        }
+        const top = out.width % 64;
+        if (top != 0) v[v.len - 1] &= (@as(u64, 1) << @intCast(top)) - 1;
+    }
     return out;
 }
 
@@ -734,6 +757,27 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test "§4.8.2 rt's ofRealTo is intOfReal truncated to the target, at every width" {
+    const logic = @import("../rt/logic.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const values = [_]f64{
+        0,              0.5,               -0.5,              1.5,                -1.5,    2.5,           -2.5,
+        0x1p31,         -0x1p31,           0x1p31 - 0.5,      -0x1p31 - 0.5,      0x1p63,  -0x1p63,       0x1p63 - 1024,
+        -0x1p63 + 1024, 0x1p63 + 2048,     -0x1p63 - 2048,    0x1p64,             -0x1p64, 0x1p64 + 4096, 0x1p100,
+        -0x1p100,       std.math.nan(f64), std.math.inf(f64), -std.math.inf(f64),
+    };
+    inline for (.{ 1, 32, 63, 64, 65, 128 }) |w| for (values) |r| {
+        // As `convertValue` assigns it: the signed integer extended or cut.
+        const i = try intOfReal(a, r);
+        const want = try normalize(a, i, .{ .width = w, .signed = i.signed });
+        const got = logic.wide(logic.ofRealTo(r, w));
+        try std.testing.expectEqualSlices(u64, want.values(), &got.v);
+        try std.testing.expectEqualSlices(u64, want.unknowns(), &got.x);
+    };
+}
 
 test copyBits {
     // Oracle: the bit-at-a-time copy it replaced, over random 4-state data at

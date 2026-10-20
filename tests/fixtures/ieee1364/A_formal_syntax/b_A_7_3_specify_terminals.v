@@ -7,10 +7,10 @@
 // Terminal descriptors of every kind in b_A_7_3_cell's paths: a whole input
 // port, a bit-select (a[1]), a part-select (a[3:2]), the output's bit and
 // part (y[0], y[3:2]), and the inout port io as a path input and as a path
-// output. Paths are not modelled (W0251); the cell runs as its assignments:
-// a = 4'b1010 -> y = ~a = 4'b0101; io is driven by the top: 1.
+// output. Each destination's time-0 change takes its paths' delay (§14.3.3),
+// at most 5, so by t=10 the cell shows its assignments: a = 4'b1010 ->
+// y = ~a = 4'b0101; io is driven by the top: 1.
 // Output: "y=0101 io=1".
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.7.3
 `timescale 1ns/1ns
 module b_A_7_3_cell (a, y, io);

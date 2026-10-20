@@ -11,6 +11,7 @@
 //
 //! lrm 5.10.3.2
 //! bias V(c) = 1.25, V(p) = 0.3
+//! lrm 5.10.3.2:1004
 `include "check.vh"
 module ch5_above_enable(p, c);
   inout p, c; electrical p, c; real held; integer enabled;

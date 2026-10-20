@@ -20,7 +20,9 @@
 //
 // A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 10.6
+//! lrm 10.6:1001
 //! reject-only E0202
+//! neighbour 16_begin_keywords_verilog.va
 module ch10_keywords_paramset_target(p, n);
     parameter real r = 1000 from (0:inf);
     inout p, n;

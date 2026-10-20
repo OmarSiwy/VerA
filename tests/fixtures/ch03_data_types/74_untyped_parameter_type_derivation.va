@@ -19,6 +19,7 @@
 // python3 -c "print(repr(4.0/3.0))" -> 1.3333333333333333.
 //
 //! lrm 3.4.1
+//! lrm 3.4.1:1001
 //! lrm 4.2.4
 //! checks 3
 `include "check.vh"

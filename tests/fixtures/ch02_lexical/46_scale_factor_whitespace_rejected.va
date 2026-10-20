@@ -7,6 +7,7 @@
 // it matters: silently reading `1.3 u` as 1.3e-6 would be a six-decade error
 // that no value assertion elsewhere could catch.
 //! lrm 2.6.2
+//! lrm 2.6.2:1001
 //! lrm A.10
 //! lrm A.10:1
 //! reject-only E0207

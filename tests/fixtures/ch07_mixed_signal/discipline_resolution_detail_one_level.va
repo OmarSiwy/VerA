@@ -19,6 +19,7 @@
 //
 //! lrm 7.4.4.2
 //! lrm F.2.2
+//! lrm F.2.2:8
 //! discipline-resolution detail
 //! bias V(shared) = 0.5
 //! checks 1

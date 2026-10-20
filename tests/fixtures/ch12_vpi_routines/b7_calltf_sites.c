@@ -19,11 +19,18 @@
  * so the branch order does not matter. How many times beyond two calltf
  * runs is the solver's and is not asserted.
  *
+ * 12.32.1 "One or more of the compiletf, calltf, and sizetf fields can be set
+ *         to NULL if they are not needed": cfn sets compiletf, sizetf and
+ *         derivtf to NULL, and the registration succeeds; the calltf alone
+ *         runs, at each call site.
+ *
  *! design   b7_two_sites.va
  *! analysis tran 0 1m 1e-4
  */
 
+//! lrm 12.32:2
 //! lrm 12.32.1:9
+//! lrm 12.32.1:1001
 //! design ch12_vpi_routines/b7_two_sites.va
 //! stdout b7-calltf-sites: sites=2 v=2
 
@@ -90,7 +97,12 @@ static void b7_startup(void)
   cfn.sysfunctype = vpiRealFunc;
   cfn.tfname = (PLI_BYTE8 *)"$b7_cfn";
   cfn.calltf = cfn_calltf;
+  cfn.compiletf = NULL;     /* 12.32.1: not needed. */
+  cfn.sizetf = NULL;        /* 12.32.1: not needed. */
+  cfn.derivtf = NULL;       /* 12.32.1: not needed. */
+  cfn.user_data = NULL;
   P03_CHECK(vpi_register_analog_systf(&cfn) != NULL, "12.32: registering $b7_cfn failed");
+  p03_no_error("12.32.1: vpi_register_analog_systf with compiletf/sizetf/derivtf NULL");
   p03_defer(b7_after_compile);
 }
 

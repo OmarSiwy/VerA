@@ -5,6 +5,7 @@
 //! inherited IEEE 1364-2005 5.2.2 9.7.3
 //! reject E1100
 //! reject an event array index must be integral
+//! neighbour native_wide_event_indices.v
 // digital-runner: reject
 module native_wide_event_real_index_rejected;
   event ready[0:1];

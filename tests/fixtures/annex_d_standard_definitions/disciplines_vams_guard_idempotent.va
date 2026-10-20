@@ -27,6 +27,7 @@
 // must still hold its one value, not a redefinition warning's leftovers.
 //
 //! lrm D.1
+//! lrm D.1:1002
 //! lrm D.2
 //! lrm 10.1
 //! lrm 10.4

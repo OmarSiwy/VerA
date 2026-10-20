@@ -27,6 +27,7 @@
 //! lrm 3.4.2
 //! lrm C.8
 //! lrm 3.4.2:2
+//! lrm 3.4.2:1001
 //! reject-only E0361
 //! neighbour 45_parameter_range_legal_endpoints.va
 module ch3_range_target_endpoint(p, n);

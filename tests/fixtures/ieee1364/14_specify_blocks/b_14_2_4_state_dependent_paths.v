@@ -25,15 +25,14 @@
 // (A.8.4's module_path_primary has no select; the bit- and part-selects rest
 // on §14.2.4.1's text, which names them.)
 //
-// VerA reads the conditions and applies no delay (W0251), so what a condition
-// selects is not observable here; the transcript is the cells' logic,
-// sampled 50 after each input change, past the longest delay (25.0):
+// The conditions select each output change's delay (§14.3.3), but the
+// transcript samples 50 after each input change, past the longest delay
+// (25.0), so it is the cells' logic whichever is chosen:
 //   t = 1:   a=0 b=1; i1=8'h12 i2=8'h34 opcode=00; v=4'b1010
 //            xor = 0^1 = 1; o1 = 12+34 = 46; y = a^b = 1
 //   t = 51:  a=1, opcode=01: xor = 1^1 = 0; o1 = i1 = 12; y = 0
 //   t = 101: opcode=10: o1 = i2 = 34
 //   t = 151: opcode=11: o1 = 00
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2.4 14.2.4.1 14.2.4.2
 `timescale 1ns/1ns
 module b_14_2_4_state_dependent_paths_xor(a, b, out);

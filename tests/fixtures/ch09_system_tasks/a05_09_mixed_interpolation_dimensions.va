@@ -48,6 +48,7 @@
 //! lrm 9.21:4
 //! lrm 9.21.2
 //! lrm 9.21.4
+//! lrm 9.21:5
 `include "check.vh"
 module a05_mixed_interpolation_dimensions(p, n);
   inout p, n; electrical p, n;

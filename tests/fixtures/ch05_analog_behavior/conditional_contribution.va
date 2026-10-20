@@ -7,6 +7,7 @@
 //! lrm 5.8.2
 //! lrm 5.8.4
 //! bias V(c) = 0.0, V(p) = 0.4
+//! lrm 5.6.5:2
 `include "check.vh"
 module ch5_conditional(p, c);
   inout p, c; electrical p, c;

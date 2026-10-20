@@ -32,6 +32,8 @@
 //! lrm 7.4.4.2
 //! lrm 7.8.1
 //! lrm F.2.2
+//! lrm F.2.2:8
+//! lrm F.2.2:14
 //! discipline-resolution detail
 //! solve
 //! checks 1

@@ -2,6 +2,7 @@
 //! lrm 5.2.1
 //! lrm 5.2.1:1
 //! reject-only E0702
+//! neighbour analog_initial.va
 module ch5_initial_event_rejected;
   real initialized;
   analog initial @(initial_step) initialized = 1.0;

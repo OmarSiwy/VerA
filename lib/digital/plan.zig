@@ -164,6 +164,10 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             compile.sensitivity(r, arg, &mon) catch return self.refuse("a monitor argument the engine resolves only at run time");
     };
     for (mon.items) |s| watched[s] = true;
+    // §14.3.3 a module path source's every transition reaches `rt.net.pathSeen`.
+    for (r.net_cold.items) |c| for (c.paths) |p| {
+        watched[p.src] = true;
+    };
     // §18: which slots a `$dumpvars` selects is known only at run time, and
     // a dumped change must reach `rt`'s hook, which `set` bypasses.
     // ponytail: every slot of a dumping design; the catalog's alone if it matters.
@@ -375,6 +379,9 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
         };
     };
     for (mon) |s| reach[s].mon = true;
+    for (r.net_cold.items) |c| for (c.paths) |p| {
+        reach[p.src].path = true;
+    };
     if (emit.dumps(r)) for (reach) |*x| {
         x.dump = true;
     };

@@ -93,14 +93,18 @@ pub fn instanceSelectAhead(self: *const Parser) bool {
 }
 
 /// `name[k]` for §12.5's instance select `[ constant_expression ]` at the
-/// cursor, spelled as `parseDottedPath` spells it; E0231 when it does not
-/// fold.
-pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
+/// cursor, spelled as `parseDottedPath` spells it. An index that does not
+/// fold (a genvar's, §12.4.1) is spelled `name[]` and appended to
+/// `unfolded`, for `SourceFile.hier_indices`.
+pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId, unfolded: *std.ArrayList(Ast.ExprId)) Error!Ast.StrId {
     const tok = self.pos;
     self.pos += 1;
     const idx = try parse_expr.parseExpr(self);
     _ = try self.expect(.rbracket);
-    const k = try self.walk(tok, constIndex, .{ self, idx }) orelse return self.failAt(tok, .E0231, "", .{});
+    const k = try self.walk(tok, constIndex, .{ self, idx }) orelse {
+        try unfolded.append(self.arena, idx);
+        return self.file.intern(self.arena, try self.arena.print("{s}[]", .{self.file.str(name)}));
+    };
     return self.file.intern(self.arena, try self.arena.print("{s}[{d}]", .{ self.file.str(name), k }));
 }
 

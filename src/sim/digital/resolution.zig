@@ -54,6 +54,9 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     const current = self.values[n.slot];
     const tables = wiredLogic(n.kind);
     var floating: u32 = 0;
+    // §7.10/§7.11: a MOS switch passes its data's strength, so a change of
+    // strength alone on a net one reads re-evaluates that switch.
+    var moved = false;
     if (uniform(self, net)) foldUniform(n.resolved, self.drivers, drivers) else for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
         var acc: Signal = .{};
@@ -70,20 +73,115 @@ pub fn resolve(self: *Run, net: u32) Error!void {
             floating += 1;
         }
         acc = acc.combine(netPull(n.kind));
+        moved = moved or (n.strength_read and !std.meta.eql(self.signals[n.signal + at], acc));
         self.signals[n.signal + at] = acc;
         setBit(n.resolved, at, acc.collapse());
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
-    // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it applies
-    // between the resolution and the publish, after every driver is folded in.
-    if (self.netCold(n).delay.present) {
+    // A.2.1.3's `[ delay3 ]` and §14's module paths delay the net's own
+    // transition, so they apply between the resolution and the publish,
+    // after every driver is folded in.
+    const cold = self.netCold(n);
+    if (cold.delay.present or cold.paths.len != 0) {
         const c = try self.netColdMut(net);
         const st = &c.transition;
-        if (try schedule(self, self.values[n.slot], false, n.resolved, false, st))
-            st.in_flight = try exec.enqueue(self, .{ .net_update = net }, c.delay.continuous(self.values[n.slot].truth(), st.target), false);
-        return;
+        const from = self.values[n.slot];
+        if (try transitionDelay(self, c, from, n.resolved)) |ticks| {
+            if (try schedule(self, from, false, n.resolved, false, st))
+                st.in_flight = try exec.enqueue(self, .{ .net_update = net }, ticks, false);
+            return;
+        }
+        // No path is active: the transition is not delayed, and one in
+        // flight is superseded.
+        if (st.in_flight) |h| try exec.cancel(self, h);
+        st.in_flight = null;
     }
     try waiters.store(self, n.slot, n.resolved.planes);
+    if (moved) try waiters.wakeSwitches(self, n.slot);
+}
+
+/// The delay of net `c`'s transition from `from` to `to`, in ticks from
+/// now: its own `delay3` (§6.1.3), its module paths' (`pathDelay`), or of
+/// the two "the larger" (IEEE 1364-2005 §14.4); null when neither applies.
+fn transitionDelay(self: *Run, c: *const net_mod.NetCold, from: Int.Literal, to: Int.Literal) Error!?u64 {
+    const own: ?u64 = if (c.delay.present) c.delay.continuous(from.truth(), to) else null;
+    const path = try pathDelay(self, c.paths, from, to);
+    if (own) |o| return if (path) |p| @max(o, p) else o;
+    return path;
+}
+
+/// IEEE 1364-2005 §14.3.3: "Active specify paths are those whose input has
+/// transitioned most recently in time, and either they have no condition or
+/// their conditions are true", and of them the delay is chosen "by
+/// comparing the correct delay for the specific transition being scheduled
+/// from each specify path and choosing the smallest". An edge-sensitive
+/// path is active only for its edge (§14.2.3), an `ifnone` one only while
+/// no state-dependent path from its source is (§14.2.4.4). The delay runs
+/// from the source's transition, so time the module's own logic already
+/// took counts toward it: §14.4's "larger of the two delays" (Figure 14-3
+/// lands at 22, Figure 14-4 at 30). Null when no path is active.
+/// ponytail: a vector destination takes the smallest delay its changed bits
+/// select, as one transition; per-bit scheduling would time each bit.
+fn pathDelay(self: *Run, paths: []const net_mod.Path, from: Int.Literal, to: Int.Literal) Error!?u64 {
+    var latest: ?u64 = null;
+    for (paths) |p| if (self.path_changed.get(p.src)) |c| {
+        latest = @max(latest orelse c.time, c.time);
+    };
+    const t = latest orelse return null;
+    var best: ?u64 = null;
+    for (paths) |p| {
+        if (!try pathActive(self, paths, p, t)) continue;
+        for (0..to.width) |i| {
+            const a = from.bit(@intCast(i));
+            const b = to.bit(@intCast(i));
+            if (a == b) continue;
+            const d = p.table[@backingInt(a)][@backingInt(b)];
+            best = @min(best orelse d, d);
+        }
+    }
+    const d = best orelse return null;
+    return (t + d) -| self.scheduler.now;
+}
+
+/// Whether path `p` into a destination whose paths are `paths` is active
+/// for a source transition at time `t` (`pathDelay`).
+fn pathActive(self: *Run, paths: []const net_mod.Path, p: net_mod.Path, t: u64) Error!bool {
+    if (!pathFired(self, p, t)) return false;
+    if (p.ifnone) {
+        // Its state-dependent paths may be edge-sensitive ones (§14.2.4.4,
+        // `(posedge CLK => (Q +: D))` beside `ifnone (CLK => Q)`).
+        for (paths) |q| if (q.src == p.src and !q.ifnone and (q.cond != .none or q.edge != .none) and pathFired(self, q, t) and (q.cond == .none or try pathCond(self, q))) return false;
+        return true;
+    }
+    return p.cond == .none or try pathCond(self, p);
+}
+
+/// Whether `p`'s source transitioned at `t`, on its edge when it has one
+/// (§14.2.3: "the edge transition shall be detected on the least
+/// significant bit", or the bit a bit-select names).
+/// ponytail: a source bit past 63 counts any transition as its edge.
+fn pathFired(self: *const Run, p: net_mod.Path, t: u64) bool {
+    const c = self.path_changed.get(p.src) orelse return false;
+    if (c.time != t) return false;
+    if (p.edge == .none or p.src_bit >= 64) return true;
+    const sh: u6 = @intCast(p.src_bit);
+    const before: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(c.before[0] >> sh & 1)) | @as(u2, @intCast(c.before[1] >> sh & 1)) << 1));
+    const after: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(c.after[0] >> sh & 1)) | @as(u2, @intCast(c.after[1] >> sh & 1)) << 1));
+    return (if (p.edge == .posedge) waiters.Edge.posedge else waiters.Edge.negedge).matches(before, after);
+}
+
+/// §14.2.4.1: a state-dependent path's condition, read now in its module.
+/// "If the conditional expression evaluates to x or z, it shall be treated
+/// as true. If the conditional expression evaluates to multiple bits, the
+/// least significant bit shall represent the result."
+fn pathCond(self: *Run, p: net_mod.Path) Error!bool {
+    if (self.resolve_depth == 0) _ = self.resolve_scratch.reset(.retain_capacity);
+    self.resolve_depth += 1;
+    defer self.resolve_depth -= 1;
+    const saved = self.scope;
+    defer self.scope = saved;
+    self.scope = p.scope;
+    return (try evaluate.eval(self, self.resolve_scratch.allocator(), p.cond, 0)).bit(0) != .zero;
 }
 
 /// Whether `net` resolves plane-wise (`net.foldUniform`): a net type with no
@@ -177,10 +275,13 @@ const Switches = struct {
 /// transmits the z through"), where a switch differs from a bufif.
 pub fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: net_mod.Mos, or_z: *bool) Error!Int.Literal {
     const ex = &self.file.exprs;
-    const g = (try evaluate.eval(self, scratch, m.gate, 1)).bit(0);
-    var sig: Signal = .of((try evaluate.eval(self, scratch, m.data, 1)).bit(0), .strong, .strong);
+    const gv = try evaluate.eval(self, scratch, m.gate, 1);
+    const g = gv.bit(if (gv.width > 1) m.lane.? else 0);
+    const dv = try evaluate.eval(self, scratch, m.data, 1);
+    const bit = if (dv.width > 1) m.lane.? else 0;
+    var sig: Signal = .of(dv.bit(bit), .strong, .strong);
     if (ex.tag(m.data) == .ident) if (self.net_of.get(try self.slot(m.data))) |net| {
-        sig = self.signals[self.nets[net].signal];
+        sig = self.signals[self.nets[net].signal + bit];
     };
     const d = &self.drivers[at];
     d.s0 = net_mod.reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
@@ -189,7 +290,9 @@ pub fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: net_mod.Mos,
     const on: Int.Bit = if (m.n_type) .one else .zero;
     const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
     or_z.* = out != .z and g != on;
-    return filled(scratch, 1, false, out);
+    const result = try filled(scratch, d.current.width, false, .z);
+    setBit(result, m.out_bit orelse 0, out);
+    return result;
 }
 
 /// What one driver asserts on bit `at`: its value at its strengths, or §7.10.2's
@@ -521,4 +624,242 @@ fn runBus(gpa: std.mem.Allocator) !void {
 
 test "allocation failure anywhere in net resolution, a port window or a forced select cleans up" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, runBus, .{});
+}
+
+test "§14.3.3 Example 1: the source that transitioned last picks the delay, and a simultaneous tie the smallest" {
+    // (A => Y) = (6, 9); (B => Y) = (5, 11), with Y = A | B: a rise after A
+    // is 6, after B 5, and after both at once the smaller, 5; a fall after A
+    // is 9, after B 11, after both 9. x -> 0 at time 0 is Table 14-3's
+    // max(tz0, t10) per path, 9 and 11, so 9.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input A, input B, output Y);
+        \\  assign Y = A | B;
+        \\  specify (A => Y) = (6, 9); (B => Y) = (5, 11); endspecify
+        \\endmodule
+        \\module t;
+        \\  reg a, b;
+        \\  wire y;
+        \\  dut d(a, b, y);
+        \\  always @(y) $display("%0t Y=%b", $time, y);
+        \\  initial begin
+        \\    a = 0; b = 0;
+        \\    #20 a = 1;
+        \\    #20 a = 0;
+        \\    #20 b = 1;
+        \\    #20 b = 0;
+        \\    #20 a = 1; b = 1;
+        \\    #20 a = 0; b = 0;
+        \\  end
+        \\endmodule
+    , "9 Y=0\n26 Y=1\n49 Y=0\n65 Y=1\n91 Y=0\n105 Y=1\n129 Y=0\n");
+}
+
+test "§14.3.3 Example 2: the true conditions' paths are active, and the smallest delay for the transition wins" {
+    // The example's conditions are `MODE < 5` ... `MODE < 1`, but `<` is not
+    // in Table 14-1 nor A.7.4's binary_module_path_operator, so each is
+    // written as one bit `LT[k]` = (MODE < k+1): MODE 2 is 5'b11100, MODE 5
+    // 5'b00000, MODE 0 5'b11111. MODE 2 makes the first three active: rise 4,
+    // fall 5. MODE 5 makes none: no path delay. MODE 0 makes all five: rise
+    // 3, fall 2.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input A, input [4:0] LT, output Y);
+        \\  assign Y = A;
+        \\  specify
+        \\    if (LT[4]) (A => Y) = (5, 9);
+        \\    if (LT[3]) (A => Y) = (4, 8);
+        \\    if (LT[2]) (A => Y) = (6, 5);
+        \\    if (LT[1]) (A => Y) = (3, 2);
+        \\    if (LT[0]) (A => Y) = (7, 7);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg a;
+        \\  reg [4:0] lt;
+        \\  wire y;
+        \\  dut d(a, lt, y);
+        \\  always @(y) $display("%0t Y=%b", $time, y);
+        \\  initial begin
+        \\    lt = 5'b11100; a = 0;
+        \\    #20 a = 1;
+        \\    #20 a = 0;
+        \\    #20 lt = 5'b00000;
+        \\    #1 a = 1;
+        \\    #19 lt = 5'b11111;
+        \\    #1 a = 0;
+        \\    #19 a = 1;
+        \\  end
+        \\endmodule
+    , "5 Y=0\n24 Y=1\n45 Y=0\n61 Y=1\n83 Y=0\n103 Y=1\n");
+}
+
+test "§14.2.3 an edge-sensitive path times only the transitions its edge causes" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input clk, input d, output q);
+        \\  assign q = clk & d;
+        \\  specify (posedge clk => (q : d)) = 3; endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk, d;
+        \\  wire q;
+        \\  dut u(clk, d, q);
+        \\  always @(q) $display("%0t q=%b", $time, q);
+        \\  initial begin
+        \\    d = 1; clk = 0;
+        \\    #10 clk = 1;
+        \\    #10 clk = 0;
+        \\  end
+        \\endmodule
+    , "0 q=0\n13 q=1\n20 q=0\n");
+}
+
+test "§14.3.1 six path delays time 0->1, 1->0, 0->z, z->1, 1->z and z->0 each" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input en, input d, output q);
+        \\  assign q = en ? d : 1'bz;
+        \\  specify (d, en *> q) = (1, 2, 3, 4, 5, 6); endspecify
+        \\endmodule
+        \\module t;
+        \\  reg en, d;
+        \\  wire q;
+        \\  dut u(en, d, q);
+        \\  always @(q) $display("%0t q=%b", $time, q);
+        \\  initial begin
+        \\    en = 1; d = 0;
+        \\    #10 d = 1;
+        \\    #10 d = 0;
+        \\    #10 en = 0;
+        \\    #10 d = 1;
+        \\    #1 en = 1;
+        \\    #9 en = 0;
+        \\    #10 d = 0;
+        \\    #1 en = 1;
+        \\  end
+        \\endmodule
+    , "6 q=0\n11 q=1\n22 q=0\n33 q=z\n45 q=1\n55 q=z\n67 q=0\n");
+}
+
+test "§14.4 Figures 14-3 and 14-4: a path delay and the distributed delays along it, the larger" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module fig3(input D, output Q);
+        \\  wire n;
+        \\  buf #0 g1(n, D);
+        \\  buf #1 g2(Q, n);
+        \\  specify (D => Q) = 22; endspecify
+        \\endmodule
+        \\module fig4(input D, output Q);
+        \\  wire n;
+        \\  buf #10 g1(n, D);
+        \\  buf #20 g2(Q, n);
+        \\  specify (D => Q) = 22; endspecify
+        \\endmodule
+        \\module t;
+        \\  reg d;
+        \\  wire q3, q4;
+        \\  fig3 u3(d, q3);
+        \\  fig4 u4(d, q4);
+        \\  always @(q3) $display("%0t q3=%b", $time, q3);
+        \\  always @(q4) $display("%0t q4=%b", $time, q4);
+        \\  initial begin
+        \\    d = 0;
+        \\    #100 d = 1;
+        \\  end
+        \\endmodule
+    , "22 q3=0\n30 q4=0\n122 q3=1\n130 q4=1\n");
+}
+
+test "§14.3.3 a path delay times a destination driven through a procedural block" {
+    // `q` starts at z (§4.2.1: "The default initialization value for a net
+    // shall be the value z") and takes `r`'s x at time 0, when `clk` too
+    // first transitions: that z -> x lands after Table 14-3's
+    // min(tz1, tz0) = 3. (iverilog starts the net at x and prints no line.)
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input clk, input d, output q);
+        \\  reg r;
+        \\  always @(posedge clk) r <= d;
+        \\  assign q = r;
+        \\  specify (clk => q) = 3; endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk, d;
+        \\  wire q;
+        \\  dut u(clk, d, q);
+        \\  always @(q) $display("%0t q=%b", $time, q);
+        \\  initial begin
+        \\    clk = 0; d = 1;
+        \\    #10 clk = 1;
+        \\  end
+        \\endmodule
+    , "3 q=x\n13 q=1\n");
+}
+
+test "§14.3.3 a destination change no path source caused takes no path delay" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input a, output y);
+        \\  reg r;
+        \\  assign y = r;
+        \\  initial begin r = 0; #5 r = 1; end
+        \\  specify (a => y) = 3; endspecify
+        \\endmodule
+        \\module t;
+        \\  wire y;
+        \\  dut d(, y);
+        \\  always @(y) $display("%0t y=%b", $time, y);
+        \\endmodule
+    , "0 y=0\n5 y=1\n");
+}
+
+test "§14.2.4.4 an ifnone path applies while every state-dependent path from its source is false" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input C1, input IN, output OUT);
+        \\  assign OUT = IN;
+        \\  specify
+        \\    if (C1) (IN => OUT) = (1, 1);
+        \\    ifnone (IN => OUT) = (2, 2);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg c1, in;
+        \\  wire out;
+        \\  dut d(c1, in, out);
+        \\  always @(out) $display("%0t OUT=%b", $time, out);
+        \\  initial begin
+        \\    c1 = 1; in = 0;
+        \\    #10 in = 1;
+        \\    #10 c1 = 0;
+        \\    #1 in = 0;
+        \\  end
+        \\endmodule
+    , "1 OUT=0\n11 OUT=1\n23 OUT=0\n");
+}
+
+test "§14.2.4.4 an ifnone path yields to an edge-sensitive path from its source that fired" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module dut(input CLK, input D, output Q);
+        \\  assign Q = CLK & D;
+        \\  specify
+        \\    (posedge CLK => (Q : D)) = 5;
+        \\    ifnone (CLK => Q) = 1;
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk, d;
+        \\  wire q;
+        \\  dut u(clk, d, q);
+        \\  always @(q) $display("%0t Q=%b", $time, q);
+        \\  initial begin
+        \\    d = 1; clk = 0;
+        \\    #10 clk = 1;
+        \\    #10 clk = 0;
+        \\  end
+        \\endmodule
+    , "1 Q=0\n15 Q=1\n21 Q=0\n");
 }

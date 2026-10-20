@@ -32,9 +32,9 @@
 //! neighbour hierarchy_overview_instances_and_overrides.va
 module ch6_nested_outer(p);
   inout p; electrical p;
-  module ch6_nested_inner(q);
-    inout q; electrical q;
+  analog I(p) <+ V(p);
+  module ch6_nested_inner;
+    electrical q;
     analog I(q) <+ V(q);
   endmodule
-  analog I(p) <+ V(p);
 endmodule

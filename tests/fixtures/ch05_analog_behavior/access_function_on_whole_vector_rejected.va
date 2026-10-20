@@ -10,6 +10,7 @@
 //! lrm 5.5.2
 //! reject-only E0351
 //! neighbour vector_access.va
+//! lrm 5.5.2:1001
 `include "disciplines.vams"
 module ch5_access_function_on_whole_vector(p, n);
   inout p, n; electrical p, n;

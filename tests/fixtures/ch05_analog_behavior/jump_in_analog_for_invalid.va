@@ -15,6 +15,8 @@
 //! lrm 5.11
 //! lrm 5.9.3
 //! reject-only E0440
+//! neighbour jump_in_runtime_for_in_analog_for.va
+//! lrm 5.11:1003
 module ch5_jump_in_analog_for(p);
   inout p; electrical p; genvar k; real x;
   analog begin

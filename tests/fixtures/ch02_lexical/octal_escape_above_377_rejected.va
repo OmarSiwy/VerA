@@ -9,8 +9,9 @@
 // "\377" (255) spelled "\477". A tool that accepts the escape conforms too,
 // so this fixture tests VerA's choice.
 //! lrm 2.7
-//! reject E0148
+//! reject-only E0148
 //! reject octal escape is above \377
+//! neighbour octal_escape_377_largest_byte.va
 `include "check.vh"
 module octal_escape_above_377_rejected(p, n);
     inout p, n;

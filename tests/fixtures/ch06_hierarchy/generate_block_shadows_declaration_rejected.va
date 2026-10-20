@@ -31,6 +31,7 @@
 //! lrm 6.8
 //! lrm 6.8:1
 //! reject-only E0230
+//! neighbour generate_if_true.va
 module ch6_generate_block_shadows_declaration(p);
   inout p; electrical p;
   real sel;

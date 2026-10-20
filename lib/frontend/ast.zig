@@ -195,6 +195,25 @@ pub const SourceFile = struct {
     lte_attrs: std.ArrayList(LteAttr) = .empty,
     /// Every source attribute, including vendor attributes, with its owner.
     attributes: std.ArrayList(AttributeBinding) = .empty,
+    /// IEEE 1364-2005 §12.4.1 hierarchical names whose instance select does
+    /// not fold at parse time (`target[i].val`, `i` a genvar). See `HierIndex`.
+    hier_indices: std.ArrayList(HierIndex) = .empty,
+
+    /// One `.hier_ident` (or hierarchical `.call`) with unfolded instance
+    /// selects. Each such segment is spelled `name[]` in the expression's
+    /// parts (`target[].val`), where a folded one is `name[k]`; `indices`
+    /// holds the unfolded index expressions in segment order, for
+    /// elaboration to fold and respell. `tok` is the expression's main token.
+    /// A digital parse only, as `Defparam.indices`.
+    pub const HierIndex = struct { tok: u32, indices: []const ExprId };
+
+    /// Returns the unfolded instance-select indices of the hierarchical name
+    /// whose main token is `tok`, in segment order; empty when every select
+    /// folded. Linear in `hier_indices`, which only genvar-indexed names fill.
+    pub fn hierIndices(self: *const SourceFile, tok: u32) []const ExprId {
+        for (self.hier_indices.items) |h| if (h.tok == tok) return h.indices;
+        return &.{};
+    }
 
     /// Returns the `kind` attribute on statement `id`, if any; the last one
     /// wins (§2.9). Linear in `lte_attrs`.
@@ -269,6 +288,7 @@ pub const SourceFile = struct {
             .netlist_unsupported = c.netlist_unsupported,
             .lte_attrs = base.lte_attrs,
             .attributes = base.attributes,
+            .hier_indices = base.hier_indices,
         };
     }
 
@@ -296,6 +316,7 @@ pub const SourceFile = struct {
         if (self.base == null) {
             self.attributes.deinit(gpa);
             self.lte_attrs.deinit(gpa);
+            self.hier_indices.deinit(gpa);
         }
         self.* = .empty;
     }
@@ -336,6 +357,8 @@ pub const SourceFile = struct {
         // Vendor-attribute rows name statements and expressions by id, which
         // the copied columns keep valid.
         self.lte_attrs = try src.lte_attrs.clone(gpa);
+        // Rows only: the index slices are borrowed, like the decl slices.
+        self.hier_indices = try src.hier_indices.clone(gpa);
         self.modules = src.modules;
         self.disciplines = src.disciplines;
         self.natures = src.natures;

@@ -43,6 +43,7 @@
 //! lrm 5.6.1
 //! lrm 5.6.1:1
 //! solve
+//! lrm 5.6.1:1001
 `include "check.vh"
 module ch5_signals_and_contributions(a, b, c);
   inout a, b, c;

@@ -33,6 +33,7 @@
 // partition only if it also mis-latches — so 8ns is kept as its own sample.
 //
 //! lrm 8.4.3.2
+//! lrm 8.4.3.2:1001
 //! analysis tran
 //! time 0, 2n, 4n, 6n, 8n, 10n, 12n, 14n
 `timescale 1ns/1ns

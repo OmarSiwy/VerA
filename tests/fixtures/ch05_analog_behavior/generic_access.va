@@ -14,6 +14,7 @@
 //! lrm 5.5.1
 //! bias V(p) = 1.0, V(n) = 0.25
 //! sweep flowZ28pZ2cnZ29 = 0.125
+//! lrm 5.5.1:1001
 `include "check.vh"
 module ch5_generic_access(p, n);
   inout p, n; electrical p, n; branch (p, n) b;

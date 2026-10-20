@@ -34,7 +34,6 @@ const Error = parser.Error;
 pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const open = self.pos;
     const first = b.timing_checks.items.len;
-    const first_path = b.paths.items.len;
     self.pos += 1; // `specify`
     var item_at: u32 = undefined;
     while (!self.reservedIs(self.pos, "endspecify")) : (std.debug.assert(self.pos > item_at)) {
@@ -44,17 +43,16 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
         try parseSpecifyItem(self, b);
     }
     self.pos += 1; // `endspecify`
-    // A digital run (`vera --run`, src/sim/digital/tchk.zig) evaluates the
-    // §15 timing checks, or refuses one by name (E1149); what no run
-    // applies is §14: the path delays and the pulse controls. So a digital
-    // parse warns only for a block holding one of those.
+    // A digital run (`vera --run`) evaluates the §15 timing checks (or
+    // refuses one by name, E1149) and every §14 module path. What it ignores
+    // is §14.6's pulse controls, so a digital parse warns only for those.
     if (self.digital) {
-        if (b.paths.items.len == first_path and !pulseControls(self, open)) return;
+        if (!pulseControls(self, open)) return;
         return self.bag.add(
             .parse,
             .W0251,
             lexer.tokenSpan(self.src, self.starts, open),
-            "its module path delays and pulse controls are never applied",
+            "its §14.6 pulse controls are ignored: the default pulse handling applies (inertial, with reject and error limits equal to the path delay)",
             .{},
         );
     }
@@ -375,14 +373,18 @@ pub fn checkPaths(self: *Parser, b: *const parse_module.Body) Error!void {
             const port = portNamed(b, name);
             if (port == null or (port.?.direction != .output and port.?.direction != .inout))
                 try self.report(ex.mainTok(t), .E0245, "module path destination `{s}` is not an output or inout port (§14.2.1)", .{self.file.str(name)});
-            var drivers: usize = 0;
-            for (b.assigns.items) |a| {
-                if (terminalName(self, a.target) == name) drivers += 1;
-            }
-            for (b.gates.items) |g| {
-                if (terminalName(self, g.out) == name) drivers += 1;
-            }
-            if (drivers > 1) try self.report(ex.mainTok(t), .E0245, "module path destination `{s}` has {d} drivers; §14.2.1 allows only one driver inside the module", .{ self.file.str(name), drivers });
+            // One driver per bit: `buf b0(P[0], ...); buf b1(P[1], ...);`
+            // drive P once each. A select that does not fold covers it all.
+            const n_drv = b.assigns.items.len + b.gates.items.len;
+            const shared = outer: for (0..n_drv) |j| {
+                const dj = driverTarget(b, j);
+                if (terminalName(self, dj) != name) continue;
+                for (0..j) |k| {
+                    const dk = driverTarget(b, k);
+                    if (terminalName(self, dk) == name and bitsOverlap(driverBits(self, dj), driverBits(self, dk))) break :outer true;
+                }
+            } else false;
+            if (shared) try self.report(ex.mainTok(t), .E0245, "module path destination `{s}` has more than one driver on a bit; §14.2.1 allows only one driver inside the module", .{self.file.str(name)});
         }
         if (!p.full) {
             const src = p.ins[0];
@@ -408,6 +410,37 @@ pub fn checkPaths(self: *Parser, b: *const parse_module.Body) Error!void {
                 try self.report(p.main_tok, .E0245, "an ifnone path and an unconditional path for the same module path (§14.2.4.4)", .{});
         }
     }
+}
+
+/// The `j`th driver inside the module: the continuous assignments, then the
+/// gate outputs.
+fn driverTarget(b: *const parse_module.Body, j: usize) Ast.ExprId {
+    const n = b.assigns.items.len;
+    return if (j < n) b.assigns.items[j].target else b.gates.items[j - n].out;
+}
+
+/// The bits a driver's target selects, low to high, when the select is
+/// literal; null for the whole signal or a select that does not fold.
+fn driverBits(self: *const Parser, t: Ast.ExprId) ?[2]i128 {
+    const ex = &self.file.exprs;
+    if (ex.tag(t) != .index) return null;
+    const rg = ex.rhs(t);
+    switch (ex.tag(rg)) {
+        .int_literal => return .{ parse_decl.literalValue(self, rg), parse_decl.literalValue(self, rg) },
+        .range => {
+            if (ex.tag(ex.lhs(rg)) != .int_literal or ex.tag(ex.rhs(rg)) != .int_literal) return null;
+            const a = parse_decl.literalValue(self, ex.lhs(rg));
+            const c = parse_decl.literalValue(self, ex.rhs(rg));
+            return .{ @min(a, c), @max(a, c) };
+        },
+        else => return null, // else: an indexed part-select or a select that does not fold
+    }
+}
+
+fn bitsOverlap(a: ?[2]i128, c: ?[2]i128) bool {
+    const x = a orelse return true;
+    const y = c orelse return true;
+    return x[0] <= y[1] and y[0] <= x[1];
 }
 
 fn samePath(self: *const Parser, p: Ast.SpecPath, q: Ast.SpecPath) bool {

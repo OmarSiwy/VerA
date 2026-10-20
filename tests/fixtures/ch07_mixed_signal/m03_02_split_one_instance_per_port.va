@@ -27,6 +27,7 @@
 // Both are far outside the tolerance.
 //
 //! lrm 7.8.3.2
+//! lrm 7.8.3.2:1001
 //! lrm 7.8.4
 //! lrm 7.8.4:7
 //! lrm 7.8.2
@@ -35,6 +36,8 @@
 //! lrm 7.8.3
 //! lrm 7.8.3:1
 //! lrm 7.8.4:4
+//! lrm 7.6
+//! lrm 7.6:1001
 //! solve
 `include "check.vh"
 

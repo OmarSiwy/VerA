@@ -22,6 +22,7 @@
 // interchangeability rule. This is the analog form that does.
 //
 //! lrm 6.2
+//! lrm 6.2:1001
 //! bias V(p) = 0.5
 `include "check.vh"
 macromodule ch6_macromodule(p);

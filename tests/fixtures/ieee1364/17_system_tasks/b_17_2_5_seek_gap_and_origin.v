@@ -27,6 +27,7 @@
 //   $fseek(fd, -10, 0): no byte -10 exists -> "bad=-1"
 //! lrm 9.5.5
 //! lrm 9.5.5:4
+//! lrm 9.5.5:3
 //! inherited IEEE 1364-2005 17.2.5
 module b_17_2_5_seek_gap_and_origin;
   integer fd, r, c;

@@ -23,6 +23,9 @@
 // where region 1b DOES see 2, is m02_15_explicit_d2a_per_delta_cycle.va.
 //
 //! lrm 8.5.1
+//! lrm 8.5.1:2
+//! lrm 8.5.1:4
+//! lrm 8.5.1:1001
 //! lrm 8.5
 //! lrm 8.5.3.7
 //! analysis tran

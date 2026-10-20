@@ -30,6 +30,7 @@
 //! analysis dc
 //! bias V(p) = 0.3
 //! sweep V(c) = -1.0, 1.25, 2.0
+//! lrm 5.10.3.2:1003
 `include "check.vh"
 module ch5_above(p, c);
   inout p, c; electrical p, c; real held; integer n;

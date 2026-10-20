@@ -14,8 +14,10 @@
 // sentence, and a different code path.
 //
 //! lrm 3.4.1
+//! lrm 3.4.1:1002
 //! lrm 3.4.6
 //! reject-only E0346
+//! neighbour 04_parameter_types.va
 module ch3_string_parameter_untyped(p, n);
     inout p, n;
     electrical p, n;

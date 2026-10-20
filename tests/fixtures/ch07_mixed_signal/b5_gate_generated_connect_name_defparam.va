@@ -35,6 +35,7 @@
 // from the wrong field (`y__g1__in1`, `a__g1__a`) is likewise E0907.
 //
 //! lrm 7.8.5.1
+//! lrm 7.8.5.1:1001
 //! lrm 7.8.5.1:2
 //! lrm 7.8.5
 //! lrm 3.9

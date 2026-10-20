@@ -388,6 +388,7 @@ fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const As
     const d = (try descriptor(self, a, args[0])) orelse return -1;
     const format = try text(a, try evaluate.eval(self, a, args[1], 0));
     var file = try fileScan(a, t, d, format, args.len - 2);
+    try scanContext(self, a, &file.scan, args[2..]);
     try scanAssign(self, a, &file.scan, args[2..]);
     return finishFileScan(t, file, file.scan);
 }
@@ -498,19 +499,26 @@ pub fn readWord(a: std.mem.Allocator, t: contract.FileIo, d: i64, width: u32) Er
 /// descriptor's bits name.
 pub fn fclose(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!void {
     const d = (try descriptor(self, a, args[0])) orelse return;
+    @import("display.zig").cancelFile(self, d);
     if (table(self)) |t| _ = t.close(d);
 }
 
 /// §17.2.2 `$fdisplay`/`$fwrite` and their radix forms: the `$display` text
 /// of the arguments after the descriptor, to every channel it names.
 pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
-    // ponytail: `$fstrobe` and `$fmonitor` are not implemented.
     const d = (try descriptor(self, a, args[0])) orelse return;
+    return fdisplayTo(self, a, d, args, show);
+}
+
+/// `fdisplay` to descriptor `d`, already read from `args[0]`.
+pub fn fdisplayTo(self: *Run, a: std.mem.Allocator, d: i64, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
+    var sh = show;
+    sh.file = false;
     var buf: std.Io.Writer.Allocating = .init(a);
     const saved = self.out;
     self.out = &buf.writer;
     defer self.out = saved;
-    try @import("display.zig").display(self, args[1..], a, show);
+    try @import("display.zig").display(self, args[1..], a, sh);
     self.out = saved;
     if (try channels(table(self), self.io, self.out, d, buf.written())) {
         const start = self.starts[@min(self.file.exprs.mainTok(args[0]), self.starts.len - 1)];
@@ -542,8 +550,17 @@ fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i6
     const input = try text(a, try evaluate.eval(self, a, args[0], 0));
     const format = try text(a, try evaluate.eval(self, a, args[1], 0));
     var sc: Scan = .init(input, format, args.len - 2);
+    try scanContext(self, a, &sc, args[2..]);
     try scanAssign(self, a, &sc, args[2..]);
     return sc.result;
+}
+
+/// What `%u`/`%z` (the output widths) and `%t` (the time scale) read.
+fn scanContext(self: *Run, a: std.mem.Allocator, sc: *Scan, outs: []const Ast.ExprId) Error!void {
+    const widths = try a.alloc(u32, outs.len);
+    for (outs, widths) |e, *w| w.* = (try evaluate.targetType(self, e)).width;
+    sc.widths = widths;
+    sc.time = .{ .units = self.time_format.units, .precision = self.time_format.precision, .unit_exp = self.timeOf(self.scope).unit_exp };
 }
 
 fn scanAssign(self: *Run, a: std.mem.Allocator, sc: *Scan, outs: []const Ast.ExprId) Error!void {
@@ -567,7 +584,7 @@ fn scanAssign(self: *Run, a: std.mem.Allocator, sc: *Scan, outs: []const Ast.Exp
 /// A conversion is `%`, an optional `*` (match, do not assign or count), an
 /// optional maximum field width, and one of %b %o %d %h %x %c %s %f %e %g.
 pub const Scan = struct {
-    // ponytail: %t %v %m %u %z stop the scan; add them when a source reads them.
+    // ponytail: %v %m stop the scan; add them when a source reads them.
     input: []const u8,
     format: []const u8,
     /// Output arguments the call has.
@@ -576,6 +593,29 @@ pub const Scan = struct {
     i: usize = 0,
     result: i64 = 0,
     done: bool = false,
+    /// §17.2.4.3 `%u`/`%z` read "sufficient data from the input to fill the
+    /// target reg": each output argument's width in bits. Without one, or
+    /// past 64 bits, the conversion stops the scan.
+    widths: []const u32 = &.{},
+    /// §17.2.4.3 `%t`'s scale; null stops the scan at a `%t`.
+    time: ?Time = null,
+
+    /// `$timeformat`'s units and precision and the module's time unit, all
+    /// as the exponents (precision: digits) §17.3.2 gives them.
+    pub const Time = struct {
+        units: i32,
+        precision: u32,
+        unit_exp: i32,
+
+        /// "The value matched is then scaled and rounded according to the
+        /// current time scale as set by $timeformat": `v` in $timeformat's
+        /// units, rounded to its precision, in the module's time unit
+        /// (the clause's example: 10.345 at -3, 2 is 10350000.0 in 1ns).
+        pub fn scale(t: Time, v: f64) f64 {
+            const p: i32 = @intCast(t.precision);
+            return @round(v * std.math.pow(f64, 10, @floatFromInt(p))) * std.math.pow(f64, 10, @floatFromInt(t.units - p - t.unit_exp));
+        }
+    };
 
     /// Output argument `arg` (0 = the first after the format) takes a 64-bit
     /// 4-state value (`bits`: value and unknown planes, signed), characters
@@ -624,6 +664,17 @@ pub const Scan = struct {
             while (self.i < format.len and std.ascii.isDigit(format[self.i])) : (self.i += 1) width = width *| 10 +| (format[self.i] - '0');
             if (self.i == format.len) return self.stop(false);
             const conv = std.ascii.toLower(format[self.i]);
+            // §17.2.4.3 `%u`/`%z` match binary data, whose bytes may be white space.
+            if (conv == 'u' or conv == 'z') {
+                if (suppress or width != 0) return self.stop(false);
+                const arg: usize = @intCast(self.result);
+                if (arg >= self.widths.len or arg >= self.outs) return self.stop(false);
+                const bits = unformatted(input[self.at..], self.widths[arg], conv == 'z') orelse return self.stop(true);
+                self.at += bits[2];
+                self.i += 1;
+                self.result += 1;
+                return .{ .arg = arg, .value = .{ .bits = .{ bits[0], bits[1] } } };
+            }
             if (conv != 'c') while (self.at < input.len and std.ascii.isWhitespace(input[self.at])) : (self.at += 1) {};
             if (self.at >= input.len) return self.stop(true);
             // "it extends to the next inappropriate character or until the
@@ -637,6 +688,11 @@ pub const Scan = struct {
                 },
                 'd', 'h', 'x', 'o', 'b' => number(field, conv) orelse return self.stop(false),
                 'f', 'e', 'g' => float(field) orelse return self.stop(false),
+                't' => blk: {
+                    const t = self.time orelse return self.stop(false);
+                    const n, const v = float(field) orelse return self.stop(false);
+                    break :blk .{ n, .{ .real = t.scale(v.real) } };
+                },
                 else => return self.stop(false),
             };
             self.at += n;
@@ -648,6 +704,26 @@ pub const Scan = struct {
             return .{ .arg = arg, .value = value };
         }
         return self.stop(false);
+    }
+
+    /// §17.2.4.3 `%u` (`four` false) / `%z` of a `width`-bit target: 32-bit
+    /// words, the least significant first, each little-endian (the native
+    /// order of every target VerA builds for); a `%z` word is §27.14's
+    /// s_vpi_vecval, aval then bval. The value and unknown planes and the
+    /// bytes used, or null when `input` ends first or `width` passes 64.
+    fn unformatted(input: []const u8, width: u32, four: bool) ?[3]u64 {
+        if (width > 64) return null;
+        const words: usize = @max(1, (width + 31) / 32);
+        const per: usize = if (four) 8 else 4;
+        if (input.len < words * per) return null;
+        var v: u64 = 0;
+        var u: u64 = 0;
+        for (0..words) |k| {
+            const w = input[k * per ..][0..per];
+            v |= @as(u64, std.mem.readInt(u32, w[0..4], .little)) << @intCast(32 * k);
+            if (four) u |= @as(u64, std.mem.readInt(u32, w[4..8], .little)) << @intCast(32 * k);
+        }
+        return .{ v, u, words * per };
     }
 
     /// The characters of `field` one integral conversion matches, and their
@@ -1003,6 +1079,29 @@ test stringValue {
     const none = try stringValue(a, "");
     try std.testing.expectEqual(@as(u32, 8), none.width);
     try std.testing.expectEqual(@as(?i64, 0), none.asInt());
+}
+
+test "§17.2.4.3 Scan: %u, %z and %t" {
+    // %u: a 32-bit word, little-endian; white space is data, not skipped.
+    var u: Scan = .init("\x20\x56\x34\x12", "%u", 1);
+    u.widths = &.{32};
+    try std.testing.expectEqual([2]u64{ 0x12345620, 0 }, u.next().?.value.bits);
+    // %z: aval then bval; z is (0, 1), x is (1, 1).
+    var z: Scan = .init("\x01\x00\x00\x00\x03\x00\x00\x00", "%z", 1);
+    z.widths = &.{8};
+    try std.testing.expectEqual([2]u64{ 1, 3 }, z.next().?.value.bits);
+    // Too few bytes for the target is EOF before the first conversion.
+    var short: Scan = .init("\x01\x02", "%u", 1);
+    short.widths = &.{32};
+    try std.testing.expect(short.next() == null);
+    try std.testing.expectEqual(@as(i64, -1), short.result);
+    // 8.125 at $timeformat(-3, 2) rounds to 8.13ms, 8130000 in 1ns.
+    var t: Scan = .init("8.125", "%t", 1);
+    t.time = .{ .units = -3, .precision = 2, .unit_exp = -9 };
+    try std.testing.expectEqual(@as(f64, 8130000), t.next().?.value.real);
+    // With no width or scale the conversion stops the scan.
+    var none: Scan = .init("1234", "%u", 1);
+    try std.testing.expect(none.next() == null);
 }
 
 test "§17.2.4.3 Scan: C's conversions over a string" {

@@ -31,6 +31,7 @@
 //! reject-only E0501
 //! reject Temp
 //! neighbour conductor.va
+//! lrm 5.5.1:1001
 module ch5_access_not_of_discipline(p, n);
   inout p, n;
   electrical p, n;

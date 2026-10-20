@@ -15,6 +15,7 @@
 //! analysis tran
 //! time 0, 1n, 2n
 //! bias V(p) = 0.3
+//! lrm 5.2.1:1003
 `include "check.vh"
 module ch5_analog_initial(p);
   inout p; electrical p; real gain;

@@ -22,6 +22,7 @@
 //! lrm 6.4.2
 //! lrm 6.4.2:10
 //! reject-only E0914
+//! neighbour paramset_tie_break_fewest_unoverridden.va
 module ch6_amb_user(p, n);
   inout p, n; electrical p, n;
   ch6_amb_bin #(.l(1.0)) u(p, n);

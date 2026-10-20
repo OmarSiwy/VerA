@@ -659,7 +659,11 @@ pub fn onTchk(r: *digital.Run, check: u32) void {
 }
 
 /// IEEE 1364-2005 §27.33.3 cbError: "Simulation run-time error occurred".
-pub fn runError() void {
+/// §12.31.4: "On a cbError callback, the routine vpi_chk_error() can be
+/// called to retrieve error information" — recorded first, and not as a
+/// cbPLIError, which is a different reason.
+pub fn runError(e: anyerror) void {
+    root.noteError("RUNTIME", "simulation run-time error: {t}", .{e});
     fireAll(cbError, null);
 }
 
@@ -698,6 +702,14 @@ pub fn pendingTimes(out: *std.ArrayList(u64), a: std.mem.Allocator, now: u64) !v
 /// Fire the callbacks of `reason` due at `now`, each at most once: a time
 /// callback is one-shot (§12.31.2 "shall occur ... a specified time"), so it
 /// is removed as it fires and its handle stops being valid.
+/// Whether a live `reason` callback is due at `now` (what `fireDue` would run).
+pub fn isDue(reason: c_int, now: u64) bool {
+    for (cbs.items) |cb| {
+        if (!cb.dead and cb.reason == reason and cb.due == now) return true;
+    }
+    return false;
+}
+
 pub fn fireDue(reason: c_int, now: u64) void {
     const n = cbs.items.len;
     for (0..n) |i| {

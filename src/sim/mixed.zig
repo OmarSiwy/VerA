@@ -149,6 +149,7 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                         continue;
                     },
                     .analog => {},
+                    .vpi_sync => unreachable, // only `src/vpi` queues the marker
                 }
                 const t = s.timeOf(k, target, horizon);
                 // §8.4.2: activity before the first analog time is settled
@@ -306,6 +307,7 @@ fn State(comptime A: type) type {
                 .idle => break,
                 .explicit_d2a => try s.explicitD2a(),
                 .analog => {},
+                .vpi_sync => unreachable, // only `src/vpi` queues the marker
             };
         }
 
@@ -612,6 +614,7 @@ fn State(comptime A: type) type {
                 },
                 .explicit_d2a => try s.explicitD2a(),
                 .analog => try s.accept(s.acc.?),
+                .vpi_sync => unreachable, // only `src/vpi` queues the marker
             };
         }
 

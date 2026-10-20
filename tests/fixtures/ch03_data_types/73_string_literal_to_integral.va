@@ -18,6 +18,8 @@
 // type keeps the leading "h" and answers 448378203247.
 //
 //! lrm 3.3
+//! lrm 3.3:1001
+//! lrm 3.3:1003
 //! lrm 3.2
 `include "check.vh"
 module ch03_string_literal_to_integral(p, n);

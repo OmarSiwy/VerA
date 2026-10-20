@@ -18,6 +18,7 @@
 //! lrm 9.13.1
 //! lrm 9.13.3
 //! lrm 9.13.3:1000
+//! lrm 9.13.1:1002
 //! param initial_seed = 7
 //! time 0, 1, 2
 //! checks 12

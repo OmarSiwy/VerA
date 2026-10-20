@@ -27,10 +27,10 @@
 // full path from two inputs to two outputs with - polarity; a parallel
 // posedge path with a data source; a full negedge path; a state-dependent
 // simple path (if), a state-dependent edge path (if) and an ifnone path.
-// Paths are not modelled (W0251), so the cell runs as its assignments:
-// a = 1, b = 0, clk = 1 -> y = a & b = 0, z = a | b = 1, q = a = 1.
+// Every input transitions at time 0, and each output's change takes its active
+// paths' smallest delay (§14.3.3), at most 7, so by t=10 the cell shows its
+// assignments: a = 1, b = 0, clk = 1 -> y = a & b = 0, z = a | b = 1, q = a = 1.
 // Output: "y=0 z=1 q=1".
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.7.2
 `timescale 1ns/1ns
 module b_A_7_2_cell (a, b, clk, y, z, q);

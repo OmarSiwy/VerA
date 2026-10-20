@@ -18,6 +18,7 @@
 //! bias V(p) = 0.7
 //! time 0, 1n, 2n
 //! wave V(c) = -1, 1, 1
+//! lrm 5.10.3.1:1002
 `include "check.vh"
 module ch5_cross_enable(p, c);
   inout p, c; electrical p, c; real held; integer enabled;

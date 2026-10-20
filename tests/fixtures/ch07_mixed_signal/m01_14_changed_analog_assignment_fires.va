@@ -16,6 +16,7 @@
 //
 //! lrm 7.3.5
 //! lrm 7.3.6.1
+//! lrm 7.3.6.1:1001
 //! analysis tran
 //! time 0, 6n, 12n, 16n, 22n, 30n
 `timescale 1ns/1ns

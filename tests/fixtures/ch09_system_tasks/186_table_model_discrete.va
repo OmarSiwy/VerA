@@ -4,6 +4,8 @@
 //! lrm 9.21
 //! lrm 9.21:4
 //! lrm 9.21:10
+//! lrm 9.21.1:1002
+//! lrm 9.21.4:1001
 //! bias V(p) = 2.0
 `include "check.vh"
 module ch09_table_model_discrete(p, n);

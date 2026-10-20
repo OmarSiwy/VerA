@@ -50,6 +50,7 @@
 //! bias V(s) = 1.0
 //! bias V(g) = 0.0
 //! solve
+//! lrm 5.6.6:1001
 `include "check.vh"
 module a02_implicit_solved(s, g);
   inout s, g;

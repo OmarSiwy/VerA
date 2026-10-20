@@ -18,7 +18,9 @@
 //! lrm A.7.5
 //! lrm A.7.5.2
 //! lrm A.7.5.2:1000
-//! reject notifier
+//! reject-only notifier
+//! reject endspecify
+//! neighbour b8_timing_checks_design_runs.va
 module annex_a_numeric_notifier(o, a, clk);
   output o;
   input a, clk;

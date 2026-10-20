@@ -21,6 +21,7 @@
 // now has its own (`elaborate/paramset.zig` `paramsetOverrides`).
 //
 //! lrm 6.4
+//! lrm 6.4:1
 //! lrm 6.4.1
 //! bias V(p) = 0.5
 //! checks 2

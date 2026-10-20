@@ -13,6 +13,7 @@
 // Two checks, both want 2.
 //! lrm 4.2.4
 //! lrm 4.2.4:1002
+//! lrm 4.2.4:1
 //! sweep V(p) = 3, -3
 //! checks 2
 //! print none

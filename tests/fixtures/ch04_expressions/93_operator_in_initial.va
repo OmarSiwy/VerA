@@ -11,7 +11,7 @@
 // would be satisfied by a typo in this file.
 //
 //! lrm 4.5.15
-//! reject E0422
+//! reject-only E0422
 module ch04_operator_in_initial(p, n);
     inout p, n;
     electrical p, n;

@@ -39,6 +39,7 @@
 // refusal is probe_of_a_discrete_net_in_digital_rejected.va.
 //
 //! lrm 7.3.3
+//! lrm 7.3.3:1001
 //! lrm 7.3.6.3
 //! analysis tran
 //! time 0, 10n, 18n, 25n

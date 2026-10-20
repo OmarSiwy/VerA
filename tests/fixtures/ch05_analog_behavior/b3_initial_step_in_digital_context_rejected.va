@@ -19,7 +19,7 @@
 //! lrm 5.10
 //! lrm 5.10:3
 //! reject-only digital context
-//! neighbour ../ch07_mixed_signal/event_bounds_mixed_legal.va
+//! neighbour b3_cross_expr_tol_and_time_tol_both_hold.va
 `timescale 1ns/1ps
 module b3_initial_step_in_digital_context(p);
   inout p; electrical p;

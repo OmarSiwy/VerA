@@ -15,6 +15,7 @@
 //! lrm 2.8.3
 //! lrm 2.8.3:1
 //! reject-only E0209
+//! neighbour 09_system_identifiers.va
 module ch02_bare_dollar_rejected;
     real value;
     analog value = $ ;

@@ -33,7 +33,7 @@ pub const Edge = enum(u2) {
     /// Whether a change of the watched bit from `before` to `after` is this
     /// edge (§9.7.2 Table 9-1). `any` is true for every change, since the
     /// caller has already proved the whole value changed.
-    fn matches(self: Edge, before: Int.Bit, after: Int.Bit) bool {
+    pub fn matches(self: Edge, before: Int.Bit, after: Int.Bit) bool {
         // A plain `@(v)` term watches the whole value, which the caller has
         // already proved changed; the other two read the LSB the table covers.
         if (self == .any) return true;
@@ -127,6 +127,9 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // over anything, including a net's resolution.
     const dest = self.values[target];
     const before = dest.bit(0);
+    // §14.3.3 a module path source's transitions, by time (`resolution.pathDelay`).
+    const path_source = target < self.watch.len and self.watch[target].contains(.path);
+    const before_words: [2]u64 = if (path_source) .{ dest.values()[0], dest.unknowns()[0] } else undefined;
     const changed = changed: {
         if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
             if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
@@ -151,13 +154,11 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // watches a slot yet.
     if (self.growing != null or self.folding_constant) return;
     if (!changed) return driver.stored(self, target, false);
+    if (path_source) try self.path_changed.put(self.arena, target, .{ .time = self.scheduler.now, .before = before_words, .after = .{ dest.values()[0], dest.unknowns()[0] } });
     // Most slots have no watcher, so one test skips them all.
     const watchers = self.watch[target];
     if (watchers.count() != 0) {
-        if (watchers.contains(.monitor)) {
-            self.monitor_slot_hit = true;
-            try requestMonitor(self);
-        }
+        if (watchers.contains(.monitor)) try @import("display.zig").monitorChanged(self, target);
         if (watchers.contains(.analog)) try requestAnalog(self);
         if (watchers.contains(.vcd) or watchers.contains(.ports)) try requestVcd(self);
         if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
@@ -302,6 +303,17 @@ pub fn requestVcd(self: *Run) Error!void {
 /// statements": the waiters of a monitor slot resume in the active region.
 pub fn wakeA2d(self: *Run, slot: u32) Error!void {
     return wake(self, slot, .x, .x);
+}
+
+/// Re-run the MOS switches reading `target` (§7.11), when its strength
+/// changed and its value may not have: no event control sees that.
+pub fn wakeSwitches(self: *Run, target: u32) Error!void {
+    if (target + 1 < self.fan_start.len) for (self.fan[self.fan_start[target]..self.fan_start[target + 1]]) |pc| if (self.armed[pc]) {
+        const ins = self.code.items[pc];
+        if (ins != .continuous or self.drivers[ins.continuous].source != .mos) continue;
+        self.armed[pc] = false;
+        _ = try exec.enqueue(self, .{ .run_process = pc }, null, false);
+    };
 }
 
 /// Resume every process suspended on `target` whose edge matches. Split out

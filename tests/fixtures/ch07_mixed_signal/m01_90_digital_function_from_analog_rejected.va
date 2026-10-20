@@ -49,6 +49,7 @@
 //! lrm 4.7
 //! lrm 7.3.7:1000
 //! reject-only E0436
+//! neighbour functions_called_from_their_own_context.va
 module m01_digital_function_from_analog(p);
   inout p;
   electrical p;

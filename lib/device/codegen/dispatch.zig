@@ -434,6 +434,22 @@ fn emitDisplay(self: *Gen) Error!void {
         \\/// those passes; `.all` (`display`) at one that ran none.
         \\pub fn displayPass(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState, comptime pass: contract.SayPass) void {{
         \\    _ = {s}(S, zProbe(S, x), model, inst, sim, pass);
+        \\    zFinishPass(S, x, model, inst, sim);
+        \\}}
+        \\
+        \\/// §5.10.2 a `$finish`/`$stop` recorded during the pass: `$finish` first
+        \\/// raises `final_step` and re-runs the chain so the event's own tasks
+        \\/// print, then the run ends. `final_step` and `zFinish` make the nested
+        \\/// pass terminate without repeating either.
+        \\fn zFinishPass(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
+        \\    if (zFinish == 0) return;
+        \\    if (zFinish == 1 and !sim.final_step) {{
+        \\        var zfs = sim;
+        \\        zfs.final_step = true;
+        \\        _ = eval(S, x, model, inst, zfs);
+        \\        display(S, x, model, inst, zfs);
+        \\    }}
+        \\    _ = zHalt(0);
         \\}}
         \\
         \\
@@ -442,6 +458,22 @@ fn emitDisplay(self: *Gen) Error!void {
         \\/// §9.4 run this module's display tasks once, in source order.
         \\pub fn display(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
         \\    _ = {s}(S, zProbe(S, x), model, inst, sim);
+        \\    zFinishPass(S, x, model, inst, sim);
+        \\}}
+        \\
+        \\/// §5.10.2 a `$finish`/`$stop` recorded during the pass: `$finish` first
+        \\/// raises `final_step` and re-runs the chain so the event's own tasks
+        \\/// print, then the run ends. `final_step` and `zFinish` make the nested
+        \\/// pass terminate without repeating either.
+        \\fn zFinishPass(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
+        \\    if (zFinish == 0) return;
+        \\    if (zFinish == 1 and !sim.final_step) {{
+        \\        var zfs = sim;
+        \\        zfs.final_step = true;
+        \\        _ = eval(S, x, model, inst, zfs);
+        \\        display(S, x, model, inst, zfs);
+        \\    }}
+        \\    _ = zHalt(0);
         \\}}
         \\
         \\

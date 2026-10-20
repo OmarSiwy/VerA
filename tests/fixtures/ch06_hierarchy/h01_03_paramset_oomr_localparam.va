@@ -35,6 +35,7 @@
 // declared default instead, in the `in_paramset` context only.
 //
 //! lrm 6.4.1
+//! lrm 6.4.1:1001
 //! bias V(p) = 0.5
 `include "check.vh"
 module h01_oomr(p, n);

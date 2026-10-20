@@ -8,7 +8,7 @@
 // b_A_2_4_pp runs as a plain buffer of the top's 1'b1: y = 1 at t=1 ->
 // "y=1".
 // digital-runner: warning W0251
-//! inherited IEEE 1364-2005 A.2.4
+//! inherited IEEE 1364-2005 A.2.4 14.6 14.6.1
 `timescale 1ns/1ns
 module b_A_2_4_pp (a, y);
   input a;

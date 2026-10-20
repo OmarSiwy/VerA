@@ -13,6 +13,7 @@
 // the legal neighbour of b3_above_noninteger_enable_rejected.va (enable 0.5).
 //
 //! lrm 5.10.3.2
+//! lrm 5.10.3.2:3
 //! analysis tran
 //! time 0, 1n
 //! bias V(c) = 0.9

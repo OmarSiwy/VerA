@@ -19,7 +19,7 @@
 //! lrm 6.3.1:3
 //! lrm 6.3.1:6
 //! inherited IEEE 1364-2005 12.2.1
-//! reject E1100
+//! reject-only E1100
 //! reject outside the generate block
 //! neighbour b_12_2_1_defparam_inside_generate_block.v
 module flop;

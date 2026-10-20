@@ -382,8 +382,16 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
 const attributed_lists = .{ "ports", "params", "vars", "nets", "instances", "defparams", "events", "functions", "analog", "discrete", "assigns", "gates", "pulls", "tasks", "switches", "paths", "timing_checks" };
 
 fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
-    try self.refuseAms();
-    switch (self.peek()) {
+    // Under a 1364 language a keyword the §10.6 set frees, followed by a name
+    // or a `#`, is a name opening an instance or a declaration (IEEE 1364-2005
+    // annex B reserves no Verilog-AMS word, so `connect u(a, b);` instantiates
+    // `connect`). Under Verilog-AMS the construct wins: §10.6's own example
+    // keeps `analog I(sin, n) <+ ...` under "1364-2005".
+    const freed = @backingInt(self.language) < @backingInt(token.KeywordSet.vams_2_3) and
+        token.isKeyword(self.peek()) and self.identLike(self.pos) and
+        (self.identLike(self.pos + 1) or self.peekAt(1) == .hash);
+    if (!freed) try self.refuseAms();
+    switch (if (freed) .identifier else self.peek()) {
         // §10.6: "can only be specified outside of a design element".
         .dir_begin_keywords, .dir_end_keywords => return self.failAt(
             self.pos,
@@ -414,7 +422,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         // Not an item: a generate_block is only ever the body of the two
         // above (E0221). Kept as its own arm so the diagnostic can cite
         // Syntax 6-8 rather than blaming the analog subset.
-        .kw_begin => return self.failAt(self.pos, .E0221, "", .{}),
+        .kw_begin => return self.failAt(self.pos, .E0221, "found {s}", .{self.found(self.pos)}),
         // §3.4 parameter / localparam (A.2.1.1)
         .kw_parameter, .kw_localparam => {
             // §6.6: a generate block "may not contain port declarations,

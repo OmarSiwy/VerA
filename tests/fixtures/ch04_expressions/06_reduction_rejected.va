@@ -18,6 +18,7 @@
 //! lrm 4.2.10
 //! lrm 4.2.10:1000
 //! reject-only E0348
+//! neighbour parameter_reduction_and_arithmetic_shift.va
 module ch04_reduction_rejected(p, n);
     inout p, n;
     electrical p, n;

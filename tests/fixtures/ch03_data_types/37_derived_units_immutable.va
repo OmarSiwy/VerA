@@ -9,6 +9,7 @@
 //! lrm 3.6.1.2
 //! lrm 3.6.1.2:10
 //! reject-only E0333
+//! neighbour b1_3_6_1_2_derived_nature_inherits_units.va
 nature ch3_units_parent; units="V"; access=UnitsV; abstol=1u; endnature
 nature ch3_units_child:ch3_units_parent; units="A"; endnature
 module ch3_bad_units; endmodule

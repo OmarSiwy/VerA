@@ -20,6 +20,7 @@
 //! lrm 5.10.3.1:1
 //! reject-only E0517
 //! neighbour event_bounds_cross_legal.va
+//! lrm 5.10:1
 module b3_cross_null_expr(p);
   inout p; electrical p;
   integer n;

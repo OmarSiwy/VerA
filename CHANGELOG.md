@@ -11,6 +11,48 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 - `--emit-osdi` builds a large device as parallel objects: `eval` and every callback the simulator calls per iterate on LLVM, noise in its own object, and the once-per-instance code (parameter access, setup, setup's chunks) on the self-hosted backend on x86_64 Linux. PSP103 builds in about half the time.
 - A finished `.osdi` is cached in Zig's global cache directory (`vera-osdi`), keyed by everything that decides its bytes, so rebuilding a model already built in any work directory copies it.
 
+## v0.11.3 — 2026-10-20
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2750 / 2750 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **383 / 808 — 47.4%** | 4 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 3 · 1 · 0 · 421 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
+### New
+
+- Module path delays (IEEE 1364-2005 §14) are applied, in `vera --run` and natively: the delay of the active path whose source changed most recently, per transition (Tables 14-2/14-3, all 1/2/3/6/12-value lists), with state-dependent paths, `ifnone` and edge-sensitive paths, and the larger of path and distributed delay (§14.4). W0251 now warns only for §14.6 pulse controls, which are still ignored (default inertial handling).
+- §15.8 explicit delayed signals in `$setuphold`/`$recrem` with non-negative limits (an undelayed copy); `$fmonitor`, `$fstrobe`; `%u`/`%z` in output and input, `%t` input scaled by `$timeformat`; genvar-indexed hierarchical names and task enables (`g[i].x`, `g[i].t;`); instance arrays of MOS, `tran` and pull gates; net-array element selects, `force` of a net-array element; continuous assignments with a variable delay.
+- Analog event arrays (§5.10.4); `final_step` runs on `$finish` (§5.10.2); `$fatal` in a rejected iteration ends the run (§9.7.3); an expression as the actual of a digital input port (§6.2.2); wreal child ports promote the parent's wire (§3.7); `$bound_step` is floored at the minimum step (§9.17.2); VPI cbError (§12.31.4) and cbReadWriteSynch as an inactive event (§8.5.1).
+
+### Changed
+
+- A unary operator's operand must be a primary (1364-2005 A.8.3, VAMS-2023 annex A): `- -x`, `!!x` and `~ &x` are refused with E0209; write `-(-x)`. A binary-then-unary form such as `a + - b` is unaffected.
+- A delay of a sized constant needs parentheses (`#(64'd5)`, A.2.2.3); `@ev[0]` is written `@(ev[0])` (A.6.5); a module instance takes no delay (A.4.1.1).
+- A port connected to a net of another width is converted as a continuous assignment (§12.3.9.2, §5.6) under `--std=1364-*`; under VAMS-2023 (the default) it is refused (§6.5.7.1).
+- A `force`/`assign` takes effect before the next statement; a strength-only change on a net a MOS switch reads re-runs the switch (§7.11).
+
+### Fixed
+
+- `$fgets`/`$fscanf` read their line lazily, so a read after `$fclose` or another read returned an empty string or 0.
+- A parameter's declared range and width, untyped parameter width, and `time` parameters (unsigned 64-bit); a real converted to an integer wider than 64 bits; `$rtoi`-style rounding of a real parameter used as a delay.
+- defparams naming nothing or no parameter are refused (E0901/E0907); non-ANSI port redeclarations of another range or type are refused; a port typed by a later declaration works for functions and tasks; implicit nets inside instance expressions; generate-scope localparams, functions and named blocks; constant functions with named blocks or system tasks; hierarchical task calls that suspend; automatic variables refused where §10 forbids them; attribute values must be constant (§3.8).
+- `$monitor` prints when one of its arguments changes, not when any bit of the underlying variable does; part-select drivers keep their strength; `uwire` refuses only overlapping driver bits.
+- `$sscanf` treats NUL as whitespace (§9.5.4.2:3); `` `default_nettype ``/`` `unconnected_drive `` operands may be on the next line; a backslash-newline inside a `//` comment in a macro; AMS keywords are identifiers under a 1364 `--std`; `1364-2001-noconfig` is accepted.
+
 ## v0.11.2 — 2026-10-20
 
 | Measure | Number | Remaining to v1.0.0 | Command |

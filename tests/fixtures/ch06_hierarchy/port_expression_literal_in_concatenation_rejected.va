@@ -30,7 +30,7 @@
 //! lrm 6.5.1:1
 //! reject-only E0208
 //! reject 1'b0
-//! neighbour ../annex_a_syntax/42_concatenated_port.va
+//! neighbour port_select_ordered_of_a_parent_port.va
 module ch6_port_literal_member({a, 1'b0}, n);
   inout a, n;
   electrical a, n;

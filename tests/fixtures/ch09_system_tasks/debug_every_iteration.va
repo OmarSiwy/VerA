@@ -22,6 +22,7 @@
 // There is no invalid input: $debug takes any display argument list.
 //! lrm 9.4.1
 //! lrm 9.4.6
+//! lrm 9.4.6:1
 //! solve
 //! print none
 //! checks 3

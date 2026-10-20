@@ -21,6 +21,7 @@
 //! lrm 6.6
 //! lrm 6.6:7
 //! reject-only E0228
+//! neighbour generate_if_true.va
 module ch6_generate_nested_region(p);
   inout p; electrical p;
   generate

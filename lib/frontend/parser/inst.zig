@@ -347,13 +347,15 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
         // A.3.1 makes `name_of_gate_instance` optional here too; `(` after
         // the name tells the two apart, as in `parseGates`.
         var name: Ast.StrId = .none;
+        var range: ?Ast.Dim = null;
         if (self.identLike(self.pos)) {
             name = try self.internTok(self.pos);
             self.pos += 1;
+            range = try parse_decl.optDim(self);
         }
         _ = try self.expect(.lparen);
         const out = try parse_expr.parseNetLvalue(self); // A.3.3 output_terminal ::= net_lvalue
-        try b.pulls.append(self.arena, .{ .out = out, .one = side == 1, .strength = strength, .name = name, .main_tok = main_tok });
+        try b.pulls.append(self.arena, .{ .out = out, .one = side == 1, .strength = strength, .name = name, .range = range, .main_tok = main_tok });
         _ = try self.expect(.rparen);
         if (!self.eat(.comma)) break;
     }

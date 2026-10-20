@@ -4,6 +4,7 @@
 //! lrm 3.4.5
 //! lrm 3.4.5:1000
 //! reject-only E0907
+//! neighbour 06_local_parameter.va
 module localparam_override_target;
   parameter real base = 2.0;
   localparam real derived = 2.0 * base;

@@ -20,6 +20,7 @@
 // band is the solver's convergence tolerance, relative 1e-4, as in 26_limit.
 //
 //! lrm 9.17.3
+//! lrm 9.17.3:1002
 //! nowarn
 //! solve
 //! bias V(p) = 0.7, V(n) = 0

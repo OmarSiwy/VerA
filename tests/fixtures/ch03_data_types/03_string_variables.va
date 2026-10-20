@@ -17,6 +17,7 @@
 // parameter, would still pass the two positive lines if `==` always returned 1.
 //
 //! lrm 3.3
+//! lrm 3.3:1002
 `include "check.vh"
 module ch03_string_variables(p);
     inout p;

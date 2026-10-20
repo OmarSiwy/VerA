@@ -11,6 +11,7 @@
 //           `checkRange` names `r` and the run ends there.
 // range_card_value_excluded_rejected.va is the `exclude` half.
 //! lrm 3.4.2
+//! lrm 3.4.2:2
 //! psweep r = 3, -1
 //! bias V(p) = 1, V(n) = 0
 //! reject-run E0377

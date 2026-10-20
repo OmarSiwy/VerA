@@ -11,5 +11,6 @@
 //! lrm 5.4.2.2:1000
 //! bias V(p) = 1.0, V(n) = 0.25
 //! sweep flowZ28pZ2cnZ29 = 0.125
+//! lrm 5.4.2.2:1001
 `include "check.vh"
 module ch5_source_probe(p,n); inout p,n; electrical p,n; branch(p,n) b; analog begin `CHECKX("named branch potential is the node difference", V(b), 0.75); `CHECKX("named branch flow probe", I(b), 0.125); `CHECKX("the source relation", 10.0*I(b), 1.25); `CHECKX("flow contributed onto node p", V(b)+I(b), 0.875); V(b)<+10.0*I(b); I(p)<+V(b)+I(b); end endmodule

@@ -25,12 +25,12 @@
 // source may raise or lower q: unknown), qp = In1 | s (a source's rise never
 // lowers it: positive), qn = ~(In1 & s) (a source's rise never raises it:
 // negative). The polarity is not applied to anything (the clause: it "does
-// not affect the actual propagation"), so the transcript is the logic's,
-// sampled 50 after each change, past the longest delay (4):
+// not affect the actual propagation"); each output change takes its paths'
+// delay (§14.3.3), and the transcript is sampled 50 after each change, past
+// the longest delay (4):
 //   t = 1:   In1 = 0, s = 1: q = 1, qp = 1, qn = ~0 = 1
 //   t = 51:  In1 = 1:        q = 0, qp = 1, qn = ~1 = 0
 //   t = 101: s = 0:          q = 1, qp = 1, qn = 1
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2.7 14.2.7.1 14.2.7.2 14.2.7.3
 `timescale 1ns/1ns
 module b_14_2_7_polarity_cell(In1, s, q, qp, qn);

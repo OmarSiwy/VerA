@@ -1,6 +1,7 @@
 // §2.2 a comment is a token separator. If this fixture ever COMPILES again, the
 // preprocessor has gone back to welding `1` and `2` into the literal 12.
 //! reject-only E0207
+//! neighbour audit_comment_separator_legal_neighbor.va
 //! reject expected `)`
 // §2.2: "Verilog-AMS HDL source text files shall be a stream of lexical
 // tokens", and the list that follows names `comment` as one of the seven token

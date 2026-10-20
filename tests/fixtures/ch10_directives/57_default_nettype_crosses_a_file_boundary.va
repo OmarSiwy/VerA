@@ -26,6 +26,7 @@
 //! lrm 2.8.4:2
 //! lrm 10.1:1000
 //! reject-only E0367
+//! neighbour 55_default_nettype_wire_restores_implicit_nets.va
 `include "nettype_none.vh"
 module ch10_crosses_boundary_child(a, b);
     inout a, b;

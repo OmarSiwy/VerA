@@ -20,6 +20,7 @@ const PullInst = ast.PullInst;
 const SwitchInst = ast.SwitchInst;
 const Defparam = ast.Defparam;
 const NetDecl = ast.NetDecl;
+const Subroutine = ast.Subroutine;
 const FuncDecl = ast.FuncDecl;
 
 /// Which of A.6.5's three procedural timing controls a prefixed statement
@@ -181,6 +182,9 @@ pub const GenItems = struct {
     defparams: []const Defparam = &.{},
     /// IEEE 1364-2005 §12.4 the block's own nets, declared in its scope.
     nets: []const NetDecl = &.{},
+    /// IEEE 1364-2005 A.1.5 `module_or_generate_item_declaration`'s task and
+    /// function declarations, scoped to the block (§12.4).
+    tasks: []const Subroutine = &.{},
 };
 
 /// §5.3.2 sequential block body plus its local declarations

@@ -46,6 +46,7 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
     const signed = self.eat(.kw_signed);
     // §3.4.1: no type keyword is `.unspecified`, inferred from the default
     // by lowering.
+    const is_time = self.peek() == .kw_time;
     const ty = varType(self.peek()) orelse .unspecified;
     if (ty != .unspecified) self.pos += 1;
     // A.2.1.1's first arm, `parameter [ signed ] [ range ] list_of_param_assignments`.
@@ -85,6 +86,7 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
             .default = default,
             .is_local = is_local,
             .is_signed = signed,
+            .is_time = is_time,
             .dims = dims,
             .packed_range = packed_range,
             .ranges = ranges.items,
@@ -305,7 +307,7 @@ pub fn literalWidth(self: *const Parser, d: Ast.Dim) ?u64 {
 // An `.int_literal`'s value as written. The store keeps an `i64`, so an
 // unsigned 64-bit literal with its top bit set (`64'h8000000000000000`)
 // reads back negative; reinterpreted here, it is the large positive number.
-fn literalValue(self: *const Parser, e: Ast.ExprId) i128 {
+pub fn literalValue(self: *const Parser, e: Ast.ExprId) i128 {
     const lit = self.file.exprs.intLiteral(e);
     if (!lit.signed and lit.value < 0) return @as(u64, @bitCast(lit.value));
     return lit.value;

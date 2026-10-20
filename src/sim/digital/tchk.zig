@@ -26,6 +26,7 @@ const root = @import("root.zig");
 const Run = root.Run;
 const Error = root.Error;
 const compile = @import("compile.zig");
+const elab = @import("elab.zig");
 const evaluate = @import("evaluate.zig");
 const waiters = @import("waiters.zig");
 const wordMask = @import("net.zig").wordMask;
@@ -190,9 +191,10 @@ fn compileOne(r: *Run, t: *const Ast.TimingCheck) Error!void {
         .setuphold, .recrem => {
             c.ev[0] = try event(r, t, 0);
             c.ev[1] = try event(r, t, 1);
-            // §15.5.1, §15.5.2: the timestamp and timecheck conditions and
-            // the delayed signals serve negative timing checks (§15.8).
-            for (5..9) |k| if (arg(t, k) != .none) return r.failWith(
+            // §15.5.1, §15.5.2: the timestamp and timecheck conditions
+            // serve negative timing checks (§15.8). The delayed signals are
+            // driven (`delayedDrivers`).
+            for (5..7) |k| if (arg(t, k) != .none) return r.failWith(
                 .E1149,
                 r.file.exprs.mainTok(arg(t, k)),
                 "argument {d} of `{s}` (a stamptime or checktime condition, or a delayed signal: IEEE 1364-2005 §15.5.1, §15.5.2) is not evaluated by VerA's digital engine",
@@ -207,6 +209,52 @@ fn compileOne(r: *Run, t: *const Ast.TimingCheck) Error!void {
         },
     }
     try r.tchks.append(r.arena, c);
+}
+
+/// §15.5.1 the explicit delayed signals of every `$setuphold` and `$recrem`
+/// (arguments 8 and 9, Syntax 15-3/15-6) of the instances `e` elaborated:
+/// each is a net the check drives with its reference or data signal. "The
+/// delayed timing check signals are only actually delayed when negative
+/// limit values are present", which `signedLimit` refuses, so each is a
+/// zero-delay copy, one more driver of its net (a port window, `Bridge`).
+pub fn delayedDrivers(r: *Run, e: *elab.Elab) Error!void {
+    for (e.insts.items) |inst| for (inst.module.timing_checks) |*t| {
+        const name = r.file.str(t.name);
+        if (!std.mem.eql(u8, name, "$setuphold") and !std.mem.eql(u8, name, "$recrem")) continue;
+        r.scope = inst.scope;
+        for ([_][2]usize{ .{ 7, 0 }, .{ 8, 1 } }) |pair| {
+            const dst_e = arg(t, pair[0]);
+            if (dst_e == .none) continue;
+            const src = try terminal(r, t.args[pair[1]]);
+            const dst = try terminal(r, dst_e);
+            const net = r.net_of.get(dst.slot) orelse
+                return r.failWith(.E1147, r.file.exprs.mainTok(dst_e), "a delayed signal of `{s}` is a net (IEEE 1364-2005 §15.5.1)", .{name});
+            if (src.width != dst.width)
+                return r.failWith(.E1147, r.file.exprs.mainTok(dst_e), "a delayed signal of `{s}` is as wide as the signal it delays (IEEE 1364-2005 §15.5.1)", .{name});
+            try e.wires.append(r.arena, .{
+                .net = net,
+                .scope = inst.scope,
+                .source = .{ .bridge = .{ .src = src.slot, .src_lo = src.lo, .dst_lo = dst.lo, .width = src.width } },
+                .tok = t.main_tok,
+            });
+        }
+    };
+}
+
+/// A.7.3 a `specify_terminal_descriptor`: a name, or a constant select of one.
+fn terminal(r: *Run, e: Ast.ExprId) Error!struct { slot: u32, lo: u32, width: u32 } {
+    const ex = &r.file.exprs;
+    switch (ex.tag(e)) {
+        .ident, .hier_ident => {
+            const at = try r.slot(e);
+            return .{ .slot = at, .lo = 0, .width = r.values[at].width };
+        },
+        else => { // else: a select, which `selectTerm` admits; every other form is refused there
+            const sel = (try compile.selectTerm(r, e)) orelse
+                return r.failWith(.E1147, ex.mainTok(e), "a timing check terminal names a port or a constant select of one (A.7.3)", .{});
+            return .{ .slot = sel.slot, .lo = @intCast(sel.first), .width = sel.count };
+        },
+    }
 }
 
 /// Event argument `k`: A.7.3's `specify_terminal_descriptor`, a name or a
@@ -584,6 +632,27 @@ test "§15.2.2: a $hold pair at one time violates whichever event comes first" {
         \\  end
         \\endmodule
     , "1 n=0\n10 n=1\n20 n=0\n");
+}
+
+test "§15.5.1: with non-negative limits a delayed signal is its signal undelayed" {
+    try root.expectRun(
+        \\module c(clk, d);
+        \\  input clk; input [1:0] d;
+        \\  wire dclk; wire [1:0] dd;
+        \\  always @(dclk or dd) $display("%0d %b %b", $time, dclk, dd[1]);
+        \\  specify
+        \\    $setuphold(posedge clk, d[1], 0, 0, , , , dclk, dd[1]);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk; reg [1:0] d;
+        \\  c u(clk, d);
+        \\  initial begin
+        \\    #1 clk = 0; d = 2'b10;
+        \\    #1 clk = 1;
+        \\  end
+        \\endmodule
+    , "1 0 1\n2 1 1\n");
 }
 
 test "§15.3.1: a check the engine does not evaluate is refused by name" {

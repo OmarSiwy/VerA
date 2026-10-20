@@ -21,9 +21,9 @@
 // (The flop waits on a net copy of clockv[0]: VerA refuses an event control
 // on a bit-select, E1100, a §9.7 gap outside this clause.)
 //
-// VerA reads the paths and applies no delay (W0251), so the transcript is
-// sampled 40 or more after the last edge, where a simulator applying the
-// (10, 8) delays agrees:
+// Each output change takes its path's delay when the path's edge caused it
+// (§14.2.3, §14.3.3); the transcript is sampled 40 or more after the last
+// edge, past the (10, 8) delays:
 //   t = 1:   in = 1; clockv 2'bxx -> 2'b10: bit 0 x -> 0 is a negedge
 //            (§9.7.2), so out_n <= ~1 = 0; clock x -> 0: no posedge, and
 //            out_any <= 1 (any transition).
@@ -34,7 +34,6 @@
 //            clock 1 -> 0: no posedge, out keeps 1; out_any <= 0.
 //   t = 111: prints out=1 out_n=1 out_any=0.
 // in is set before the edges that sample it, so no edge races its data.
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2.3
 `timescale 1ns/1ns
 module b_14_2_3_edge_sensitive_paths_cell(clock, clockv, in, out, out_n, out_any);

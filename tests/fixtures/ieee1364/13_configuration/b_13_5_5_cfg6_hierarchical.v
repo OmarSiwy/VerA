@@ -21,7 +21,7 @@
 //   t=22 top.a2.f2 gateLib.foo (cfg5's default list).
 // digital-runner: --libmap ex13_5/lib.map
 // digital-runner: files ex13_5/top.v ex13_5/adder.v ex13_5/adder.vg
-//! inherited IEEE 1364-2005 13.3.2 13.3.1.6 13.1.1
+//! inherited IEEE 1364-2005 13.5.5 13.3.2 13.3.1.6 13.1.1
 `timescale 1ns/1ns
 config cfg5;
     design aLib.adder;

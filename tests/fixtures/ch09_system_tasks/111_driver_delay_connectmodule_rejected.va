@@ -18,6 +18,7 @@
 //! lrm 9.23:1000
 //! reject-only connect module
 //! reject E0818
+//! neighbour ../ch07_mixed_signal/m04_15_driver_delay_and_next_state.va
 module ch09_atomic_driver_delay_connectmodule_rejected(p, n);
   inout p, n; electrical p, n;
   real info;

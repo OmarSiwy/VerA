@@ -5,6 +5,7 @@
 // derive from the final overridden values too. These are HDL instantiation
 // overrides, not numeric host bindings, so the source retains each value's type.
 //! lrm 3.4.1
+//! lrm 3.4.1:1001
 //! lrm 6.3
 //! lrm 6.3.3
 //! lrm 6.3.3:1

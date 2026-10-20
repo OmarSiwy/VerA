@@ -68,6 +68,7 @@
 //! lrm 12.10:4
 //! lrm 12.10:5
 //! lrm 12.10:7
+//! lrm 12.10:1001
 //! design ch12_vpi_routines/p03_dc_divider.va
 //! stdout p03-08: v=1.25 i=0.0025 vexp=1.250000e+00 vdec=1.25 vg=1.25 fmt_reset=1 sep_buf=1 overwritten=1
 

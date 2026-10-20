@@ -29,6 +29,7 @@
 //! param at_excluded_open_high = 20
 //! param at_second_excluded_open_low = 30
 //! lrm 3.4.2
+//! lrm 3.4.2:1001
 `include "check.vh"
 module ch03_parameter_range_legal_endpoints(p, n);
     inout p, n;

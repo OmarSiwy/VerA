@@ -12,12 +12,11 @@
 //   path_delay_expression ::= constant_mintypmax_expression
 //
 // One path per form: a bare single delay and a parenthesized one, then two,
-// three, six and twelve delays, the last with a specparam in it. Paths are not
-// modelled (W0251, the §1 B scope for §14), so the cell runs as its
-// assignment: y = a = 1.
+// three, six and twelve delays, the last with a specparam in it. Every source
+// transitions at time 0; y's x -> 1 then takes the smallest of the active
+// paths' Table 14-2/14-3 delays (§14.3.3), at most 12, so at t=20 y = a = 1.
 // (A min:typ:max path_delay_expression is b_A_7_4_mintypmax_path_delay.v.)
 // Output: "y=1".
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.7.4
 `timescale 1ns/1ns
 module b_A_7_4_cell (a, b, c, d, e, f, y);

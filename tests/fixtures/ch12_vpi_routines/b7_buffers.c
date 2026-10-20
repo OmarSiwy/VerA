@@ -29,6 +29,8 @@
  *         alpha = 8'h01) survives a vpi_get_str() call, and a vpi_get_str()
  *         result ("alpha") survives a vpi_get_value() call (beta as
  *         vpiBinStrVal, "00000010").
+ *   12.16 One buffer holds the vpi_get_value() strings too: alpha's
+ *         "00000001" reads "00000010" after beta's call.
  *   12.25 Two files opened; their names, copied, differ. p = vpi_mcd_name(a)
  *         reads a's name; after vpi_mcd_name(b), p reads b's. The names
  *         themselves are not pinned: the clause fixes the overwrite, not the
@@ -37,14 +39,16 @@
 
 //! lrm 12.4
 //! lrm 12.12
+//! lrm 12.16
 //! lrm 12.25
 //! lrm 12.4:3
 //! lrm 12.4:4
 //! lrm 12.12:2
 //! lrm 12.12:3
+//! lrm 12.16:1001
 //! lrm 12.25:3
 //! design ch12_vpi_routines/b7_digital.v
-//! stdout p02: b7_buffers checks=37
+//! stdout p02: b7_buffers checks=38
 
 #include "../ch11_vpi/p02_check.h"
 
@@ -95,6 +99,7 @@ static PLI_INT32 at1(p_cb_data cb)
   v.format = vpiBinStrVal;
   vpi_get_value(beta, &v);
   CHECK_STR(v.value.str, "00000010", "beta as vpiBinStrVal");
+  CHECK(strcmp(s, "00000010") == 0, "12.16: every vpi_get_value() string call uses one buffer, so the first result now reads `00000010`, got `%s`", s);
   CHECK(strcmp(p, "alpha") == 0, "12.12: vpi_get_value() overwrote vpi_get_str()'s string, now `%s`", p);
 
   /* 12.25 */

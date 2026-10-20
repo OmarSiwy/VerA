@@ -10,6 +10,7 @@
 // the rule itself.
 //
 //! lrm 3.6.3
+//! lrm 3.6.3:1001
 //! lrm 3.6.2.3
 //! reject-only E0501
 //! neighbour 30_natureless_discipline.va

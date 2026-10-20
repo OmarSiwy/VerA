@@ -2,6 +2,7 @@
 //! lrm 5.2.1
 //! lrm 5.2.1:1
 //! reject-only E0421
+//! neighbour analog_initial.va
 module ch5_initial_access_rejected(p);
   inout p; electrical p; real initialized;
   analog initial initialized = V(p);

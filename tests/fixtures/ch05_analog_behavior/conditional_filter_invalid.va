@@ -10,6 +10,7 @@
 //! lrm 5.8.4
 //! lrm 5.8.4:1000
 //! reject-only E0514
+//! neighbour conditional_ddt_contribution_static.va
 // §5.8.1: "If any of the conditionally-executed statements contains an analog
 // operator, the conditional expression shall be a analysis_or_constant_
 // expression." `V(c) > 0.0` is neither — a probe moves on every Newton

@@ -568,6 +568,38 @@ pub inline fn ofReal(r: f64) W {
     return .{ .v = @bitCast(@as(i64, @intFromFloat(t))), .x = 0 };
 }
 
+/// §4.8.2 real to a `to`-bit integer (`evaluate.intOfReal`, then the
+/// assignment's truncation): rounded to nearest, halves away from zero, mod
+/// 2^to, at any magnitude; x when no such integer exists.
+pub fn ofRealTo(r: f64, comptime to: u32) T(to) {
+    const n = @round(r);
+    if (!std.math.isFinite(n)) return xs(to);
+    var v: [words(to)]u64 = @splat(0);
+    if (n >= -0x1p63 and n < 0x1p63) {
+        const i: i64 = @intFromFloat(n);
+        for (&v, 0..) |*w, j| w.* = if (j == 0) @bitCast(i) else if (i < 0) ones else 0;
+    } else {
+        // An f64 this large is its 53-bit significand shifted left.
+        const fr = std.math.frexp(@abs(n));
+        const mant: u64 = @intFromFloat(std.math.ldexp(fr.significand, 53));
+        const by: u32 = @intCast(fr.exponent - 53);
+        const at = by / 64;
+        const b: u6 = @intCast(by % 64);
+        if (at < v.len) v[at] |= mant << b;
+        if (b != 0 and at + 1 < v.len) v[at + 1] |= mant >> @intCast(64 - @as(u7, b));
+        if (n < 0) {
+            var carry: u1 = 1;
+            for (&v) |*w| {
+                const sum = @addWithOverflow(~w.*, @as(u64, carry));
+                w.* = sum[0];
+                carry = sum[1];
+            }
+        }
+    }
+    v[v.len - 1] &= top(to);
+    return narrow(to, .{ .v = v, .x = @splat(0) });
+}
+
 /// §17.8 `$rtoi`: truncated toward zero, a 32-bit signed value; x when none.
 pub inline fn rtoi(r: f64) W {
     const t = @trunc(r);

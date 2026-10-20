@@ -7,6 +7,7 @@
 // one-character string in an integer expression is that byte's unsigned value
 // (67_octal_escape_boundaries.va), so "\377" is 255.
 //! lrm 2.7
+//! lrm 2.7:3
 //! nowarn
 //! checks 1
 `include "check.vh"

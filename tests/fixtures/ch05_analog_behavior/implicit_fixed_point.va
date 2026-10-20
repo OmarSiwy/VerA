@@ -26,6 +26,7 @@
 //! lrm 5.6.6
 //! bias V(p) = 1.0, V(n) = 0.0
 //! sweep flowZ28pZ2cnZ29 = 0.25
+//! lrm 5.6.6:1001
 `include "check.vh"
 module ch5_implicit_fixed_point(p, n);
   inout p, n; electrical p, n;

@@ -16,9 +16,9 @@
 `timescale 1ns/1ns
 module audit_time_stime_wrap;
   initial begin
-    #64'd2147483648;
+    #(64'd2147483648);
     $display("half t=%0d s=%0d positive=%0d", $time, $stime, $stime > 0);
-    #64'd2147483647;
+    #(64'd2147483647);
     $display("before t=%0d s=%0d", $time, $stime);
     #1;
     $display("wrap t=%0d s=%0d high=%0d", $time, $stime, $time >> 32);

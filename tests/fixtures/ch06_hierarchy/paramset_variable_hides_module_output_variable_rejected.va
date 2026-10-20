@@ -38,6 +38,7 @@
 //! lrm 9.16
 //! lrm 9.16:1
 //! reject-only E0817
+//! neighbour paramset_hidden_output_variable_takes_the_fallback.va
 //! reject `$simprobe("u_dev", "id")`
 module ch6_pshide_top(p, n);
   inout p, n;

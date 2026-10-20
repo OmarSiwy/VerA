@@ -18,6 +18,7 @@
 //
 //! lrm 6.5.2.1
 //! lrm 3.6.2.4
+//! lrm 3.6.2.4:4
 //! reject-only E0337
 //! neighbour untyped_child_port_passed_to_an_instance.va
 module untyped_child_port_behavioral_use(p);

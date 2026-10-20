@@ -12,6 +12,7 @@
 //! lrm 5.4.1
 //! lrm 4.5.3
 //! bias V(p) = 1.5, V(n) = 0.25
+//! lrm 5.6.1:1001
 `include "check.vh"
 module ch5_derivative(p, n);
   inout p, n; electrical p, n;

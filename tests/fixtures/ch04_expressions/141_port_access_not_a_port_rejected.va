@@ -11,6 +11,7 @@
 // 34_port_access.va is the legal side.
 //
 //! lrm 4.4
+//! lrm 4.4:1003
 //! lrm A.8.9
 //! lrm A.8.9:1000
 //! reject-only E0508

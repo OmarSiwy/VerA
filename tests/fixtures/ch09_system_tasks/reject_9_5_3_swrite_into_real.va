@@ -12,6 +12,7 @@
 //! lrm 9.5.3
 //! lrm 9.5.3:1
 //! reject-only E0813
+//! neighbour 044_swrite.va
 `include "disciplines.vams"
 module ch9_swrite_into_real(p, n);
   inout p, n;

@@ -8,6 +8,7 @@
 // §15.3.2 not-supported. Legal neighbour: b_15_2_1_setup.v, the same cell
 // shape with a check the engine evaluates.
 // digital-runner: reject
+//! inherited IEEE 1364-2005 15.3.2
 //! reject-only E1149
 //! reject `$timeskew`
 //! neighbour b_15_2_1_setup.v

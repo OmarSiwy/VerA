@@ -10,6 +10,7 @@
 // digital-runner: reject
 //! lrm 6.6.1
 //! lrm 6.6.1:6
+//! lrm 6.6.1:7
 //! inherited IEEE 1364-2005 12.4.1
 //! reject E1100
 //! reject a genvar value is repeated, so this loop generate does not terminate

@@ -22,6 +22,7 @@
 //   one that cannot read the array refuses (E0929).
 //
 //! lrm 7.8.4
+//! lrm 7.8.4:5
 //! lrm 6.2.2
 //! lrm F.2.1
 //! inherited IEEE 1364-2005 12.1.2

@@ -40,11 +40,11 @@
 //   K = V[3 +: 2], V = 8'hA5                a constant_range_expression +: on a
 //                                            parameter: bits 4..3 of 1010_0101 = 2'b00
 // The module_path expressions sit in a specify block's condition
-// `if (!en ? a : ~a)`; paths are not modelled (W0251), so it only parses.
+// `if (!en ? a : ~a)`. Nothing printed reads the path's destination y, so
+// its delay (§14.3.3) does not show in the output.
 // (min:typ:max expressions are b_A_2_2_3_mintypmax_delay.v and
 // b_A_7_4_mintypmax_path_delay.v; attributes on operators, b_A_9_1_attributes.v.)
 // Output: "c=1011 n=1 Q=4 s1=101 s2=11 s3=1 K=00".
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.8.3
 `timescale 1ns/1ns
 module b_A_8_3_cell (en, a, y);

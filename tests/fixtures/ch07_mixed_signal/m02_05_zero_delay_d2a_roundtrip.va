@@ -48,6 +48,7 @@
 // what is read at 6, 8 and 10 ns, to within the cross()'s own 1p time_tol
 // (§5.10.3.1's box, as in 04).
 //
+//! lrm 7.3.6.1:1002
 //! lrm 8.4.3.3
 //! lrm 8.4.3.3:1
 //! lrm 8.4.4

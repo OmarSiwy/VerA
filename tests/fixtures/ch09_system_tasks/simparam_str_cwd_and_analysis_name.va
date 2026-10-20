@@ -18,6 +18,7 @@
 // the first, third and fourth checks; answering analysis_type for
 // analysis_name fails the first.
 //! lrm 9.15
+//! lrm 9.15:4
 //! analysis dc mydc
 //! checks 4
 `include "check.vh"

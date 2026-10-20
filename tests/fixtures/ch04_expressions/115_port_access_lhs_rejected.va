@@ -16,6 +16,7 @@
 // value assertion cannot reach.
 //
 //! lrm 4.4
+//! lrm 4.4:1001
 //! lrm 5.4.3
 //! lrm 5.4.3:1
 //! reject-only E0407

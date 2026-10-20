@@ -21,6 +21,7 @@
 //! lrm 9.5.1
 //! lrm 9.5.1:2
 //! lrm 9.5.2
+//! lrm 9.5.2:1
 `include "check.vh"
 module ch09_file_output(p, n);
   inout p, n; electrical p, n;

@@ -14,6 +14,7 @@
 //! lrm 9.17.2
 //! lrm 9.17.2:1
 //! reject-only E0803
+//! neighbour 25_bound_step.va
 module ch09_bound_step_negative_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

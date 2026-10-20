@@ -16,6 +16,7 @@
 // iteration, 2 iterations, so s = 2; \repeat (1.5) = 3.0; V(\wait ) = 1.0.
 //
 //! lrm B
+//! lrm B:1
 //! lrm 2.8.1
 //! bias V(p) = 1.0, V(n) = 0.0
 //! checks 4

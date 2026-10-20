@@ -3,6 +3,7 @@
 //! lrm 6.3.3
 //! lrm 6.3.3:1
 //! lrm 6.3.3:2
+//! lrm 6.3.3:1001
 //! checks 2
 // inherited IEEE 1364-2005 12.2.2.2
 `include "check.vh"

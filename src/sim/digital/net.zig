@@ -141,15 +141,89 @@ pub const NetCold = struct {
     decay_event: ?Handle = null,
     /// The §7.6 pass switches with this net as a terminal.
     trans: []const u32 = &.{},
+    /// IEEE 1364-2005 §14.3 the module paths into this net, which time its
+    /// transitions in place of `delay` (`resolution.pathDelay`).
+    paths: []const Path = &.{},
 
     /// Every field at its default: the row of a net with none.
     pub const none: NetCold = .{};
 };
 
+/// IEEE 1364-2005 §14.2 one module path into a net, from bit `src_bit` of
+/// source slot `src` (an input or inout port; §14.2.3 reads an edge on the
+/// least significant bit, or the bit a bit-select names). `edge` makes it an
+/// edge-sensitive path (§14.2.3), `cond` a state-dependent one (§14.2.4),
+/// evaluated in `scope`, and `ifnone` the default of the state-dependent
+/// paths from the same source (§14.2.4.4). `table` is its delay for each
+/// transition of the destination (`pathTable`).
+pub const Path = struct {
+    src: u32,
+    src_bit: u32 = 0,
+    edge: Ast.SpecEdge = .none,
+    cond: Ast.ExprId = .none,
+    ifnone: bool = false,
+    scope: u32 = 0,
+    table: PathTable,
+};
+
+/// A module path's delay for each destination transition, `[from][to]`
+/// indexed by `Int.Bit`'s backing integer. The diagonal is never read.
+pub const PathTable = [4][4]u64;
+
+/// The last transition of a module path source (`Run.path_changed`): when,
+/// and its low 64 bits before and after, values then unknowns.
+pub const PathEdge = struct { time: u64, before: [2]u64, after: [2]u64 };
+
+/// IEEE 1364-2005 §14.3.1 Table 14-2: the delay for each transition from a
+/// path's 1, 2, 3, 6 or 12 values, and for the x transitions §14.3.2's
+/// Table 14-3 where fewer than 12 are given: "Transitions from a known state
+/// to x shall occur as quickly as possible", "from x to a known state shall
+/// take as long as possible".
+pub fn pathTable(d: []const u64) PathTable {
+    std.debug.assert(d.len == 1 or d.len == 2 or d.len == 3 or d.len == 6 or d.len == 12);
+    const t01, const t10, const t0z, const tz1, const t1z, const tz0 = switch (d.len) {
+        1 => .{ d[0], d[0], d[0], d[0], d[0], d[0] },
+        2 => .{ d[0], d[1], d[0], d[0], d[1], d[1] },
+        3 => .{ d[0], d[1], d[2], d[0], d[2], d[1] },
+        else => .{ d[0], d[1], d[2], d[3], d[4], d[5] }, // else: the 6 and 12 forms name these six first
+    };
+    const zero = @backingInt(Int.Bit.zero);
+    const one = @backingInt(Int.Bit.one);
+    const z = @backingInt(Int.Bit.z);
+    const x = @backingInt(Int.Bit.x);
+    var t: PathTable = @splat(@splat(0));
+    t[zero][one] = t01;
+    t[one][zero] = t10;
+    t[zero][z] = t0z;
+    t[z][one] = tz1;
+    t[one][z] = t1z;
+    t[z][zero] = tz0;
+    if (d.len == 12) {
+        t[zero][x] = d[6];
+        t[x][one] = d[7];
+        t[one][x] = d[8];
+        t[x][zero] = d[9];
+        t[x][z] = d[10];
+        t[z][x] = d[11];
+    } else {
+        t[zero][x] = @min(t0z, t01);
+        t[one][x] = @min(t1z, t10);
+        t[z][x] = @min(tz1, tz0);
+        t[x][zero] = @max(tz0, t10);
+        t[x][one] = @max(tz1, t01);
+        t[x][z] = @max(t1z, t0z);
+    }
+    return t;
+}
+
 /// §7.6 one MOS switch (half of a CMOS one, §7.7): it passes `data`, value
 /// and strength, to its output while `gate` holds the conducting value (1
 /// for an n-type, 0 for a p-type), and is off otherwise.
-pub const Mos = struct { data: Ast.ExprId, gate: Ast.ExprId, n_type: bool, resistive: bool };
+///
+/// One member of a §7.1.5 instance array reads bit `lane` of a data or gate
+/// terminal wider than one bit (§7.1.6) and drives bit `out_bit` of a vector
+/// output net, as `Gate` does.
+pub const Mos = struct { data: Ast.ExprId, gate: Ast.ExprId, n_type: bool, resistive: bool, lane: ?u32 = null, out_bit: ?u32 = null };
 
 /// §7.6 one pass switch between bit `a_bit` of net `a` and bit `b_bit` of
 /// net `b` ("scalar nets or bit-selects of vector nets"): always on (`tran`),
@@ -1505,4 +1579,31 @@ test foldUniform {
         try std.testing.expectEqual(@as(u64, 0), out.values()[last] & ~wordMask(width, last));
         try std.testing.expectEqual(@as(u64, 0), out.unknowns()[last] & ~wordMask(width, last));
     };
+}
+
+test "§14.3.2 Table 14-3's usage row: (5, 12, 17, 10, 6, 22) gives the x transitions 5, 6, 10, 22, 10, 17" {
+    const t = pathTable(&.{ 5, 12, 17, 10, 6, 22 });
+    const zero = @backingInt(Int.Bit.zero);
+    const one = @backingInt(Int.Bit.one);
+    const z = @backingInt(Int.Bit.z);
+    const x = @backingInt(Int.Bit.x);
+    try std.testing.expectEqual(@as(u64, 5), t[zero][x]);
+    try std.testing.expectEqual(@as(u64, 6), t[one][x]);
+    try std.testing.expectEqual(@as(u64, 10), t[z][x]);
+    try std.testing.expectEqual(@as(u64, 22), t[x][zero]);
+    try std.testing.expectEqual(@as(u64, 10), t[x][one]);
+    try std.testing.expectEqual(@as(u64, 17), t[x][z]);
+}
+
+test "§14.3.1 Table 14-2: two values are rise and fall, three add tz, twelve name every transition" {
+    const zero = @backingInt(Int.Bit.zero);
+    const one = @backingInt(Int.Bit.one);
+    const z = @backingInt(Int.Bit.z);
+    const x = @backingInt(Int.Bit.x);
+    const two = pathTable(&.{ 6, 9 });
+    try std.testing.expectEqual([4]u64{ 6, 9, 6, 9 }, [4]u64{ two[zero][one], two[one][zero], two[zero][z], two[one][z] });
+    const three = pathTable(&.{ 1, 2, 3 });
+    try std.testing.expectEqual([6]u64{ 1, 2, 3, 1, 3, 2 }, [6]u64{ three[zero][one], three[one][zero], three[zero][z], three[z][one], three[one][z], three[z][zero] });
+    const twelve = pathTable(&.{ 10, 12, 14, 15, 29, 36, 14, 15, 15, 14, 20, 30 });
+    try std.testing.expectEqual([6]u64{ 14, 15, 15, 14, 20, 30 }, [6]u64{ twelve[zero][x], twelve[x][one], twelve[one][x], twelve[x][zero], twelve[x][z], twelve[z][x] });
 }

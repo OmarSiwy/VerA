@@ -26,10 +26,9 @@
 // 4'hA; PP = (P) is 90 (a constant_mintypmax_expression in parentheses);
 // STR = "ab", a string, prints as ab. The specparam and number forms appear
 // in the child's specify block (`specparam S = 6;`), and a
-// module_path_primary in its condition `if (en == 1'b1)`; paths are not
-// modelled (W0251), so those only parse.
+// module_path_primary in its condition `if (en == 1'b1)`; nothing printed
+// reads the path's destination y, so its delay does not show.
 // Output: "12 1 c 6 10010 11 10 9 10 OK" then "a 90 ab".
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.8.4
 `timescale 1ns/1ns
 module b_A_8_4_child (en, a, y);

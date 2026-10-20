@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 17.2.9
 //! reject E1100
 //! reject the memory file has a malformed `@` address
+//! neighbour b_17_2_9_readmem_address_underscore.v
 module b_17_2_9_readmem_address_x_rejected;
   reg [7:0] mem[0:1];
   initial $readmemh("b_17_2_9_readmem_address_x.txt", mem);

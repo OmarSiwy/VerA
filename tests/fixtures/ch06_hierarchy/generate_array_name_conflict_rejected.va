@@ -28,6 +28,7 @@
 //! lrm 6.6.1:5
 //! lrm 6.8:1
 //! reject-only E0230
+//! neighbour generate_loop.va
 module ch6_generate_array_name_conflict(p);
   inout p; electrical p;
   real g;

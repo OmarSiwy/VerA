@@ -19,6 +19,7 @@
 //! lrm 6.6
 //! lrm 6.6:3
 //! lrm 6.6:5
+//! lrm 6.6:4
 //! inherited IEEE 1364-2005 12.4
 `timescale 1ns/1ns
 module g2b1 (bin, gray);

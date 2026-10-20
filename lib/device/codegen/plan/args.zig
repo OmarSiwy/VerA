@@ -135,6 +135,11 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$wide", .@"$wide$int" => i > 0,
         // §3.3 Table 3-3: every piece, and the count.
         .@"$str$cat", .@"$str$repeat" => true,
+        // §9.5.4.2 `str` "shall be a string variable, string parameter or a
+        // string literal", and the format is a string expression too:
+        // `gen_render.emitScan` renders the source, the format and the item
+        // index, so a computed one (a `$fgets` line, a phi) must be sliced in.
+        .@"$sscanf", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str" => true,
         .@"$limit$uf" => i < 2,
         // §9.4.3 the operand a `%d` or radix field prints (`emitCall` renders
         // it); argument 1 (and 2) are lowering's width record, read at
@@ -213,7 +218,6 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$stop",
         .@"$sformat",
         .@"$sformat$rt",
-        .@"$sscanf",
         .@"$table_model",
         .@"$vera_reject_step",
         .@"$held_int",
@@ -226,9 +230,6 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$tp_wide",
         .@"$limit$old",
         .@"$monitor$arm",
-        .@"$sscanf$int",
-        .@"$sscanf$real",
-        .@"$sscanf$str",
         .@"$plusarg$str",
         => false,
     };

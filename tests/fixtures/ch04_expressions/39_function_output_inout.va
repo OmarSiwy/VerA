@@ -15,6 +15,9 @@
 // identifier, which is that same 7.0.
 //
 //! lrm 4.7.2.3
+//! lrm 4.7.2.3:1001
+//! lrm 4.7.2.4:1001
+//! lrm 4.7.3:1001
 //! lrm 4.7.2.4
 //! bias V(p) = 1.5
 `include "check.vh"

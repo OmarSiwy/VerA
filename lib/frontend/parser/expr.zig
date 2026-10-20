@@ -83,7 +83,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
 /// A.8.6 unary_operator (§4.2.1, §4.2.7 to §4.2.10). Unary binds tighter than
 /// every binary operator (Table 4-3, top row).
 fn parseUnary(self: *Parser) Error!Ast.ExprId {
-    // Every expression recursion (parentheses, unary chains, `?:`) passes here.
+    // Every expression recursion (parentheses, `?:`) passes here.
     if (self.segmentDue()) return self.segment(parseUnary, .{self});
     self.enter();
     defer self.leave();
@@ -105,7 +105,11 @@ fn parseUnary(self: *Parser) Error!Ast.ExprId {
     };
     self.pos += 1;
     try self.ownedAttributes(.{ .kind = .expression, .tok = tok }); // A.8.3 unary suffix
-    const operand = try parseUnary(self);
+    // A.8.3 `unary_operator { attribute_instance } primary` (VAMS-2023
+    // annex A: `analog_primary`): the operand is a primary, so `- -x`, `!!x`
+    // and `~ &x` are syntax errors (E0209 at the second operator) and
+    // `-(-x)` is the spelling. `a - -b` stays legal: binary, then unary.
+    const operand = try parsePostfix(self);
     return self.file.exprs.add(self.arena, .{
         .tag = .unary,
         .main_tok = tok,
@@ -231,7 +235,8 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // `.hier_ident`; lowering tells them apart by resolving the parts.
             // IEEE 1364-2005 §12.5 an instance select, `g[0].l.x`: the part
             // is spelled `g[0]`, the name the digital engine registers.
-            const head = if (parse_hier.instanceSelectAhead(self)) try parse_hier.parseInstanceSelect(self, name) else name;
+            var unfolded: std.ArrayList(Ast.ExprId) = .empty;
+            const head = if (parse_hier.instanceSelectAhead(self)) try parse_hier.parseInstanceSelect(self, name, &unfolded) else name;
             if (self.peek() == .dot) {
                 var parts: std.ArrayList(Ast.StrId) = .empty;
                 try parts.append(self.arena, head);
@@ -254,8 +259,12 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                         },
                         else => try self.expectIdent(), // else: not a nature attribute keyword; `expectIdent` takes it or refuses it
                     };
-                    try parts.append(self.arena, if (parse_hier.instanceSelectAhead(self)) try parse_hier.parseInstanceSelect(self, part) else part);
+                    try parts.append(self.arena, if (parse_hier.instanceSelectAhead(self)) try parse_hier.parseInstanceSelect(self, part, &unfolded) else part);
                 }
+                // Keyed by the main token, which the `.hier_ident` or `.call`
+                // below carries.
+                if (unfolded.items.len != 0)
+                    try self.file.hier_indices.append(self.arena, .{ .tok = tok, .indices = unfolded.items });
                 // §6.7.1: "Analog user defined functions can be accessed
                 // hierarchically." A dotted name with an argument list becomes
                 // `.call` under the joined name, which is the flat name

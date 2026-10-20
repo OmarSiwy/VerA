@@ -6,6 +6,7 @@
 // The legal replications are 31_replication.va and audit_replication_zero_effect.va.
 //
 //! lrm 4.2.13
+//! lrm 4.2.13:1001
 //! reject-only E0327
 //! neighbour 31_replication.va
 //! neighbour audit_replication_zero_effect.va

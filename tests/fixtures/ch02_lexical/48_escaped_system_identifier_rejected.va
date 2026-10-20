@@ -16,6 +16,7 @@
 //! lrm A.10
 //! lrm A.10:4
 //! reject-only E0314
+//! neighbour 09_system_identifiers.va
 module ch02_escaped_system_identifier_rejected;
     real value;
     analog value = \$vt ;

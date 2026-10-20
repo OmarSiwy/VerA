@@ -42,6 +42,7 @@
 //! lrm 2.6.2
 //! lrm 9.5.3
 //! lrm 9.5.4.2
+//! lrm 9.4.3:1002
 //! print none
 `include "check.vh"
 module s01_real_engineering_notation(p, n);

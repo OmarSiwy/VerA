@@ -18,12 +18,16 @@
 // `(code == 0) || (code == -1)` — satisfied by an implementation that returns
 // -1 unconditionally. Every §9.5 fixture now owns its filename.
 //
+// The third check takes the other half of the same sentence: a reposition to a
+// NEGATIVE offset fails, so the status is -1 and the position is unchanged.
+//
 //! lrm 9.5.5
 //! lrm 9.5.5:3
+//! lrm 9.5.5:1001
 `include "check.vh"
 module ch09_atomic_fseek(p, n);
   inout p, n; electrical p, n;
-  integer fd, code, pos;
+  integer fd, code, pos, bad, pos_after;
   analog begin
     fd = $fopen("ch09_050_fseek.dat", "w");
     $fwrite(fd, "abc\n");
@@ -31,9 +35,13 @@ module ch09_atomic_fseek(p, n);
     fd = $fopen("ch09_050_fseek.dat", "r");
     code = $fseek(fd, 0, 2);
     pos = $ftell(fd);
+    bad = $fseek(fd, -1, 0);
+    pos_after = $ftell(fd);
     $fclose(fd);
     `CHECKI("§9.5.5 $fseek returns a status, and success is 0", code, 0);
     `CHECKI("§9.5.5 operation 2 sets the position to EOF, which is byte 4", pos, 4);
-    I(p,n) <+ V(p,n) + code + pos;
+    `CHECKI("§9.5.5 an error repositioning sets the status to -1", bad, -1);
+    `CHECKI("§9.5.5 a failed reposition leaves the position alone", pos_after, 4);
+    I(p,n) <+ V(p,n) + code + pos + bad + pos_after;
   end
 endmodule

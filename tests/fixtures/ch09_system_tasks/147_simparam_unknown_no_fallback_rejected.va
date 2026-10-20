@@ -29,6 +29,7 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.15
+//! lrm 9.15:1003
 //! reject-only simulation parameter is not known
 //! reject E0811
 //! neighbour 22_simparam.va

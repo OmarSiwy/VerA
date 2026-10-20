@@ -28,12 +28,11 @@
 // in1[7:4]), and (s => ns) and (s *> ns2), a scalar to a scalar either way
 // (ns = ns2 = ~s).
 //
-// VerA reads the paths and applies no delay (W0251); the transcript is
+// Each output change takes its paths' delay (§14.3.3); the transcript is
 // sampled 50 after each change, past the longest delay (4):
 //   t = 1:  in1 = 8'hA5, in2 = 8'h3C, s = 0: q = in1 = a5, nib = a, ns = 1,
 //           ns2 = 1
 //   t = 51: s = 1: q = in2 = 3c, nib = a, ns = 0, ns2 = 0
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2.5
 `timescale 1ns/1ns
 module b_14_2_5_full_parallel_paths_mux8(in1, in2, s, q, nib, ns, ns2);

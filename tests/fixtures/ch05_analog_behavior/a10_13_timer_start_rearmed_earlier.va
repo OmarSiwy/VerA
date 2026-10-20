@@ -43,6 +43,7 @@
 //! time 0, 1n, 2n, 3n, 4n, 5n, 6n, 7n
 //! bias V(p) = 0
 //! print none
+//! lrm 5.10.3.3:1004
 `include "check.vh"
 module a10_timer_start_rearmed_earlier(p);
   inout p;

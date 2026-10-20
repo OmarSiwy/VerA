@@ -214,9 +214,9 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         return self.print(")", .{});
     }
     if (compile.typeOf(self.r, e).real) {
-        try self.print("L.rs(L.ofReal(", .{});
+        try self.print("L.ofRealTo(", .{});
         try real(self, e);
-        return self.print("), 64, {d}, {})", .{ w, sg });
+        return self.print(", {d})", .{w});
     }
     switch (ex.tag(e)) {
         .ident, .hier_ident => {
@@ -445,6 +445,13 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                 },
                 // §17.2.4.3: each output argument as the scan reaches it.
                 .sscanf, .fscanf => |f| {
+                    // `rt.State.scan` gives the scanner no time scale and no
+                    // output widths.
+                    if (ex.tag(args[1]) == .str_literal) {
+                        const fm = r.file.str(ex.strOf(args[1]));
+                        if (scanNeedsContext(fm))
+                            return self.refuse("§17.2.4.3 a $sscanf/$fscanf %t (scaled by $timeformat) or %u/%z (unformatted) conversion");
+                    }
                     try self.xMeaning("`$sscanf`/`$fscanf`, which answer EOF for an x or z in the input or format", ex.mainTok(e));
                     const lb = self.label();
                     try self.print("L.rs(sc{d}: {{\n            var arena{d} = std.heap.ArenaAllocator.init(s.gpa);\n            defer arena{d}.deinit();\n", .{ lb, lb, lb });
@@ -758,4 +765,20 @@ pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
 /// The low `w` bits set; all 64 for `w` >= 64.
 pub fn maskOf(w: u32) u64 {
     return if (w >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(w)) - 1;
+}
+
+/// Whether scan format `fm` has a `%t`, `%u` or `%z` conversion, after any
+/// `*` and field width.
+fn scanNeedsContext(fm: []const u8) bool {
+    var i: usize = 0;
+    while (i < fm.len) : (i += 1) {
+        if (fm[i] != '%') continue;
+        i += 1;
+        while (i < fm.len and (fm[i] == '*' or std.ascii.isDigit(fm[i]))) i += 1;
+        if (i < fm.len) switch (std.ascii.toLower(fm[i])) {
+            't', 'u', 'z' => return true,
+            else => {},
+        };
+    }
+    return false;
 }

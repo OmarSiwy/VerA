@@ -12,6 +12,7 @@
 // 09_assignment_pattern.va and 23_laplace_filters.va.
 //
 //! lrm 4.2.14
+//! lrm 4.2.14:1001
 //! lrm 4.2.14:1000
 //! reject-only E0509
 //! neighbour 09_assignment_pattern.va

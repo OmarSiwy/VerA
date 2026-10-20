@@ -8,6 +8,8 @@
 //! inherited IEEE 1364-2005 17.6.5
 //! reject E1100
 //! reject a $q_exam q_stat_code is one of Table 17-15's codes 1 to 6
+//! neighbour b_17_6_5_q_exam.v
+//! neighbour b_17_6_5_q_exam_code_runtime.v
 `timescale 1 ns / 1 ns
 module b_17_6_5_q_exam_code_rejected;
   integer status, v;

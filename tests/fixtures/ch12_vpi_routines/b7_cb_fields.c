@@ -32,19 +32,23 @@
  *   registration succeeds with no error; the statement runs once (t=0), so
  *   one callback, and it carries no value (value NULL, or a structure that
  *   says vpiSuppressVal: either way no value information is passed).
+ *   A second cbValueChange on w40, registered with value->format
+ *   vpiSuppressVal, says the value is not needed: it fires for both changes
+ *   too, and each callback is handed no value.
  */
 
 //! lrm 12.16
 //! lrm 12.31.1
 //! lrm 12.16:12
 //! lrm 12.31.1:4
+//! lrm 12.31.1:1001
 //! design ch12_vpi_routines/b7_digital.v
-//! stdout p02: b7_cb_fields checks=30
+//! stdout p02: b7_cb_fields checks=35
 
 #include "../ch11_vpi/p02_check.h"
 
 static vpiHandle first_stmt;
-static int stmt_hits, vec_hits;
+static int stmt_hits, vec_hits, supp_hits;
 
 static PLI_UINT32 now(void)
 {
@@ -87,11 +91,20 @@ static PLI_INT32 on_vec(p_cb_data d)
   return 0;
 }
 
+static PLI_INT32 on_supp(p_cb_data d)
+{
+  supp_hits++;
+  CHECK(d->reason == cbValueChange && d->value == NULL,
+        "12.31.1: with value->format vpiSuppressVal no value information is passed, got %s",
+        d->value ? "a value" : "none");
+  return 0;
+}
+
 static PLI_INT32 at1(p_cb_data d)
 {
   static s_vpi_time t;
-  static s_vpi_value v;
-  static s_cb_data cb;
+  static s_vpi_value v, none;
+  static s_cb_data cb, supp;
   (void)d;
   t.type = vpiSimTime;
   v.format = vpiVectorVal;
@@ -103,6 +116,15 @@ static PLI_INT32 at1(p_cb_data d)
   cb.value = &v;
   CHECK(vpi_register_cb(&cb) != NULL, "cbValueChange on w40 registration failed");
   expect_no_error("vpi_register_cb(cbValueChange, vpiVectorVal)");
+
+  none.format = vpiSuppressVal;
+  supp.reason = cbValueChange;
+  supp.cb_rtn = on_supp;
+  supp.obj = cb.obj;
+  supp.time = &t;
+  supp.value = &none;
+  CHECK(vpi_register_cb(&supp) != NULL, "12.31.1: cbValueChange with value->format vpiSuppressVal registration failed");
+  expect_no_error("vpi_register_cb(cbValueChange, vpiSuppressVal)");
   return 0;
 }
 
@@ -145,6 +167,7 @@ static PLI_INT32 eos(p_cb_data d)
   (void)d;
   CHECK(stmt_hits == 1, "alpha = 8'h01 runs once, %d cbStmt callbacks", stmt_hits);
   CHECK(vec_hits == 2, "w40 changes twice after t=1, %d callbacks", vec_hits);
+  CHECK(supp_hits == 2, "the vpiSuppressVal cbValueChange also fires twice, %d callbacks", supp_hits);
   p02_done("b7_cb_fields");
   return 0;
 }

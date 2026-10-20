@@ -407,9 +407,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
         },
         .int_literal => blk: {
             const n = ex.intLiteral(e);
-            if (n.width == 0 and (if (n.signed) n.value < std.math.minInt(i32) or n.value > std.math.maxInt(i32) else n.value < 0 or n.value > std.math.maxInt(u32)))
-                return self.exprFail(e, "unsized constants outside the implemented 32-bit integer width are not supported; use an explicit size");
-            break :blk .{ .width = if (n.width == 0) 32 else n.width, .signed = n.signed };
+            break :blk .{ .width = literalWidth(n), .signed = n.signed };
         },
         // An unsized based constant is an integer-sized operand (Table
         // 5-22) whose x/z fill is decided in context (`evaluate.unsizedFill`).
@@ -423,6 +421,17 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
         .real_literal => real_type,
         else => self.exprFail(e, "this expression requires digital context typing beyond the implemented leaf operands"), // else: infer calls this for the leaves above only
     };
+}
+
+/// The lexer's literal row, which the frontend does not re-export.
+const IntLiteral = @typeInfo(@TypeOf(Ast.ExprStore.intLiteral)).@"fn".return_type.?;
+
+/// A decimal literal's width: its size, or for an unsized one 32 bits, which
+/// §3.5.1 makes a minimum: a value that does not fit keeps the frontend's 64.
+pub fn literalWidth(n: IntLiteral) u32 {
+    if (n.width != 0) return n.width;
+    const fits = if (n.signed) n.value >= std.math.minInt(i32) and n.value <= std.math.maxInt(i32) else n.value >= 0 and n.value <= std.math.maxInt(u32);
+    return if (fits) 32 else 64;
 }
 
 /// §3.6 a string literal's width: eight bits per character, and 8 for "".
@@ -491,13 +500,31 @@ pub fn attributeConstantExpression(self: *Run, e: Ast.ExprId) bool {
     return isConstantExpression(self, e, true);
 }
 
+/// IEEE 1364-2005 §3.8: "attr_spec ::= attr_name [ = constant_expression ]",
+/// so a value naming a variable or net is refused. `attrs` are one module's
+/// (`ModuleDecl.attrs`), read in its instance `scope`, whose parameters are
+/// constants.
+pub fn checkAttributes(self: *Run, attrs: []const Ast.NatureAttr, scope: u32) Error!void {
+    const saved = self.scope;
+    defer self.scope = saved;
+    self.scope = scope;
+    for (attrs) |a| if (a.value != .none and !attributeConstantExpression(self, a.value))
+        return self.exprFail(a.value, "§3.8: an attribute value must be a constant expression");
+}
+
 fn isConstantExpression(self: *Run, e: Ast.ExprId, attribute: bool) bool {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .real_literal => return true,
         // §12.2: a parameter is a constant; every other name is not.
         .ident => {
-            const at = self.lookup(self.scope, ex.strOf(e)) orelse return false;
+            // An attribute's name that the module scope does not hold is a
+            // genvar or a name of the generate block, task or function the
+            // attribute sits in (`checkAttributes` reads the module's whole
+            // list in its instance scope).
+            // ponytail: such a name is taken as constant; checking it needs
+            // each attribute's own scope.
+            const at = self.lookup(self.scope, ex.strOf(e)) orelse return attribute;
             return self.params.contains(at);
         },
         // §5: "constant bit-selects and part-selects of parameters" are
@@ -509,7 +536,7 @@ fn isConstantExpression(self: *Run, e: Ast.ExprId, attribute: bool) bool {
         // elaboration time", so only while elaboration folds.
         .call => {
             if (self.growing == null and !attribute) return false;
-            const idx = self.sub_by_name.get(.{ .scope = self.instanceOf(self.scope), .str = ex.strOf(e) }) orelse return false;
+            const idx = subIn(self, self.scope, ex.strOf(e)) orelse return false;
             if (!self.subs.items[idx].framed or !(constantFunction(self, idx) catch false)) return false;
         },
         // §17.7: a call that reads the clock is never constant, however
@@ -558,7 +585,7 @@ pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
                 else
                     "it reads a name that is neither its own nor a parameter",
                 .hier_ident => "it contains a hierarchical reference",
-                .call => if (v.r.sub_by_name.get(.{ .scope = v.sub.inst, .str = ex.strOf(x) })) |callee| blk: {
+                .call => if (subIn(v.r, v.sub.inst, ex.strOf(x))) |callee| blk: {
                     if (!v.r.subs.items[callee].framed) try elab.earlyFrame(v.r, callee, ex.mainTok(x));
                     break :blk if (try notConstant(v.r, callee) == null) null else "it calls a function that is not a constant function";
                 } else "it calls a function that is not a constant function",
@@ -570,8 +597,10 @@ pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
         }
         pub fn stmt(v: *@This(), st: Ast.StmtId) Error!void {
             if (st == .none or v.why != null) return;
-            if (v.r.file.stmt(st) == .sys_task) {
-                v.why = "it enables a system task";
+            // §10.4.5: a system task in a constant function is ignored when
+            // the call is folded (`exec`); a task enable is not allowed.
+            if (v.r.file.stmt(st) == .sys_task and v.r.file.str(v.r.file.stmt(st).sys_task.name)[0] != '$') {
+                v.why = "it enables a task";
                 return;
             }
             try v.r.file.stmtEdges(st, v);
@@ -887,7 +916,7 @@ fn infer(self: *Run, e: Ast.ExprId) Error!Type {
         // so the call site's context never reaches inside it.
         .call => blk: {
             const inst = self.instanceOf(self.scope);
-            const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
+            const idx = subIn(self, self.scope, ex.strOf(e)) orelse return self.exprFail(e, "undeclared function");
             if (!self.subs.items[idx].decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
             if (!self.subs.items[idx].framed) try elab.earlyFrame(self, idx, ex.mainTok(e));
             const sub = self.subs.items[idx];
@@ -1130,6 +1159,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
             if (self.in_function and intraTimed(s)) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
             try checkTarget(self, s.target);
             if (s.nonblocking) try notAutomatic(self, s.target, "a nonblocking assignment");
+            // Its event control is waited on after the activation may be gone.
+            if (s.nonblocking and !s.timing_is_delay and s.timing != .none) try readsNoAutomatic(self, s.timing, "a nonblocking assignment's event control");
             try checkExpr(self, s.value);
             if (!intraTimed(s)) {
                 _ = try append(self, .{ .assign = .{ .target = s.target, .value = s.value, .nonblocking = s.nonblocking } });
@@ -1431,8 +1462,14 @@ fn overTarget(self: *Run, x: Ast.ExprId) Error!OverTarget {
     switch (ex.tag(x)) {
         .ident, .hier_ident => return .{ .at = try self.scalarSlot(x), .bits = null },
         .index => {
+            // §9.3.2 an element of a net array is a net (§4.9.1); a memory
+            // word is not forced.
+            if (try self.indexedArray(x) != null) {
+                if (!self.net_of.contains(try self.baseSlot(x))) return self.exprFail(x, refused);
+                return .{ .at = try elab.netSlot(self, x, ex.mainTok(x)), .bits = null };
+            }
             const base = ex.lhs(x);
-            if (ex.tag(base) != .ident and ex.tag(base) != .hier_ident or try self.indexedArray(x) != null) return self.exprFail(x, refused);
+            if (ex.tag(base) != .ident and ex.tag(base) != .hier_ident) return self.exprFail(x, refused);
             const at = try self.scalarSlot(base);
             if (!self.net_of.contains(at)) return self.exprFail(x, refused);
             try checkExpr(self, x);
@@ -1455,6 +1492,8 @@ fn overTarget(self: *Run, x: Ast.ExprId) Error!OverTarget {
 fn override(self: *Run, target: Ast.ExprId, t: OverTarget, value: Ast.ExprId, kind: Ast.ProcContinuous, slice: ?Slice) Error!void {
     const at = t.at;
     try notAutomatic(self, target, "a procedural continuous assignment");
+    // Its value is re-evaluated after the activation may be gone.
+    if (value != .none) try readsNoAutomatic(self, value, "a procedural continuous assignment");
     const force = kind == .force or kind == .release;
     if (!force and self.net_of.contains(at)) return self.exprFail(target, "§9.3.1: assign/deassign take a variable; a net is forced");
     if (kind == .deassign or kind == .release) {
@@ -1466,6 +1505,12 @@ fn override(self: *Run, target: Ast.ExprId, t: OverTarget, value: Ast.ExprId, ki
     try sensitivity(self, value, &watched);
     const start = try watcher(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } }, watched.items);
     const end = position(self);
+    // §9.3.1/§9.3.2: the override holds from the statement on, so the
+    // value is written here, before the next statement reads it; the
+    // process `.override_on` starts keeps it. `.override_on` stays the
+    // statement's last instruction, the `done_sites` pc whose process
+    // reports the §12.31.1 cbForce/cbAssign (`exec.doneFlush`).
+    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } });
     _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end, .bits = t.bits } });
 }
 
@@ -1506,13 +1551,20 @@ fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u32) Error!void {
 /// entered by `.call`: every function, and every task with no timing control
 /// (§10.2.1 allows one in a task; §10.4.4 forbids it in a function).
 pub fn compileSubs(self: *Run) Error!void {
-    for (0..self.subs.items.len) |i| try compileSub(self, @intCast(i));
+    // A §10.4.5 constant function call during elaboration compiled its
+    // callee already; a second body would register its named blocks twice.
+    for (0..self.subs.items.len) |i| if (!self.subs.items[i].compiled) try compileSub(self, @intCast(i));
 }
 
 /// Subroutine `idx`'s body at a pc range of its own, unless it is a timed
 /// task, which is inlined where it is enabled.
 pub fn compileSub(self: *Run, idx: u32) Error!void {
-    if (try timed(self, idx)) return;
+    if (try timed(self, idx)) {
+        // §10.2.3 holds whether or not the task is ever enabled.
+        const sub = self.subs.items[idx];
+        if (sub.decl.automatic) try deferredReads(self, sub.frame.scope, sub.decl.body);
+        return;
+    }
     const sub = &self.subs.items[idx];
     self.scope = sub.frame.scope;
     self.in_function = sub.decl.is_function;
@@ -1576,11 +1628,22 @@ fn stmtTimed(self: *Run, inst: u32, id: Ast.StmtId) Error!bool {
         } else false,
         .sys_task => |s| blk: {
             if (self.file.str(s.name)[0] == '$') break :blk false;
-            const callee = self.sub_by_name.get(.{ .scope = inst, .str = s.name }) orelse break :blk false;
+            const callee = (try enabledTask(self, inst, s.name, self.file.stmtTok(id), false)) orelse break :blk false;
             break :blk try timed(self, callee);
         },
         else => false, // else: no other statement suspends or nests one
     };
+}
+
+/// The task or function `name` names from `scope`: §12.4's generate blocks
+/// declare their own (A.1.4), searched before the instance's, up to and
+/// including the instance.
+fn subIn(self: *const Run, scope: u32, name: Ast.StrId) ?u32 {
+    var s = scope;
+    while (true) : (s = self.scope_info.items[s].parent) {
+        if (self.sub_by_name.get(.{ .scope = s, .str = name })) |idx| return idx;
+        if (!self.scope_info.items[s].lexical) return null;
+    }
 }
 
 /// §10.2.2's argument rules, for an enable and for a call: one argument per
@@ -1608,25 +1671,63 @@ fn checkArgs(self: *Run, decl: *const Ast.Subroutine, args: []const Ast.ExprId, 
 /// between every such copy (§10.2.3); an automatic one gets a frame per call
 /// site, which is per activation because a site cannot be re-entered while
 /// its process is suspended inside it.
+/// The task an enable of `name` in `scope` names. IEEE 1364-2005 A.6.9
+/// `hierarchical_task_identifier`: the parts before the last dot name
+/// instances as a §12.5 reference's do, and the task is the last part,
+/// declared in the final one. Fails at `tok` when `report`, else is null.
+fn enabledTask(self: *Run, scope: u32, name: Ast.StrId, tok: u32, comptime report: bool) Error!?u32 {
+    const saved = self.scope;
+    defer self.scope = saved;
+    self.scope = scope;
+    const text = self.file.str(name);
+    const dot = std.mem.findScalarLast(u8, text, '.') orelse
+        return subIn(self, scope, name) orelse if (report) self.fail(tok, "undeclared task `{s}`", .{text}) else null;
+    var inst = self.instanceOf(scope);
+    var parts = std.mem.splitScalar(u8, text[0..dot], '.');
+    var k: usize = 0;
+    // §12.4.1 a select a genvar indexes is spelled `g[]` until folded here.
+    const indices = self.file.hierIndices(tok);
+    var used: usize = 0;
+    while (parts.next()) |part| : (k += 1) {
+        if (std.mem.endsWith(u8, part, "[]") and std.mem.count(u8, part, "[]") == 1) {
+            // Element `v` of the array or loop generate `base`, found by its
+            // scope row: `base[v]` is interned only when the source spells it.
+            const base = self.file.strings.find(part[0 .. part.len - 2]);
+            if (used == indices.len) return self.fail(tok, "§12.5: a hierarchical select has no index", .{});
+            const v = (try self.constant(indices[used], tok)).asInt() orelse return self.fail(tok, "§12.5: a hierarchical select's index has an x or z bit", .{});
+            used += 1;
+            // The first part is found upward from `scope`, as `upward` does.
+            var from = if (k == 0) scope else inst;
+            var found: ?u32 = null;
+            while (base) |b| {
+                found = element(self, from, b, v);
+                if (found != null or k != 0 or from == 0) break;
+                from = self.scope_info.items[from].parent;
+            }
+            inst = found orelse return if (report) self.fail(tok, "§12.5: `{s}`: an instance select out of range, or of no array", .{part}) else null;
+            continue;
+        }
+        const str = if (std.mem.find(u8, part, "[]") != null) try self.foldSelects(tok, part, indices, &used) else self.file.strings.find(part);
+        inst = (if (str) |n| (if (k == 0) self.upward(n) else self.instances.get(.{ .scope = inst, .str = n })) else null) orelse
+            return if (report) self.fail(tok, "undeclared instance `{s}` in a hierarchical task name", .{part}) else null;
+    }
+    const leaf = self.file.strings.find(text[dot + 1 ..]);
+    return (if (leaf) |l| self.sub_by_name.get(.{ .scope = inst, .str = l }) else null) orelse
+        if (report) self.fail(tok, "undeclared task `{s}`", .{text}) else null;
+}
+
+/// The scope of element `v` of instance array or loop generate `name`
+/// directly under `parent`, or null.
+pub fn element(self: *const Run, parent: u32, name: Ast.StrId, v: i64) ?u32 {
+    for (self.scope_info.items, 0..) |info, at| {
+        if (at != parent and info.parent == parent and info.name == name and info.index == v) return @intCast(at);
+    }
+    return null;
+}
+
 fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32, depth: u32) Error!void {
     if (self.in_function) return self.fail(tok, "§10.4.4: a function cannot enable a task", .{});
-    var inst = self.instanceOf(self.scope);
-    var leaf = name;
-    // IEEE 1364-2005 A.6.9 `hierarchical_task_identifier`: the parts before
-    // the last dot name instances as a §12.5 reference's do, and the task is
-    // the last part, declared in the final one.
-    const text = self.file.str(name);
-    if (std.mem.findScalarLast(u8, text, '.')) |dot| {
-        var parts = std.mem.splitScalar(u8, text[0..dot], '.');
-        var k: usize = 0;
-        while (parts.next()) |part| : (k += 1) {
-            const str = self.file.strings.find(part) orelse return self.fail(tok, "undeclared instance `{s}` in a hierarchical task name", .{part});
-            inst = (if (k == 0) self.upward(str) else self.instances.get(.{ .scope = inst, .str = str })) orelse
-                return self.fail(tok, "undeclared instance `{s}` in a hierarchical task name", .{part});
-        }
-        leaf = self.file.strings.find(text[dot + 1 ..]) orelse return self.fail(tok, "undeclared task `{s}`", .{text});
-    }
-    const idx = self.sub_by_name.get(.{ .scope = inst, .str = leaf }) orelse return self.fail(tok, "undeclared task `{s}`", .{self.file.str(name)});
+    const idx = (try enabledTask(self, self.scope, name, tok, true)).?;
     const decl = self.subs.items[idx].decl;
     if (decl.is_function) return self.fail(tok, "§10.4: a function is called in an expression, not enabled", .{});
     try checkArgs(self, decl, args, tok);
@@ -1644,7 +1745,7 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
     }
     self.subs.items[idx].inlining = true;
     defer self.subs.items[idx].inlining = false;
-    const f = if (decl.automatic) try elab.frame(self, decl, inst) else self.subs.items[idx].frame;
+    const f = if (decl.automatic) try elab.frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
     const start = position(self);
     for (decl.ports, args, f.ports) |p, a, slot| if (p.direction != .output) {
         _ = try append(self, .{ .init_var = .{ .slot = slot, .value = a } });
@@ -1795,8 +1896,12 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
         }
         return;
     }
+    const net_refused = "a net is driven by a continuous assignment; there is no procedural assignment to a net";
     if (try self.indexedArray(e) != null) {
-        if (self.events.contains(try self.slot(self.chainBase(e).base))) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
+        const base = try self.slot(self.chainBase(e).base);
+        if (self.events.contains(base)) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
+        // §4.9.1 an element of a net array is a net.
+        if (self.net_of.contains(base)) return self.exprFail(e, net_refused);
         var x = e;
         while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
             try checkExpr(self, ex.rhs(x));
@@ -1807,8 +1912,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     // typing it as a read folds its bounds and checks its index.
     if (ex.tag(e) == .index) try checkExpr(self, e);
     const at = try self.baseSlot(e);
-    if (self.net_of.contains(at))
-        return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
+    if (self.net_of.contains(at)) return self.exprFail(e, net_refused);
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
     if (self.events.contains(at)) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
 }
@@ -1851,6 +1955,52 @@ fn notAutomatic(self: *Run, e: Ast.ExprId, comptime what: []const u8) Error!void
             return self.exprFail(e, "§10.2.3: " ++ what ++ " cannot name a variable of an automatic task or function"),
         else => {}, // else: an expression names no storage to outlive the activation, its operands are read now
     }
+}
+
+/// The §10.2.3 checks a timed automatic task's body gets when compiled, for
+/// one that is inlined only where enabled: what a nonblocking assignment
+/// writes or waits on, and a procedural continuous assignment's target and
+/// value, in the scope `scope` its names resolve in.
+fn deferredReads(self: *Run, scope: u32, s: Ast.StmtId) Error!void {
+    if (s == .none) return;
+    const W = struct {
+        r: *Run,
+        scope: u32,
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {}
+        pub fn stmt(w: @This(), c: Ast.StmtId) Error!void {
+            try deferredReads(w.r, w.scope, c);
+        }
+    };
+    const saved = self.scope;
+    defer self.scope = saved;
+    self.scope = scope;
+    switch (self.file.stmt(s)) {
+        .block => self.scope = self.block_scopes.get(.{ .scope = scope, .stmt = s }) orelse scope,
+        .assign => |a| if (a.continuous != .none) {
+            try notAutomatic(self, a.target, "a procedural continuous assignment");
+            try readsNoAutomatic(self, a.value, "a procedural continuous assignment");
+        } else if (a.nonblocking) {
+            try notAutomatic(self, a.target, "a nonblocking assignment");
+            if (!a.timing_is_delay) try readsNoAutomatic(self, a.timing, "a nonblocking assignment's event control");
+        },
+        else => {}, // else: no other statement outlives the activation
+    }
+    try self.file.stmtEdges(s, W{ .r = self, .scope = self.scope });
+}
+
+/// §10.2.3 `notAutomatic` for an expression read after the activation may
+/// have ended: none of its operands names an automatic variable. A
+/// hierarchical name cannot reach one (§10.2.1), so only plain names count.
+fn readsNoAutomatic(self: *Run, e: Ast.ExprId, comptime what: []const u8) Error!void {
+    const ex = &self.file.exprs;
+    if (e == .none) return;
+    if (ex.tag(e) == .ident) {
+        if (self.lookup(self.scope, ex.strOf(e))) |at| if (self.auto_slots.contains(at))
+            return self.exprFail(e, "§10.2.3: " ++ what ++ " cannot name a variable of an automatic task or function");
+        return;
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| try readsNoAutomatic(self, c, what);
 }
 
 /// §9.7.1 a delay is a "delay_value", which A.8.3 makes
@@ -2019,10 +2169,34 @@ test "§5.3 a min:typ:max expression reads its typical member everywhere" {
     try expectRun("module m; initial $display(\"%0d\", (1:2:3) * 10 + (3:2:1)); endmodule", "22\n");
 }
 
+test "§3.5.1 an unsized constant is at least 32 bits, and a wider one keeps its value" {
+    try expectRun("module m; initial $display(\"%0d %0d\", 2147483648, 4294967312); endmodule", "2147483648 4294967312\n");
+}
+
+test "§3.8 an attribute value is a constant expression: a parameter is one, a variable is not" {
+    try expectRun("module m; parameter P = 2; (* a = P + 1, b *) initial $display(\"ok\"); endmodule", "ok\n");
+    try expectRejected("module m; integer N; (* a = N *) initial $display(N); endmodule", "an attribute value must be a constant expression");
+    // §12.4.1 a genvar is a constant inside its generate block.
+    try expectRun("module m; genvar g; generate for (g = 0; g < 2; g = g + 1) begin : b (* i = g + 5 *) wire w; end endgenerate initial $display(\"ok\"); endmodule", "ok\n");
+}
+
+test "§12.4.1 a genvar-indexed hierarchical task enable names the task in that iteration's block" {
+    try expectRun(
+        \\module m;
+        \\  genvar i;
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : g
+        \\    task t; $display("g%0d", i); endtask
+        \\  end endgenerate
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : h
+        \\    initial #(i) g[i].t;
+        \\  end endgenerate
+        \\endmodule
+    , "g0\ng1\n");
+}
+
 test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"before\"); initial forever ; endmodule", "error");
     try expectRejected("module m; wire [1:0] a, b; tran(a,b); initial $display(\"before\"); endmodule", "a scalar net or a bit-select of a vector net");
-    try expectRejected("module m; initial $display(\"%b\",2147483648); endmodule", "unsized constants");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
     try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "no bits to select");
     // §5.10 "events do not hold any data", so neither direction of the
@@ -2032,8 +2206,8 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; wire [3:0] w; initial w[0]=1; endmodule", "no procedural assignment to a net");
     // Past Table 9-22 and §17.1.1's %c %s %m %l %t %v, a conversion such as
-    // the unformatted `%u` is refused, and the refusal names the table.
-    try expectRejected("module m; initial $display(\"%u\",1); endmodule", "Table 9-22");
+    // `%y` is refused, and the refusal names the table.
+    try expectRejected("module m; initial $display(\"%y\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
     // IEEE 1364-2005 §5.1.1 Table 5-3: a real takes no bitwise, modulus or
     // case operator.

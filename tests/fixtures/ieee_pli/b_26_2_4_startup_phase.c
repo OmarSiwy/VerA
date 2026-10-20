@@ -25,6 +25,9 @@
  *   vpi_register_systf($b264)                    a handle
  *   vpi_register_cb for cbEndOfCompile, cbStartOfSimulation,
  *     cbEndOfSimulation, cbError, cbPLIError      five handles
+ * $b264's compiletf and sizetf are NULL: 12.33.1 "One or more of the
+ * compiletf, calltf, and sizetf fields can be set to NULL if they are not
+ * needed." The registration is accepted and reports no error.
  * (cbUnresolvedSystf is not asserted: VerA delivers no such callback and
  * refuses the reason at any time.) vpi_chk_error() is how each refusal below
  * is read; §27.1 resets the status on every call but it, so it is usable here.
@@ -53,6 +56,8 @@
 //! inherited-reject IEEE 1364-2005 26.2.4
 //! lrm 12.33.2
 //! lrm-reject 12.33.2
+//! lrm 12.33.2:1001
+//! lrm 12.33.1:1001
 //! design ch11_vpi/p04_objects.v
 //! stdout b264 eoc
 //! stdout p02: b_26_2_4_startup_phase checks=27

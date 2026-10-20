@@ -43,6 +43,8 @@
 // its input", 0.75.
 //
 //! lrm 4.5.7
+//! lrm 4.5.7:1001
+//! lrm 4.5.7:1003
 //! bias V(in) = 0.75
 //! print none
 //! acdyn (a,in) f=0 re=1 im=0 tol=0

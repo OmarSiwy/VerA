@@ -29,6 +29,7 @@
 // 10 - floor(2.666...)*3.75 = 10 - 2*3.75 = 2.5, exact in binary.
 //
 //! lrm 4.2.4
+//! lrm 4.2.4:1003
 //! bias V(p) = 5.5
 `include "check.vh"
 module ch04_modulo(p, n);

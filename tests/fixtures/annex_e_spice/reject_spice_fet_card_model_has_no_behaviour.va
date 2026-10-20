@@ -19,8 +19,9 @@
 //! lrm E.3
 //! lrm E.1.2
 //! bias V(d) = 1.0, V(g) = 0.75, V(s) = 0.25, V(b) = 0.0
-//! reject E0953
+//! reject-only E0953
 //! reject Table E.1's `mosfet`
+//! neighbour spice_fet_card_instantiates_model_module.va
 //! spice .MODEL NCH NMOS LEVEL = 72
 //! spice .SUBCKT CELL D G S B
 //! spice M1 D G S B NCH W=1U L=20N

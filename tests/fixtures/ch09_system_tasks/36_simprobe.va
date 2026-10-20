@@ -20,6 +20,7 @@
 // negative and is not tested here.
 //
 //! lrm 9.16
+//! lrm 9.16:1002
 `include "check.vh"
 module ch09_simprobe(p, n);
   inout p, n; electrical p, n;
