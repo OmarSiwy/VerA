@@ -129,7 +129,7 @@ fn source(o: *const Obj) ?Source {
     // §26.6.19(b): the active system function's own handle reads its
     // current return value, without recursively invoking its calltf.
     if (activeCall(o)) if (systf.result) |lit| {
-        if (systf.find(o.name, .digital).?.digital.sysfunctype == systf.vpiRealFunc) return .{ .real = @bitCast(lit.values()[0]) };
+        if (systf.active_reg.?.digital.sysfunctype == systf.vpiRealFunc) return .{ .real = @bitCast(lit.values()[0]) };
         return literalSource(lit);
     };
     if (o.kind == .code and o.vtype == root.code.vpiContAssign) return driven(o);
@@ -762,7 +762,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
             if (e == error.OutOfMemory) return oom();
             return null;
         };
-        if (systf.find(o.name, .digital).?.digital.sysfunctype == systf.vpiRealFunc) {
+        if (systf.active_reg.?.digital.sysfunctype == systf.vpiRealFunc) {
             const f: f64 = if (v.format == vpiRealVal) v.value.real else @floatFromInt(@as(i64, @bitCast(res.planes[0])));
             @memset(res.planes, 0);
             res.planes[0] = @bitCast(f);

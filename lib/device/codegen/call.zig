@@ -719,10 +719,26 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // else the `Instance` slice (`contract.hostString`). `Lower` answers a
         // literal "instance" or "path"; any other name reads "".
         .@"$simparam$str" => {
+            // A literal name picks its row here, so the device holds only
+            // that row's value. §4.6.1's analysis names are the
+            // `AnalysisKind` tag spellings. `Lower` answers the hierarchy
+            // rows; "module" remains for callers that build a `Gen` without
+            // an elaborated unit table.
+            if (strArg(self, args, 0)) |nm| {
+                if (std.mem.eql(u8, nm, "analysis_type")) {
+                    self.uses.sim = true;
+                    return self.b("@tagName(sim.kind)", .{});
+                }
+                if (std.mem.eql(u8, nm, "module")) return self.b("\"{f}\"", .{std.zig.fmtString(self.mir.name)});
+                const host = std.mem.eql(u8, nm, "cwd") or std.mem.eql(u8, nm, "analysis_name");
+                if (!host or !self.lowered.uses.contains(.host_strings)) return self.b("\"\"", .{});
+                self.uses.inst = true;
+                self.uses.model = true;
+                float_lanes.instPin(self);
+                return self.b("contract.hostString(model.{0s}_idx__, inst.{0s})", .{nm});
+            }
             // §9.15 param_name may be a string variable, so the lookup runs
-            // at run time. §4.6.1's analysis names are the `AnalysisKind` tag
-            // spellings. `Lower` answers the hierarchy rows; "module" remains
-            // for callers that build a `Gen` without an elaborated unit table.
+            // at run time.
             self.uses.sim = true;
             try self.b("(if (std.mem.eql(u8, ", .{});
             try gen_render.renderValueRef(self, self.an.rv(args[0]));

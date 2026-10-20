@@ -325,11 +325,10 @@ pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, na
     return t.open(path, ty, mcd);
 }
 
-/// Is `ty` one of §17.2.1 Table 17-7's file types?
+/// Is `ty` one of §17.2.1 Table 17-7's file types? The list is lowering's
+/// too (`kernels.fopen_types`).
 pub fn fileType(ty: []const u8) bool {
-    const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
-    for (types) |allowed| if (std.mem.eql(u8, allowed, ty)) return true;
-    return false;
+    return @import("kernels").fopen_types.has(ty);
 }
 
 /// §17.2.4.1 / §17.2.4.2 / §17.2.5 / §17.2.8 on the table `t`, C's
