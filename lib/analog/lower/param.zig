@@ -587,14 +587,23 @@ pub fn collectDeclMeta(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         if (b.owner.kind != .declaration) continue;
         for (b.specs) |s| {
             const n = self.file.str(s.name);
-            const is_desc = std.mem.eql(u8, n, "desc");
-            if (!is_desc and !std.mem.eql(u8, n, "units")) continue;
+            const slot = meta_specs.get(n) orelse continue;
             const g = try last.getOrPut(self.arena, b.owner.tok);
             if (!g.found_existing) g.value_ptr.* = .{};
-            laterSpec(if (is_desc) &g.value_ptr.desc else &g.value_ptr.units, s);
+            laterSpec(switch (slot) {
+                .desc => &g.value_ptr.desc,
+                .units => &g.value_ptr.units,
+                .type => &g.value_ptr.type,
+            }, s);
         }
     }
     if (last.count() == 0) return;
+    // `type = "instance"`: the parameter an instance line may set (OpenVAF's
+    // convention, `instance_params`). A tool convention, not §2.9.2's.
+    for (module.params) |p| if (last.get(p.main_tok)) |l| {
+        const ty = metaString(self, l.type) orelse continue;
+        if (std.mem.eql(u8, ty, "instance")) try self.out.instance_params.append(self.arena, self.file.str(p.name));
+    };
     for (module.params) |p| try metaRow(self, &last, .parameter, p.name, &.{p.main_tok});
     for (module.vars) |v| try metaRow(self, &last, .variable, v.name, &.{v.main_tok});
     // A port typed by a later net declaration owns both lines' prefixes
@@ -619,7 +628,10 @@ pub fn collectDeclMeta(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     }
 }
 
-const MetaSpecs = struct { desc: ?Ast.NatureAttr = null, units: ?Ast.NatureAttr = null };
+const MetaSpecs = struct { desc: ?Ast.NatureAttr = null, units: ?Ast.NatureAttr = null, type: ?Ast.NatureAttr = null };
+const meta_specs: std.StaticStringMap(std.meta.FieldEnum(MetaSpecs)) = .initComptime(.{
+    .{ "desc", .desc }, .{ "units", .units }, .{ "type", .type },
+});
 
 /// Keeps in `slot` whichever of it and `s` comes later in the source.
 fn laterSpec(slot: *?Ast.NatureAttr, s: Ast.NatureAttr) void {

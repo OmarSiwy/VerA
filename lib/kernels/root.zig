@@ -81,6 +81,13 @@ pub const fmt = @import("fmt.zig");
 /// one answer for a parameter default (`frontend.constfold`) and a folded
 /// MIR opcode (`ir.opcode`). Host Zig.
 pub const fold = @import("fold.zig");
+/// §9.5.1 Table 9-24's `$fopen` type strings, the fifteen of IEEE 1364-2005
+/// §17.2.1 Table 17-7: one list for lowering's E0889 and the digital engine's
+/// `$fopen` (`sim/digital/system.zig` `fileType`). Host Zig.
+pub const fopen_types = @import("std").StaticStringMap(void).initComptime(.{
+    .{"r"},   .{"rb"}, .{"w"},   .{"wb"},  .{"a"},  .{"ab"},  .{"r+"},  .{"r+b"},
+    .{"rb+"}, .{"w+"}, .{"w+b"}, .{"wb+"}, .{"a+"}, .{"a+b"}, .{"ab+"},
+});
 
 /// Each kernel file's bytes, for `codegen/kernel_text.zig` to splice into a
 /// device: `@embedFile` reaches only files under its own module's root.

@@ -634,6 +634,8 @@ pub const Request = struct {
         backend: orchestrator.Backend = .llvm,
         /// Keep DWARF in a release artifact.
         debug_info: bool = false,
+        /// `orchestrator.Options.artifact_cache` for an `osdi` build.
+        artifact_cache: ?[]const u8 = null,
     };
 };
 
@@ -913,6 +915,9 @@ pub fn compile(
             .modules = &modules,
             .zig_exe = b.zig_exe,
             .debug_info = b.debug_info,
+            // `osdi_dyn` keeps every per-iterate callback in `.eval`.
+            .cold_self_hosted = req.osdi,
+            .artifact_cache = if (req.osdi) b.artifact_cache else null,
         }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ in_path, e });
             return o.done(1);

@@ -1489,9 +1489,15 @@ const mixed_head =
     \\    return nodeValue(x, n1) - if (n2) |b| nodeValue(x, b) else 0.0;
     \\}
     \\fn nodeValue(x: *const [n_u]f64, name: []const u8) f64 {
-    \\    for (u_names, 0..) |u, i| if (std.mem.eql(u8, u, name)) return x[i];
-    \\    return 0.0;
+    \\    return x[u_index.get(name) orelse return 0.0];
     \\}
+    \\/// `u_names` back to positions, built at comptime: a digital probe's name
+    \\/// arrives at run time (`sim.mixed`'s probe hook).
+    \\const u_index = std.StaticStringMap(usize).initComptime(blk: {
+    \\    var kvs: [u_names.len]struct { []const u8, usize } = undefined;
+    \\    for (u_names, &kvs, 0..) |u, *kv, i| kv.* = .{ u, i };
+    \\    break :blk kvs;
+    \\});
     \\
     \\/// A `//! wave`, piecewise linear over the declared `//! time`s. At a
     \\/// declared point it is the fixed-grid runner's value, a short list holds its

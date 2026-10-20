@@ -190,6 +190,8 @@ pub fn main(init: std.process.Init) !u8 {
             .optimize = opt,
             .backend = backend,
             .debug_info = cli.debug_info,
+            // A finished `.osdi` is reused across work directories.
+            .artifact_cache = if (cli.emit_osdi) try digital_cli.globalCache(arena.allocator(), init.environ_map, "vera-osdi") else null,
         },
     }, &bag, &o) catch |e| {
         // Past the `--param` check the bag is final, and an error leaves

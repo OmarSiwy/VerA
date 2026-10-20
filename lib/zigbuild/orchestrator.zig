@@ -119,6 +119,21 @@ pub const Options = struct {
     /// A `.v` device's prebuilt engine object (`buildEngine`): linked in,
     /// and the shim declares `vera_prebuilt_engine`.
     engine: ?[]const u8 = null,
+    /// In a split LLVM build, compile every piece but `eval` and `state`
+    /// (`.setup` and `setup`'s chunks) on the self-hosted backend: they run
+    /// once per instance or card, so unoptimized code costs the simulation
+    /// nothing, and they leave LLVM's critical path (psp103's three setup
+    /// chunks, 1.35 s each under LLVM, take 0.7 s). Sound only for a `dyn`
+    /// that keeps every per-iterate entry point out of `.setup`, as
+    /// `osdi_dyn` does; applied only where the two backends' objects link
+    /// together (`coldSelfHosted`). Not hashed: no type layout depends on
+    /// the backend.
+    cold_self_hosted: bool = false,
+    /// A directory of finished libraries keyed by everything that decides
+    /// their bytes (`artifactKey`): a build whose key is there copies it
+    /// instead of compiling, whatever its `work_dir`. Null: no such cache.
+    /// Not used with `engine`, a prebuilt object outside the key.
+    artifact_cache: ?[]const u8 = null,
     /// `-target` for every compile, e.g. `x86_64-linux-gnu`: a host that
     /// dlopens the library passes its own, so the library links the host's
     /// libc. Null builds for the detected native target, which inside a Nix
@@ -370,10 +385,14 @@ fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u
     try a.appendSlice(arena, link_libc);
     if (o.target) |t| try a.appendSlice(arena, &.{ "-target", t });
 
-    switch (o.backend.forHost()) {
+    const backend: Backend = if (part) |p| (if (coldSelfHosted(o, p)) .self_hosted else o.backend.forHost()) else o.backend.forHost();
+    switch (backend) {
         // The only backend that patches in place, so the only one where
-        // `-fincremental` pays.
-        .self_hosted => try a.appendSlice(arena, &.{ "-fno-llvm", "-fno-lld", "-fincremental" }),
+        // `-fincremental` pays. Not for a cold piece of an LLVM build
+        // (`coldSelfHosted`): lld links it beside the LLVM objects and
+        // refuses an incremental object's padded `.eh_frame` ("corrupted
+        // .eh_frame: FDE version 1 or 3 expected").
+        .self_hosted => try a.appendSlice(arena, if (backend != o.backend.forHost()) &.{ "-fno-llvm", "-fno-lld" } else &.{ "-fno-llvm", "-fno-lld", "-fincremental" }),
         .llvm => try a.append(arena, "-fllvm"),
     }
     if (strip(o.optimize, o.debug_info)) try a.append(arena, "-fstrip");
@@ -404,6 +423,16 @@ fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u
     assert(a.items.len >= 3);
     assert(a.items[0].ptr == o.zig_exe.ptr);
     return a.items;
+}
+
+/// Whether split piece `piece` builds on the self-hosted backend under
+/// `Options.cold_self_hosted`: a piece other than `eval` and `state`, in an
+/// LLVM build for the native x86_64 Linux target, the one place this
+/// compiler's self-hosted ELF objects link beside its LLVM ones.
+fn coldSelfHosted(o: Options, piece: []const u8) bool {
+    if (!o.cold_self_hosted or o.backend.forHost() != .llvm or o.target != null) return false;
+    if (builtin.target.cpu.arch != .x86_64 or builtin.target.os.tag != .linux) return false; // os: the self-hosted backend's ELF objects link beside LLVM's here
+    return !std.mem.eql(u8, piece, @tagName(Part.eval)) and !std.mem.eql(u8, piece, @tagName(Part.state));
 }
 
 /// The pieces of a split build: the `Part`s, then `setup`'s chunks as
@@ -545,6 +574,20 @@ pub fn compileRelease(
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    const cached: ?[]const u8 = if (o.artifact_cache != null and o.engine == null)
+        try std.fs.path.join(arena, &.{ o.artifact_cache.?, try arena.print("{x:0>16}{s}", .{ try artifactKey(io, arena, o, device), builtin.target.dynamicLibSuffix() }) })
+    else
+        null;
+    if (cached) |c| if (try publishFile(io, gpa, o, c, generation)) |so_path|
+        return .{ .ok = .{ .so_path = so_path } };
+    const r = try compileFresh(gpa, io, arena, o, device, generation);
+    if (cached) |c| if (r == .ok) store(io, r.ok.so_path, c);
+    return r;
+}
+
+/// `compileRelease` past the artifact cache: spawn, write, compile, link,
+/// publish. `arena` holds what lives only for the build.
+fn compileFresh(gpa: Allocator, io: Io, arena: Allocator, o: Options, device: Output, generation: u32) !Result {
     const parts = comptime std.enums.values(Part);
     const split = splits(o, device);
     const pieces = try pieceNames(arena, if (split) device.setup_chunks else 0);
@@ -627,6 +670,72 @@ pub fn compileRelease(
 fn testLib(comptime name: []const u8) []const u8 {
     const t = &builtin.target;
     return comptime t.libPrefix() ++ name ++ t.dynamicLibSuffix();
+}
+
+/// The artifact cache key: the compiler VerA was built with, every option
+/// that reaches the compiler's command line, every byte of `device`, and
+/// each support module's root source. A module root's own imports are not read: the contract
+/// and `dyn` VerA ships import only `std` and each other, and a host's
+/// `dyn` that imports more needs its own `artifact_cache` (none by default).
+fn artifactKey(io: Io, arena: Allocator, o: Options, device: Output) !u64 {
+    var h: std.hash.Wyhash = .init(0x05d1_ca_c4e);
+    const bytes = struct {
+        fn of(w: *std.hash.Wyhash, s: []const u8) void {
+            w.update(std.mem.asBytes(&s.len));
+            w.update(s);
+        }
+    }.of;
+    bytes(&h, builtin.zig_version_string);
+    bytes(&h, @tagName(o.optimize));
+    bytes(&h, @tagName(o.backend.forHost()));
+    bytes(&h, o.target orelse "");
+    bytes(&h, o.name);
+    for (o.modules) |m| {
+        bytes(&h, m.name);
+        for (m.deps) |d| bytes(&h, d);
+    }
+    bytes(&h, device.text);
+    for (device.names) |n| bytes(&h, n);
+    for ([_][]const u32{ device.unit_lo, device.unit_fn, device.unit_hi }) |offs| bytes(&h, std.mem.sliceAsBytes(offs));
+    bytes(&h, device.prelude);
+    bytes(&h, device.helpers);
+    h.update(std.mem.asBytes(&device.setup_chunks));
+    for (o.modules) |m| bytes(&h, try Io.Dir.cwd().readFileAlloc(io, m.root, arena, .unlimited));
+    h.update(&.{ @intFromBool(o.debug_info), @intFromBool(splits(o, device)), @intFromBool(o.cold_self_hosted) });
+    bytes(&h, o.zig_exe);
+    return h.final();
+}
+
+/// Publishes `src`, a finished library, as `publish` does a compiler's;
+/// null when there is none to copy. Caller owns the returned path.
+fn publishFile(io: Io, gpa: Allocator, o: Options, src: []const u8, generation: u32) !?[]u8 {
+    const t = &builtin.target;
+    const dst = try gpa.print("{s}{c}{s}{s}.{d}{s}", .{
+        o.work_dir, std.fs.path.sep, t.libPrefix(),
+        o.name,     generation,      t.dynamicLibSuffix(),
+    });
+    errdefer gpa.free(dst);
+    try Io.Dir.cwd().createDirPath(io, o.work_dir);
+    Io.Dir.cwd().copyFile(src, .cwd(), dst, io, .{}) catch |e| switch (e) {
+        error.FileNotFound => {
+            gpa.free(dst);
+            return null;
+        },
+        else => |x| return x,
+    };
+    return dst;
+}
+
+/// Puts `so_path` in the artifact cache as `dst`, through a temporary name
+/// renamed into place, so a concurrent build reads a whole library or none.
+/// A cache that cannot be written is skipped: the build already succeeded.
+fn store(io: Io, so_path: []const u8, dst: []const u8) void {
+    const cwd: Io.Dir = .cwd();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp = std.fmt.bufPrint(&buf, "{s}.{x}.tmp", .{ dst, std.hash.Wyhash.hash(0, so_path) }) catch return;
+    if (std.fs.path.dirname(dst)) |d| cwd.createDirPath(io, d) catch return;
+    cwd.copyFile(so_path, cwd, tmp, io, .{}) catch return;
+    cwd.rename(tmp, cwd, dst, io) catch cwd.deleteFile(io, tmp) catch {};
 }
 
 /// Copies the cache output to a generation-stamped path so the host dlopens a
@@ -1337,4 +1446,87 @@ test "writeTree frees everything and reports OutOfMemory at every allocation" {
     // A first write, so every later run reads the same files back.
     _ = try writeTree(io, std.testing.allocator, o, out);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, writeTreeOnce, .{ io, tmp.dir, o, out });
+}
+
+test "coldSelfHosted: every piece but eval and state, only when asked, in an LLVM build for the native x86_64 Linux target" {
+    var o: Options = .{ .work_dir = ".", .name = "d", .optimize = .fast, .backend = .llvm, .modules = &.{}, .cold_self_hosted = true };
+    const here = builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag == .linux; // os: the rule under test is per host
+    try std.testing.expectEqual(here, coldSelfHosted(o, "setup"));
+    try std.testing.expectEqual(here, coldSelfHosted(o, "setup0"));
+    try std.testing.expect(!coldSelfHosted(o, "eval"));
+    try std.testing.expect(!coldSelfHosted(o, "state"));
+    if (here) {
+        // A cold piece builds self-hosted without `-fincremental`, which lld
+        // could not link; `eval` stays on LLVM.
+        var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        defer arena_state.deinit();
+        const cold = try buildArgv(arena_state.allocator(), o, "setup");
+        const hot = try buildArgv(arena_state.allocator(), o, "eval");
+        const has = struct {
+            fn f(argv: []const []const u8, flag: []const u8) bool {
+                for (argv) |x| if (std.mem.eql(u8, x, flag)) return true;
+                return false;
+            }
+        }.f;
+        try std.testing.expect(has(cold, "-fno-llvm") and !has(cold, "-fincremental") and !has(cold, "-fllvm"));
+        try std.testing.expect(has(hot, "-fllvm") and !has(hot, "-fno-llvm"));
+    }
+    o.target = "x86_64-linux-gnu";
+    try std.testing.expect(!coldSelfHosted(o, "setup"));
+    o.target = null;
+    o.cold_self_hosted = false;
+    try std.testing.expect(!coldSelfHosted(o, "setup"));
+}
+
+test "artifact_cache: a second work directory reuses the first's library, and a changed device misses" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try gpa.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer gpa.free(base);
+    try tmp.dir.writeFile(io, .{ .sub_path = "contract.zig", .data = "pub const k: f64 = 2.0;\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "dyn.zig", .data =
+        \\pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
+        \\    _ = name;
+        \\    @export(&D.eval, .{ .name = "arp_eval" });
+        \\}
+        \\
+    });
+    const mods = [_]Module{
+        .{ .name = "contract", .root = try std.fs.path.join(gpa, &.{ base, "contract.zig" }) },
+        .{ .name = "dyn", .root = try std.fs.path.join(gpa, &.{ base, "dyn.zig" }) },
+    };
+    defer for (mods) |m| gpa.free(m.root);
+    const cache = try std.fs.path.join(gpa, &.{ base, "cache" });
+    defer gpa.free(cache);
+    const dev = "pub fn eval(x: f64) callconv(.c) f64 { return x * @import(\"contract\").k; }\n";
+
+    // The first build fills the cache; its entry is then replaced by a
+    // marker, which a hit publishes and a miss cannot.
+    const marker = "not a library";
+    var got: [3]bool = undefined;
+    for ([_][]const u8{ "w1", "w2", "w3" }, 0..) |w, i| {
+        const wd = try std.fs.path.join(gpa, &.{ base, w });
+        defer gpa.free(wd);
+        const o: Options = .{ .work_dir = wd, .name = "cachedev", .optimize = .debug, .backend = .self_hosted, .modules = &mods, .artifact_cache = cache };
+        var r = compileRelease(gpa, io, o, .{ .text = if (i == 2) dev ++ "pub const z = 1;\n" else dev }, 1) catch |err| switch (err) {
+            error.CompilerGone => return error.SkipZigTest,
+            else => return err,
+        };
+        defer r.deinit(gpa);
+        try std.testing.expect(r == .ok);
+        const bytes = try Io.Dir.cwd().readFileAlloc(io, r.ok.so_path, gpa, .unlimited);
+        defer gpa.free(bytes);
+        got[i] = std.mem.eql(u8, bytes, marker);
+        if (i == 0) {
+            var cdir = try Io.Dir.cwd().openDir(io, cache, .{ .iterate = true });
+            defer cdir.close(io);
+            var it = cdir.iterate();
+            var n: usize = 0;
+            while (try it.next(io)) |e| : (n += 1) try cdir.writeFile(io, .{ .sub_path = e.name, .data = marker });
+            try std.testing.expectEqual(@as(usize, 1), n);
+        }
+    }
+    try std.testing.expectEqualSlices(bool, &.{ false, true, false }, &got);
 }

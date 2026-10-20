@@ -401,6 +401,13 @@ fn libraries(
 /// `HOME/.cache/zig`, else Windows' `LOCALAPPDATA/zig`), else the work
 /// directory's own cache.
 fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, work_dir: ?[]const u8) ![]const u8 {
+    return try globalCache(arena, env, "vera-engine") orelse std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
+}
+
+/// `sub` in Zig's global cache directory (`ZIG_GLOBAL_CACHE_DIR`, else
+/// `XDG_CACHE_HOME/zig`, else `HOME/.cache/zig`, else Windows'
+/// `LOCALAPPDATA/zig`); null when the environment names none.
+pub fn globalCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, sub: []const u8) !?[]const u8 {
     const global = if (env.get("ZIG_GLOBAL_CACHE_DIR")) |d|
         d
     else if (env.get("XDG_CACHE_HOME")) |d|
@@ -410,8 +417,8 @@ fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, wo
     else if (env.get("LOCALAPPDATA")) |d|
         try std.fs.path.join(arena, &.{ d, "zig" })
     else
-        return std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
-    return std.fs.path.join(arena, &.{ global, "vera-engine" });
+        return null;
+    return try std.fs.path.join(arena, &.{ global, sub });
 }
 
 // ---------------------------------------------------------------------------
