@@ -2573,6 +2573,11 @@ pub const DeclMeta = struct {
     units: ?[]const u8 = null,
 };
 
+// Optional device table `instance_params: [_][]const u8`: the `Model` fields
+// of the parameters the source marks `(* type = "instance" *)`, OpenVAF's
+// convention for the ones an instance line sets. An OSDI host lists only
+// these as instance parameters; absent, it may list every parameter.
+
 /// Returns the device's `ac_dyn_slots`, or empty. Slot `row * n_u + col` is a
 /// local Jacobian entry whose small-signal value depends on frequency: a
 /// partial that flows through §4.5.7 `absdelay` (e^(−jω·td)), §4.5.11
@@ -4228,6 +4233,7 @@ const AllowedPubDecl = enum {
     u_abstol,
     u_nodeset,
     decl_meta,
+    instance_params,
     jac_pattern,
     q_pattern,
     jac_rows,
@@ -4722,6 +4728,7 @@ const MockAll = struct {
         .{ .kind = .variable, .name = "ids", .units = "A" },
         .{ .kind = .net, .name = "p", .desc = "positive terminal" },
     };
+    pub const instance_params = [_][]const u8{"g"};
     pub const mc_param = "g";
     pub const constant: Constant = .{ .g = true };
     // §4.6.4: a parametric generator and a §4.6.4.4 tabulated one, so the

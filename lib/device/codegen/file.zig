@@ -133,6 +133,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitTopology(self);
     try emitModel(self);
     try emitDeclMeta(self);
+    try emitInstanceParams(self);
     try emitDerive(self);
     try emitShapeCheck(self);
     try emitCardCheck(self);
@@ -496,6 +497,22 @@ fn emitDeclMeta(self: *Gen) Error!void {
         if (m.desc) |v| try self.w(", .desc = \"{f}\"", .{std.zig.fmtString(v)});
         if (m.units) |v| try self.w(", .units = \"{f}\"", .{std.zig.fmtString(v)});
         try self.w(" }},\n", .{});
+    }
+    try self.w("}};\n\n", .{});
+}
+
+/// Emits `instance_params` (`contract`'s optional table): the `Model` fields
+/// of the parameters marked `type = "instance"`. Only when one is.
+fn emitInstanceParams(self: *Gen) Error!void {
+    if (self.lowered.instance_params.items.len == 0) return;
+    try self.w("/// The parameters marked `(* type = \"instance\" *)`: an OSDI host lists\n", .{});
+    try self.w("/// only these as instance parameters.\n", .{});
+    try self.w("pub const instance_params = [_][]const u8{{\n", .{});
+    for (self.lowered.instance_params.items) |nm| {
+        for (self.lowered.params.items, 0..) |p, i| if (std.mem.eql(u8, p.name, nm)) {
+            try self.w("    \"{s}\",\n", .{self.names.p_names[i]});
+            break;
+        };
     }
     try self.w("}};\n\n", .{});
 }

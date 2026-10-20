@@ -799,6 +799,10 @@ nodesets: std.ArrayList(Nodeset) = .empty,
 /// in declaration order (`lower_param.collectDeclMeta`). Sparse, so codegen
 /// emits the optional `decl_meta` table only when this is non-empty.
 decl_meta: std.ArrayList(DeclMeta) = .empty,
+/// The parameters whose last `type` attribute is "instance", in declaration
+/// order (`lower_param.collectDeclMeta`): OpenVAF's convention for the ones
+/// an instance line sets. Empty when the module marks none.
+instance_params: std.ArrayList([]const u8) = .empty,
 disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
 
 // ---- §3.4 the model card and §5.6 the equations -----------------------------

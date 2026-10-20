@@ -37,11 +37,14 @@
 //!   temperature  each instance runs on its own `Model` row: the card,
 //!                the instance's own parameters and `temperature__`, then
 //!                `derive`, `checkShape`, `checkRange`, `setup`, `setupInstance`
-//!   collapse     a flow unknown whose branch a card switches off
+//!   collapse     a 0 V short (`D.collapse`) merges its two nodes, an OSDI
+//!                collapsible pair, as OpenVAF's do, and its flow unknown
+//!                collapses into ground (`collapse_applied`); a flow
+//!                unknown whose branch a card switches off
 //!                (`<flow>__retained` = 0 after `derive`) collapses into
-//!                ground; every other `collapse` alias is left unapplied
-//!                (the uncollapsed system is exact, a 0 V branch's flow kept
-//!                as an unknown)
+//!                ground too. A short kept as a flow unknown is a
+//!                zero-diagonal row, which SPARSE 1.3 pivots around at
+//!                about 3,500x the factor time (psp103, 51-stage ring)
 //!   static request  `updateState`'s `request_reject_at` in a static solve
 //!                ("iterate again", `contract.UpdateResult`) is
 //!                EVAL_RET_FLAG_LIM: ngspice counts the iterate unconverged
@@ -258,7 +261,10 @@ var osdi_log: ?*const fn (?*anyopaque, [*:0]const u8, u32) callconv(.c) void = n
 /// Sends `msg` and a newline to the simulator's logger at level `lvl`; does
 /// nothing before the simulator installed one.
 fn log(handle: ?*anyopaque, lvl: u32, msg: []const u8) void {
-    const f = osdi_log orelse return;
+    // Through the exported symbol: a split build's `.eval` object has its
+    // own copy of `osdi_log`, which the simulator never writes.
+    const slot = if (@import("builtin").is_test) &osdi_log else @extern(*const @TypeOf(osdi_log), .{ .name = "osdi_log" });
+    const f = slot.* orelse return;
     var buf: [1024]u8 = undefined;
     // Cut to what fits with the newline and the NUL rather than dropped: a
     // fatal status names its file and line first.
@@ -284,7 +290,35 @@ fn eqlZ(z: [*:0]const u8, comptime s: []const u8) bool {
 /// OSDI descriptor, named `name` (the module's name, which a `.model` card
 /// names).
 pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
-    const H = Osdi(D, name);
+    exportDescriptor(D, name, false);
+}
+
+/// The split build's hook (`contract.DevicePart`): `.setup` holds the
+/// descriptor and the once-per-instance callbacks; `.eval` the ones the
+/// simulator calls every iterate (`Osdi.hot`) and `.state` `load_noise`,
+/// which the descriptor reaches through hidden symbols, so the three compile
+/// in parallel. `evalQ` is most of a large device's LLVM time and the noise
+/// PSD a large share of the rest; nothing in `.setup` runs per iterate.
+pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: contract.DevicePart) void {
+    const H = OsdiAs(D, name, true);
+    switch (part) {
+        .setup => exportDescriptor(D, name, true),
+        .eval => inline for (H.hot) |h| {
+            if (comptime std.mem.eql(u8, h[0], "load_noise")) continue;
+            @export(&@field(H, h[1]), .{ .name = H.sym(h[0]), .visibility = .hidden });
+        },
+        .state => @export(&H.loadNoise, .{ .name = H.sym("load_noise"), .visibility = .hidden }),
+    }
+}
+
+/// The scalar `D.setup` runs on here, so a split build compiles each
+/// `D.setup_chunks` chunk in an object of its own (`contract.SetupValue`).
+pub fn SetupValue(comptime D: type) type {
+    return Osdi(D, "").Val;
+}
+
+fn exportDescriptor(comptime D: type, comptime name: []const u8, comptime split: bool) void {
+    const H = OsdiAs(D, name, split);
     contract.validateHost(H, D);
     @export(&osdi_version_major, .{ .name = "OSDI_VERSION_MAJOR" });
     @export(&osdi_version_minor, .{ .name = "OSDI_VERSION_MINOR" });
@@ -329,6 +363,12 @@ fn cName(comptime s: []const u8) [:0]const u8 {
 /// the simulator allocates (`model_size`, `instance_size`) and fills through
 /// `access` before `setup_model` and `setup_instance`.
 fn Osdi(comptime D: type, comptime name: []const u8) type {
+    return OsdiAs(D, name, false);
+}
+
+/// `Osdi`, whose descriptor under `split` names `eval` and `load_noise` by
+/// symbol (`exportDevicePart`) instead of compiling them in.
+fn OsdiAs(comptime D: type, comptime name: []const u8, comptime split: bool) type {
     @setEvalBranchQuota(10_000_000);
     return struct {
         const n = contract.nU(D);
@@ -342,10 +382,17 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         pub const shape_check = true;
         pub const calls_ac_dyn = true;
 
+        /// Whether the device names its 0 V shorts (`collapse`, and
+        /// `collapse_full` for the pairs at comptime). The descriptor then
+        /// lists each as an OSDI collapsible pair, ngspice merges the
+        /// short's nodes as it does OpenVAF's, and the families say so
+        /// (`collapse_applied`): the device drops the short's flow unknown
+        /// and its stamps instead of a zero-diagonal branch row per short.
+        const collapses = @hasDecl(D, "collapse") and @hasDecl(D, "collapse_full");
         /// The value-only hooks' family: no lanes.
-        const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{});
+        const Val = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .collapse_applied = collapses });
         /// `eval`'s family: unknown `u` on lane `u`.
-        const Dual = contract.RefFamily(f64, &lanes, .{});
+        const Dual = contract.RefFamily(f64, &lanes, .{ .collapse_applied = collapses });
         const lanes = blk: {
             @setEvalBranchQuota(10_000_000);
             var a: [n]u8 = undefined;
@@ -377,39 +424,61 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             break :blk ps;
         };
         const np = params.len;
+        /// Every parameter, as `params` indices: the model card's set.
+        const all_idx: [np]u16 = blk: {
+            @setEvalBranchQuota(10 * np + 1000);
+            var a: [np]u16 = undefined;
+            for (&a, 0..) |*x, i| x.* = i;
+            break :blk a;
+        };
+        /// The instance parameters, as `params` indices: the ones the device
+        /// marks (`instance_params`, OpenVAF's `type = "instance"`), else
+        /// every one, so a device that marks none lets an instance line set
+        /// any.
+        const inst_idx: []const u16 = blk: {
+            @setEvalBranchQuota(10_000_000);
+            if (!@hasDecl(D, "instance_params")) break :blk &all_idx;
+            var a: []const u16 = &.{};
+            for (params, 0..) |p, i| for (D.instance_params) |f| {
+                if (std.mem.eql(u8, p.field, f)) a = a ++ [_]u16{i};
+            };
+            break :blk a;
+        };
+        const ni = inst_idx.len;
         const has_mf = @hasField(D.Instance, "mfactor");
-        const num_inst_params = np + @intFromBool(has_mf);
+        const num_inst_params = ni + @intFromBool(has_mf);
         const num_params = num_inst_params + np;
 
-        /// One 8-byte slot per parameter, in OSDI's C types: double, int32,
-        /// char*. ngspice writes them through `access` before setup.
-        const Vals = [np]u64;
         comptime {
             // `slot` reinterprets one `u64` as each C type a parameter takes.
             assert(@sizeOf(f64) <= @sizeOf(u64));
             assert(@sizeOf(i32) <= @sizeOf(u64));
             assert(@sizeOf(Str) <= @sizeOf(u64));
             assert(@alignOf(Str) <= @alignOf(u64));
-            assert(num_inst_params >= np);
+            assert(ni <= np);
             assert(num_params == num_inst_params + np);
         }
 
-        fn slot(comptime T: type, vals: *Vals, comptime i: usize) *T {
-            return @ptrCast(@alignCast(&vals[i]));
+        /// One 8-byte value slot, in OSDI's C types: double, int32, char*.
+        /// ngspice writes them through `access` before setup.
+        fn slot(comptime T: type, v: *u64) *T {
+            return @ptrCast(@alignCast(v));
         }
 
         /// Writes the given parameters of `vals` into `m`. Returns the name
         /// of an integer parameter whose host value the field cannot hold
         /// (the host's `int32_t` into VerA's narrower field), with `m`
         /// partly written; null when every value was written.
-        fn overlay(m: *D.Model, vals: *Vals, given: *const [np]bool) ?[]const u8 {
+        /// `vals[k]` and `given[k]` are parameter `params[idx[k]]`.
+        fn overlay(m: *D.Model, comptime idx: []const u16, vals: *[idx.len]u64, given: *const [idx.len]bool) ?[]const u8 {
             @setEvalBranchQuota(10_000_000);
-            inline for (params, 0..) |p, i| if (given[i]) {
+            inline for (idx, 0..) |pi, i| if (given[i]) {
+                const p = params[pi];
                 const F = @FieldType(D.Model, p.field);
                 @field(m, p.field) = switch (p.kind) {
-                    .real => @floatCast(slot(f64, vals, i).*),
-                    .int => std.math.cast(F, slot(i32, vals, i).*) orelse return p.field,
-                    .str => if (slot(Str, vals, i).*) |z| std.mem.span(z) else @as(F, ""),
+                    .real => @floatCast(slot(f64, &vals[i]).*),
+                    .int => std.math.cast(F, slot(i32, &vals[i]).*) orelse return p.field,
+                    .str => if (slot(Str, &vals[i]).*) |z| std.mem.span(z) else @as(F, ""),
                 };
                 if (@hasField(D.Model, p.field ++ "__given")) @field(m, p.field ++ "__given") = true;
             };
@@ -425,13 +494,13 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
 
         /// Writes `m`'s value of every parameter not given into `vals`, so a
         /// host reading one back (ngspice `show`) sees the default.
-        fn readback(m: *const D.Model, vals: *Vals, given: *const [np]bool) void {
+        fn readback(m: *const D.Model, comptime idx: []const u16, vals: *[idx.len]u64, given: *const [idx.len]bool) void {
             @setEvalBranchQuota(10_000_000);
-            inline for (params, 0..) |p, i| if (!given[i]) switch (p.kind) {
-                .real => slot(f64, vals, i).* = @field(m, p.field),
-                .int => slot(i32, vals, i).* = std.math.lossyCast(i32, @field(m, p.field)),
+            inline for (idx, 0..) |pi, i| if (!given[i]) switch (params[pi].kind) {
+                .real => slot(f64, &vals[i]).* = @field(m, params[pi].field),
+                .int => slot(i32, &vals[i]).* = std.math.lossyCast(i32, @field(m, params[pi].field)),
                 // ponytail: a default string is not known to be NUL-terminated.
-                .str => slot(Str, vals, i).* = null,
+                .str => slot(Str, &vals[i]).* = null,
             };
         }
 
@@ -467,6 +536,40 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             return changed;
         }
 
+        /// `hostParams` for `eval`, which runs every iterate: each host
+        /// field's position in the simulator's names list is found once per
+        /// list (ngspice passes one static array, osdiload.c), and later
+        /// calls compare only values. The last match wins, as in
+        /// `hostParams`.
+        fn hostParamsAt(self: *Instance, p: SimParas) error{SimParasUnterminated}!bool {
+            @setEvalBranchQuota(10_000_000);
+            const names = p.names orelse return false;
+            const vals = p.vals orelse return false;
+            if (self.paras_names != names) {
+                self.paras_names = null;
+                const len = for (0..max_sim_paras + 1) |i| {
+                    if (names[i] == null) break i;
+                } else return error.SimParasUnterminated;
+                assert(len <= max_sim_paras);
+                inline for (host_fields, 0..) |h, j| {
+                    self.paras_at[j] = no_off;
+                    for (names[0..len], 0..) |nm, i| if (eqlZ(nm.?, h[0])) {
+                        self.paras_at[j] = @intCast(i);
+                    };
+                }
+                self.paras_names = names;
+            }
+            var changed = false;
+            inline for (host_fields, 0..) |h, j| if (@hasField(D.Model, h[1])) {
+                const i = self.paras_at[j];
+                if (i != no_off) {
+                    if (@field(self.row, h[1]) != vals[i]) changed = true;
+                    @field(self.row, h[1]) = vals[i];
+                }
+            };
+            return changed;
+        }
+
         /// What `setup_model`, `setup_instance` and `eval` log, fatal, when
         /// `hostParams` refuses the host's list.
         const sim_paras_refusal = std.fmt.comptimePrint("vera osdi: the simulator's $simparam names list has no NULL in its first {d} entries", .{max_sim_paras + 1});
@@ -481,6 +584,9 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             @setEvalBranchQuota(10_000_000);
             var es: []const Entry = &.{};
             for (0..n) |r| for (0..n) |c| {
+                // A short's flow unknown always collapses into ground: its
+                // row and column reach no matrix slot.
+                if (shortFlow(r) or shortFlow(c)) continue;
                 var e: Entry = .{ .r = r, .c = c, .resist = bit(if (@hasDecl(D, "jac_pattern")) D.jac_pattern[r] else ~@as(u64, 0), c), .react = has_q and bit(if (@hasDecl(D, "q_pattern")) D.q_pattern[r] else ~@as(u64, 0), c) };
                 for (contract.jacConst(D)) |j| if (@backingInt(j.row) == r and @backingInt(j.col) == c) {
                     e.resist = e.resist or j.g != 0;
@@ -509,22 +615,62 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             for (entries, 0..) |e, k| if (e.r == r and e.c == c) return k;
             unreachable;
         }
-        /// The §5.4.2 flow unknowns a card can switch off: `derive` writes
-        /// `<flow>__retained` = 0 when the branch's `V(...) <+` arm is not
-        /// taken, and `eval` then writes neither the flow's row nor its
-        /// column. Each is an OSDI collapsible pair into ground, collapsed
-        /// in `setupInstance` when off, so the simulator drops the unknown.
-        const dead_flows: []const u8 = blk: {
+        fn isFlow(comptime u: usize) bool {
+            return @hasDecl(D, "u_kinds") and D.u_kinds[u] != .voltage;
+        }
+
+        /// Whether unknown `u` is a 0 V short's flow, which `collapses` drops.
+        fn shortFlow(comptime u: usize) bool {
+            return collapses and isFlow(u) and D.collapse_full[u] != null;
+        }
+
+        /// One OSDI collapsible pair; `to` = `no_off` is ground.
+        const Pair = struct {
+            from: u8,
+            to: u32,
+            /// What collapses it in `setupInstance`:
+            ///   merge      `D.collapse` resolves `from` to `to`: a 0 V
+            ///              short (a chain of them) joins the two nodes
+            ///   short_flow always, under `collapses`: the family drops
+            ///              the short's flow unknown, row and column, in
+            ///              either arm
+            ///   dead_flow  `<flow>__retained` = 0: the §5.4.2 branch's
+            ///              `V(...) <+` arm is not taken, and `eval`
+            ///              writes neither the flow's row nor its column
+            kind: enum { merge, short_flow, dead_flow },
+        };
+        /// The collapsible pairs. A merge is listed for every root its node
+        /// can resolve to (`collapse_full` names the deepest; a card that
+        /// keeps part of a chain resolves to a root in between), so exactly
+        /// the pair `D.collapse` picks is set, whatever the card.
+        const pairs: []const Pair = blk: {
             @setEvalBranchQuota(10_000_000);
-            var fs: []const u8 = &.{};
+            var ps: []const Pair = &.{};
+            if (collapses) for (0..n) |u| {
+                const root = D.collapse_full[u] orelse continue;
+                if (isFlow(u)) continue;
+                for (0..u) |r| {
+                    if (!isFlow(r) and (D.collapse_full[r] orelse r) == root)
+                        ps = ps ++ [_]Pair{.{ .from = u, .to = r, .kind = .merge }};
+                }
+            };
             for (@typeInfo(D.U).@"enum".field_names, 0..) |f, u| {
-                if (@hasField(D.Model, f ++ "__retained")) fs = fs ++ [_]u8{u};
+                if (shortFlow(u)) {
+                    ps = ps ++ [_]Pair{.{ .from = u, .to = no_off, .kind = .short_flow }};
+                } else if (@hasField(D.Model, f ++ "__retained")) {
+                    ps = ps ++ [_]Pair{.{ .from = u, .to = no_off, .kind = .dead_flow }};
+                }
             }
-            break :blk fs;
+            break :blk ps;
         };
         comptime {
-            assert(dead_flows.len <= n);
+            @setEvalBranchQuota(10_000_000);
             assert(D.num_ports <= n);
+            for (pairs) |p| {
+                assert(p.from < n);
+                assert(p.to == no_off or p.to < p.from);
+                assert((p.kind == .merge) == (p.to != no_off));
+            }
         }
 
         /// Whether row `i` is a KCL row: a voltage unknown's.
@@ -541,7 +687,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         // ---- model and instance data ---------------------------------------
 
         const Model = struct {
-            vals: Vals,
+            vals: [np]u64,
             given: [np]bool,
             /// The card: defaults, the simulator's `$simparam`s and the given
             /// parameters, before `derive`.
@@ -549,15 +695,20 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         };
 
         const Instance = struct {
-            vals: Vals,
-            given: [np]bool,
+            /// The instance parameters' slots, `inst_idx` order.
+            vals: [ni]u64,
+            given: [ni]bool,
             mfactor: f64,
             mfactor_given: bool,
             /// This instance's own `Model` row, derived and set up.
             row: D.Model,
             inst: D.Instance,
             node_mapping: [n]u32,
-            collapsed: [@max(dead_flows.len, 1)]bool,
+            /// `hostParamsAt`'s cache: the names list it indexed, null
+            /// before the first, and each host field's position in it.
+            paras_names: ?[*]const Str,
+            paras_at: [host_fields.len]u32,
+            collapsed: [@max(pairs.len, 1)]bool,
             state_idx: [1]u32,
             jac_ptr: [nj]?*f64,
             react_ptr: [nj]?*f64,
@@ -591,12 +742,12 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
 
         fn access(ip: ?*anyopaque, mp: ?*anyopaque, id: u32, flags: u32) callconv(.c) ?*anyopaque {
             const set = flags & access_flag_set != 0;
-            if (id < np and flags & access_flag_instance != 0) {
+            if (id < ni and flags & access_flag_instance != 0) {
                 const self: *Instance = @ptrCast(@alignCast(ip orelse return null));
                 if (set) self.given[id] = true;
                 return &self.vals[id];
             }
-            if (has_mf and id == np) {
+            if (has_mf and id == ni) {
                 const self: *Instance = @ptrCast(@alignCast(ip orelse return null));
                 if (set) self.mfactor_given = true;
                 return &self.mfactor;
@@ -607,7 +758,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             if (np == 0) return null;
             // A model-side id, or an instance parameter asked of the model
             // (OpenVAF's semantics: the card's value of it).
-            const j = if (id < np) id else if (id >= num_inst_params and id < num_params) id - num_inst_params else return null;
+            const j = if (id < ni) inst_idx[id] else if (id >= num_inst_params and id < num_params) id - num_inst_params else return null;
             const m: *Model = @ptrCast(@alignCast(mp orelse return null));
             if (set) m.given[j] = true;
             return &m.vals[j];
@@ -622,8 +773,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
 
         fn givenInstance(ip: *anyopaque, id: u32) callconv(.c) u32 {
             const self: *Instance = @ptrCast(@alignCast(ip));
-            if (has_mf and id == np) return @intFromBool(self.mfactor_given);
-            return if (id < np) @intFromBool(self.given[id]) else 0;
+            if (has_mf and id == ni) return @intFromBool(self.mfactor_given);
+            return if (id < ni) @intFromBool(self.given[id]) else 0;
         }
 
         /// `derive`, `checkShape` and `checkRange` on `m`; false (and a fatal
@@ -655,14 +806,14 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 res.flags |= eval_ret_flag_fatal;
                 return;
             };
-            if (overlay(&m.card, &m.vals, &m.given)) |param| {
+            if (overlay(&m.card, &all_idx, &m.vals, &m.given)) |param| {
                 refuseInt(handle, param);
                 res.flags |= eval_ret_flag_fatal;
                 return;
             }
             var d = m.card;
             if (!derive(handle, &d)) res.flags |= eval_ret_flag_fatal;
-            readback(&d, &m.vals, &m.given);
+            readback(&d, &all_idx, &m.vals, &m.given);
         }
 
         fn setupInstance(handle: ?*anyopaque, ip: *anyopaque, mp: *anyopaque, temperature: f64, connected: u32, paras: *const SimParas, res: *InitInfo) callconv(.c) void {
@@ -685,7 +836,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 res.flags |= eval_ret_flag_fatal;
                 return;
             };
-            if (overlay(&self.row, &self.vals, &self.given)) |param| {
+            if (overlay(&self.row, inst_idx, &self.vals, &self.given)) |param| {
                 refuseInt(handle, param);
                 res.flags |= eval_ret_flag_fatal;
                 return;
@@ -696,20 +847,23 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             if (@hasField(D.Model, "port_connected__"))
                 self.row.port_connected__ = if (connected >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(connected)) - 1;
             if (!derive(handle, &self.row)) res.flags |= eval_ret_flag_fatal;
-            readback(&self.row, &self.vals, &self.given);
+            readback(&self.row, inst_idx, &self.vals, &self.given);
             if (@hasDecl(D, "setup")) D.setup(Val, &self.row);
-            inline for (dead_flows, 0..) |u, k| {
-                const f = @typeInfo(D.U).@"enum".field_names[u];
-                self.collapsed[k] = @field(self.row, f ++ "__retained") == 0;
-            }
             self.inst = .{};
             if (has_mf) {
                 if (!self.mfactor_given) self.mfactor = 1;
                 self.inst.mfactor = self.mfactor;
             }
             if (@hasDecl(D, "setupInstance")) D.setupInstance(&self.row, &self.inst);
+            const roots: [n]?u8 = if (collapses) D.collapse(Val, &self.row, &self.inst) else @splat(null);
+            inline for (pairs, 0..) |p, k| self.collapsed[k] = switch (p.kind) {
+                .merge => if (roots[p.from]) |r| r == p.to else false,
+                .short_flow => true,
+                .dead_flow => @field(self.row, @typeInfo(D.U).@"enum".field_names[p.from] ++ "__retained") == 0,
+            };
             if (State != void) self.state = D.initState(&self.row, &self.inst);
             self.have_x = false;
+            self.paras_names = null;
             self.sim = .{};
             self.t_prev = 0;
             self.t_last = 0;
@@ -763,7 +917,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             const self: *Instance = @ptrCast(@alignCast(ip));
             var ret: u32 = 0;
             // Gmin and source stepping move a `$simparam` mid-solve.
-            if (hostParams(&self.row, info.paras) catch {
+            if (hostParamsAt(self, info.paras) catch {
                 log(handle, log_lvl_fatal, sim_paras_refusal);
                 return eval_ret_flag_fatal;
             }) {
@@ -811,7 +965,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 }
             }
             inline for (comptime contract.jacConst(D)) |e| {
-                if (contract.jacConstApplies(D, e, &self.row, false)) {
+                if (comptime shortFlow(@backingInt(e.row)) or shortFlow(@backingInt(e.col))) continue;
+                if (contract.jacConstApplies(D, e, &self.row, collapses)) {
                     const k = comptime entryOf(@backingInt(e.row), @backingInt(e.col));
                     self.jac[k] = e.g;
                     self.jac_q[k] = e.c;
@@ -840,10 +995,13 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             // J·prev_solve − f into the linearization at the limited point.
             self.lim_res = @splat(0);
             self.lim_q = @splat(0);
-            inline for (entries, 0..) |e, k| {
-                const dx = x[e.c] - cur[e.c];
-                self.lim_res[e.r] += self.jac[k] * dx;
-                self.lim_q[e.r] += self.jac_q[k] * dx;
+            // Zero unless limiting or a seed moved the point.
+            if (@reduce(.Or, @as(@Vector(n, f64), x) != @as(@Vector(n, f64), cur))) {
+                inline for (entries, 0..) |e, k| {
+                    const dx = x[e.c] - cur[e.c];
+                    self.lim_res[e.r] += self.jac[k] * dx;
+                    self.lim_q[e.r] += self.jac_q[k] * dx;
+                }
             }
             self.x = x;
             self.cur = cur;
@@ -963,6 +1121,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 var out: [D.ac_dyn_slots.len]std.math.Complex(f64) = undefined;
                 D.acDyn(f64, &self.row, &self.inst, &self.x, self.sim, alpha, &out);
                 inline for (D.ac_dyn_slots, 0..) |s, j| {
+                    if (comptime shortFlow(s / n) or shortFlow(s % n)) continue;
                     const k = comptime entryOf(s / n, s % n);
                     if (self.jac_ptr[k]) |p| p.* += out[j].re;
                     if (self.react_ptr[k]) |p| p.* += out[j].im;
@@ -1060,8 +1219,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
 
         const collapsible = blk: {
             @setEvalBranchQuota(10_000_000);
-            var a: [dead_flows.len]NodePair = undefined;
-            for (&a, dead_flows) |*p, u| p.* = .{ .node_1 = u, .node_2 = no_off };
+            var a: [pairs.len]NodePair = undefined;
+            for (&a, pairs) |*np_, p| np_.* = .{ .node_1 = p.from, .node_2 = p.to };
             break :blk a;
         };
 
@@ -1084,20 +1243,26 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             var a: [num_params]ParamOpvar = undefined;
             for (params, 0..) |p, i| {
                 const names: []const Str = &.{cName(p.field)};
-                const ty = switch (p.kind) {
-                    .real => para_ty_real,
-                    .int => para_ty_int,
-                    .str => para_ty_str,
-                };
-                a[i] = .{ .name = names.ptr, .num_alias = 0, .description = "", .units = "", .flags = ty | para_kind_inst, .len = 0 };
-                a[num_inst_params + i] = .{ .name = names.ptr, .num_alias = 0, .description = "", .units = "", .flags = ty, .len = 0 };
+                a[num_inst_params + i] = .{ .name = names.ptr, .num_alias = 0, .description = "", .units = "", .flags = paraTy(p.kind), .len = 0 };
+            }
+            for (inst_idx, 0..) |pi, k| {
+                const names: []const Str = &.{cName(params[pi].field)};
+                a[k] = .{ .name = names.ptr, .num_alias = 0, .description = "", .units = "", .flags = paraTy(params[pi].kind) | para_kind_inst, .len = 0 };
             }
             if (has_mf) {
                 const names: []const Str = &.{"$mfactor"};
-                a[np] = .{ .name = names.ptr, .num_alias = 0, .description = "multiplicity", .units = "", .flags = para_ty_real | para_kind_inst, .len = 0 };
+                a[ni] = .{ .name = names.ptr, .num_alias = 0, .description = "multiplicity", .units = "", .flags = para_ty_real | para_kind_inst, .len = 0 };
             }
             break :blk a;
         };
+
+        fn paraTy(comptime k: Kind) u32 {
+            return switch (k) {
+                .real => para_ty_real,
+                .int => para_ty_int,
+                .str => para_ty_str,
+            };
+        }
 
         const n_resist = blk: {
             @setEvalBranchQuota(10_000_000);
@@ -1114,6 +1279,40 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             break :blk c;
         };
 
+        /// The descriptor slots a split build names by symbol, and the
+        /// function behind each: `load_noise` in the `.state` object, every
+        /// other one (the ones the simulator calls every iterate) in `.eval`.
+        const hot = [_][2][]const u8{
+            .{ "eval", "eval" },
+            .{ "load_residual_resist", "loadResidualResist" },
+            .{ "load_residual_react", "loadResidualReact" },
+            .{ "load_limit_rhs_resist", "loadLimitRhsResist" },
+            .{ "load_limit_rhs_react", "loadLimitRhsReact" },
+            .{ "load_spice_rhs_dc", "loadSpiceRhsDc" },
+            .{ "load_spice_rhs_tran", "loadSpiceRhsTran" },
+            .{ "load_jacobian_resist", "loadJacobianResist" },
+            .{ "load_jacobian_react", "loadJacobianReact" },
+            .{ "load_jacobian_tran", "loadJacobianTran" },
+            .{ "write_jacobian_array_resist", "writeJacobianResist" },
+            .{ "write_jacobian_array_react", "writeJacobianReact" },
+            .{ "load_noise", "loadNoise" },
+        };
+
+        /// The hidden symbol a split build exports descriptor slot `field`
+        /// under: the device name hashed, as a name may hold any byte.
+        fn sym(comptime field: []const u8) []const u8 {
+            return std.fmt.comptimePrint("vera_osdi_{s}_{x}", .{ field, std.hash.Wyhash.hash(0, name) });
+        }
+
+        /// Descriptor slot `field` (a `hot` row): the function itself, or
+        /// under `split` its symbol in another object.
+        fn pick(comptime field: []const u8) @FieldType(Descriptor, field) {
+            const f = inline for (hot) |h| {
+                if (comptime std.mem.eql(u8, h[0], field)) break &@field(@This(), h[1]);
+            } else @compileError("not a hot slot: " ++ field);
+            return if (split) @extern(@TypeOf(f), .{ .name = sym(field), .visibility = .hidden }) else f;
+        }
+
         pub const descriptors = [1]Descriptor{.{
             .name = zStr(name),
             .num_nodes = n,
@@ -1121,7 +1320,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             .nodes = &nodes,
             .num_jacobian_entries = nj,
             .jacobian_entries = &jacobian_entries,
-            .num_collapsible = dead_flows.len,
+            .num_collapsible = pairs.len,
             .collapsible = &collapsible,
             .collapsed_offset = @offsetOf(Instance, "collapsed"),
             .noise_sources = &noise_sources,
@@ -1140,23 +1339,23 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             .access = &access,
             .setup_model = &setupModel,
             .setup_instance = &setupInstance,
-            .eval = &eval,
-            .load_noise = &loadNoise,
-            .load_residual_resist = &loadResidualResist,
-            .load_residual_react = &loadResidualReact,
-            .load_limit_rhs_resist = &loadLimitRhsResist,
-            .load_limit_rhs_react = &loadLimitRhsReact,
-            .load_spice_rhs_dc = &loadSpiceRhsDc,
-            .load_spice_rhs_tran = &loadSpiceRhsTran,
-            .load_jacobian_resist = &loadJacobianResist,
-            .load_jacobian_react = &loadJacobianReact,
-            .load_jacobian_tran = &loadJacobianTran,
+            .eval = pick("eval"),
+            .load_noise = pick("load_noise"),
+            .load_residual_resist = pick("load_residual_resist"),
+            .load_residual_react = pick("load_residual_react"),
+            .load_limit_rhs_resist = pick("load_limit_rhs_resist"),
+            .load_limit_rhs_react = pick("load_limit_rhs_react"),
+            .load_spice_rhs_dc = pick("load_spice_rhs_dc"),
+            .load_spice_rhs_tran = pick("load_spice_rhs_tran"),
+            .load_jacobian_resist = pick("load_jacobian_resist"),
+            .load_jacobian_react = pick("load_jacobian_react"),
+            .load_jacobian_tran = pick("load_jacobian_tran"),
             .given_flag_model = &givenModel,
             .given_flag_instance = &givenInstance,
             .num_resistive_jacobian_entries = n_resist,
             .num_reactive_jacobian_entries = n_react,
-            .write_jacobian_array_resist = &writeJacobianResist,
-            .write_jacobian_array_react = &writeJacobianReact,
+            .write_jacobian_array_resist = pick("write_jacobian_array_resist"),
+            .write_jacobian_array_react = pick("write_jacobian_array_react"),
             .num_inputs = 0,
             .inputs = null,
             .load_jacobian_with_offset_resist = null,
@@ -1685,4 +1884,105 @@ test "an integer parameter the field cannot hold is fatal, not a trap; the neigh
     d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
     try testing.expectEqual(@as(u32, 0), info.flags);
     try testing.expectEqual(@as(u8, 3), inst.row.k);
+}
+
+/// A resistor `r` from internal node `i` to port `b`, joined to port `a` by
+/// series resistance `rs`: a 0 V short when `rs` = 0 (`V(a, i) <+ 0`, flow
+/// unknown `f`), as VerA emits PSP's and BSIM's parasitics. `r` is the one
+/// parameter marked `type = "instance"`.
+const Short = struct {
+    pub const U = enum(u8) { a, b, i, f };
+    pub const num_ports: usize = 2;
+    pub const vera_version = contract.vera_version;
+    pub const u_kinds = [4]contract.UnknownKind{ .voltage, .voltage, .voltage, .flow };
+    pub const Model = struct { rs: f64 = 0, r: f64 = 1e3, temperature__: f64 = 300.15 };
+    pub const Instance = struct {};
+    pub const instance_params = [_][]const u8{"r"};
+
+    pub fn eval(comptime S: type, x: *const [4]S.V, m: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        const ib = p[2].sub(p[1]).scale(1.0 / m.r);
+        var a = p[0].scale(0);
+        var i = ib;
+        var f = p[3];
+        if (m.rs != 0) {
+            const fl = p[0].sub(p[2]).scale(1.0 / m.rs);
+            a = a.add(fl);
+            i = i.sub(fl);
+        } else if (!(@hasDecl(S, "collapse_applied") and S.collapse_applied)) {
+            a = a.add(p[3]);
+            i = i.sub(p[3]);
+            f = p[0].sub(p[2]);
+        }
+        return contract.rows(@This(), S, .{ a, ib.neg(), i, f });
+    }
+    pub fn collapse(comptime _: type, m: *const Model, _: *const Instance) [4]?u8 {
+        return if (m.rs == 0) .{ null, null, 0, 0 } else @splat(null);
+    }
+    pub const collapse_full = [4]?u8{ null, null, 0, 0 };
+};
+
+fn evalAt4(d: *const Descriptor, ip: *anyopaque, mp: *anyopaque, x: *const [4]f64) u32 {
+    const si: SimInfo = .{ .paras = no_paras, .abstime = 0, .prev_solve = x, .prev_state = null, .next_state = null, .flags = 0 };
+    return d.eval(null, ip, mp, &si);
+}
+
+test "a 0 V short is a merge pair and its flow collapses into ground; no entry touches the flow" {
+    const H = Osdi(Short, "short");
+    const d = &H.descriptors[0];
+    try testing.expectEqual(@as(u32, 2), d.num_collapsible);
+    try testing.expectEqual(NodePair{ .node_1 = 2, .node_2 = 0 }, d.collapsible.?[0]);
+    try testing.expectEqual(NodePair{ .node_1 = 3, .node_2 = no_off }, d.collapsible.?[1]);
+    for (d.jacobian_entries[0..d.num_jacobian_entries]) |e| {
+        try testing.expect(e.nodes.node_1 != 3);
+        try testing.expect(e.nodes.node_2 != 3);
+    }
+
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1, 2, 3 };
+    var info: InitInfo = undefined;
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    const collapsed: [*]const bool = @ptrCast(@as([*]u8, @ptrCast(&inst)) + d.collapsed_offset);
+    try testing.expect(collapsed[0] and collapsed[1]);
+    // Merged, `i` is `a`: the short's stamps are gone, the resistor's stay.
+    _ = evalAt4(d, &inst, &model, &.{ 1, 0, 1, 0 });
+    try testing.expectEqualSlices(f64, &.{ 0, -1e-3, 1e-3 }, inst.res[0..3]);
+
+    // A card with rs > 0 keeps both nodes; the flow still drops.
+    real(d, null, &model, 1, access_flag_set).* = 50;
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expect(!collapsed[0] and collapsed[1]);
+    _ = evalAt4(d, &inst, &model, &.{ 1, 0, 0.5, 0 });
+    try testing.expectEqualSlices(f64, &.{ 0.5 / 50.0, -0.5e-3, 0.5e-3 - 0.5 / 50.0 }, inst.res[0..3]);
+}
+
+test "instance_params: only the marked parameter is an instance parameter; its id asked of the model reads the card" {
+    const H = Osdi(Short, "short");
+    const d = &H.descriptors[0];
+    // `r` on the instance side; `rs` and `r` on the model side.
+    try testing.expectEqual(@as(u32, 1), d.num_instance_params);
+    try testing.expectEqual(@as(u32, 3), d.num_params);
+    try testing.expectEqualStrings("r", std.mem.span(d.param_opvar[0].name[0].?));
+    try testing.expectEqual(para_ty_real | para_kind_inst, d.param_opvar[0].flags);
+    try testing.expectEqualStrings("rs", std.mem.span(d.param_opvar[1].name[0].?));
+    try testing.expectEqualStrings("r", std.mem.span(d.param_opvar[2].name[0].?));
+
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1, 2, 3 };
+    var info: InitInfo = undefined;
+    real(d, null, &model, 2, access_flag_set).* = 2e3; // the card's r
+    d.setup_model(null, &model, &no_paras, &info);
+    try testing.expectEqual(@as(f64, 2e3), real(d, null, &model, 0, 0).*);
+    real(d, &inst, &model, 0, access_flag_set | access_flag_instance).* = 4e3;
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(f64, 4e3), inst.row.r);
+    try testing.expectEqual(@as(f64, 2e3), model.card.r);
+    // Past the one instance id (no `$mfactor` here), id 1 is the model's `rs`.
+    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&model.vals[0])), d.access(&inst, &model, 1, access_flag_instance));
+    try testing.expectEqual(@as(u32, 0), d.given_flag_instance(&inst, 1));
 }
