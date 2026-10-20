@@ -6,6 +6,7 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ### Fixed
 
+- A device whose `$strobe`/`$display` compares against a constant that folds from several operands, one of them a value the core caches, failed to compile ("use of undeclared identifier `c`"); `zig build benchmark -- --perturb` showed it on many_timers_instance_defaults.
 - VerA builds for Windows again: a size check on a file-table slot assumed an 8-byte OS file handle, and Windows' is wider, so v0.11.0 did not compile there.
 
 ## v0.11.0 — 2026-10-19

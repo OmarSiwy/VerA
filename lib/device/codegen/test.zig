@@ -4889,3 +4889,31 @@ test "codegen: a display of a constant branch flow reads the core cache it decla
     const decl = std.mem.find(u8, body, "const c = ").?;
     try std.testing.expect(decl < read);
 }
+
+test "codegen: a folded want whose operands the core returns reads no undeclared `c`" {
+    // `--perturb`'s CHECK (`check.vh` VERA_PW): the want folds to one number
+    // (`UnitPlan.literal`), so the display unit plans none of its operands,
+    // even the ones the core returns. Every spelling of it, `f64Const`
+    // included, must then be the number, never `c.f<k>` (#perturb).
+    const gpa = std.testing.allocator;
+    var h: Harness = undefined;
+    try Harness.run(gpa,
+        \\module mt(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  integer k;
+        \\  analog begin
+        \\    @(timer(1e-3, 1e-3)) k = 0;
+        \\    @(timer(2e-3, 2e-3)) k = 1;
+        \\    $strobe("%g ok=%d", (0.75) * (1 + (1e-3)) + ((0.75) == 0) * (1e-3),
+        \\            (abs((V(p, n)) - ((0.75) * (1 + (1e-3)) + ((0.75) == 0) * (1e-3))) <= (1e-12)));
+        \\    I(p, n) <+ 1e-3 * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const out = try h.genDisplay(h.arena_state.allocator());
+    const at = std.mem.find(u8, out, "__display__tasks(comptime").?;
+    const end = std.mem.findPos(u8, out, at, "\n}\n").?;
+    const body = out[at..end];
+    if (std.mem.find(u8, body, "c.f") != null) try std.testing.expect(std.mem.find(u8, body, "const c = ") != null);
+}
