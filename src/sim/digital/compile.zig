@@ -518,7 +518,13 @@ fn isConstantExpression(self: *Run, e: Ast.ExprId, attribute: bool) bool {
         .int_literal, .logic_literal, .str_literal, .real_literal => return true,
         // §12.2: a parameter is a constant; every other name is not.
         .ident => {
-            const at = self.lookup(self.scope, ex.strOf(e)) orelse return false;
+            // An attribute's name that the module scope does not hold is a
+            // genvar or a name of the generate block, task or function the
+            // attribute sits in (`checkAttributes` reads the module's whole
+            // list in its instance scope).
+            // ponytail: such a name is taken as constant; checking it needs
+            // each attribute's own scope.
+            const at = self.lookup(self.scope, ex.strOf(e)) orelse return attribute;
             return self.params.contains(at);
         },
         // §5: "constant bit-selects and part-selects of parameters" are
@@ -1499,10 +1505,13 @@ fn override(self: *Run, target: Ast.ExprId, t: OverTarget, value: Ast.ExprId, ki
     try sensitivity(self, value, &watched);
     const start = try watcher(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } }, watched.items);
     const end = position(self);
-    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end, .bits = t.bits } });
     // §9.3.1/§9.3.2: the override holds from the statement on, so the
-    // thread's next statement reads it; the process started above keeps it.
+    // value is written here, before the next statement reads it; the
+    // process `.override_on` starts keeps it. `.override_on` stays the
+    // statement's last instruction, the `done_sites` pc whose process
+    // reports the §12.31.1 cbForce/cbAssign (`exec.doneFlush`).
     _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } });
+    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end, .bits = t.bits } });
 }
 
 /// An out-of-line process that runs `step`, then waits on `watched` and
@@ -2167,6 +2176,8 @@ test "§3.5.1 an unsized constant is at least 32 bits, and a wider one keeps its
 test "§3.8 an attribute value is a constant expression: a parameter is one, a variable is not" {
     try expectRun("module m; parameter P = 2; (* a = P + 1, b *) initial $display(\"ok\"); endmodule", "ok\n");
     try expectRejected("module m; integer N; (* a = N *) initial $display(N); endmodule", "an attribute value must be a constant expression");
+    // §12.4.1 a genvar is a constant inside its generate block.
+    try expectRun("module m; genvar g; generate for (g = 0; g < 2; g = g + 1) begin : b (* i = g + 5 *) wire w; end endgenerate initial $display(\"ok\"); endmodule", "ok\n");
 }
 
 test "§12.4.1 a genvar-indexed hierarchical task enable names the task in that iteration's block" {
