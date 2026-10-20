@@ -4,6 +4,27 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+### New
+
+- Module path delays (IEEE 1364-2005 §14) are applied, in `vera --run` and natively: the delay of the active path whose source changed most recently, per transition (Tables 14-2/14-3, all 1/2/3/6/12-value lists), with state-dependent paths, `ifnone` and edge-sensitive paths, and the larger of path and distributed delay (§14.4). W0251 now warns only for §14.6 pulse controls, which are still ignored (default inertial handling).
+- §15.8 explicit delayed signals in `$setuphold`/`$recrem` with non-negative limits (an undelayed copy); `$fmonitor`, `$fstrobe`; `%u`/`%z` in output and input, `%t` input scaled by `$timeformat`; genvar-indexed hierarchical names and task enables (`g[i].x`, `g[i].t;`); instance arrays of MOS, `tran` and pull gates; net-array element selects, `force` of a net-array element; continuous assignments with a variable delay.
+- Analog event arrays (§5.10.4); `final_step` runs on `$finish` (§5.10.2); `$fatal` in a rejected iteration ends the run (§9.7.3); an expression as the actual of a digital input port (§6.2.2); wreal child ports promote the parent's wire (§3.7); `$bound_step` is floored at the minimum step (§9.17.2); VPI cbError (§12.31.4) and cbReadWriteSynch as an inactive event (§8.5.1).
+
+### Changed
+
+- A unary operator's operand must be a primary (1364-2005 A.8.3, VAMS-2023 annex A): `- -x`, `!!x` and `~ &x` are refused with E0209; write `-(-x)`. A binary-then-unary form such as `a + - b` is unaffected.
+- A delay of a sized constant needs parentheses (`#(64'd5)`, A.2.2.3); `@ev[0]` is written `@(ev[0])` (A.6.5); a module instance takes no delay (A.4.1.1).
+- A port connected to a net of another width is converted as a continuous assignment (§12.3.9.2, §5.6) under `--std=1364-*`; under VAMS-2023 (the default) it is refused (§6.5.7.1).
+- A `force`/`assign` takes effect before the next statement; a strength-only change on a net a MOS switch reads re-runs the switch (§7.11).
+
+### Fixed
+
+- `$fgets`/`$fscanf` read their line lazily, so a read after `$fclose` or another read returned an empty string or 0.
+- A parameter's declared range and width, untyped parameter width, and `time` parameters (unsigned 64-bit); a real converted to an integer wider than 64 bits; `$rtoi`-style rounding of a real parameter used as a delay.
+- defparams naming nothing or no parameter are refused (E0901/E0907); non-ANSI port redeclarations of another range or type are refused; a port typed by a later declaration works for functions and tasks; implicit nets inside instance expressions; generate-scope localparams, functions and named blocks; constant functions with named blocks or system tasks; hierarchical task calls that suspend; automatic variables refused where §10 forbids them; attribute values must be constant (§3.8).
+- `$monitor` prints when one of its arguments changes, not when any bit of the underlying variable does; part-select drivers keep their strength; `uwire` refuses only overlapping driver bits.
+- `$sscanf` treats NUL as whitespace (§9.5.4.2:3); `` `default_nettype ``/`` `unconnected_drive `` operands may be on the next line; a backslash-newline inside a `//` comment in a macro; AMS keywords are identifiers under a 1364 `--std`; `1364-2001-noconfig` is accepted.
+
 ## v0.11.2 — 2026-10-20
 
 | Measure | Number | Remaining to v1.0.0 | Command |

@@ -524,6 +524,7 @@ pass	ch02_lexical/62_wide_literal_backend_boundary.va
 pass	ch02_lexical/63_unknown_decimal_backend_boundary.va
 pass	ch02_lexical/64_leading_zero_size_rejected.va
 pass	ch02_lexical/65_operator_arity.va
+pass	ch02_lexical/65b_unary_of_unary_rejected.va
 pass	ch02_lexical/66_number_positions.va
 pass	ch02_lexical/67_octal_escape_boundaries.va
 pass	ch02_lexical/68_string_whitespace_significant.va
@@ -1375,7 +1376,7 @@ pass	ch05_analog_behavior/disable_keeps_contributions_already_made.va
 pass	ch05_analog_behavior/event_above.va
 pass	ch05_analog_behavior/event_above_enable.va
 pass	ch05_analog_behavior/event_above_tolerance.va
-pass	ch05_analog_behavior/event_array_device_limit_rejected.va
+pass	ch05_analog_behavior/event_array_index_change_is_not_an_event.va
 pass	ch05_analog_behavior/event_block_contribution_invalid.va
 pass	ch05_analog_behavior/event_bounds_cross_expr_tol_without_time_tol_rejected.va
 pass	ch05_analog_behavior/event_bounds_cross_legal.va
@@ -2317,7 +2318,9 @@ pass	ch09_system_tasks/230_limit_too_few_arguments_returns_probe.va
 pass	ch09_system_tasks/231_limit_polarity_sign_argument_honoured.va
 pass	ch09_system_tasks/232_limit_scaled_probe_rejected.va
 pass	ch09_system_tasks/233_limit_numeric_algorithm_rejected.va
+pass	ch09_system_tasks/234_sscanf_nul_is_whitespace.va
 pass	ch09_system_tasks/235_fatal_in_iteration_terminates.va
+pass	ch09_system_tasks/237_bound_step_below_minimum_step.va
 pass	ch09_system_tasks/23_simparam_string.va
 pass	ch09_system_tasks/24_discontinuity.va
 pass	ch09_system_tasks/25_bound_step.va
