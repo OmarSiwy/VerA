@@ -6,6 +6,7 @@
 //
 //! lrm 5.8.3
 //! bias V(p) = 0.4
+//! lrm 5.8.3:1002
 `include "check.vh"
 module ch5_case_default(p);
   inout p; electrical p; integer mode; real x;

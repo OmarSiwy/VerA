@@ -10,6 +10,7 @@
 //! lrm 6.4.1
 //! lrm 6.4.1:3
 //! reject-only named block
+//! neighbour b4_paramset_statement_without_event_control.va
 `include "disciplines.vams"
 module ch6_ps_block_res(p, n);
   inout p, n;

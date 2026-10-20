@@ -18,6 +18,7 @@
 //! lrm 9.23:1000
 //! reject-only connect module
 //! reject E0818
+//! neighbour 200_driver_strength_next_strength_type.va
 module ch09_atomic_driver_next_strength_connectmodule_rejected(p, n);
   inout p, n; electrical p, n;
   real info;

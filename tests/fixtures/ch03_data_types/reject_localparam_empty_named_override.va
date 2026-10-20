@@ -16,8 +16,9 @@
 // default.
 //
 //! lrm 3.4.5
-//! reject E0907
+//! reject-only E0907
 //! reject `derived` is a localparam
+//! neighbour ../ch06_hierarchy/audit_hierarchy_empty_named_parameter.va
 module reject_lp_empty_target;
   parameter real base = 2.0;
   localparam real derived = 2.0 * base;

@@ -13,7 +13,7 @@
 //   t=11,12,21,22 top.a1.f1 .. top.a2.f2 gateLib.foo.
 // digital-runner: --libmap ex13_5/lib.map
 // digital-runner: files ex13_5/top.v ex13_5/adder.v ex13_5/adder.vg
-//! inherited IEEE 1364-2005 13.3.1.4 13.3.1.6 13.3.1.2
+//! inherited IEEE 1364-2005 13.5.3 13.3.1.4 13.3.1.6 13.3.1.2
 `timescale 1ns/1ns
 config cfg3;
      design rtlLib.top ;

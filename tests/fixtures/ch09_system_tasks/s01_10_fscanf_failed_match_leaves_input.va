@@ -45,6 +45,7 @@
 //! lrm 9.5.4.1
 //! lrm 9.5.5
 //! lrm 9.5.4.1:1000
+//! lrm 9.5.4.2:1002
 //! print none
 `include "check.vh"
 module s01_fscanf_failed_match(p, n);

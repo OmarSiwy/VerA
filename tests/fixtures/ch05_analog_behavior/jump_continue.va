@@ -14,6 +14,8 @@
 //
 //! lrm 5.11
 //! lrm 5.9.2
+//! lrm 5.11:1001
+//! lrm 5.11:1002
 `include "check.vh"
 module ch5_jump_continue(p);
   inout p; electrical p; integer i; integer acc;

@@ -14,6 +14,7 @@
 //
 //! lrm 6.4.1
 //! lrm 6.4.1:2
+//! lrm 6.4.1:1
 //! reject-only an event control
 //! neighbour b4_paramset_statement_without_event_control.va
 module b4_pec_top(p, n);

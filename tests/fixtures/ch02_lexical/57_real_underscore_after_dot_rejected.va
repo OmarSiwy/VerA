@@ -17,6 +17,7 @@
 // begins with a non-digit and the requirement is unmet.
 //! lrm 2.6.2
 //! lrm 2.6.2:2
+//! lrm 2.6.2:1002
 //! reject-only E0207
 //! neighbour 34_real_underscores.va
 module ch02_real_underscore_after_dot_rejected;

@@ -8,8 +8,9 @@
 // attribute_keyword_name_escaped.va, which writes it `\module ` and also uses
 // `units`.
 //! lrm 2.9
-//! reject E0208
+//! reject-only E0208
 //! reject found keyword `module`: an attribute name is an identifier
+//! neighbour attribute_keyword_name_escaped.va
 `include "check.vh"
 module attribute_keyword_name_rejected(p, n);
     inout p, n;

@@ -18,7 +18,7 @@
 //
 //! lrm 4.7.3
 //! lrm 4.7.3:2
-//! reject scale
+//! reject-only scale
 //! reject analog
 //! reject E0430
 //! neighbour 28_user_function.va

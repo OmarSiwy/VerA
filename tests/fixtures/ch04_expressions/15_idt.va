@@ -17,6 +17,7 @@
 // idt(expr, ic, assert, nature), is 145_ddt_idt_nature_tolerance.va.
 //
 //! lrm 4.5.4
+//! lrm 4.5.4:1001
 //! print none
 `include "check.vh"
 module ch04_idt(p, n);

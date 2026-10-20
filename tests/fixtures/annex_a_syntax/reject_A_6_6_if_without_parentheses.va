@@ -18,7 +18,9 @@
 //! lrm A.6
 //! lrm A.6.6
 //! lrm A.6.6:1000
-//! reject E0207
+//! reject-only E0207
+//! reject E0209
+//! neighbour 05_behavioral_statements.va
 `include "disciplines.vams"
 module annex_a_if_no_parens(p, n);
   inout p, n;

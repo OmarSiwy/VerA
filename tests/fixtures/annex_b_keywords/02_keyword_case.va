@@ -10,6 +10,7 @@
 // other: an upper-case spelling must not be able to ACT as its keyword.
 `include "check.vh"
 //! lrm B
+//! lrm B:1001
 //! lrm 2.8
 //! lrm 2.8:5
 module Module(p, n);

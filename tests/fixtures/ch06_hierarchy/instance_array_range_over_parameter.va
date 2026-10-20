@@ -22,6 +22,7 @@
 // read from a variable.
 //
 //! lrm 6.2.2
+//! lrm 6.2.2:1004
 //! lrm 3.4
 //! lrm 6.3
 //! bias V(p) = 0.75, V(n) = 0.25

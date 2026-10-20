@@ -9,6 +9,7 @@
 // 0100 & 0010 = 0, while the logical 4 && 2 would be 1.
 //
 //! lrm 4.2.9
+//! lrm 4.2.9:1001
 `include "check.vh"
 module ch04_bitwise_and(p, n);
     inout p, n;

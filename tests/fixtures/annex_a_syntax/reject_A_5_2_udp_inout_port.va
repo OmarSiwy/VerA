@@ -14,6 +14,7 @@
 //! lrm A.5.2:1000
 //! reject-only E0207
 //! reject found `inout`
+//! neighbour b8_udp_declared_and_instantiated.va
 primitive annex_a_udp_inout(o, a);
   output o;
   inout a;                   // illegal: a UDP has no inout ports

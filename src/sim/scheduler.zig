@@ -96,6 +96,12 @@ pub const Scheduler = struct {
     free: SlotId = .none,
     sequence: u64 = 0,
     phase: union(enum) { idle, dispatch: Region, stopped } = .idle,
+    /// VAMS §8.5.1 a VPI read-write callback is an inactive event: when set
+    /// to `now`, `nextUntil` returns null at this time's inactive point (after
+    /// active, explicit D2A and inactive, before the NBA updates) and sets
+    /// `synced`. Written only by the VPI host (`src/vpi/run.zig`).
+    sync_at: ?Time = null,
+    synced: bool = false,
 
     /// `TooManyEvents`: 2^32 - 1 slots are live. `SequenceOverflow`: 2^64
     /// future events were ever scheduled, so FIFO order among equal times can
@@ -240,6 +246,11 @@ pub const Scheduler = struct {
             var promoted = false;
             inline for (.{ Region.explicit_d2a, Region.inactive, Region.nba, Region.analog, Region.monitor }) |region| {
                 if (!promoted and self.heads[@backingInt(region)] != .none) {
+                    // VAMS §8.5.1: the inactive point is reached once active,
+                    // explicit D2A and inactive are empty, before the NBA
+                    // updates (`sync_at`).
+                    if (comptime region == .nba or region == .analog or region == .monitor)
+                        if (self.syncHere()) return null;
                     self.heads[0] = self.heads[@backingInt(region)];
                     self.tails[0] = self.tails[@backingInt(region)];
                     self.heads[@backingInt(region)] = .none;
@@ -248,8 +259,23 @@ pub const Scheduler = struct {
                 }
             }
             if (promoted) continue;
+            if (self.syncHere()) return null;
             if (!self.advance(limit)) return null;
         }
+    }
+
+    /// Whether `nextUntil` stops at this time's inactive point: `sync_at` is
+    /// `now` and no event of `now` is still in the future heap (a caller that
+    /// set `now` itself, as the VPI loop does, leaves them there until
+    /// `advance`). Clears the request and sets `synced`, which the caller reads.
+    fn syncHere(self: *Scheduler) bool {
+        const at = self.sync_at orelse return false;
+        if (at != self.now) return false;
+        self.purgeCancelled();
+        if (self.future.peek()) |entry| if (entry.time == self.now) return false;
+        self.sync_at = null;
+        self.synced = true;
+        return true;
     }
 
     /// The time of the event `next` would return, or null when nothing is

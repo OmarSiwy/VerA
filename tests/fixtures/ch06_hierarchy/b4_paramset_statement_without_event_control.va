@@ -11,6 +11,7 @@
 // stamps 2.0 * 0.5 = 1.0.
 //
 //! lrm 6.4.1
+//! lrm 6.4.1:1003
 //! bias V(p) = 0.75, V(n) = 0.25
 //! checks 2
 `include "check.vh"

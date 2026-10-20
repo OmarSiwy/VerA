@@ -802,17 +802,25 @@ pub fn clearError() void {
 /// ponytail: a fixed 512-byte message, truncating, so the error path never
 /// allocates.
 pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
+    noteError(err, fmt, args);
+    // A cbPLIError routine may call other routines, each clearing the status;
+    // the failing routine's caller still reads this error afterwards.
+    const saved = .{ err_level, err_code, err_buf, err_len };
+    callback.pliError();
+    err_level, err_code, err_buf, err_len = saved;
+}
+
+/// Records the status `vpi_chk_error` reports, without firing cbPLIError.
+/// For the cbError path: §12.31.4 "On a cbError callback, the routine
+/// vpi_chk_error() can be called to retrieve error information", and that
+/// callback is not a PLI-routine failure.
+pub fn noteError(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
     err_level = vpiError;
     err_code = err;
     const written = std.mem.print(err_buf[0 .. err_buf.len - 1], fmt, args) catch
         err_buf[0 .. err_buf.len - 1];
     err_len = written.len;
     err_buf[err_len] = 0;
-    // A cbPLIError routine may call other routines, each clearing the status;
-    // the failing routine's caller still reads this error afterwards.
-    const saved = .{ err_level, err_code, err_buf, err_len };
-    callback.pliError();
-    err_level, err_code, err_buf, err_len = saved;
 }
 
 // ---------------------------------------------------------------------------

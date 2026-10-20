@@ -37,6 +37,7 @@
 // where the discipline, not the variable, is what the name would mean.
 //
 //! lrm 10.6
+//! lrm 10.6:1003
 //! bias V(p) = 0.75, V(n) = 0.25
 `begin_keywords "VAMS-2023"
 `include "check.vh"

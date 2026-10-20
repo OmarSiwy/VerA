@@ -15,6 +15,7 @@
 //! lrm 1.3.4.1
 //! lrm 1.3.4.1:2
 //! reject-only E0360
+//! neighbour 11_potential_signal_flow.va
 module ch01_sf_potential_on_inout(p);
     inout p;
     voltage p;

@@ -25,15 +25,27 @@
 //
 // The second literal is the 1m scale factor of 2.6.2 Table 2-1.
 //
+// The first criterion's last sentence is the one a model can read back: "reltol
+// is set as a simulator option and typically has a value of 0.001." The host
+// writes the §9.15 host field `reltol__` from `//! param` below, and
+// `$simparam("reltol")` returns the option the iteration criterion consults. A
+// tool with no reltol option, or one that answered something other than the
+// host's value, fails the check. (The per-iteration inequality itself has no
+// source-level observer; only the option it reads does.)
+//
 //! lrm 8.3.3
+//! lrm 8.3.3:1
 //! lrm 4.5.13
 //! lrm 2.6.2
+//! param reltol__ = 1e-3
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch8_nonlinear(p, n);
   inout p, n; electrical p, n;
   parameter real scale = 1m;
   analog begin
+    `CHECKX("reltol is a simulator option, holding the host's value",
+            $simparam("reltol"), 1e-3);
     `CHECKX("the 1m scale factor", scale, 0.001);
     `CHECK("limexp equals the exponential at the reported solution",
            limexp(V(p, n)), 1.6487212707001282, 1e-15);

@@ -79,8 +79,17 @@
  *           routine "can also be used to close file descriptors that were
  *           opened using the system function $fopen()", after which hf names
  *           no file (§27.24's NULL).
+ *
+ * VAMS-2023 §12.24 fixes the three predefined descriptors by number: 1 is
+ * stdout, 2 is stderr, 3 is the current log file, and none can be closed.
+ * In the mcd bit mask descriptor n is bit n-1, so those are mcd values 1, 2
+ * and 4. vpi_mcd_name reads back their names, and vpi_mcd_close returns the
+ * unclosed mask, 1, 2 and 4.
  */
 
+//! lrm 12.24:1001
+//! lrm-reject 12.24:1001
+//! lrm 12.24:1002
 //! inherited IEEE 1364-2005 27.22
 //! inherited-reject IEEE 1364-2005 27.22
 //! inherited IEEE 1364-2005 27.24
@@ -93,7 +102,7 @@
 //! design ieee_pli/b_27_mcd.v
 //! stdout b27 printf 7 ok
 //! stdout b27 mcd1
-//! stdout p02: b_27_mcd checks=34
+//! stdout p02: b_27_mcd checks=41
 //! stderr
 
 #include "b_check.h"
@@ -167,6 +176,15 @@ static PLI_INT32 rw0(p_cb_data d)
   CHECK(file_is("b_27_mcd_a.log", "alpha\nboth\n"), "27.26: file a");
   CHECK(file_is("b_27_mcd_b.log", "both\n"), "27.26: file b");
   CHECK(vpi_mcd_close(1) == 1, "27.22: channel 1 cannot be closed");
+  /* 12.24: the three predefined descriptors, by number. Descriptor 3 is the
+   * third bit, mcd value 4. */
+  CHECK_STR(vpi_mcd_name(1), "stdout", "12.24: descriptor 1 is stdout");
+  CHECK_STR(vpi_mcd_name(2), "stderr", "12.24: descriptor 2 is stderr");
+  nm = vpi_mcd_name(4);
+  CHECK(nm != NULL && strlen(nm) > 4 && strcmp(nm + strlen(nm) - 4, ".log") == 0,
+        "12.24: descriptor 3 is the current log file, got `%s`", nm ? nm : "(null)");
+  CHECK(vpi_mcd_close(2) == 2, "12.24: descriptor 2, stderr, cannot be closed");
+  CHECK(vpi_mcd_close(4) == 4, "12.24: descriptor 3, the log file, cannot be closed");
   CHECK(vpi_mcd_close(a) == a, "27.22: a is no longer open");
   CHECK(vpi_mcd_close(hm) == 0, "27.22: the HDL's mcd closes");
   CHECK(file_is("b_27_mcd_hdl.log", "hdl\n"), "27.26: the HDL's file");

@@ -11,6 +11,7 @@
 //! lrm 3.6.1.2
 //! lrm 3.6.1.2:3
 //! reject-only E0334
+//! neighbour 36_derived_nature_inheritance.va
 nature ch3_access_parent; units="V"; access=AccessV; abstol=1u; endnature
 nature ch3_access_child:ch3_access_parent; access=ChangedV; endnature
 module ch3_bad_access; endmodule

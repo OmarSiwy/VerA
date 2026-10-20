@@ -6,8 +6,9 @@
 // defparam with the top module's name in front is applied.
 //! lrm 6.3.1
 //! inherited IEEE 1364-2005 12.2.1 12.6
-//! reject E0907
+//! reject-only E0907
 //! reject `m.no_such_scope.u1.g` names no parameter of the elaborated design
+//! neighbour defparam_upward_module_name_path.va
 `include "check.vh"
 module dpn_leaf(a, b);
   inout a, b; electrical a, b;

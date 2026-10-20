@@ -30,6 +30,7 @@
 //
 //! lrm 4.5.7
 //! lrm 4.5.15
+//! lrm 4.5.15:1002
 //! bias V(n) = 0
 //! time 0, 1n, 2n, 3n, 4n
 //! analysis tran

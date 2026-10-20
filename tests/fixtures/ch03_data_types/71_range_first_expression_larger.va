@@ -17,6 +17,7 @@
 //! lrm 3.4.2
 //! lrm 3.4.2:1
 //! reject-only E0347
+//! neighbour 05_parameter_ranges.va
 module ch3_range_first_expression_larger(p, n);
     inout p, n;
     electrical p, n;

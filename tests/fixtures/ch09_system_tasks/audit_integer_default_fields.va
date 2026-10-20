@@ -19,6 +19,7 @@
 // whose later string literal is a format again.
 //! lrm 9.4.3
 //! lrm 9.5.3
+//! lrm 9.4.3:1001
 //! print none
 //! checks 5
 `include "check.vh"

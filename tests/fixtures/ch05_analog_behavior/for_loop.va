@@ -9,6 +9,7 @@
 //
 //! lrm 5.9.2
 //! bias V(p) = 0.25
+//! lrm 5.9.2:1001
 `include "check.vh"
 module ch5_for(p);
   inout p; electrical p; integer i; real x;

@@ -13,6 +13,7 @@
 // branch current only. The invalid input, "The expression argument shall be
 // non-negative", is 136_bound_step_negative_rejected.va.
 //! lrm 9.17.2
+//! lrm 9.17.2:3
 //! analysis tran
 //! time 0, 1n
 //! bias V(p) = 1, V(n) = 0

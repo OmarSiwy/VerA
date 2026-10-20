@@ -480,6 +480,9 @@ initial_state: std.StringArrayHashMapUnmanaged(struct { value: Ast.ExprId, tok: 
 /// `x = tick;` has no derivation, and putting the flag in `vars` would give it
 /// one.
 events: std.StringHashMapUnmanaged(Ssa.Place) = .empty,
+/// §5.10.4 `event_identifier { dimension }`: an event array's shape. Each
+/// element is its own `events` row under its scalarized key (`ev[0]`).
+event_arrays: std.StringHashMapUnmanaged([]const lower_shape.Bounds) = .empty,
 /// §5.6.6 the branch a `<+` right-hand side is being lowered for, null outside
 /// one. For the implicit form `I(b) <+ f(I(b))`, the rhs read is the branch-flow
 /// unknown of the implicit equation, not the §5.6.1.2 accumulator, which
@@ -778,10 +781,25 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // never runs. Closing that needs a scheduler queue; §5.10.4's own example
     // triggers first.
     for (module.events) |ev| {
-        if (ev.dims.len != 0) return self.err(ev.main_tok, .E0235, "§5.10.4: a named event array in an analog device", .{});
-        const place = self.builder.newPlace();
-        try self.builder.writeVariable(place, self.cur, .zero);
-        try self.events.put(self.arena, self.file.str(ev.name), place);
+        const name = self.file.str(ev.name);
+        if (ev.dims.len == 0) {
+            const place = self.builder.newPlace();
+            try self.builder.writeVariable(place, self.cur, .zero);
+            try self.events.put(self.arena, name, place);
+            continue;
+        }
+        // §5.10.4 an event array: one flag per element, scalarized as §3.2
+        // arrays are (`ev[0]`, `ev[1][2]`), so `-> ev[i]` raises exactly one.
+        const bounds = (try lower_shape.dimsBounds(self, ev.dims, ev.main_tok, name)) orelse continue;
+        var buf: [lower_shape.max_stack_dims]i64 = undefined;
+        const idx = try lower_shape.subscriptBuf(self, &buf, bounds.len);
+        for (0..lower_shape.shapeCells(bounds)) |k| {
+            lower_shape.shapeSubscripts(bounds, k, idx);
+            const place = self.builder.newPlace();
+            try self.builder.writeVariable(place, self.cur, .zero);
+            try self.events.put(self.arena, try lower_shape.elemName(self, name, idx), place);
+        }
+        try self.event_arrays.put(self.arena, name, bounds);
     }
 
     // §4.7.3, checked on the declarations before any call site sees them.

@@ -22,6 +22,7 @@
 // 3.0 and 5.0 are exact in binary; no arithmetic is performed on them.
 //
 //! lrm 5.8.2
+//! lrm 5.8.2:1001
 `include "check.vh"
 module ch5_dangling_else(p);
   inout p; electrical p;

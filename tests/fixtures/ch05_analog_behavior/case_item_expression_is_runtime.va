@@ -1,0 +1,23 @@
+// §5.8.3: "The analog_expression and the analog_case_item expression can be
+// computed at runtime; neither expression is required to be a constant
+// expression." Both the selector and the item below are `V(sel)`, a probe of
+// the solution, and the harness biases it to 1.0. A tool that required case
+// items to be elaboration-time constants would refuse the module; one that
+// evaluated the item at the wrong time would miss the match and run default,
+// leaving x at 0.0.
+//
+//! lrm 5.8.3
+//! lrm 5.8.3:1003
+//! bias V(sel) = 1.0
+`include "check.vh"
+module ch5_case_runtime_item(sel);
+  inout sel; electrical sel; real x;
+  analog begin
+    case (V(sel))
+      V(sel): x = 2.0;
+      default: x = 0.0;
+    endcase
+    `CHECKX("a case item computed from a probe matches the probe", x, 2.0);
+    I(sel) <+ 0.0;
+  end
+endmodule

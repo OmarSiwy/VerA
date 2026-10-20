@@ -16,6 +16,7 @@
 // value of its own to write down.
 //
 //! lrm 9.15
+//! lrm 9.15:1002
 //! temp 350
 `include "check.vh"
 module ch09_atomic_vt_ambient(p, n);

@@ -27,6 +27,7 @@
 //! lrm 5.5.1:1
 //! reject-only E0901
 //! reject names no net
+//! neighbour hierarchical_net_reference_probes_solve.va
 module ch5_hier_variable_ref(p);
   inout p;
   electrical p;

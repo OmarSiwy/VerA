@@ -20,6 +20,7 @@
 // sub-range swaps each q pair. Dyadic, so exact.
 //
 //! lrm 6.6.1
+//! lrm 6.6.1:1003
 //! lrm 5.5.2
 //! lrm 5.5.2:1
 //! lrm 6.5.5

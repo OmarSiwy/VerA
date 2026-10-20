@@ -1,0 +1,24 @@
+// §5.10.1: "A comma ( , ) can be used interchangeably with the keyword or to
+// OR event expressions." This is event_or.va with the comma spelling. V(c) is
+// held at -1 so the cross half never fires; the timer half, timer(1n, 1n),
+// fires at 1n and 2n. `held` is 0.0 of §3.2 before the first event and
+// V(p) = 0.7 from 1n. A parser that treated the comma as anything but OR
+// would leave held at 0.0 or make the silent cross veto the timer.
+//
+//! lrm 5.10.1
+//! lrm 5.10.1:1001
+//! lrm 5.10.3.1
+//! lrm 5.10.3.3
+//! analysis tran
+//! bias V(p) = 0.7, V(c) = -1.0
+//! time 0, 1n, 2n
+`include "check.vh"
+module ch5_event_comma(p, c);
+  inout p, c; electrical p, c; real held;
+  analog begin
+    @(cross(V(c), +1), timer(1n, 1n)) held = V(p);
+    `CHECK("the timer half of a comma event list fires on its own",
+           held - (($abstime >= 1n) ? 0.7 : 0.0), 0.0, 1e-15);
+    I(p) <+ held;
+  end
+endmodule

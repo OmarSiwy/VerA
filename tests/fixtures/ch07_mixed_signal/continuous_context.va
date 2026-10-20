@@ -10,6 +10,7 @@
 // a dropped or hoisted-away analog assignment leaves 0.
 //
 //! lrm 7.2.2
+//! lrm 7.2.2:1001
 //! lrm 3.2
 //! bias V(p) = 1.25
 `include "check.vh"

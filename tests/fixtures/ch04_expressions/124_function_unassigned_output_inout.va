@@ -24,6 +24,9 @@
 // slots from passing either.
 //
 //! lrm 4.7.2.3
+//! lrm 4.7.2.1:1001
+//! lrm 4.7.2.3:1001
+//! lrm 4.7.2.4:1001
 //! lrm 4.7.2.4
 `include "check.vh"
 module ch04_function_unassigned_output_inout(p, n);

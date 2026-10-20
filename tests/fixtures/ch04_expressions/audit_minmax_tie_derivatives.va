@@ -4,6 +4,7 @@
 // d/dx = 0, d/dy = 1. Checking only the equal numeric values cannot tell.
 // 4.5.6 holds other unknowns fixed when computing these partial derivatives.
 //! lrm 4.3.1
+//! lrm 4.3.1:1002
 //! lrm 4.5.6
 //! checks 4
 //! bias V(p) = 0.5, V(q) = 0.5

@@ -45,7 +45,7 @@
 //! lrm 4.1
 //! lrm 4.1:1000
 //! reject-only E0363
-//! neighbour ../ch06_hierarchy/dependent_parameter_transcendental.va
+//! neighbour 190_constant_expression_of_parameters_and_operators.va
 module ch04_limexp_not_constant(p, n);
     inout p, n;
     electrical p, n;

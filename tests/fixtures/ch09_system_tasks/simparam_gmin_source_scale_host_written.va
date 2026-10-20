@@ -17,6 +17,7 @@
 // The invalid neighbour is simparam_spice_option_not_known_rejected.va: a
 // SPICE option VerA does not publish ("chgtol") is E0811.
 //! lrm 9.15
+//! lrm 9.15:3
 //! param gmin__ = 2e-9, source_scale__ = 0.25
 //! print none
 //! checks 5

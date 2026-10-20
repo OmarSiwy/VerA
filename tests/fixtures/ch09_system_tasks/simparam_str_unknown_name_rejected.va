@@ -6,8 +6,9 @@
 // simparam_str_cwd_and_analysis_name.va is the legal neighbour: Table 9-28's
 // "cwd" and "analysis_name" in the same position are read.
 //! lrm 9.15
-//! reject E0811
+//! reject-only E0811
 //! reject `"working_directory"` is not a Table 9-28 string parameter
+//! neighbour simparam_str_cwd_and_analysis_name.va
 module simparam_str_unknown_name_rejected(p, n);
   inout p, n; electrical p, n;
   string s;

@@ -15,8 +15,9 @@
 //
 //! lrm B
 //! lrm 2.8
-//! reject E0240
+//! reject-only E0240
 //! reject found annex_b_kw_leaf
+//! neighbour 26_escaped_keyword_name_positions.va
 `include "disciplines.vams"
 module annex_b_kw_leaf(a, b);
   inout a, b; electrical a, b;

@@ -18,6 +18,7 @@
 //! lrm A.1.5:1000
 //! reject-only E0207
 //! reject begins with its `design` statement
+//! neighbour 47_configuration_source_text.va
 `include "disciplines.vams"
 module annex_a_cfg_top(p, n);
   inout p, n;

@@ -59,6 +59,7 @@
 //! lrm 9.5.5:3
 //! lrm 9.5.8:1000
 //! lrm 9.5.9
+//! lrm 9.5.9:1
 //! time 0, 1e-3
 //! checks 8
 `include "check.vh"

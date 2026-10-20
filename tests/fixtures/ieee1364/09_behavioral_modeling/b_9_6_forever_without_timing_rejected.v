@@ -14,8 +14,10 @@
 // untimed loop under the same budget that runs to its end.
 // digital-runner: --event-budget=1000
 // digital-runner: reject
+//! inherited IEEE 1364-2005 9.6
 //! reject E1100
 //! reject more than 1000 loop iterations and events at time 0
+//! neighbour b_9_6_untimed_loop_under_budget.v
 module b_9_6_forever_without_timing_rejected;
   reg x;
   initial forever x = 1;

@@ -12,6 +12,7 @@
 //! lrm 2.4
 //! lrm 2.4:3
 //! reject-only E0240
+//! neighbour audit_comment_nonnest_legal_neighbor.va
 module ch02_nested_comment_rejected;
     /* outer /* nested */ still_outer */
 endmodule

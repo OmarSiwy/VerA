@@ -8,6 +8,7 @@
 // §15.8 not-supported. Legal neighbour: b_15_2_3_setuphold.v, the same cell
 // shape with a check the engine evaluates.
 // digital-runner: reject
+//! inherited IEEE 1364-2005 15.5.4 15.8
 //! reject-only E1149
 //! reject negative limit
 //! neighbour b_15_2_3_setuphold.v

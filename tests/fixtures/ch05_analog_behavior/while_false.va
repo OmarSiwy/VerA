@@ -8,6 +8,7 @@
 // leaves 1, which is exactly what this assertion refuses.
 //
 //! lrm 5.9.1
+//! lrm 5.9.1:1001
 `include "check.vh"
 module ch5_while_false(p);
   inout p; electrical p;

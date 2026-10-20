@@ -11,6 +11,8 @@
 //! lrm 12.33.2
 //! lrm 12.30:14
 //! lrm 12.30:15
+//! lrm 12.30:1002
+//! lrm 12.30:1003
 //! design ieee_pli/audit_vpi_event_handles.v
 //! stdout vpi-event-handles=ok
 

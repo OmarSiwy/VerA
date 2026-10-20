@@ -15,6 +15,7 @@
 // generate block is the only thing under test.
 //
 //! lrm 6.6
+//! lrm 6.6:1001
 //! analysis tran
 //! time 10n, 30n
 `timescale 1ns/1ns

@@ -17,6 +17,7 @@
 // b5_prim_connect_gate_array.va, where each element gets its own bridge.
 //
 //! lrm 7.8.4
+//! lrm 7.8.4:2
 //! lrm 7.8.5.1
 //! reject-only E0929
 //! neighbour b5_prim_connect_gate_array.va

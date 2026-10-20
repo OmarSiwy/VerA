@@ -16,6 +16,7 @@
 //! lrm 4.2.11
 //! lrm 4.2.11:1000
 //! reject-only E0324
+//! neighbour 61_shift_right.va
 module ch04_bitwise_shift(p, n);
     inout p, n;
     electrical p, n;

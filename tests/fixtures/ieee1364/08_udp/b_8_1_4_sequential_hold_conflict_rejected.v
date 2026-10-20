@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 8.1.4 8.1.6
 //! reject E0248
 //! reject entries 2 and 3 share an input combination and give it 0 and 1
+//! neighbour b_8_1_4_sequential_hold_agrees.v
 primitive latch_conflict(q, d, en);
   output q; reg q;
   input d, en;

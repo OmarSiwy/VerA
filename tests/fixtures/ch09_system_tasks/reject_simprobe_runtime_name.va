@@ -15,7 +15,9 @@
 // with the names in string parameters.
 //
 //! lrm 9.16
-//! reject E0823
+//! lrm 9.16:1
+//! reject-only E0823
+//! neighbour simprobe_string_parameter_name_resolves.va
 `include "disciplines.vams"
 module reject_simprobe_runtime_name(p, n);
   inout p, n;

@@ -16,6 +16,7 @@
 //! lrm 6.4.1
 //! lrm 6.4.1:6
 //! reject-only E0237
+//! neighbour b4_paramset_statement_without_event_control.va
 `include "disciplines.vams"
 module ch6_ps_var_res(p, n);
   inout p, n;

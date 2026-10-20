@@ -44,8 +44,11 @@
 // for it sits at digital_blk's port in top), V = 0.5:
 // discipline_resolution_basic_figure_7_3.va.
 //
+//! lrm 7.4.4
+//! lrm 7.4.4:2
 //! lrm 7.4.4.2
 //! lrm F.2.2
+//! lrm F.2.2:8
 //! discipline-resolution detail
 //! solve
 //! checks 1

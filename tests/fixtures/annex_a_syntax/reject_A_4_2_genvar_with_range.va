@@ -12,6 +12,7 @@
 //! lrm A.4.2
 //! lrm A.4.2:1000
 //! reject-only E0208
+//! neighbour 09_generate.va
 `include "disciplines.vams"
 module annex_a_genvar_range(p, n);
   inout p, n;

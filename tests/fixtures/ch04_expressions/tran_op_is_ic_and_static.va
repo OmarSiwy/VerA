@@ -30,6 +30,7 @@
 // at t = 0 and initial_step("static")/("ic") never fired.
 //
 //! lrm 4.6.1
+//! lrm 4.6.1:1003
 //! lrm 5.10.2
 //! analysis tran
 //! time 0, 1n, 2n

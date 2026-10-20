@@ -16,6 +16,7 @@
 //! lrm 3.4.1
 //! lrm 3.4.1:1
 //! reject-only E0207
+//! neighbour 04_parameter_types.va
 module ch3_parameter_without_default(p, n);
     inout p, n;
     electrical p, n;

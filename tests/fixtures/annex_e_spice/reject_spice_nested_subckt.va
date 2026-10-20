@@ -16,8 +16,9 @@
 //! lrm E.1.2
 //! lrm E.2
 //! bias V(in) = 1.0, V(gnd) = 0.0
-//! reject E0928
+//! reject-only E0928
 //! reject nested subcircuits
+//! neighbour h04_06_subckt_body_contributes_equations.va
 //! spice .SUBCKT RDIV IN OUT GND
 //! spice .SUBCKT HALF A B
 //! spice R1 A B 1K

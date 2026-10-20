@@ -1161,6 +1161,12 @@ pub const display_txt =
     \\    std.process.exit(code);
     \\}
     \\
+    \\/// §5.10.2 a `$finish` (1) or `$stop` (2) call, which the enclosing
+    \\/// display wrapper (`zFinishPass`) performs after the pass: it can raise
+    \\/// `final_step` and re-run the chain, which the per-task site cannot do
+    \\/// (it holds a probe, not the solution vector).
+    \\var zFinish: u8 = 0;
+    \\
 ;
 
 test appendAliases {

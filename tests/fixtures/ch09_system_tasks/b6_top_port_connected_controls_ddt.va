@@ -16,6 +16,7 @@
 //
 //! lrm 9.19
 //! lrm 9.19:6
+//! lrm 9.19:2
 //! bias V(p) = 0.5, V(n) = 0.0, V(t) = 0.0
 //! checks 2
 `include "check.vh"

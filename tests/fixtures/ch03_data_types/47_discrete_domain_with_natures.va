@@ -19,6 +19,7 @@
 //! lrm 3.6.2.2
 //! lrm 3.6.2.2:2
 //! reject-only E0339
+//! neighbour 11_discipline_declarations.va
 nature ch3_discrete_n; units="V"; access=DiscreteV; abstol=1u; endnature
 discipline ch3_discrete_natured;
     domain discrete;

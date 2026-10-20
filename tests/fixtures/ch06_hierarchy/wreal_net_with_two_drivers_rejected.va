@@ -21,6 +21,7 @@
 // legal one.
 //
 //! lrm 6.5.3
+//! lrm 6.5.3:1001
 //! lrm 3.7
 //! reject-only E0918
 //! reject `stim` is already driven

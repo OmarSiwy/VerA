@@ -6,7 +6,8 @@
 // E0310 rather than reading undefined knots. Legal neighbour:
 // noise_table_parameter_part_select.va (tbl[2:7] of a [0:9] array).
 //! lrm 4.6.4.3
-//! reject E0310
+//! reject-only E0310
+//! neighbour noise_table_parameter_part_select.va
 module noise_table_part_select_out_of_range_rejected(p, n);
     inout p, n;
     electrical p, n;

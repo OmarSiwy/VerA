@@ -22,6 +22,7 @@
 //
 //! lrm 6.6
 //! lrm 6.6.2
+//! lrm 6.6.2:1003
 //! checks 1
 //! bias V(p) = 0.5
 `include "check.vh"

@@ -15,6 +15,7 @@
 // same 0.5 A.
 //
 //! lrm 6.7.1
+//! lrm 6.7.1:1003
 //! lrm 6.7
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

@@ -19,6 +19,7 @@
 //! lrm 3.6.1:2
 //! lrm 3.13.1
 //! reject-only E0342
+//! neighbour 10_nature_declarations.va
 nature ch3_twice_n; units="V"; access=TwiceA; abstol=1u; endnature
 nature ch3_twice_n; units="A"; access=TwiceB; abstol=1p; endnature
 module ch3_duplicate_nature_name; endmodule

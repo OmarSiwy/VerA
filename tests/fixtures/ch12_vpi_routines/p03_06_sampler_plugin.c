@@ -59,6 +59,7 @@
 //! lrm 12.32:1
 //! lrm 12.32.1
 //! lrm 12.32.1:9
+//! lrm 12.32.1:1002
 //! design ch12_vpi_routines/p03_sampnhold.va
 //! stdout p03-06: samples=6 first=0 last=5 hold_2p5=2 hold_4p25=4
 
@@ -82,6 +83,7 @@ typedef struct {
 static s_sampler_data sampler;
 
 static int    captures;
+static int    compiletf_calls, calltf_calls;
 static double captured[16];
 static double hold_2p5 = -1.0, hold_4p25 = -1.0;
 static vpiHandle vout;
@@ -124,6 +126,11 @@ static PLI_INT32 sampler_calltf(p_cb_data cb)
 {
   s_vpi_value value;
   (void)cb;
+  calltf_calls++;
+  /* 12.32.1: the analog calltf has the digital calltf's usage — it runs at
+   * every invocation, and only after the one compiletf built the call. */
+  P03_CHECK(compiletf_calls == 1,
+            "12.32.1: calltf ran with %d compiletf calls, want the one call site's", compiletf_calls);
   value.format     = vpiRealVal;
   value.value.real = sampler.held;
   vpi_put_value(sampler.returnHandle, &value, NULL, vpiNoDelay);
@@ -136,6 +143,13 @@ static PLI_INT32 sampler_compiletf(p_cb_data cb)
 {
   vpiHandle f, e, p;
   (void)cb;
+  compiletf_calls++;
+  /* 12.32.1: compiletf's usage is the digital compiletf's: once for the one
+   * call site, at compile, before any calltf. */
+  P03_CHECK(compiletf_calls == 1,
+            "12.32.1: compiletf ran %d times for one call site", compiletf_calls);
+  P03_CHECK(calltf_calls == 0,
+            "12.32.1: compiletf ran after %d calltf calls", calltf_calls);
   f = vpi_handle(vpiSysTfCall, NULL);
   P03_CHECK(f != NULL, "12.32.3: no vpiSysTfCall context in compiletf");
   e = vpi_handle_by_index(f, 1);

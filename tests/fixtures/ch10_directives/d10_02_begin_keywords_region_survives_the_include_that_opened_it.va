@@ -40,6 +40,7 @@
 // one produced the ordinary answer.
 //
 //! lrm 10.6
+//! lrm 10.6:1002
 //! lrm 10.1
 //! lrm 10.1:1000
 //! bias V(sin) = 0.75, V(n) = 0.25

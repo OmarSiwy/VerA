@@ -20,6 +20,7 @@
 // there. The node is read through the primitive instances' own ports (§6.7).
 //
 //! lrm 3.9
+//! lrm 3.9:1001
 //! bias V(in) = 1.0, V(gnd) = 0.0
 //! solve
 `include "check.vh"

@@ -1828,11 +1828,11 @@ test "codegen: §9.5.9 `$fdebug` and `$debug` run on every pass but the accepted
     try std.testing.expect(std.mem.find(u8, exe, "displayPass(S, x, model, inst, sim, .all);") != null);
     try std.testing.expect(std.mem.find(u8, exe, ", comptime pass: contract.SayPass)") != null);
     // §5.2.1 the analog initial block's open runs once, at the first iterate.
-    try std.testing.expect(std.mem.find(u8, exe, "(if (pass == .all or (pass == .iteration and sim.iteration == 1)) zFKeep(") != null);
+    try std.testing.expect(std.mem.find(u8, exe, "(if (zFinish == 0 and (pass == .all or (pass == .iteration and sim.iteration == 1))) zFKeep(") != null);
     // `$fdebug` and `$debug`, then `$fwrite`, the main block's `$fopen` (its
     // latch otherwise) and `$strobe`.
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, exe, "(if (pass != .accepted) "));
-    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, exe, "(if (pass != .iteration) "));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, exe, "(if (zFinish == 0 and (pass != .accepted)) "));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, exe, "(if (zFinish == 0 and (pass != .iteration)) "));
     try std.testing.expect(std.mem.find(u8, exe, " else zFRes(") != null);
     // A device drops every §9.5 call: no passes.
     const dev = try h.gen(std.testing.allocator);

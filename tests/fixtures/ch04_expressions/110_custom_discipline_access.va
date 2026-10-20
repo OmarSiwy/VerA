@@ -21,6 +21,7 @@
 // through" whatever the net's discipline calls them.
 //
 //! lrm 4.4
+//! lrm 4.4:1002
 //! bias V(p) = 0.7
 `include "check.vh"
 nature ch4_c110_p; units="V"; access=CustomV; abstol=1u; endnature

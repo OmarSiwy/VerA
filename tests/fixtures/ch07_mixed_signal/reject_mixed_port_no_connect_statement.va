@@ -15,9 +15,11 @@
 // statement, compiles and reads `shared` as a continuous node.
 //
 //! lrm 7.8.4
+//! lrm 7.8.4:2
 //! lrm 6.5.7
-//! reject E0927
+//! reject-only E0927
 //! reject port `port` of `child1`
+//! neighbour lrm_7_4_4_1.va
 `include "check.vh"
 discipline ch7441r_discrete;
   domain discrete;

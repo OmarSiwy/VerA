@@ -6,7 +6,8 @@
 // with `==` the comparison could never test z, so the z constant is refused
 // (E0130). The `===` form beside it compiles, reads the z and runs.
 //! lrm 7.3.2
-//! reject E0130
+//! reject-only E0130
+//! neighbour a2d_example_undriven_dnet_reads_z.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module a2d_eq_undriven(dnet, anet);

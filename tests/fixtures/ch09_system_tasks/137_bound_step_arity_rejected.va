@@ -6,6 +6,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.17.2
+//! lrm 9.17.2:1001
+//! neighbour 25_bound_step.va
 //! reject-only E0802
 module ch09_bound_step_arity_rejected(p, n);
   inout p, n; electrical p, n;

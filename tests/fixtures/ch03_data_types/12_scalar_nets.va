@@ -11,6 +11,7 @@
 // interior nets are swapped.
 //
 //! lrm 3.6.3
+//! lrm 3.6:1000
 //! bias V(p) = 3, V(internal_a) = 2, V(internal_b) = 1, V(n) = 0
 `include "check.vh"
 module ch03_scalar_nets(p, n);

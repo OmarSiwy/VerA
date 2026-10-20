@@ -252,7 +252,7 @@ pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports,
 /// `explicit_d2a` is region 1b (§8.5.3.6): region 1 of the tick is done, and
 /// `d2a_fired` names the analog event terms that occurred. The caller takes the
 /// values the guarded statements read NOW; the tick's region-3b stop follows.
-pub const Stop = enum { idle, analog, explicit_d2a };
+pub const Stop = enum { idle, analog, explicit_d2a, vpi_sync };
 
 /// One analog event a digital event control waits on (`Run.registerMonitor`).
 const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32, kind: MonitorKind };
@@ -903,6 +903,11 @@ pub const Run = struct {
             // Freed only now: the `.write` planes above are this row's own, and
             // nothing dispatched may reuse them before `store` has copied them.
             try r.free_rows.append(r.arena, event.payload);
+        }
+        // `Scheduler.sync_at`: the queue stopped at that time's inactive point.
+        if (r.scheduler.synced) {
+            r.scheduler.synced = false;
+            return .vpi_sync;
         }
         return .idle;
     }

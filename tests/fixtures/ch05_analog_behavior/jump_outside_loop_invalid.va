@@ -8,6 +8,7 @@
 //! reject-only E0404
 //! neighbour jump_break.va
 //! neighbour jump_continue.va
+//! lrm 5.11:1001
 module ch5_jump_outside_loop(p);
   inout p; electrical p;
   analog begin

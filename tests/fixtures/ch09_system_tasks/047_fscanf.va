@@ -34,9 +34,11 @@
 // missing-file rule from the second run onward.
 //
 //! lrm 9.5.1
+//! lrm 9.5.1:1002
 //! lrm 9.5.4.2
 //! lrm 9.5.4
 //! lrm 9.5.9
+//! lrm 9.5.9:1
 //! time 0, 1e-3
 //! checks 6
 `include "check.vh"

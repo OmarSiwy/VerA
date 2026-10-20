@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 13.4.4
 //! reject E0243
 //! reject are both unreferenced
+//! neighbour b_13_3_2_hierarchical_config.v
 config cfg_a;
   design work.top;
 endconfig

@@ -11,7 +11,9 @@
 // VerA reports E0209 "expected an expression: found `,`" at the empty slot.
 //
 //! lrm 6.3.2
+//! lrm 6.3.2:1002
 //! reject-only E0209
+//! neighbour ordered_override_partial_subset.va
 `include "disciplines.vams"
 module ch6_skip_child(p, n);
   inout p, n;

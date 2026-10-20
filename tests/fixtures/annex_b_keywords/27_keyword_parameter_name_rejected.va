@@ -7,9 +7,11 @@
 // 26_escaped_keyword_name_positions.va runs.
 //
 //! lrm B
+//! lrm B:1001
 //! lrm 2.8
-//! reject E0208
+//! reject-only E0208
 //! reject found `ground`
+//! neighbour 26_escaped_keyword_name_positions.va
 `include "disciplines.vams"
 module annex_b_kw_param(p, n);
   inout p, n; electrical p, n;

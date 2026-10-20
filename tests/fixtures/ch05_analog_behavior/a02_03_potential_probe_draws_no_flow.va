@@ -45,6 +45,8 @@
 //! bias V(s) = 3.0
 //! bias V(g) = 0.0
 //! solve
+//! lrm 5.4.2.1:1001
+//! lrm 5.4.2.1:1002
 `include "check.vh"
 module a02_potential_probe_open(s, g);
   inout s, g;

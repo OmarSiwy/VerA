@@ -8,6 +8,7 @@
 //
 // Legal neighbour: audit_readmem_address_restart.v loads a small file.
 // digital-runner: reject
+//! inherited IEEE 1364-2005 17.2.9
 //! reject E1100
 //! reject the memory file has a malformed data word
 //! neighbour audit_readmem_address_restart.v

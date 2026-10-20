@@ -39,6 +39,7 @@
 // 4-20, and the only spelling in which the release edge is observable at all.
 //
 //! lrm 4.5.4
+//! lrm 4.5.4:1002
 //! bias V(n) = 0
 //! wave V(a) = 1, 1, 0
 //! time 0, 1n, 2n, 3n, 4n

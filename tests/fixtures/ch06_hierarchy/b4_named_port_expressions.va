@@ -26,6 +26,7 @@
 // moves 0.5 onto bus[2] or bus[3]. All values are exact in binary.
 //
 //! lrm 6.5.5
+//! lrm 6.5.5:1
 //! lrm 6.5.5:2
 //! bias V(p) = 0.0
 //! solve

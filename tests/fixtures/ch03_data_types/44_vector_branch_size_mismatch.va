@@ -13,6 +13,7 @@
 // pin could mistake for validation of the terminal-size rule.
 //
 //! lrm 3.12
+//! lrm 3.12:1001
 //! reject-only E0353
 //! neighbour 33_vector_branches.va
 module ch3_vector_branch_size_mismatch(a, b);

@@ -8,6 +8,7 @@
 // currents are 10.5,9,7.5,2,1 A. The two same-spelling defparams for by_name
 // also pin source order: the later 7 wins 5, then wins the inline 2.
 //! lrm 6.3
+//! lrm 6.3:1001
 //! lrm 6.3.1
 //! lrm 6.4.2
 //! lrm 6.4.2:4

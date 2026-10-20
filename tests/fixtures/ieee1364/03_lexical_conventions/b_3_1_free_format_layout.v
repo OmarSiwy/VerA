@@ -13,6 +13,7 @@
 // Printed: "7 12 6 11".
 //! lrm 2.2
 //! lrm 2.2:3
+//! lrm 2.2:2
 //! inherited IEEE 1364-2005 3.1
 module b_3_1_free_format_layout;reg[7:0]a,b,c,d,e;integer \a+b ;
   initial begin

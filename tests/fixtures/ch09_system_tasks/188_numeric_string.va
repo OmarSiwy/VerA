@@ -12,6 +12,7 @@
 //! lrm 9.5.3:1
 //! lrm 9.5.4.1
 //! lrm 9.5.4.1:1000
+//! lrm 9.4.5:1001
 `include "check.vh"
 module ch09_numeric_string(p, n);
   inout p, n; electrical p, n;

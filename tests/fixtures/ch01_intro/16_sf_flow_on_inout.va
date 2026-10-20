@@ -13,6 +13,7 @@
 //! lrm 1.3.4.2
 //! lrm 1.3.4.2:2
 //! reject-only E0360
+//! neighbour 12_flow_signal_flow.va
 module ch01_sf_flow_on_inout(p);
     inout p;
     current p;

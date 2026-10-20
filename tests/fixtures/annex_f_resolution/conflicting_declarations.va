@@ -38,6 +38,7 @@
 //! lrm F.2.1:3
 //! lrm F.2.2:4
 //! reject-only E0902
+//! neighbour in_context_declaration.va
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 module annex_f_conflict(sig);

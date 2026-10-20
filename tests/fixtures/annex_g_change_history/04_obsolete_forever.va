@@ -7,7 +7,7 @@
 // rest of the module reports nothing.
 //! lrm G.2.1
 //! lrm 5.9
-//! reject E0256
+//! reject-only E0256
 //! reject forever
 module annex_g_obsolete_forever(p, n);
   inout p, n; electrical p, n;

@@ -11,6 +11,7 @@
 //! lrm 5.6.7
 //! lrm 5.6.7:1
 //! reject-only E0414
+//! neighbour indirect_contribution.va
 module ch5_indirect_equation_lhs(p, c);
   inout p, c; electrical p, c; real x;
   analog begin

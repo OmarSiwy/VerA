@@ -19,6 +19,7 @@
 //! lrm A.2.1.1
 //! lrm A.2.1.1:1000
 //! reject-only E0208
+//! neighbour 48_parameter_declarations.va
 `include "disciplines.vams"
 module annex_a_param_reg(p, n);
   inout p, n;

@@ -33,6 +33,7 @@
 //! lrm 5.6.1:5
 //! reject-only E0501
 //! reject `V` is not an access function of `d`
+//! neighbour analog_signals_nets_branches_contributions.va
 module ch5_contribution_to_discrete(p, d);
   inout p; electrical p;
   inout d; logic d;

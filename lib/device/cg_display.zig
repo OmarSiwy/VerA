@@ -430,7 +430,10 @@ pub fn planPasses(g: *Gen) Error!void {
     var init: std.ArrayList(Mir.Inst) = .empty;
     for (g.lowered.displays.items) |d| {
         const c: Mir.Callee = .fromName(d.name);
-        if (c == .@"$debug" or c == .@"$fdebug") g.passes = true;
+        // §5.10.2/§9.7: `$finish`/`$stop` also need the pass gate, so the
+        // tasks after either of them in the same chain do not run (the halt
+        // itself happens in the display wrapper's `zFinishPass`).
+        if (c == .@"$debug" or c == .@"$fdebug" or c == .@"$finish" or c == .@"$stop") g.passes = true;
         if (!d.analog_initial or d.val == .undef) continue;
         var def = g.mir.valueDef(g.an.rv(d.val));
         if (def != .inst_result) continue;
@@ -585,13 +588,21 @@ fn finishLevel(g: *Gen, args: []const Mir.Value) i64 {
 pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
     const level = finishLevel(g, args);
     try g.b("zd: {{ ", .{});
+    // §5.10.2: "final_step will also generate a global event upon the
+    // termination of the simulation due to a $finish() simulation control
+    // task." The request is recorded here; the enclosing `display` wrapper
+    // performs it after the pass, where the solution vector is in hand (this
+    // unit holds only its probe). The nested pass sees `zFinish` set and
+    // halts without printing or raising the event twice.
+    const kind: u8 = if (Mir.Callee.fromName(name) == .@"$finish") 1 else 2;
+    try g.b("if (zFinish == 0) {{ ", .{});
     if (level >= 1) {
         g.uses.sim = true;
         try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{sim.t}}); ", .{
             name, std.zig.fmtString(g.mir.name),
         });
     }
-    try g.b("_ = zHalt(0); break :zd S.con(0.0); }}", .{});
+    try g.b("zFinish = {d}; }} break :zd S.con(0.0); }}", .{kind});
 }
 
 /// Emits §9.5.3 `$swrite`/`$sformat` ("the same as their counterparts ...
@@ -673,7 +684,16 @@ pub fn emitFileCall(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize
     if (wrap) try g.b("S.con(", .{});
     if (wrap and from_int) try g.b("@as(f64, @floatFromInt(", .{});
     if (keep) try g.b("zFKeep({d}, ", .{site});
+    // §9.5.4.1/§9.5.4.2 a read's line is copied when the read runs, so its
+    // readers see it however late codegen places them (`zFLatch`).
+    const latch = c == .@"$fgets" or c == .@"$fscanf";
+    if (latch) try g.b("zFLatch({d}, ", .{site});
     try emitFileCallInner(g, c, args, site);
+    if (latch) {
+        try g.b(", ", .{});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b(")", .{});
+    }
     if (keep) try g.b(")", .{});
     if (wrap and from_int) try g.b("))", .{});
     if (wrap) try g.b(")", .{});
@@ -750,7 +770,7 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
         },
         // The synthetic readers, all of which take the count first; see
         // `file_kernels.zFLine` for why that operand is there and why it is read.
-        .@"$fgets$str" => return emitLine(g, args, "zFLine"),
+        .@"$fgets$str" => return emitReadLine(g, args),
         .@"$ferror$str" => return emitLine(g, args, "zFErrorStr"),
         // §9.5.4.2's items: the same three flavours `$sscanf` has, over the line the
         // count's read latched. `(count, fd, format, item)`.
@@ -760,7 +780,7 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
                 .@"$fscanf$real" => "zScanR",
                 else => "zScanS", // else: `$fscanf$str`, the one left
             }});
-            try emitLine(g, args, "zFLine");
+            try emitReadLine(g, args);
             try g.b(", ", .{});
             try g.renderVal(if (args.len > 2) args[2] else Mir.Value.f_zero, .str);
             try g.b(", ", .{});
@@ -770,6 +790,23 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
         else => return g.abort(.E1020, "VerA: unhandled §9.5 call `{s}`", .{@tagName(c)}), // else: `emitCall` routes only `callee.isFileCall` here, and every one of those has a prong above
     }
 }
+/// The line a `$fgets`/`$fscanf` reader reads: its count's site latch
+/// (`zFLineAt`), so the value is the one the read statement left. A count that
+/// is not a direct read call (no site to name) reads the channel (`zFLine`).
+fn emitReadLine(g: *Gen, args: []const Mir.Value) Error!void {
+    const n = if (args.len > 0) args[0] else Mir.Value.zero;
+    const def = g.mir.valueDef(g.an.rv(n));
+    if (def == .inst_result and g.mir.instOp(def.inst_result) == .call) {
+        const callee = g.mir.instData(def.inst_result).call.callee;
+        if (callee == .@"$fgets" or callee == .@"$fscanf") {
+            try g.b("zFLineAt({d}, ", .{@backingInt(def.inst_result)});
+            try g.renderVal(n, .int);
+            return g.b(")", .{});
+        }
+    }
+    return emitLine(g, args, "zFLine");
+}
+
 /// The first two operands every synthetic reader carries: count, then fd.
 inline fn emitLine(g: *Gen, args: []const Mir.Value, comptime kernel: []const u8) Error!void {
     try g.b(kernel ++ "(", .{});
@@ -1572,22 +1609,26 @@ test "§9.7 simulation control: the run ends at the call, with the pinned status
     // $error stays non-fatal: same severity family, no exit at its call site
     // (the kernel text is present in every printing artifact; the CALL is not).
     const err = try emitBody(a, "$error(\"soft\");");
-    try std.testing.expect(!has(err, "_ = zHalt"));
+    try std.testing.expect(!has(err, "_ = zHalt(1)"));
+    try std.testing.expect(!has(err, "_ = zHalt(2)"));
 
     // §9.7.1: the default diagnostic level is 1 ("prints simulation time and
     // location"), and the exit status is 0: ending the run is the task's
-    // defined behaviour, not a failure.
+    // defined behaviour, not a failure. §5.10.2's `final_step` re-run is the
+    // display wrapper's job, so the site records the request (`zFinish`: 1
+    // for `$finish`, 2 for `$stop`) and the wrapper halts.
     const fin = try emitBody(a, "$finish;");
     try std.testing.expect(has(fin, "\"$finish: t={d} (t)\\n\""));
-    try std.testing.expect(has(fin, "_ = zHalt(0); "));
+    try std.testing.expect(has(fin, "zFinish = 1; "));
     // Table 9-25 level 0 prints nothing (and still exits).
     const fin0 = try emitBody(a, "$finish(0);");
     try std.testing.expect(!has(fin0, "$finish: t="));
-    try std.testing.expect(has(fin0, "_ = zHalt(0); "));
-    // §9.7.2 $stop, non-interactive artifact: diagnostic then exit 0.
+    try std.testing.expect(has(fin0, "zFinish = 1; "));
+    // §9.7.2 $stop, non-interactive artifact: diagnostic then exit 0. Not
+    // `$finish`, so §5.10.2's final_step event is not raised.
     const stp = try emitBody(a, "$stop(1);");
     try std.testing.expect(has(stp, "\"$stop: t={d} (t)\\n\""));
-    try std.testing.expect(has(stp, "_ = zHalt(0); "));
+    try std.testing.expect(has(stp, "zFinish = 2; "));
 
     // The kernel is `std.process.exit`, f64-typed so the legal dead code
     // after a terminating call still compiles.
