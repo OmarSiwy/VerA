@@ -117,9 +117,17 @@ pub const Lexer = struct {
 
     // ---- scanners ---------------------------------------------------------
 
+    /// Whether the last non-space byte before `at` is a `#`.
+    fn afterHash(src: []const u8, at: usize) bool {
+        var k = at;
+        while (k > 0 and isSpace(src[k - 1])) k -= 1;
+        return k > 0 and src[k - 1] == '#';
+    }
+
     /// LRM §2.6.1 (integer constants) and §2.6.2 (real constants). Cursor is on
     /// a decimal digit. Underscores are legal anywhere but first (§2.6.1).
     fn lexNumber(self: *Lexer) token.Tag {
+        const start = self.pos;
         self.skipUnsignedNumber(); // `size`, or the whole integer/mantissa
 
         // §2.6.1 sized based constant: size ' [s|S] base digits.
@@ -129,10 +137,14 @@ pub const Lexer = struct {
         // shall be legal to macro substitute these three tokens": `8 `BASE `DIGITS`
         // arrives as `8 'h A5`, with white space at both joins. Footnote 1's
         // "embedded spaces are illegal" applies to each single-token production.
+        //
+        // Not after a `#`: A.6.5's delay_value there is an unsigned_number,
+        // never a size, so `#1 'h123` is delay 1, then the constant 'h123.
+        // Read from the bytes, so `tokenEnd` re-lexes the same span.
         {
             var i = self.pos;
             while (i < self.src.len and isSpace(self.src[i])) i += 1;
-            if (i < self.src.len and self.src[i] == '\'') {
+            if (i < self.src.len and self.src[i] == '\'' and (i == self.pos or !afterHash(self.src, start))) {
                 const save = self.pos;
                 self.pos = i;
                 // Not a base_format (e.g. `2 '{`): the number ends before the
@@ -724,6 +736,10 @@ test "numbers: bases, reals, scale factors (§2.6)" {
     // still joins to the base format. Both spacings are one literal.
     try expectTags("8 'h A5", &.{ .int_literal, .eof });
     try expectTags("32\n'h 12ab_f001", &.{ .int_literal, .eof });
+    // A.6.5: after `#` the number is a delay_value, never a size, so the
+    // white space ends it (IEEE 1364-2005 §3.5.1's three tokens do not form).
+    try expectTags("#1 'h123", &.{ .hash, .int_literal, .int_literal, .eof });
+    try expectTags("# 1 'h123", &.{ .hash, .int_literal, .int_literal, .eof });
     // White space before an assignment pattern is not joined: `'{` is
     // not a base_format, so the number ends at its digits (§4.2.14).
     try expectTags("2 '{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });

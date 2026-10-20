@@ -10,6 +10,7 @@ const std = @import("std");
 const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
+const parse_net = @import("net.zig");
 const parse_expr = @import("expr.zig");
 const parse_literal = @import("literal.zig");
 const parse_generate = @import("generate.zig");
@@ -240,6 +241,12 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
         decl_at = self.pos;
         const mark = self.markAttributes();
         try self.skipAttributes();
+        // A keyword the §10.6 set frees (`string` under "1364-2005") that no
+        // name follows is no declaration: it starts a statement.
+        if (self.identLike(self.pos) and !self.identLike(self.pos + 1)) {
+            self.rewindAttributes(mark);
+            break;
+        }
         // A.6.3 `analog_seq_block ::= begin [ : analog_block_identifier
         // { analog_block_item_declaration } ] ...`, and IEEE 1364-2005's
         // `seq_block`/`par_block` alike: an unnamed block declares nothing.
@@ -428,7 +435,7 @@ fn parseDelay(self: *Parser) Error!Ast.ExprId {
     const saved_delay = self.in_digital_delay;
     self.in_digital_delay = true;
     defer self.in_digital_delay = saved_delay;
-    if (!self.eat(.lparen)) return parse_expr.parsePrimary(self);
+    if (!self.eat(.lparen)) return parse_net.parseDelayValue(self);
     const value = try parse_expr.parseMinTypMax(self);
     _ = try self.expect(.rparen);
     return value;
@@ -442,7 +449,8 @@ fn parseEvent(self: *Parser) Error!Ast.ExprId {
         _ = try self.expect(.rparen);
         return e;
     }
-    // A.9.3 `hierarchical_event_identifier`: `c.e`, `$root.top.e`.
+    // A.9.3 `hierarchical_event_identifier`: `c.e`, `$root.top.e`. Its final
+    // segment takes no index, so an event-array element is `@(ev[0])`.
     if (self.peekAt(1) == .dot) return parse_expr.parsePrimary(self);
     const id_tok = self.pos;
     const name = try self.expectIdent();

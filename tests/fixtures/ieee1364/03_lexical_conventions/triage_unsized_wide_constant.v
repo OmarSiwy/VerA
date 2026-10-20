@@ -4,11 +4,11 @@
 module triage_unsized_wide_constant;
   initial begin
     # 4294967312 $display("FAILED -- time=%d", $time);
-    $finish;
+    $finish(0);
   end
 
   initial begin
     # 32 $display("PASSED");
-    $finish;
+    $finish(0);
   end
 endmodule

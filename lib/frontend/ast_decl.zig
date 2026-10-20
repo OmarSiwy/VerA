@@ -62,6 +62,9 @@ pub const ParamDecl = struct {
     /// IEEE 1364-2005 §4.10.3 a module-body `specparam`, kept as a
     /// `localparam` (`is_local`) that no module parameter may read.
     is_spec: bool = false,
+    /// IEEE 1364-2005 §4.10.1 `parameter time`: `ty` folds it to `.integer`,
+    /// but its value is unsigned 64-bit (§4.8), not a signed 32-bit integer.
+    is_time: bool = false,
     /// §3.4.4 array parameter dimensions; empty for a scalar.
     dims: []const Dim = &.{},
     /// A.2.1.1's `[ range ]`, the first arm's width bracket (`parameter [3:0]
@@ -283,6 +286,9 @@ pub const Port = struct {
     /// port. §12.3.3: "If either ... is declared as signed, then the other
     /// shall also be considered signed."
     is_signed: bool = false,
+    /// A digital parse has folded this port's type declaration (`wire x;`)
+    /// into it, so another one is a second declaration of the name.
+    typed: bool = false,
     main_tok: u32 = 0,
 
     /// The name a §6.5.5 named connection `.name(expr)` binds by: the
@@ -537,6 +543,9 @@ pub const PullInst = struct {
     strength: Strength = .pull,
     /// A.3.1 `name_of_gate_instance`, `.none` when not written.
     name: StrId = .none,
+    /// `name_of_gate_instance ::= gate_instance_identifier [ range ]`: an
+    /// instance array (IEEE 1364-2005 §7.1.5), as `GateInst.range`.
+    range: ?Dim = null,
     main_tok: u32 = 0,
     /// As `GateInst.generated`.
     generated: bool = false,

@@ -9,7 +9,7 @@ module triage_event_array;
       #1 -> ev[0];
     end
     begin
-      @ev[0] $display("PASSED");
+      @(ev[0]) $display("PASSED");
     end
   join
 endmodule

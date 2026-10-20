@@ -26,14 +26,14 @@
 // tPLH2 and tPHL2, so each drives its own output (Q1, Q2, Q3, Q6) and the
 // three-value set is named tPLH3, tPHL3, tPz3.
 //
-// Logic: q = (clk | pre) & ~clr; every Qk = C. The longest delay any
-// min:typ:max selection gives is 350 (tFall_clk_q's max), so the transcript
-// is sampled 1000 after each change, where every selection agrees:
+// Logic: q = (clk | pre) & ~clr; every Qk = C. Each output change takes its
+// paths' delay (§14.3.3); the longest any min:typ:max selection gives is 350
+// (tFall_clk_q's max), so the transcript is sampled 1000 after each change,
+// where every selection agrees:
 //   t = 1:    clk=1 clr=0 pre=0 C=1: q = (1|0) & ~0 = 1; Q1 Q2 Q3 Q6 = 1111,
 //             printed at t = 1001
 //   t = 1001: clr=1 C=0:             q = 1 & ~1 = 0;     Q1 Q2 Q3 Q6 = 0000,
 //             printed at t = 2001
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.3 14.3.1
 `timescale 1ns/1ns
 module b_14_3_1_mintypmax_path_delays_cell(clk, clr, pre, q, C, Q1, Q2, Q3, Q6);

@@ -62,10 +62,18 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
             // §2.4: to the end of the line. A single-needle search is vectorized.
+            const start = i;
             i = std.mem.findScalarPos(u8, src, i, '\n') orelse src.len;
+            // IEEE 1364 §19.3.1: inside `define text the comment is dropped but
+            // a `\` ending it still continues the macro (iverilog br_gh435), so
+            // the `\` and what follows it survive.
+            var keep = i;
+            while (keep > start + 2 and (src[keep - 1] == ' ' or src[keep - 1] == '\t' or src[keep - 1] == '\r')) keep -= 1;
+            if (keep > start + 2 and src[keep - 1] == '\\' and inDefine(out.items)) keep -= 1 else keep = i;
             // The output stood still while the input advanced; from here the
             // two run in lockstep again, which is one mark.
-            try marks.append(pp.scratch, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
+            try marks.append(pp.scratch, .{ .out = @intCast(out.items.len), .src = @intCast(keep) });
+            out.appendSliceAssumeCapacity(src[keep..i]);
             continue;
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '*') {
@@ -103,4 +111,19 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
     }
     const text = try out.toOwnedSlice(pp.arena);
     return .{ .text = text, .marks = try pp.arena.dupe(diag.StripMark, marks.items) };
+}
+
+/// Whether the end of `out` sits on a `define's logical line: walk back over
+/// `\`-continued physical lines to the first, and look for the word there.
+fn inDefine(out: []const u8) bool {
+    var line_end = out.len;
+    while (true) {
+        const line_start = if (std.mem.findScalarLast(u8, out[0..line_end], '\n')) |n| n + 1 else 0;
+        const line = std.mem.trimStart(u8, out[line_start..line_end], " \t");
+        if (std.mem.startsWith(u8, line, "`define")) return true;
+        if (line_start == 0) return false;
+        const prev = std.mem.trimEnd(u8, out[0 .. line_start - 1], " \t\r");
+        if (prev.len == 0 or prev[prev.len - 1] != '\\') return false;
+        line_end = line_start - 1;
+    }
 }

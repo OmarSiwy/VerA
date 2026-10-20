@@ -696,7 +696,7 @@ ieee1364/15_timing_checks/b_15_3_5_period.v	transcript	accepts	0	no	stdout diffe
 ieee1364/15_timing_checks/b_15_3_5_period_without_edge_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/b_15_3_6_nochange_refused.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/b_15_4_edge_descriptor_rejected.v	reject	refuses	-	yes	tests/fixtures/ieee1364/15_timing_checks/b_15_4_edge_descriptor_rejected.v:21: syntax error
-ieee1364/15_timing_checks/b_15_5_1_delayed_signal_refused.v	reject	accepts	0	no	accepts and exits 0
+ieee1364/15_timing_checks/b_15_5_1_timecheck_condition_refused.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/b_15_5_notifier.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/b_15_5_notifier_net_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/b_15_6_conditions.v	transcript	accepts	0	no	stdout differs

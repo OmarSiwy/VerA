@@ -132,6 +132,16 @@ fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Erro
         return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
 }
 
+/// A driver's `delay3` that reads a variable (`Run.driver_delays`), its
+/// values now, defaulted as `Run.declaredDelay3` defaults a constant one.
+fn variableDelay(self: *Run, scratch: std.mem.Allocator, d: Ast.Delay3, tok: u32) Error!@import("net.zig").Delay {
+    var out: @import("net.zig").Delay = .{ .present = true };
+    out.rise = try delayOf(self, scratch, d.rise, tok);
+    out.fall = if (d.fall != .none) try delayOf(self, scratch, d.fall, tok) else out.rise;
+    out.off = if (d.off != .none) try delayOf(self, scratch, d.off, tok) else @min(out.rise, out.fall);
+    return out;
+}
+
 fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
     const ex = &self.file.exprs;
     const edge: waiters.Edge = switch (ex.tag(e)) {
@@ -535,6 +545,12 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 return;
             },
             .task => |s| {
+                // §10.4.5: a system task in a constant function is ignored
+                // while the function folds a constant.
+                if (self.growing != null or self.folding_constant) {
+                    pc += 1;
+                    continue;
+                }
                 self.pc = pc;
                 switch (s.task) {
                     .show => |sh| try display.display(self, s.args, scratch, sh),
@@ -543,27 +559,9 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     // so evaluation waits for the `.monitor` region.
                     .strobe => |sh| try enqueueMonitor(self, .{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc } }),
                     // §17.1.3 one standing monitor: a new one replaces the
-                    // old, watch list and all. Its first line is at the end
-                    // of this step like every other, so it shows settled
-                    // values.
-                    .monitor => |sh| {
-                        for (self.monitor_slots.items) |at| self.watch[at].remove(.monitor);
-                        self.monitor_slots.clearRetainingCapacity();
-                        var probes: std.ArrayList(Ast.ExprId) = .empty;
-                        for (s.args) |arg| if (arg != .none and self.file.exprs.tag(arg) != .str_literal)
-                            try compile.sensitivityProbes(self, arg, &self.monitor_slots, &probes);
-                        for (self.monitor_slots.items) |at| self.watch[at].insert(.monitor);
-                        self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc };
-                        // VAMS §8.5.1 row 4 after 3b: a probe of the analog
-                        // solution is an operand no slot holds, so it is
-                        // compared at every time step and analog solution
-                        // (`display.monitorDue`). The first report is due.
-                        self.monitor_probes = probes.items;
-                        self.monitor_last = try self.arena.alloc(f64, probes.items.len);
-                        @memset(self.monitor_last, 0);
-                        self.monitor_slot_hit = true;
-                        try waiters.requestMonitor(self);
-                    },
+                    // old, watch list and all; §17.2.2 any number of
+                    // $fmonitors.
+                    .monitor => |sh| try display.install(self, scratch, s.args, sh, pc),
                     // "$monitoron shall produce a display immediately after
                     // it is invoked, regardless of whether a value change has
                     // taken place", so whether it was already on is not asked.
@@ -712,6 +710,9 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 // assignment, which for a port connection is the parent of
                 // the net it feeds, not the dispatch's scope.
                 self.scope = d.scope;
+                // A.2.2.3: a delay that reads a variable is read when the
+                // driver schedules (§6.1.3).
+                const timing = if (self.driver_delays.get(at)) |d3| try variableDelay(self, scratch, d3, d.tok) else d.delay;
                 var or_z = false;
                 const value = switch (d.source) {
                     .bridge => |b| try resolution.window(self, scratch, b, d.current.width),
@@ -736,16 +737,17 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 // later transitions wait for the instance delay.
                 const first_udp = if (d.source == .udp) d.source.udp.sequential and !d.source.udp.started else false;
                 // A combinational one's output is x until its first delayed value.
-                if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolution.resolve(self, d.net);
+                if (d.source == .udp and !d.source.udp.started and !first_udp and timing.present) try resolution.resolve(self, d.net);
                 if (d.source == .udp) d.source.udp.started = true;
-                if (d.delay.present and !first_udp) {
+                if (timing.present and !first_udp) {
                     const st = try self.driverTransition(at);
                     if (try resolution.schedule(self, d.current, d.or_z, value, or_z, st)) {
                         const delay = switch (d.source) {
-                            .expr => d.delay.continuous(d.current.truth(), st.target),
-                            .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
-                            .udp => |u| d.delay.to(st.target.bit(u.out_bit orelse 0)),
-                            .bridge, .mos, .pull => d.delay.to(st.target.bit(0)),
+                            .expr => timing.continuous(d.current.truth(), st.target),
+                            .gate => |g| timing.to(st.target.bit(g.out_bit orelse 0)),
+                            .udp => |u| timing.to(st.target.bit(u.out_bit orelse 0)),
+                            .mos => |mo| timing.to(st.target.bit(mo.out_bit orelse 0)),
+                            .bridge, .pull => timing.to(st.target.bit(0)),
                         };
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }

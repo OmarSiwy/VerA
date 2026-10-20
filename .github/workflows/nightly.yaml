@@ -45,6 +45,12 @@ jobs:
           grep -E '^fd_check FAIL|^FAIL ' /tmp/certify.txt > /tmp/fd-failures.txt || true
           exit "$status"
 
+      - name: Digital transcripts, with verdicts
+        continue-on-error: true
+        run: |
+          zig build -Doptimize=ReleaseFast test-devices -- --verdicts=/tmp/digital.tsv 2>&1 | tail -3
+          exit "${PIPESTATUS[0]}"
+
       - name: Coverage-guided fuzzing, bounded (L6)
         continue-on-error: true
         run: |
@@ -53,7 +59,7 @@ jobs:
 
       - name: Conformance metric and level ratchet (gate)
         run: |
-          python3 tools/conformance.py metric --verdicts=/tmp/verdicts.tsv --perturbed=/tmp/perturbed.tsv --levels=/tmp/levels.tsv | tee /tmp/metric.txt
+          python3 tools/conformance.py metric --verdicts=/tmp/verdicts.tsv --perturbed=/tmp/perturbed.tsv --digital=/tmp/digital.tsv --levels=/tmp/levels.tsv | tee /tmp/metric.txt
           python3 tools/conformance.py ratchet --verdicts=/tmp/verdicts.tsv --levels=/tmp/levels.tsv
 
       - name: Job summary

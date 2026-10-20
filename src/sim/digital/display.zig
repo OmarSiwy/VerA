@@ -14,6 +14,7 @@ const waiters = @import("waiters.zig");
 const evaluate = @import("evaluate.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
+const Standing = @import("root.zig").Standing;
 const run = @import("root.zig").run;
 const expectRun = @import("root.zig").expectRun;
 const filled = @import("net.zig").filled;
@@ -361,7 +362,9 @@ const Radix = fmt.Radix;
 /// radix an argument with no format specification is printed in, and whether
 /// the call ends with a newline. "The $write task provides the same
 /// capabilities as $display, but with no newline."
-pub const Show = struct { radix: Radix, newline: bool };
+/// `file`: §17.2.2's `$fstrobe`/`$fmonitor`, whose first argument is the
+/// descriptor the line goes to.
+pub const Show = struct { radix: Radix, newline: bool, file: bool = false };
 
 /// The display families of §9.4.1 Table 9-1 differ in when they run, not in
 /// what they print: every one formats through `display`.
@@ -417,6 +420,10 @@ fn showAs(radix: Radix, newline: bool) Show {
     return .{ .radix = radix, .newline = newline };
 }
 
+fn toFile(radix: Radix) Show {
+    return .{ .radix = radix, .newline = true, .file = true };
+}
+
 const TaskRow = struct { []const u8, Task };
 
 /// Every system task this module runs, by name.
@@ -437,6 +444,14 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$monitorb", Task{ .monitor = showAs(.binary, true) } },
     .{ "$monitoro", Task{ .monitor = showAs(.octal, true) } },
     .{ "$monitorh", Task{ .monitor = showAs(.hex, true) } },
+    .{ "$fstrobe", Task{ .strobe = toFile(.decimal) } },
+    .{ "$fstrobeb", Task{ .strobe = toFile(.binary) } },
+    .{ "$fstrobeo", Task{ .strobe = toFile(.octal) } },
+    .{ "$fstrobeh", Task{ .strobe = toFile(.hex) } },
+    .{ "$fmonitor", Task{ .monitor = toFile(.decimal) } },
+    .{ "$fmonitorb", Task{ .monitor = toFile(.binary) } },
+    .{ "$fmonitoro", Task{ .monitor = toFile(.octal) } },
+    .{ "$fmonitorh", Task{ .monitor = toFile(.hex) } },
     .{ "$monitoron", Task{ .monitor_enable = true } },
     .{ "$monitoroff", Task{ .monitor_enable = false } },
     .{ "$timeformat", .timeformat },
@@ -488,7 +503,15 @@ pub const TimeFormat = fmt.TimeFormat;
 /// Prints `args` as §9.4.1's display tasks do, onto `Run.out`; with a null
 /// `allocator` it only validates the call. Every conversion is width-exact
 /// (IEEE 1364-2005 §17.1.1.3), x and z apart (§17.1.1.4).
+/// A `file` show is only validated here (its descriptor, then the rest);
+/// `system.fdisplay` prints it.
 pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show) Error!void {
+    if (show.file) {
+        std.debug.assert(allocator == null);
+        if (args.len == 0 or args[0] == .none) return self.fail(0, "a §17.2.2 file output task's first argument is a descriptor", .{});
+        try compile.checkExpr(self, args[0]);
+        return walk(self, args[1..], null, show, false);
+    }
     return walk(self, args, allocator, show, false);
 }
 
@@ -670,9 +693,18 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     if (allocator) |a| try fmt.text(self.out, try evaluate.eval(self, a, args[arg], 0), format[i] == 'c' or format[i] == 'C', width);
                     continue;
                 },
+                // §17.1.1.2 `%u`/`%z`: the operand's two- or four-value bits
+                // as binary data.
+                'u', 'U', 'z', 'Z' => {
+                    arg += 1;
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
+                    try compile.checkExpr(self, args[arg]);
+                    if (allocator) |a| try unformatted(self.out, try evaluate.eval(self, a, args[arg], 0), format[i] == 'z' or format[i] == 'Z');
+                    continue;
+                },
                 else => return self.exprFail(
                     e,
-                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t %v are implemented",
+                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t %u %v %z are implemented",
                 ),
             };
             arg += 1;
@@ -687,6 +719,23 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
         }
     }
     if (allocator != null and show.newline) try self.out.writeByte('\n');
+}
+
+/// §17.1.1.2 `%u` (`four` false: "unknown or high-impedance bits ... shall
+/// be treated as zero") / `%z` (each word §27.14's s_vpi_vecval, aval then
+/// bval): "in units of 32 bits with the word containing the LSB written
+/// first", each little-endian, the native order of every target VerA builds
+/// for. `system.Scan` reads them back.
+fn unformatted(out: *std.Io.Writer, v: Int.Literal, four: bool) Error!void {
+    for (0..@max(1, (v.width + 31) / 32)) |k| {
+        const lo = k * 32;
+        const val: u32 = @truncate(v.values()[lo / 64] >> @intCast(lo % 64));
+        const unk: u32 = @truncate(v.unknowns()[lo / 64] >> @intCast(lo % 64));
+        if (four) {
+            try out.writeInt(u32, val, .little);
+            try out.writeInt(u32, unk, .little);
+        } else try out.writeInt(u32, val & ~unk, .little);
+    }
 }
 
 /// §17.1.1.6 `%m`: the hierarchical name of the scope the display runs in,
@@ -804,13 +853,184 @@ pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
 /// nothing (specification/Vague_Decisions.md VD-111).
 pub fn monitorDue(self: *Run, a: std.mem.Allocator) Error!bool {
     const m = self.monitor orelse return false;
-    if (self.monitor_probes.len == 0 or self.monitor_slot_hit) return true;
+    if (self.monitor_slot_hit) return true;
+    if (self.monitor_probes.len == 0) return false;
     self.scope = m.scope;
     self.pc = m.pc;
     for (self.monitor_probes, self.monitor_last) |e, last| {
         if ((try evaluate.evalReal(self, a, e)) != last) return true;
     }
     return false;
+}
+
+/// §17.1.3 `$monitor` (`show.file` false) or §17.2.2 `$fmonitor` at `pc`,
+/// in the current scope: a `$monitor` replaces the standing one, an
+/// `$fmonitor` joins the others. Its first line is at the end of this time
+/// step like every other, so it shows settled values.
+pub fn install(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: Show, pc: u32) Error!void {
+    watchAll(self, false);
+    defer watchAll(self, true);
+    var m: Standing = .{ .args = args, .show = show, .scope = self.scope, .pc = pc, .hit = true };
+    m.values = try self.arena.alloc(?[]u64, args.len);
+    var loose: std.ArrayList(u32) = .empty;
+    var probes_ignored: std.ArrayList(Ast.ExprId) = .empty;
+    for (args, m.values, 0..) |e, *v, k| {
+        v.* = null;
+        if (k < @intFromBool(show.file) or e == .none or self.file.exprs.tag(e) == .str_literal) continue;
+        // A clock query or a call can move with no slot changing (VD-111):
+        // such an argument is not compared, and any change of a slot it
+        // reads reports.
+        if (!comparable(self, e)) {
+            try compile.sensitivityProbes(self, e, &loose, &probes_ignored);
+            continue;
+        }
+        v.* = try self.arena.dupe(u64, try current(self, a, e));
+    }
+    m.loose = loose.items;
+    if (show.file) {
+        m.fd = ((try evaluate.eval(self, a, args[0], 0)).asInt() orelse return) & 0xffff_ffff;
+        var slots: std.ArrayList(u32) = .empty;
+        for (args[1..]) |e| if (e != .none and self.file.exprs.tag(e) != .str_literal)
+            try compile.sensitivity(self, e, &slots);
+        m.slots = slots.items;
+        try self.fmonitors.append(self.arena, m);
+        return requestTick(self);
+    }
+    self.monitor_slots.clearRetainingCapacity();
+    var probes: std.ArrayList(Ast.ExprId) = .empty;
+    for (args) |e| if (e != .none and self.file.exprs.tag(e) != .str_literal)
+        try compile.sensitivityProbes(self, e, &self.monitor_slots, &probes);
+    self.monitor = m;
+    // VAMS §8.5.1 row 4 after 3b: a probe of the analog solution is an
+    // operand no slot holds, so it is compared at every time step and
+    // analog solution (`monitorDue`). The first report is due.
+    self.monitor_probes = probes.items;
+    self.monitor_last = try self.arena.alloc(f64, probes.items.len);
+    @memset(self.monitor_last, 0);
+    self.monitor_slot_hit = true;
+    try waiters.requestMonitor(self);
+}
+
+/// §17.2.7: "Active $fmonitor and/or $fstrobe operations on a file
+/// descriptor or multichannel descriptor are implicitly cancelled by an
+/// $fclose operation". The `$fmonitor`s writing to `d` stop.
+pub fn cancelFile(self: *Run, d: i64) void {
+    watchAll(self, false);
+    defer watchAll(self, true);
+    var k: usize = 0;
+    while (k < self.fmonitors.items.len) {
+        if (self.fmonitors.items[k].fd == d) _ = self.fmonitors.orderedRemove(k) else k += 1;
+    }
+}
+
+/// Marks (`on`) or unmarks every slot a standing monitor reads as a
+/// `.monitor` watch (`waiters.store` -> `monitorChanged`).
+fn watchAll(self: *Run, on: bool) void {
+    for (self.monitor_slots.items) |at| self.watch[at].setPresent(.monitor, on);
+    for (self.fmonitors.items) |m| for (m.slots) |at| self.watch[at].setPresent(.monitor, on);
+}
+
+/// Whether `$monitor` argument `e` reports on a change of its own value
+/// that a change of a slot it reads need not be (`bs[1]` under `bs`): an
+/// expression `install` compares. A whole variable, a constant and an
+/// argument that is not compared report on any change of their slots.
+pub fn comparedOperand(self: *Run, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    return switch (self.file.exprs.tag(e)) {
+        .int_literal, .logic_literal, .str_literal, .real_literal, .ident, .hier_ident => false,
+        else => comparable(self, e), // else: an expression of operands
+    };
+}
+
+/// Whether argument `e`'s value can move only when a slot it reads does:
+/// no clock query, call or analog probe anywhere in it.
+fn comparable(self: *Run, e: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .int_literal, .logic_literal, .str_literal, .real_literal, .ident, .hier_ident => true,
+        .index => comparable(self, ex.lhs(e)) and comparable(self, ex.rhs(e)),
+        .unary, .binary, .multi_concat, .ternary, .concat, .range, .indexed_range => {
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| if (c != .none and !comparable(self, c)) return false;
+            return true;
+        },
+        else => false, // else: a system or user call, an analog probe
+    };
+}
+
+/// Argument `e`'s value now, as the planes compared between evaluations; a
+/// real as its bits (VD-032's change is `!=`, which -0.0 over +0.0 is not,
+/// so a real compares by value).
+fn current(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error![]u64 {
+    if (compile.typeOf(self, e).real) {
+        const r = try evaluate.evalReal(self, a, e);
+        const out = try a.alloc(u64, 1);
+        out[0] = @bitCast(if (r == 0) 0 else r);
+        return out;
+    }
+    return (try evaluate.eval(self, a, e, 0)).planes;
+}
+
+/// Re-evaluates `m`'s compared arguments after `slot` changed: true when any
+/// of them moved since its last evaluation (each then keeps its new value),
+/// or when an argument that is not compared reads `slot` (`install`).
+fn moved(self: *Run, m: *Standing, a: std.mem.Allocator, slot: u32) Error!bool {
+    if (std.mem.findScalar(u32, m.loose, slot) != null) return true;
+    const saved_scope = self.scope;
+    const saved_pc = self.pc;
+    defer {
+        self.scope = saved_scope;
+        self.pc = saved_pc;
+    }
+    self.scope = m.scope;
+    self.pc = m.pc;
+    var any = false;
+    for (m.args, m.values) |e, last| {
+        const old = last orelse continue;
+        const now = try current(self, a, e);
+        if (std.mem.eql(u64, old, now)) continue;
+        any = true;
+        @memcpy(old, now);
+    }
+    return any;
+}
+
+/// `waiters.store`: a slot some standing monitor reads changed. §17.1.3 "each
+/// time a variable or an expression in the argument list changes value": a
+/// monitor whose arguments' values moved reports at the end of the time
+/// step; one whose slot changed under an unchanged argument (`bs` under
+/// `bs[1]`) does not. A transient change still reports.
+pub fn monitorChanged(self: *Run, slot: u32) Error!void {
+    if (self.monitor_evaluating) return;
+    self.monitor_evaluating = true;
+    defer self.monitor_evaluating = false;
+    const a = self.scratch.allocator();
+    if (self.monitor) |*m| if (std.mem.findScalar(u32, self.monitor_slots.items, slot) != null and try moved(self, m, a, slot)) {
+        self.monitor_slot_hit = true;
+        try waiters.requestMonitor(self);
+    };
+    for (self.fmonitors.items) |*m| if (std.mem.findScalar(u32, m.slots, slot) != null and try moved(self, m, a, slot)) {
+        m.hit = true;
+        try requestTick(self);
+    };
+}
+
+/// The time step's one `.monitor_tick`, which `$fmonitor` needs whether or
+/// not a `$monitor` stands.
+fn requestTick(self: *Run) Error!void {
+    if (self.monitor_pending) return;
+    self.monitor_pending = true;
+    try @import("exec.zig").enqueueMonitor(self, .monitor_tick);
+}
+
+/// The `.monitor_tick`'s `$fmonitor` lines: each one whose arguments moved.
+pub fn fmonitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
+    for (self.fmonitors.items) |*m| if (m.hit) {
+        m.hit = false;
+        self.scope = m.scope;
+        self.pc = m.pc;
+        try system.fdisplayTo(self, a, m.fd, m.args, m.show);
+    };
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -837,6 +1057,22 @@ test "§17.1.3 monitor: clock queries do not trigger, a change and change back d
         \\end
         \\endmodule
     , "a=0 t=0\na=0 t=2\na=1 t=3\na=1 t=4\n");
+}
+
+test "§17.1.3 monitor: a bit-select argument reports only when that bit changes" {
+    // bs changes at t1..t4; bs[1] only at t2, so two lines in all.
+    try expectRun(
+        \\module m;
+        \\reg [3:0] bs;
+        \\integer i;
+        \\initial begin
+        \\  bs = 0;
+        \\  $monitor("%0d %b", $time, bs[1]);
+        \\  for (i = 0; i < 4; i = i + 1) #1 bs[i] = 1;
+        \\  #1 $finish(0);
+        \\end
+        \\endmodule
+    , "0 0\n2 1\n");
 }
 
 test "readmem validates high token characters beyond destination width" {

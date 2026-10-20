@@ -23,8 +23,9 @@
 // driven by the same processes (e2: ~data, e3: reset) so each vector has one
 // driver.
 //
-// VerA reads the paths and applies no delay (W0251); the transcript is
-// sampled 40 or more after each edge, past the longest delay (20):
+// Each output change takes the delay its edge and conditions select
+// (§14.3.3); the transcript is sampled 40 or more after each edge, past the
+// longest delay (20):
 //   t = 1:   reset = 0, clear = 0, cntrl = 1, in = 1, data = 1, both clocks
 //            x -> 0 (a negedge: e2 takes q = {~1, 1} = 01).
 //   t = 11:  clock and clk rise: e1 out <= 1; e2 q <= 01; e3 q <= {0, 1} = 01.
@@ -35,7 +36,6 @@
 //   t = 111: clock and clk rise: e1 out <= 0; e2 q <= 10; e3 q <= {1, 0} = 10.
 //   t = 151: prints out=0 q2=10 q3=10.
 // Data is set before the edges that sample it, so no edge races its data.
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2.4.3
 `timescale 1ns/1ns
 module b_14_2_4_3_edge_state_dependent_paths_e1(clock, reset, clear, in, out);

@@ -301,6 +301,12 @@ test "--std=1364-2005 frees AMS keywords as identifiers and refuses AMS construc
     const verilog = "module m; reg analog; wire sin; endmodule\n";
     try std.testing.expectEqual(@as(usize, 0), (try Case.parse(arena, verilog, .v1364_2005)).count());
     try std.testing.expectEqual(diag.Code.E0208, (try Case.parse(arena, verilog, .vams_2023)).code(0));
+    // ... as module and instance names, and as a statement's target.
+    const names = "module connect; endmodule\nmodule m; reg string; connect u(); initial begin string = 1; end endmodule\n";
+    try std.testing.expectEqual(@as(usize, 0), (try Case.parse(arena, names, .v1364_2005)).count());
+    // IEEE 1364-2005 §19.11: "1364-2001-noconfig" is no newer than 1364-2001.
+    const noconfig = "`begin_keywords \"1364-2001-noconfig\"\nmodule m; reg config; endmodule\n`end_keywords\n";
+    try std.testing.expectEqual(@as(usize, 0), (try Case.parse(arena, noconfig, .v1364_2001)).count());
 
     // One error per construct, and the construct is still read past.
     const ams = try Case.parse(arena, "nature N; endnature\nmodule m; analog begin end\nreg r; endmodule\n", .v1364_2005);
@@ -321,12 +327,14 @@ test "§2.6.1 based literals decode to the right VALUE, not just to a token" {
 
     const src =
         \\module m;
-        \\  integer a, b, c, d;
+        \\  integer a, b, c, d, e, f;
         \\  analog begin
         \\    a = 8'hFFFF;
         \\    b = 4'shf;
         \\    c = 'h837ff;
         \\    d = 16'b0011_0101;
+        \\    e = 'shffffffff;
+        \\    f = 'hffffffff;
         \\  end
         \\endmodule
     ;
@@ -339,7 +347,9 @@ test "§2.6.1 based literals decode to the right VALUE, not just to a token" {
         else => return error.WrongTag,
     };
     // The size truncates 8'hFFFF to 255, and the `s` designator makes 4'shf -1.
-    const want = [_]i32{ 255, -1, 0x837ff, 0x35 };
+    // IEEE 1364-2005 §3.5.1: unsized is 32 bits, so 'shffffffff is -1 too,
+    // and without the `s` it stays 2^32 - 1.
+    const want = [_]i64{ 255, -1, 0x837ff, 0x35, -1, 0xffffffff };
     for (stmts, want) |s, expect| {
         const rhs = switch (res.file.stmt(s)) {
             .assign => |a2| a2.value,
@@ -1580,7 +1590,9 @@ test "nesting has no parser bound: each construct at the old 1024 cap and far pa
     for ([_]usize{ 1025, 100_000 }) |n| {
         const deep: u32 = @intCast(n);
         try std.testing.expect(try parseNested(arena, m ++ "r = ", "(", "1.0", ")", ";" ++ e, n) >= deep);
-        try std.testing.expect(try parseNested(arena, m ++ "r = ", "-", "1.0", "", ";" ++ e, n) >= deep);
+        // A.8.3: a unary operand is a primary, so a deep unary chain is
+        // parenthesized (`- -x` is E0209).
+        try std.testing.expect(try parseNested(arena, m ++ "r = ", "-(", "1.0", ")", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m ++ "r = ", "V(p) > 1 ? 1 : ", "0", "", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m ++ "r = ", "V(p) > 1 ? ", "1", " : 0", ";" ++ e, n) >= deep);
         try std.testing.expect(try parseNested(arena, m ++ "r = 1.0", " + 1.0", "", "", ";" ++ e, n) >= deep);
@@ -2025,6 +2037,12 @@ test "A.1.4 module items: nets, assigns, defparams, regs, and the identifier dis
     try std.testing.expectEqual(n[4].delay.rise, n[4].delay.fall);
     try std.testing.expectEqual(n[4].delay.rise, n[4].delay.off);
 
+    // A.2.2.3 `delay_value ::= ... | identifier`: a name, not a call on the
+    // terminal list after it.
+    const gate = try parseForTest(arena, "module m; parameter d = 2; wire g, i; buf #d (g, i); endmodule");
+    try std.testing.expectEqual(@as(?diag.Code, null), firstError(gate));
+    try std.testing.expectEqual(Ast.ExprTag.ident, gate.file.exprs.nodes.items(.tag)[@backingInt(gate.file.modules[0].gates[0].delay.rise)]);
+
     // A.6.1 `assign [ drive_strength ] [ delay3 ]`: two values leave `off`
     // for evaluation (§7.14), not for the syntax.
     const asg = try parseForTest(arena, "module m; wire w, a; assign (weak0, pull1) #(1, 2) w = a; endmodule");
@@ -2160,9 +2178,13 @@ test "§6.6 generate: genblk<n> naming, its zero padding, direct nesting, and ge
         // A.4.2 `genvar_initialization ::= genvar_identifier = ...`.
         .{ .src = "module m; for (i = 0; i < 2; i = i + 1) begin end endmodule", .code = .E0238 },
         .{ .src = "module m; genvar i; for (i = 0; i < 2; i = i + 1) begin end endmodule", .code = null },
-        // A task in a generate block has no home in either parse (E0235).
+        // A task in a generate block has no home in the analog parse (E0235).
         .{ .src = "module m; generate if (1) begin task t; begin end endtask end endgenerate endmodule", .code = .E0235 },
     }, false);
+    // The digital parse keeps it on the block (IEEE 1364-2005 A.1.5).
+    try expectFirstErrors(arena, &.{
+        .{ .src = "module m; generate if (1) begin task t; begin end endtask end endgenerate endmodule", .code = null },
+    }, true);
 }
 
 test "A.1.1/A.1.2/A.1.5 descriptions: library text refused, configurations read, recovery to the next description" {
@@ -2644,10 +2666,19 @@ test "IEEE 1364-2005 §12.5 instance selects in a digital parse" {
     const parts = r.file.exprs.nameParts(v);
     try std.testing.expectEqual(@as(usize, 2), parts.len);
     try std.testing.expectEqualStrings("g[1]", r.file.str(parts[0]));
-    // A.9.3's index is a constant_expression the parser folds or refuses.
-    try expectFirstErrors(arena, &.{
-        .{ .src = "module m; integer x, k; initial x = g[k].y; endmodule", .code = .E0231 },
-    }, true);
+    // A.9.3's index is a constant_expression; one that does not fold here (a
+    // genvar's, §12.4.1) is spelled `g[]` and kept for elaboration under the
+    // name's main token, folded selects staying spelled out.
+    const u = try parseDigitalForTest(arena, "module m; integer x; genvar k; initial x = h[0].g[k].y; endmodule");
+    try std.testing.expectEqual(@as(?diag.Code, null), firstError(u));
+    const w = u.file.stmt(u.file.modules[0].discrete[0].body).assign.value;
+    const wparts = u.file.exprs.nameParts(w);
+    try std.testing.expectEqualStrings("h[0]", u.file.str(wparts[0]));
+    try std.testing.expectEqualStrings("g[]", u.file.str(wparts[1]));
+    const idx = u.file.hierIndices(u.file.exprs.mainTok(w));
+    try std.testing.expectEqual(@as(usize, 1), idx.len);
+    try std.testing.expectEqual(Ast.ExprTag.ident, u.file.exprs.tag(idx[0]));
+    try std.testing.expectEqual(@as(usize, 0), r.file.hierIndices(r.file.exprs.mainTok(v)).len);
 }
 
 // ---------------------------------------------------------------------------
@@ -2970,4 +3001,44 @@ test "an allocation failure anywhere in a parse surfaces as OutOfMemory, never s
             break;
         }
     };
+}
+
+test "IEEE 1364-2005 triage: pull arrays, event-array control, per-bit path drivers, block-name clashes, non-ANSI port types" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try expectFirstErrors(arena, &.{
+        // A.3.1 name_of_gate_instance takes a range on a pull gate too.
+        .{ .src = "module m; wire [7:0] n; pullup u [7:0] (n); endmodule", .code = null },
+        // A.6.5 event control on one element of an event array: through
+        // event_expression only, since A.9.3's final segment takes no index.
+        .{ .src = "module m; event ev [0:1]; initial @(ev[0]) ; endmodule", .code = null },
+        .{ .src = "module m; event ev [0:1]; initial @ev[0] ; endmodule", .code = .E0209 },
+        // §14.2.1: one driver per destination bit, not per net ...
+        .{ .src = "module m(a, p); input a; output [1:0] p; buf b0(p[0], a); buf b1(p[1], a); specify (a *> p) = 1; endspecify endmodule", .code = null },
+        // ... so two on one bit, or one on a bit plus the whole, still clash.
+        .{ .src = "module m(a, p); input a; output [1:0] p; buf b0(p[0], a); buf b1(p[0], a); specify (a *> p) = 1; endspecify endmodule", .code = .E0245 },
+        .{ .src = "module m(a, p); input a; output [1:0] p; buf b0(p[0], a); assign p = 0; specify (a *> p) = 1; endspecify endmodule", .code = .E0245 },
+        // §12.4.1: a generate block's name and a process's named block share the scope.
+        .{ .src = "module m; if (1) begin : b end initial begin : b end endmodule", .code = .E0230 },
+        // A.2.7: the first task port needs a direction.
+        .{ .src = "module m; task t(a); begin end endtask endmodule", .code = .E0207 },
+        .{ .src = "module m; task t(input a, b); begin end endtask endmodule", .code = null },
+        // A.8.3 `unary_operator { attribute_instance } primary`.
+        .{ .src = "module m; reg [3:0] i; reg r; initial r = ~ &i; endmodule", .code = .E0209 },
+        .{ .src = "module m; reg r; initial r = !!r; endmodule", .code = .E0209 },
+        .{ .src = "module m; reg r; initial r = !(!r) + - r - -r; endmodule", .code = null },
+        // A.6.5: a bare delay is an unsigned_number, not a sized one.
+        .{ .src = "module m; initial #4'd2 ; endmodule", .code = .E0207 },
+        .{ .src = "module m; initial #(4'd2) ; endmodule", .code = null },
+    }, true);
+
+    // §10.2.1: `input x; real x;` is one formal, typed real.
+    const r = try parseDigitalForTest(arena, "module m; task t; input x; real x; begin end endtask endmodule");
+    try std.testing.expectEqual(@as(?diag.Code, null), firstError(r));
+    const task = r.file.modules[0].tasks[0];
+    try std.testing.expectEqual(@as(usize, 1), task.ports.len);
+    try std.testing.expectEqual(@as(usize, 0), task.vars.len);
+    try std.testing.expectEqual(Ast.Type.real, task.ports[0].v.ty);
 }

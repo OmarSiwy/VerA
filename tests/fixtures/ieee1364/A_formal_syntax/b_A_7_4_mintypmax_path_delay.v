@@ -7,9 +7,8 @@
 // three values—representing a minimum, typical, and maximum delay, in that
 // order."
 //
-// `(a => y) = (1:2:3);`. Paths are not modelled (W0251), so the cell is a
-// buffer: y = 1. Output: "y=1".
-// digital-runner: warning W0251
+// `(a => y) = (1:2:3);`: the typical 2 times y's x -> 1 from a's transition
+// at time 0 (§14.3.3), so at t=10 y = 1. Output: "y=1".
 //! inherited IEEE 1364-2005 A.7.4
 `timescale 1ns/1ns
 module b_A_7_4_mtm_cell (a, y);

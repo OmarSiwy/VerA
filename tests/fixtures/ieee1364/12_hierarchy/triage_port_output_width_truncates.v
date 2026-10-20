@@ -1,3 +1,4 @@
+// digital-runner: --std=1364-2005
 //! inherited IEEE 1364-2005 12.3.8
 // A 32-bit output port connected to an 8-bit net truncates to the net
 // (pr1752353).

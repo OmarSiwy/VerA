@@ -10,7 +10,7 @@ module triage_zero_delay_always_finishes;
       $display("FAILED");
     else
       $display("PASSED");
-    $finish;
+    $finish(0);
   end
 
   always value1 = 1'b1 && 1'b1;

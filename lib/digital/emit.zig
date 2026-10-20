@@ -393,7 +393,7 @@ fn fmtReach(wakes: plan.Reach) std.fmt.Alt(plan.Reach, reachText) {
 
 fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.writeAll(".{");
-    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
+    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump", "path" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
     try out.writeAll(" }");
 }
 
@@ -442,9 +442,9 @@ fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
         return self.print(", {d}, {}))", .{ ty.width, ty.signed });
     }
     if (ty.real) {
-        try self.print("L.rs(L.ofReal(L.real(", .{});
+        try self.print("L.ofRealTo(L.real(", .{});
         try rhsValue(self, rhs);
-        return self.print(")), 64, {d}, true)", .{target.width});
+        return self.print("), {d})", .{target.width});
     }
     try self.print("L.rs(", .{});
     try rhsValue(self, rhs);
@@ -531,6 +531,8 @@ fn fullText(w: u32, out: *std.Io.Writer) std.Io.Writer.Error!void {
 /// The native root, or `error.Unsupported` with `self.why` set.
 fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]const u8 {
     const r = self.r;
+    // `rt` keeps a driver's delay as the constant ticks `Driver.delay` holds.
+    if (r.driver_delays.count() != 0) return self.refuse("A.2.2.3 a continuous assignment or gate delay that reads a variable");
     const off = try self.arena.alloc(u32, r.values.len);
     var total: u32 = 0;
     for (r.values, off) |v, *o| {
@@ -610,6 +612,8 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     // Selector expressions can call HDL functions. Emit them before the
     // subroutine worklist so those functions are emitted as well.
     try eventSelectors(self);
+    // §14.2.4 the module path conditions `rt.net` evaluates (`netTables`).
+    try pathConds(self);
     // The subroutines the processes call, and those they call in turn. A
     // body is reached only through a call, which runs it to completion.
     self.role = .general;
@@ -1058,10 +1062,16 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 },
                 .printtimescale => try self.print("            try s.out.writeAll(\"{f}\");\n", .{std.zig.fmtString(try staticText(self, display.printTimescale, .{t.args}))}),
                 // §17.1.2: the call is queued, its arguments are read then.
-                .strobe => try self.print("            try s.strobe({d});\n", .{try site(self, pc)}),
+                .strobe => |sh| {
+                    if (sh.file) return self.refuse("§17.2.2 $fstrobe: a strobe written to a file descriptor");
+                    try self.print("            try s.strobe({d});\n", .{try site(self, pc)});
+                },
                 // §17.1.3: one standing monitor, which a change of any
                 // slot its arguments read asks to print.
-                .monitor => {
+                .monitor => |sh| {
+                    if (sh.file) return self.refuse("§17.2.2 $fmonitor: a monitor written to a file descriptor");
+                    for (t.args) |arg| if (display.comparedOperand(r, arg))
+                        return self.refuse("§17.1.3 a $monitor argument that is an expression (a select, an operator), which reports only when its value changes");
                     var slots: std.ArrayList(u32) = .empty;
                     for (t.args) |arg| if (arg != .none and r.file.exprs.tag(arg) != .str_literal)
                         compile.sensitivity(r, arg, &slots) catch return self.refuse("a monitor argument the engine resolves only at run time");
@@ -1484,6 +1494,25 @@ fn eventSelectors(self: *Emitter) Error!void {
     }
 }
 
+/// IEEE 1364-2005 §14.2.4.1 each conditional module path of the `rt` nets,
+/// in `netTables`' order, as `fn pathCond<i>`: "If the conditional
+/// expression evaluates to x or z, it shall be treated as true. If [it]
+/// evaluates to multiple bits, the least significant bit shall represent the
+/// result."
+fn pathConds(self: *Emitter) Error!void {
+    const r = self.r;
+    const scope = r.scope;
+    defer r.scope = scope;
+    var i: u32 = 0;
+    for (self.rt_nets.items) |k| for (r.netCold(r.nets[k]).paths) |p| if (p.cond != .none) {
+        r.scope = p.scope;
+        try self.print("pub fn pathCond{d}(s: *S) rt.Error!bool {{\n    _ = &s;\n    return L.low(", .{i});
+        _ = try expr.selfDetermined(self, p.cond);
+        try self.print(") != .zero;\n}}\n\n", .{});
+        i += 1;
+    };
+}
+
 /// The entry of a triggered process or node: it waits by being listed in
 /// `rt.Design.watchers` or `comb`, so arriving here only says so (a
 /// triggered process records its suspension stamp, `rt.State.stamp`).
@@ -1875,6 +1904,7 @@ fn selectForced(r: *const Run, slot: u32) bool {
 fn netTables(self: *Emitter) Error!void {
     const r = self.r;
     if (self.rt_nets.items.len == 0) return;
+    var conds: u32 = 0;
     try self.print("    .nets = &.{{", .{});
     for (self.rt_nets.items) |k| {
         const n = r.nets[k];
@@ -1891,7 +1921,24 @@ fn netTables(self: *Emitter) Error!void {
         }
         try self.print("\n        .{{ .kind = .{t}, .slot = {d}, .off = {d}, .width = {d}, .drivers = &.{{", .{ n.kind, n.slot, self.off[n.slot], r.values[n.slot].width });
         for (r.netDrivers(k)) |di| try self.print(" {d},", .{self.drv_ix[di].?});
-        try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(c.delay), n.charge, c.decay });
+        try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d}", .{ strong, fmtDelay(c.delay), n.charge, c.decay });
+        if (c.paths.len == 0) {
+            try self.print(" }},", .{});
+            continue;
+        }
+        // §14.3 its module paths, a condition as `pathCond<i>` in `pathConds`' order.
+        try self.print(", .paths = &.{{", .{});
+        for (c.paths) |p| {
+            try self.print("\n            .{{ .src = {d}, .src_off = {d}, .src_bit = {d}, .edge = .{t}, .ifnone = {}, .cond = ", .{ p.src, self.off[p.src], p.src_bit, p.edge, p.ifnone });
+            if (p.cond != .none) {
+                try self.print("&Code(false).pathCond{d}", .{conds});
+                conds += 1;
+            } else try self.print("null", .{});
+            try self.print(", .table = .{{", .{});
+            for (p.table) |row| try self.print(" .{{ {d}, {d}, {d}, {d} }},", .{ row[0], row[1], row[2], row[3] });
+            try self.print(" }} }},", .{});
+        }
+        try self.print(" }} }},", .{});
     }
     try self.print("\n    }},\n    .drivers = &.{{", .{});
     var udps: std.ArrayList(*const root.for_emitter.net.Udp) = try .initCapacity(self.arena, self.rt_drivers.items.len);
@@ -1907,6 +1954,7 @@ fn netTables(self: *Emitter) Error!void {
                 udps.appendAssumeCapacity(u);
             },
             .mos => |m| {
+                if (m.lane != null or m.out_bit != null) return self.refuse("§7.1.6 a MOS switch of an instance array with vector terminals (one lane each)");
                 var data_net: ?u32 = null;
                 if (r.file.exprs.tag(m.data) == .ident) if (r.net_of.get(try self.slot(m.data))) |net| {
                     data_net = self.net_ix[net];
@@ -2270,6 +2318,7 @@ fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_first: 
                     try flush(self, &text);
                     try strengthOf(self, args[arg]);
                 },
+                'u', 'U', 'z', 'Z' => return self.refuse("§17.1.1.2 %u/%z: unformatted (binary) display output"),
                 else => return self.refuse("a display conversion the engine refuses"),
             }
         }

@@ -12,7 +12,7 @@ module triage_hierarchical_task_call_suspends;
 
   initial begin
     #10 $display("PASSED");
-    $finish;
+    $finish(0);
   end
 endmodule
 

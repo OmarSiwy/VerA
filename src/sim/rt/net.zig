@@ -38,7 +38,25 @@ pub const Net = struct {
     delay: dnet.Delay = .{},
     charge: Ast.Strength = .medium,
     decay: ?u64 = null,
+    /// IEEE 1364-2005 §14.3 the module paths into the net (`dnet.Path`).
+    paths: []const Path = &.{},
 };
+
+/// `dnet.Path` resolved: its source's slot and first word, and its
+/// condition as a function of the emitted design (`emit.pathConds`).
+pub const Path = struct {
+    src: u32,
+    src_off: u32,
+    src_bit: u32 = 0,
+    edge: Ast.SpecEdge = .none,
+    cond: ?*const PathCond = null,
+    ifnone: bool = false,
+    table: dnet.PathTable,
+};
+
+/// §14.2.4.1 a state-dependent path's condition, true when its least
+/// significant bit is not 0.
+pub const PathCond = fn (*State) Error!bool;
 
 /// One driver of a `Net`, `Run.drivers[i]` without its expression.
 pub const Driver = struct {
@@ -121,6 +139,16 @@ pub const Nets = struct {
     decay_ev: []?Handle,
     /// Bit 0's §7.10 signal, which a MOS switch passes on.
     sig0: []Signal,
+    /// The MOS switch drivers, and per driver the data and gate bits its
+    /// last evaluation read (null before its first), for `wakeSwitchesOn`.
+    mos_ix: []const u32 = &.{},
+    mos_in: []?[2]Bit = &.{},
+    /// §14.3.3 each module path source's slot, its row in `src_seen` and the
+    /// word it last held (values, unknowns), for `pathSeen`.
+    src_ix: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    src_off: []u32 = &.{},
+    src_last: [][2]u64 = &.{},
+    src_seen: []?dnet.PathEdge = &.{},
     /// Per UDP, its first input in `prev`, the inputs its table last saw.
     pat: []u32,
     prev: []Int.Bit,
@@ -223,6 +251,15 @@ pub const Nets = struct {
         @memset(t.decay_ev, null);
         @memset(t.capacitive, false);
         @memset(t.sig0, .{});
+        var mos_ix: std.ArrayList(u32) = .empty;
+        for (drivers, 0..) |d, i| if (d.source == .mos) try mos_ix.append(gpa, @intCast(i));
+        t.mos_ix = mos_ix.items;
+        t.mos_in = try gpa.alloc(?[2]Bit, drivers.len);
+        @memset(t.mos_in, null);
+        t.src_ix = .empty;
+        t.src_off = &.{};
+        t.src_last = &.{};
+        t.src_seen = &.{};
         t.pat = try gpa.alloc(u32, udps.len);
         t.state = try gpa.alloc(Int.Bit, udps.len);
         n = 0;
@@ -348,6 +385,7 @@ pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
 pub fn mos(s: *State, i: u32, data: Bit, gate_: Bit) Error!void {
     const t = &s.nets;
     const m = t.drivers[i].source.mos;
+    t.mos_in[i] = .{ data, gate_ };
     const g = int(gate_);
     const sig: Signal = if (m.data_net) |k| t.sig0[k] else .of(int(data), .strong, .strong);
     t.s0[i] = dnet.reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
@@ -356,6 +394,105 @@ pub fn mos(s: *State, i: u32, data: Bit, gate_: Bit) Error!void {
     const on: Int.Bit = if (m.n_type) .one else .zero;
     const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
     return driveBit(s, i, 0, out, out != .z and g != on);
+}
+
+/// §14.3.3 the module path sources of `t.nets`, each with its value at time
+/// 0 (`v`/`x`, the design's initial plane words), the "before" of its first
+/// transition (`pathSeen`). Allocated from `gpa` for the whole run.
+pub fn seedPaths(t: *Nets, gpa: std.mem.Allocator, v: []const u64, x: []const u64) Error!void {
+    std.debug.assert(t.src_ix.count() == 0); // once, from `State.initIn`
+    var last: std.ArrayList([2]u64) = .empty;
+    var offs: std.ArrayList(u32) = .empty;
+    for (t.nets) |net| for (net.paths) |p| {
+        const g = try t.src_ix.getOrPut(gpa, p.src);
+        if (g.found_existing) continue;
+        g.value_ptr.* = @intCast(last.items.len);
+        try last.append(gpa, .{ v[p.src_off], x[p.src_off] });
+        try offs.append(gpa, p.src_off);
+    };
+    t.src_last = last.items;
+    t.src_off = offs.items;
+    t.src_seen = try gpa.alloc(?dnet.PathEdge, last.items.len);
+    @memset(t.src_seen, null);
+}
+
+/// IEEE 1364-2005 §14.3.3 `resolution.pathDelay`: of the paths into net `n`
+/// whose source "has transitioned most recently in time" and whose
+/// condition is true, on its edge (§14.2.3) and an `ifnone` one only while
+/// no state-dependent path from its source is (§14.2.4.4), the smallest
+/// delay for each bit's transition from `cv`/`cx` to `res`, counted from the
+/// source's transition (§14.4). Null when no path is active.
+fn pathDelay(s: *State, n: Net, cv: []const u64, cx: []const u64, res: []const u64) Error!?u64 {
+    if (n.paths.len == 0) return null;
+    const t = &s.nets;
+    var latest: ?u64 = null;
+    for (n.paths) |p| if (t.src_seen[t.src_ix.get(p.src).?]) |c| {
+        latest = @max(latest orelse c.time, c.time);
+    };
+    const at = latest orelse return null;
+    const nw = cv.len;
+    var best: ?u64 = null;
+    for (n.paths) |p| {
+        if (!try pathActive(s, n.paths, p, at)) continue;
+        for (0..n.width) |i| {
+            const a = bitOf(cv, cx, @intCast(i));
+            const b = bitAt(res[0 .. 2 * nw], @intCast(i));
+            if (a == b) continue;
+            const d = p.table[@backingInt(a)][@backingInt(b)];
+            best = @min(best orelse d, d);
+        }
+    }
+    const d = best orelse return null;
+    return (at + d) -| s.sched.now;
+}
+
+fn pathActive(s: *State, paths: []const Path, p: Path, at: u64) Error!bool {
+    if (!pathFired(s, p, at)) return false;
+    if (p.ifnone) {
+        for (paths) |q| if (q.src == p.src and !q.ifnone and (q.cond != null or q.edge != .none) and pathFired(s, q, at) and (q.cond == null or try q.cond.?(s))) return false;
+        return true;
+    }
+    return if (p.cond) |c| try c(s) else true;
+}
+
+/// `resolution.pathFired`.
+fn pathFired(s: *const State, p: Path, at: u64) bool {
+    const t = &s.nets;
+    const c = t.src_seen[t.src_ix.get(p.src).?] orelse return false;
+    if (c.time != at) return false;
+    if (p.edge == .none or p.src_bit >= 64) return true;
+    const sh: u6 = @intCast(p.src_bit);
+    const before: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(c.before[0] >> sh & 1)) | @as(u2, @intCast(c.before[1] >> sh & 1)) << 1));
+    const after: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(c.after[0] >> sh & 1)) | @as(u2, @intCast(c.after[1] >> sh & 1)) << 1));
+    if (before == after) return false;
+    return if (p.edge == .posedge) before == .zero or after == .one else before == .one or after == .zero;
+}
+
+/// Bit `i` of the value whose planes are `v` and `x`.
+fn bitOf(v: []const u64, x: []const u64, i: u32) Int.Bit {
+    const w = i / 64;
+    const sh: u6 = @intCast(i % 64);
+    return @fromBackingInt(@intCast(@as(u2, @intCast(v[w] >> sh & 1)) | @as(u2, @intCast(x[w] >> sh & 1)) << 1));
+}
+
+/// §14.3.3 slot `slot` changed: when a module path source transitions, its
+/// time and its low word before and after (`waiters.store`'s `.path`).
+pub fn pathSeen(s: *State, slot: u32) void {
+    const t = &s.nets;
+    const i = t.src_ix.get(slot) orelse return;
+    const now: [2]u64 = .{ s.v[t.src_off[i]], s.x[t.src_off[i]] };
+    t.src_seen[i] = .{ .time = s.sched.now, .before = t.src_last[i], .after = now };
+    t.src_last[i] = now;
+}
+
+/// IEEE 1364-2005 §7.11: a MOS switch passes its data's strength, so when
+/// net `k`'s bit 0 changes strength alone, which no event control sees, the
+/// switches reading it re-evaluate on the bits they last read
+/// (`waiters.wakeSwitches`). Only they: re-running a delayed driver would
+/// restart its inertial delay.
+fn wakeSwitchesOn(s: *State, k: u32) Error!void {
+    const t = &s.nets;
+    for (t.mos_ix) |i| if (t.drivers[i].source.mos.data_net == k) if (t.mos_in[i]) |in| try mos(s, i, in[0], in[1]);
 }
 
 /// §6.5.7.1 port window driver `i`: its source's bits, z outside them.
@@ -391,9 +528,12 @@ pub fn resolve(s: *State, k: u32) Error!void {
     const res = t.res[t.nat[k]..][0 .. 2 * nw];
     const cv = s.v[n.off..][0..nw];
     const cx = s.x[n.off..][0..nw];
-    const floating = if (n.strong) foldStrong(t, n, res, cv, cx) else fold(t, k, res, cv, cx);
+    var moved = false;
+    const floating = if (n.strong) foldStrong(t, n, res, cv, cx) else fold(t, k, res, cv, cx, &moved);
     if (n.kind == .trireg) try chargeState(s, k, floating);
-    if (n.delay.present) {
+    // §14.4: of a module path delay and the net's own, "the larger".
+    const path = try pathDelay(s, n, cv, cx, res);
+    if (n.delay.present or path != null) {
         const tgt = t.ntgt[t.nat[k]..][0 .. 2 * nw];
         var or_z = false;
         if (try inertial(s, &t.nflight[k], tgt, &or_z, cv, cx, false, res, false)) {
@@ -401,12 +541,21 @@ pub fn resolve(s: *State, k: u32) Error!void {
             const from: Int.Bit = for (cv, cx) |v, x| {
                 if (v & ~x != 0) break .one;
             } else .zero;
-            const ticks = n.delay.continuous(from, literal(tgt, n.width));
+            const own: u64 = if (n.delay.present) n.delay.continuous(from, literal(tgt, n.width)) else 0;
+            const ticks = @max(own, path orelse 0);
             t.nflight[k] = s.sched.scheduleAfter(ticks, .inactive, net_base + k) catch |e| return s.timeFail(e);
         }
         return;
     }
-    return s.store(n.slot, n.off, res[0..nw], res[nw..], t.ones[0..nw]);
+    // No path active: the change is not delayed, and one in flight is superseded.
+    if (n.paths.len != 0) if (t.nflight[k]) |h| {
+        _ = s.sched.cancel(h) catch |e| return s.schedFail(e);
+        t.nflight[k] = null;
+    };
+    try s.store(n.slot, n.off, res[0..nw], res[nw..], t.ones[0..nw]);
+    // §7.11: a MOS switch passes its data's strength, so a change of
+    // strength alone re-runs what reads the net (`waiters.wakeSwitches`).
+    if (moved) try wakeSwitchesOn(s, k);
 }
 
 /// `Signal`'s fold when every driver is strong and none is H/L: a driver
@@ -470,8 +619,9 @@ fn foldStrong(t: *const Nets, n: Net, res: []u64, cv: []const u64, cx: []const u
     return driven_any == 0;
 }
 
-/// `resolution.resolve`'s fold, bit by bit through `Signal`.
-fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
+/// `resolution.resolve`'s fold, bit by bit through `Signal`. `moved` is
+/// set when bit 0's signal, the one a MOS switch reads, changed.
+fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64, moved: *bool) bool {
     const n = t.nets[k];
     const nw = cv.len;
     const tables = dnet.wiredLogic(n.kind);
@@ -492,7 +642,10 @@ fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
             floating += 1;
         }
         acc = acc.combine(dnet.netPull(n.kind));
-        if (at == 0) t.sig0[k] = acc;
+        if (at == 0) {
+            moved.* = !std.meta.eql(t.sig0[k], acc);
+            t.sig0[k] = acc;
+        }
         setBit(res, at, acc.collapse());
     }
     return floating == n.width;
@@ -740,7 +893,8 @@ test "the all-strong plane fold is Signal's fold" {
             var slow: [2]u64 = .{ 0, 0 };
             var tt = t;
             const f1 = foldStrong(&tt, net, &fast, &cv, &cx);
-            const f2 = fold(&tt, 0, &slow, &cv, &cx);
+            var moved = false;
+            const f2 = fold(&tt, 0, &slow, &cv, &cx, &moved);
             try std.testing.expectEqual(slow, fast);
             // Only a `trireg` counts its undriven bits.
             if (kind == .trireg) try std.testing.expectEqual(f2, f1);
@@ -801,7 +955,8 @@ test "the all-strong plane fold is Signal's fold across word boundaries" {
             var fast: [2 * nw]u64 = undefined;
             var slow: [2 * nw]u64 = @splat(0);
             const f1 = foldStrong(&tt, n, &fast, charge[0..nw], charge[nw..]);
-            const f2 = fold(&tt, 0, &slow, charge[0..nw], charge[nw..]);
+            var moved = false;
+            const f2 = fold(&tt, 0, &slow, charge[0..nw], charge[nw..], &moved);
             try std.testing.expectEqual(slow, fast);
             if (kind == .trireg) try std.testing.expectEqual(f2, f1);
         };
@@ -823,4 +978,140 @@ test "§6.5.7.1 a port window passes its source bits, z and x included, and show
     try std.testing.expectEqual(@as(u64, 0b0100), s.x[0]);
     const want = [_]Int.Bit{ .zero, .one, .z, .one };
     for (want, 0..) |b, i| try std.testing.expectEqual(b, shown(s, 0, @intCast(i)));
+}
+
+test "§7.11 a strength-only change re-runs the MOS switch reading it, and only it: a delayed driver's transition keeps its time" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var d = root.one_slot;
+    // Net 0 `w` (pullup and a strong driver) is the data of pmos driver 2
+    // on net 1 `q`, which a `#5` continuous assignment also drives.
+    d.v = &.{ 0, 0 };
+    d.x = &.{ 0, 0 };
+    d.slots = 2;
+    d.nets = &.{
+        .{ .kind = .wire, .slot = 0, .off = 0, .width = 1, .drivers = &.{ 0, 1 }, .strong = false },
+        .{ .kind = .wire, .slot = 1, .off = 1, .width = 1, .drivers = &.{ 2, 3 }, .strong = false },
+    };
+    d.drivers = &.{
+        .{ .net = 0, .s0 = .pull, .s1 = .pull, .source = .{ .pull = .one } },
+        .{ .net = 0, .source = .expr },
+        .{ .net = 1, .source = .{ .mos = .{ .n_type = false, .resistive = false, .data_net = 0 } } },
+        .{ .net = 1, .delay = .{ .rise = 5, .fall = 5, .off = 5, .present = true }, .source = .expr },
+    };
+    const s = try root.testState(arena.allocator(), &d);
+    try pull(s, 0);
+    try drive(s, 1, &.{ 1, 0 }, false);
+    try mos(s, 2, .one, .zero);
+    try std.testing.expectEqual(Ast.Strength.strong, s.nets.s1[2]);
+    try drive(s, 3, &.{ 1, 0 }, false);
+    const landing = s.nets.flight[3];
+    try std.testing.expect(landing != null);
+    // The strong driver lets go: `w` stays 1, at pull strength.
+    var off: [2]u64 = undefined;
+    fill(&off, 1, .z);
+    try drive(s, 1, &off, false);
+    try std.testing.expectEqual(@as(u64, 1), s.v[0] & 1);
+    try std.testing.expectEqual(Ast.Strength.pull, s.nets.s1[2]);
+    try std.testing.expect(std.meta.eql(landing, s.nets.flight[3]));
+}
+
+test "§14.3.3 the source that transitioned last picks the delay, the smallest of a tie, per transition, and only true conditions (the interpreter's Examples 1 and 2)" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const C = struct {
+        fn yes(_: *State) Error!bool {
+            return true;
+        }
+        fn no(_: *State) Error!bool {
+            return false;
+        }
+    };
+    var d = root.one_slot;
+    // Slot 0 is Y; slots 1 and 2 are A and B. Example 1: (A => Y) = (6, 9),
+    // (B => Y) = (5, 11). Example 2's MODE 2 rows: three true conditions
+    // (5, 9), (4, 8), (6, 5) and a false one (3, 2).
+    d.v = &.{ 0, 0, 0 };
+    d.x = &.{ 0, 0, 0 };
+    d.slots = 3;
+    const ex1 = [_]Path{
+        .{ .src = 1, .src_off = 1, .table = dnet.pathTable(&.{ 6, 9 }) },
+        .{ .src = 2, .src_off = 2, .table = dnet.pathTable(&.{ 5, 11 }) },
+    };
+    const ex2 = [_]Path{
+        .{ .src = 1, .src_off = 1, .cond = &C.yes, .table = dnet.pathTable(&.{ 5, 9 }) },
+        .{ .src = 1, .src_off = 1, .cond = &C.yes, .table = dnet.pathTable(&.{ 4, 8 }) },
+        .{ .src = 1, .src_off = 1, .cond = &C.yes, .table = dnet.pathTable(&.{ 6, 5 }) },
+        .{ .src = 1, .src_off = 1, .cond = &C.no, .table = dnet.pathTable(&.{ 3, 2 }) },
+    };
+    d.nets = &.{
+        .{ .kind = .wire, .slot = 0, .off = 0, .width = 1, .drivers = &.{}, .strong = false, .paths = &ex1 },
+        .{ .kind = .wire, .slot = 0, .off = 0, .width = 1, .drivers = &.{}, .strong = false, .paths = &ex2 },
+    };
+    const s = try root.testState(a, &d);
+    const zero = [_]u64{0};
+    const rise = [_]u64{ 1, 0 };
+    const fall = [_]u64{ 0, 0 };
+    const one = [_]u64{1};
+    // No source has transitioned: no path delay.
+    try std.testing.expectEqual(@as(?u64, null), try pathDelay(s, d.nets[0], &zero, &zero, &rise));
+    s.sched.now = 20;
+    s.v[1] = 1;
+    pathSeen(s, 1);
+    try std.testing.expectEqual(@as(?u64, 6), try pathDelay(s, d.nets[0], &zero, &zero, &rise));
+    try std.testing.expectEqual(@as(?u64, 9), try pathDelay(s, d.nets[0], &one, &zero, &fall));
+    s.sched.now = 60;
+    s.v[2] = 1;
+    pathSeen(s, 2);
+    try std.testing.expectEqual(@as(?u64, 5), try pathDelay(s, d.nets[0], &zero, &zero, &rise));
+    try std.testing.expectEqual(@as(?u64, 11), try pathDelay(s, d.nets[0], &one, &zero, &fall));
+    s.sched.now = 100;
+    s.v[1] = 0;
+    s.v[2] = 0;
+    pathSeen(s, 1);
+    pathSeen(s, 2);
+    try std.testing.expectEqual(@as(?u64, 5), try pathDelay(s, d.nets[0], &zero, &zero, &rise));
+    try std.testing.expectEqual(@as(?u64, 9), try pathDelay(s, d.nets[0], &one, &zero, &fall));
+    // §14.4: 30 after the sources moved, a delay of at most 11 has passed.
+    s.sched.now = 130;
+    try std.testing.expectEqual(@as(?u64, 0), try pathDelay(s, d.nets[0], &one, &zero, &fall));
+    // Example 2 at MODE 2: rise 4, fall 5 (the false row's 3 and 2 unused).
+    s.sched.now = 100;
+    try std.testing.expectEqual(@as(?u64, 4), try pathDelay(s, d.nets[1], &zero, &zero, &rise));
+    try std.testing.expectEqual(@as(?u64, 5), try pathDelay(s, d.nets[1], &one, &zero, &fall));
+}
+
+test "§14.3.1/§14.3.2 a path's delay per transition follows Tables 14-2 and 14-3 (the interpreter's usage row)" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var d = root.one_slot;
+    d.v = &.{ 0, 0 };
+    d.x = &.{ 0, 0 };
+    d.slots = 2;
+    const paths = [_]Path{.{ .src = 1, .src_off = 1, .table = dnet.pathTable(&.{ 5, 12, 17, 10, 6, 22 }) }};
+    d.nets = &.{.{ .kind = .wire, .slot = 0, .off = 0, .width = 1, .drivers = &.{}, .strong = false, .paths = &paths }};
+    const s = try root.testState(a, &d);
+    s.v[1] = 1;
+    pathSeen(s, 1);
+    // Planes per `Int.Bit`: 0 = (0, 0), 1 = (1, 0), z = (0, 1), x = (1, 1).
+    const P = struct {
+        fn of(b: Int.Bit) [2]u64 {
+            return .{ @backingInt(b) & 1, @backingInt(b) >> 1 };
+        }
+    };
+    const Case = struct { from: Int.Bit, to: Int.Bit, ticks: u64 };
+    for ([_]Case{
+        .{ .from = .zero, .to = .one, .ticks = 5 }, .{ .from = .one, .to = .zero, .ticks = 12 },
+        .{ .from = .zero, .to = .z, .ticks = 17 },  .{ .from = .z, .to = .one, .ticks = 10 },
+        .{ .from = .one, .to = .z, .ticks = 6 },    .{ .from = .z, .to = .zero, .ticks = 22 },
+        .{ .from = .zero, .to = .x, .ticks = 5 },   .{ .from = .one, .to = .x, .ticks = 6 },
+        .{ .from = .z, .to = .x, .ticks = 10 },     .{ .from = .x, .to = .zero, .ticks = 22 },
+        .{ .from = .x, .to = .one, .ticks = 10 },   .{ .from = .x, .to = .z, .ticks = 17 },
+    }) |c| {
+        const f = P.of(c.from);
+        const res = P.of(c.to);
+        try std.testing.expectEqual(@as(?u64, c.ticks), try pathDelay(s, d.nets[0], f[0..1], f[1..2], &res));
+    }
 }

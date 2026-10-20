@@ -34,12 +34,12 @@
 // parentheses, `(C => Q2b) = tPLH1, tPHL1;`: Syntax 14-6's first arm,
 // path_delay_value ::= list_of_path_delay_expressions.
 //
-// Logic: every output is C. VerA reads the delays and applies none (W0251);
-// the longest delay is 36 (uz0), so the transcript is sampled 50
-// after each change:
+// Logic: every output is C. Each output change takes its path's Table 14-2
+// delay for the transition (x -> 1 at t = 1, Table 14-3's maximum rule);
+// the longest delay is 36 (uz0), so the transcript is sampled 50 after each
+// change:
 //   t = 1:  C = 1: every output 1
 //   t = 51: C = 0: every output 0
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.3 14.3.1 14.3.2
 `timescale 1ns/1ns
 module b_14_3_path_delay_values_cell(C, Q1, Q2, Q2b, Q3, Q6, Q12);

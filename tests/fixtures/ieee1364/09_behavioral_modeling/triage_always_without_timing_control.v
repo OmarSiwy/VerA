@@ -8,6 +8,6 @@ module triage_always_without_timing_control;
   always begin
     x = ~x;
     $display("PASSED");
-    $finish;
+    $finish(0);
   end
 endmodule

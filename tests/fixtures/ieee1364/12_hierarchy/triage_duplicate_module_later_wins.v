@@ -6,7 +6,7 @@ module a;
 endmodule
 
 module triage_duplicate_module_later_wins;
-  a u;
+  a u();
 
   initial #1 $display("PASSED");
 endmodule

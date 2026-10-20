@@ -172,8 +172,10 @@ pub fn keywordsDirective(self: *Parser) Error!void {
     const raw = self.tokenText(str);
     const spec = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
     const known = token.KeywordSet.fromSpecifier(spec);
-    // A 1364 language has no Verilog-AMS specifier to name.
-    const set = if (known != null and @backingInt(known.?) <= @backingInt(self.language)) known.? else return self.failAt(
+    // A 1364 language has no Verilog-AMS specifier to name. "1364-2001-noconfig"
+    // reserves a subset of "1364-2001" (IEEE 1364-2005 §19.11), so it is no newer.
+    const age = if (known == .v1364_2001_noconfig) .v1364_2001 else known;
+    const set = if (known != null and @backingInt(age.?) <= @backingInt(self.language)) known.? else return self.failAt(
         str,
         .E0135,
         "`{s}`",

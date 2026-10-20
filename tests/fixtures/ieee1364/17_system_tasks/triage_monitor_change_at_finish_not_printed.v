@@ -8,6 +8,6 @@ module triage_monitor_change_at_finish_not_printed;
     a = 0;
     $monitor("m %0d", a);
     #1 a = 1;
-    $finish;
+    $finish(0);
   end
 endmodule

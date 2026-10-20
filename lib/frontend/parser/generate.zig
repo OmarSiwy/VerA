@@ -230,7 +230,9 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // dropped silently.
     blk.instances = gb.instances.items;
     if (!self.digital) for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
-    for (gb.tasks.items) |t| try self.report(t.main_tok, .E0235, "a task or function declaration", .{});
+    // A digital parse keeps them on the block (IEEE 1364-2005 A.1.5), like
+    // its defparams.
+    if (!self.digital) for (gb.tasks.items) |t| try self.report(t.main_tok, .E0235, "a task or function declaration", .{});
     if (self.digital) {
         const items = try self.arena.create(Ast.GenItems);
         items.* = .{
@@ -242,6 +244,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
             .switches = gb.switches.items,
             .defparams = gb.defparams.items,
             .nets = gb.nets.items,
+            .tasks = gb.tasks.items,
         };
         blk.gen = items;
     } else {
@@ -318,6 +321,24 @@ fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
         std.mem.findScalar(Ast.StrId, b.genvars.items, name) != null;
 }
 
+/// Whether an `initial` or `always` names its block `name`, past any timing
+/// control: IEEE 1364-2005 §4.11's module name space "unifies the definition
+/// of functions, tasks, named blocks, module instances, generate blocks".
+fn processBlockNamed(self: *const Parser, b: *const parse_module.Body, name: Ast.StrId) bool {
+    for (b.discrete.items) |d| {
+        var s = d.body;
+        while (true) switch (self.file.stmt(s)) {
+            .event_control => |ec| s = ec.body,
+            .block => |blk| {
+                if (blk.name == name) return true;
+                break;
+            },
+            else => break, // else: any other statement names no block
+        };
+    }
+    return false;
+}
+
 /// Reports E0238 for a loop generate whose variable is not a declared genvar,
 /// and E0230 for a named generate block whose name clashes with another
 /// declaration in the scope (§6.6.1, §6.6.2, §6.8). A block name is a
@@ -337,7 +358,8 @@ pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemor
     for (b.gen_loops.items) |l| if (std.mem.findScalar(Ast.StrId, b.genvars.items, l.name) == null)
         try self.report(l.tok, .E0238, "`{s}`", .{self.file.strings.get(l.name)});
     for (b.gen_blocks.items, 0..) |g, i| {
-        const clash = inDeclSpaces(b, g.name) or
+        const clash = inDeclSpaces(b, g.name) or processBlockNamed(self, b, g.name) or
+            nameIn(Ast.Subroutine, b.tasks.items, g.name) or
             other: {
                 for (b.gen_blocks.items[0..i]) |h| {
                     if (h.name == g.name and h.construct != g.construct) break :other true;

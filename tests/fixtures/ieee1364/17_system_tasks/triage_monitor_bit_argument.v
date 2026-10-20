@@ -10,6 +10,6 @@ module triage_monitor_bit_argument;
     $monitor("m %b", bs[1]);
     for (i = 0; i < 4; i = i + 1)
       #1 bs[i] = 1'b1;
-    #1 $finish;
+    #1 $finish(0);
   end
 endmodule

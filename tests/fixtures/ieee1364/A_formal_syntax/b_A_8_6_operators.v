@@ -18,8 +18,7 @@
 // Printed six lines, in that order, the ** result and the four relational
 // results sharing the fourth and the shifts the sixth.
 // Every module path operator appears in a specify block's path condition
-// (paths are not modelled, W0251, so it only parses).
-// digital-runner: warning W0251
+// (nothing printed reads its destination y, so the path delay does not show).
 //! inherited IEEE 1364-2005 A.8.6
 `timescale 1ns/1ns
 module b_A_8_6_cell (en, a, y);

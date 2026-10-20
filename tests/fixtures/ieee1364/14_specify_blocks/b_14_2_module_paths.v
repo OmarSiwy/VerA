@@ -26,9 +26,8 @@
 // is the inout io and whose destination is the variable qr on an output port
 // (§14.2.1's other legal terminals). Every destination has one driver.
 //
-// VerA reads the paths and applies no delay (W0251; §14.3.2-§14.6 are
-// not-supported in CLAUSES.tsv), so the transcript is sampled where a
-// simulator that applies them agrees: every input settles at t = 1 or t = 51,
+// Each output change takes its paths' delay (§14.3.3; the variable qr's at
+// the net its output port drives); every input settles at t = 1 or t = 51,
 // the longest path delay is 18, and each $display runs 50 later.
 //
 // The functions (Q = A&B | C^D, qr = ~io, q1 = a&b&c, q2 = {a|b, c}):
@@ -38,7 +37,6 @@
 //           Q = 0 | (1^1) = 0; qr = 0; q1 = 1&1&1 = 1; q2 = {1, 1} = 11
 // Stimulus starts at t = 1, not 0, so `always @(io)` is already waiting when
 // io first changes (§11 leaves the t = 0 order of the two processes open).
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2 14.2.1 14.2.2 14.2.6
 `timescale 1ns/1ns
 module b_14_2_module_paths_cell(A, B, C, D, Q, io, qr, a, b, c, q1, q2);

@@ -31,8 +31,13 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
         };
         if (lit.asInt()) |value| {
             defer self.arena.free(lit.planes);
+            // IEEE 1364-2005 §3.5.1: an unsized constant is 32 bits here, so a
+            // signed based one whose digits fill bit 31 is negative:
+            // 'shffffffff is -1. `integer.parse` holds unsized digits in 64.
+            const wraps = !lit.sized and lit.signed and std.mem.findScalar(u8, text, '\'') != null and
+                value > std.math.maxInt(i32) and value <= std.math.maxInt(u32);
             return self.file.exprs.addIntLiteral(self.arena, tok, .{
-                .value = value,
+                .value = if (wraps) value - (1 << 32) else value,
                 .width = if (lit.sized) lit.width else 0,
                 .signed = lit.signed,
                 .radix = integer.radixOf(text),

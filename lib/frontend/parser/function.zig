@@ -287,6 +287,12 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
                 dir = d;
                 self.pos += 1;
                 ty = try tfPortType(self);
+            } else if (ports.items.len == 0) {
+                // A.2.6/A.2.7: the list opens with a tf_input/output/inout_declaration;
+                // only the names after it inherit its direction. IEEE 1800's
+                // default `input` is not 1364's. Reported, then read as an
+                // input, so the declaration's body is not misparsed after it.
+                try self.report(self.pos, .E0207, "found {s}: a task or function port list opens with input, output or inout", .{self.found(self.pos)});
             }
             const formal = try tfFormal(self, dir, ty);
             if (attr_tok) |decl| try self.copyAttributes(decl, formal.v.main_tok);
@@ -296,6 +302,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         _ = try self.expect(.rparen);
     }
     _ = try self.expect(.semicolon);
+    const ansi_ports = ports.items.len;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var events: std.ArrayList(Ast.EventDecl) = .empty;
@@ -344,6 +351,23 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
                     try self.attributesEnd(item_at);
                 break;
             },
+        }
+    }
+    // IEEE 1364-2005 §10.2.1: a body port's type and range may come from a
+    // variable declaration of the same name (`output o; reg [7:0] o;`,
+    // `input x; real x;`). One object, so the variable folds into the port.
+    // A header (ANSI) port is fully declared there and keeps any clash.
+    var i = vars.items.len;
+    while (i > 0) {
+        i -= 1;
+        for (ports.items[ansi_ports..]) |*p| {
+            if (p.v.name != vars.items[i].name) continue;
+            var v = vars.items[i];
+            v.main_tok = p.v.main_tok;
+            if (v.packed_range == null) v.packed_range = p.v.packed_range;
+            p.v = v;
+            _ = vars.orderedRemove(i);
+            break;
         }
     }
     var body: std.ArrayList(Ast.StmtId) = .empty;

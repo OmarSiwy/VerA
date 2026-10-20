@@ -13,10 +13,9 @@
 //   P = {2'b01, 2'b11}       a constant_concatenation parameter: 4'b0111
 //   Q = {3{1'b1}}            a constant_multiple_concatenation: 3'b111
 // The module_path forms appear in a specify block's state-dependent path
-// condition, `if ({en, en} == 2'b11)` and `if ({2{en}} == 2'b11)`; paths are
-// not modelled (W0251), so they only have to parse.
+// condition, `if ({en, en} == 2'b11)` and `if ({2{en}} == 2'b11)`. Nothing
+// printed reads the path's destination y, so its delay does not show.
 // Output: "10011 1010 11110 0111 111".
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.8.1
 `timescale 1ns/1ns
 module b_A_8_1_cell (en, a, y);

@@ -243,7 +243,28 @@ pub const VecRange = struct {
 /// event term in an analog event control (see `watchEvent`).
 /// `tchk` is IEEE 1364-2005 §15: a timing check's event names the slot
 /// (`tchk.changed`).
-pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports, tchk };
+/// §17.1.3 a standing `$monitor`, or a §17.2.2 `$fmonitor`, whose
+/// arguments start after its descriptor `fd`. `values` is what each argument
+/// read when last evaluated (`display.monitorChanged`), null for one that
+/// is never compared: a string, an empty argument or a clock query, the
+/// clause's "with the exception of $time, $stime or $realtime". An
+/// `$fmonitor` keeps its own watched `slots` and `hit`; `$monitor`'s are
+/// `Run.monitor_slots` and `Run.monitor_slot_hit`.
+pub const Standing = struct {
+    args: []const Ast.ExprId,
+    show: Show,
+    scope: u32,
+    pc: u32,
+    values: []?[]u64 = &.{},
+    slots: []const u32 = &.{},
+    /// The slots its arguments that are not compared read: a change of one
+    /// reports without a comparison.
+    loose: []const u32 = &.{},
+    hit: bool = false,
+    fd: i64 = 0,
+};
+
+pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports, tchk, path };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
@@ -496,7 +517,22 @@ pub const Run = struct {
     finest: i32 = 0,
     /// §17.1.3 the one standing monitor. A second `$monitor` replaces it;
     /// there is no stack.
-    monitor: ?struct { args: []const Ast.ExprId, show: Show, scope: u32, pc: u32 } = null,
+    monitor: ?Standing = null,
+    /// §17.2.2 the active `$fmonitor` tasks: "any number of $fmonitor tasks
+    /// can be set up to be simultaneously active", each until an `$fclose`
+    /// of its descriptor.
+    fmonitors: std.ArrayList(Standing) = .empty,
+    /// Per driver index, a `delay3` that reads a variable: A.2.2.3 lets a
+    /// continuous assignment's or gate's delay be one, which §6.1.3 reads
+    /// each time the driver schedules (`exec`'s `.continuous`).
+    driver_delays: std.AutoHashMapUnmanaged(u32, Ast.Delay3) = .empty,
+    /// IEEE 1364-2005 §14.3.3: per module path source slot (a `.path`
+    /// watch), its last transition, which picks the path whose delay a
+    /// destination transition takes (`waiters.store` fills it).
+    path_changed: std.AutoHashMapUnmanaged(u32, @import("net.zig").PathEdge) = .empty,
+    /// `display.monitorChanged` is evaluating a monitor's arguments, so a
+    /// store that evaluation makes asks nothing again.
+    monitor_evaluating: bool = false,
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
@@ -858,11 +894,16 @@ pub const Run = struct {
                 .strobe => |s| {
                     r.scope = s.scope;
                     r.pc = s.pc;
-                    try display.display(r, s.args, scratch.allocator(), s.show);
+                    // §17.2.2 `$fstrobe`: the same line, to its descriptor.
+                    if (s.show.file)
+                        try @import("system.zig").fdisplay(r, scratch.allocator(), s.args, s.show)
+                    else
+                        try display.display(r, s.args, scratch.allocator(), s.show);
                 },
                 .monitor_tick => {
                     r.monitor_pending = false;
                     if (try display.monitorDue(r, scratch.allocator())) try display.monitorPrint(r, scratch.allocator());
+                    try display.fmonitorPrint(r, scratch.allocator());
                 },
                 .vcd_tick => try @import("vcd.zig").tick(r, scratch.allocator()),
                 // `analogPoint`: only its time, at whose arrival above the
@@ -1035,7 +1076,19 @@ pub const Run = struct {
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
             var scope: u32 = 0;
-            for (parts[0 .. parts.len - 1], 0..) |part, k| {
+            // §12.4.1 a select the parser could not fold (`target[i]`, `i` a
+            // genvar) is spelled `name[]`, its index expressions in order.
+            const indices = self.file.hierIndices(ex.mainTok(e));
+            var used: usize = 0;
+            for (parts[0 .. parts.len - 1], 0..) |spelled, k| {
+                const text = self.file.str(spelled);
+                // One `name[]`: the element's scope row, whether or not the
+                // source spells `name[<v>]` anywhere.
+                if (std.mem.endsWith(u8, text, "[]") and std.mem.findScalar(u8, text, '[').? == text.len - 2) {
+                    scope = try self.elementScope(ex.mainTok(e), text[0 .. text.len - 2], if (k == 0) null else scope, indices, &used);
+                    continue;
+                }
+                const part = if (std.mem.find(u8, text, "[]") == null) spelled else try self.foldSelects(ex.mainTok(e), text, indices, &used);
                 const next = if (k == 0) self.upward(part) else self.instances.get(.{ .scope = scope, .str = part });
                 scope = next orelse return if (std.mem.findScalar(u8, self.file.str(part), '[') != null)
                     self.fail(self.file.exprs.mainTok(e), "§12.5: `{s}`: an instance select out of range, or of no array", .{self.file.str(part)})
@@ -1049,6 +1102,42 @@ pub const Run = struct {
         }
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.lookup(self.scope, ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
+    }
+    /// `text`, a part of the hierarchical name at token `tok` with `[]`
+    /// selects, with each one's index from `indices` (from `used` on) folded
+    /// in this scope: the spelling of an instance or generate block name
+    /// (`SourceFile.hierIndices`).
+    pub fn foldSelects(self: *Run, tok: u32, text: []const u8, indices: []const Ast.ExprId, used: *usize) Error!Ast.StrId {
+        var out: std.Io.Writer.Allocating = .init(self.arena);
+        var rest = text;
+        while (std.mem.find(u8, rest, "[]")) |at| {
+            if (used.* == indices.len) return self.fail(tok, "§12.5: a hierarchical select has no index", .{});
+            const v = (try self.constant(indices[used.*], tok)).asInt() orelse return self.fail(tok, "§12.5: a hierarchical select's index has an x or z bit", .{});
+            used.* += 1;
+            try out.writer.print("{s}[{d}]", .{ rest[0..at], v });
+            rest = rest[at + 2 ..];
+        }
+        try out.writer.writeAll(rest);
+        return self.file.strings.find(out.written()) orelse
+            self.fail(tok, "§12.5: `{s}`: an instance select out of range, or of no array", .{out.written()});
+    }
+    /// The scope of element `<next index>` of the instance array or loop
+    /// generate `base` declared in `parent`, or, with no parent (the first
+    /// part of a §12.5 name), in the nearest scope upward that has one.
+    fn elementScope(self: *Run, tok: u32, base: []const u8, parent: ?u32, indices: []const Ast.ExprId, used: *usize) Error!u32 {
+        if (used.* == indices.len) return self.fail(tok, "§12.5: a hierarchical select has no index", .{});
+        const v = (try self.constant(indices[used.*], tok)).asInt() orelse return self.fail(tok, "§12.5: a hierarchical select's index has an x or z bit", .{});
+        used.* += 1;
+        const found: ?u32 = blk: {
+            const name = self.file.strings.find(base) orelse break :blk null;
+            if (parent) |p| break :blk compile.element(self, p, name, v);
+            var s = self.scope;
+            while (true) : (s = self.scope_info.items[s].parent) {
+                if (compile.element(self, s, name, v)) |at| break :blk at;
+                if (self.scope_info.items[s].parent == s) break :blk null;
+            }
+        };
+        return found orelse self.fail(tok, "§12.5: `{s}[{d}]`: an instance select out of range, or of no array", .{ base, v });
     }
     /// The slot event term `e` watches: a name's own, or the hidden one a
     /// §9.7.2 expression term keeps (`term_slots`).
@@ -1177,7 +1266,13 @@ pub const Run = struct {
         return switch (self.file.exprs.tag(e)) {
             .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
             .int_literal => scale.signedDelay(self.file.exprs.intValue(e)),
-            else => scale.signedDelay((try self.constant(e, tok)).asInt() orelse return self.fail(tok, "a declared delay cannot contain x or z", .{})), // else: any other form is a constant expression, which `constant` folds or refuses
+            else => blk: { // else: any other form is a constant expression, which `constant` folds or refuses
+                const v = try self.constant(e, tok);
+                // §9.7.1: a real parameter is rounded to the precision like a
+                // real literal, not truncated to the unit.
+                if (compile.typeOf(self, e).real) break :blk scale.realDelay(try evaluate.evalReal(self, self.arena, e));
+                break :blk scale.signedDelay(v.asInt() orelse return self.fail(tok, "a declared delay cannot contain x or z", .{}));
+            },
         } catch self.fail(tok, "digital delay cannot be represented", .{});
     }
 
@@ -1562,6 +1657,8 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.nets = e.nets.items;
     r.net_cold = e.net_cold;
     r.signals = e.signals.items;
+    // As `compileChecks` below, not in an analog compile's digital half.
+    if (!r.mixed) try tchk.delayedDrivers(&r, &e);
     // Pass two: drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.
@@ -1586,7 +1683,10 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             },
             .mos => |mo| for ([_]Ast.ExprId{ mo.data, mo.gate }) |in| {
                 try compile.checkExpr(&r, in);
-                if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar switch terminals are implemented");
+                // §7.1.6: an instance array's member reads its bit `lane`
+                // of a vector terminal, as a gate does.
+                const w = compile.typeOf(&r, in).width;
+                if (w != 1 and !(mo.lane != null and mo.lane.? < w)) return r.exprFail(in, "a switch terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
             },
             .udp => |u| for (u.ins) |in| {
@@ -1609,7 +1709,10 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
             .s0 = a.s0,
             .s1 = a.s1,
-            .delay = try r.declaredDelay3(a.delay, a.tok),
+            .delay = if (try constantDelay(&r, a.delay)) try r.declaredDelay3(a.delay, a.tok) else blk: {
+                try r.driver_delays.put(arena, @intCast(i), a.delay);
+                break :blk .{ .present = true };
+            },
             .tok = a.tok,
         };
         // A UDP's output bit starts at its state: §8.5's initial value for a
@@ -1657,8 +1760,16 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         r.net_drivers = at.items;
         for (r.nets, 0..) |n, net| {
             // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
-            // resolution question there, it is an error.
-            if (n.kind == .uwire and r.netDrivers(@intCast(net)).len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
+            // resolution question there, it is an error. §4.6.5's "more than
+            // one driver" is per bit: drivers of disjoint selects are legal.
+            if (n.kind == .uwire) {
+                const ds = r.netDrivers(@intCast(net));
+                for (ds, 0..) |a, i| for (ds[i + 1 ..]) |b| {
+                    const x = driverBits(r.drivers[a], n.resolved.width);
+                    const y = driverBits(r.drivers[b], n.resolved.width);
+                    if (x[0] < y[1] and y[0] < x[1]) return r.fail(n.tok, "a uwire net accepts a single driver per bit", .{});
+                };
+            }
         }
     }
     // §10 subroutine bodies, each on its own pc range before any process, so
@@ -1725,6 +1836,15 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .empty);
+    // §14.3.3 a module path's source is watched for its last transition; a
+    // §14.2.4 condition is type-checked in the scope that declares the path.
+    for (r.net_cold.items) |c| for (c.paths) |p| {
+        r.watch[p.src].insert(.path);
+        if (p.cond != .none) {
+            r.scope = p.scope;
+            try compile.checkExpr(&r, p.cond);
+        }
+    };
     // §7.11 "a supply strength shall be reduced to a strong strength" across a
     // pass switch, and §3.7 a net type's own pull, hold from the start: a
     // switch group with no driver event (a supply net through an uncontrolled
@@ -1769,6 +1889,30 @@ fn netRuns(
         fill[net] += 1;
     };
     return .{ .start = start, .items = items };
+}
+
+/// Whether every value of `d` is a constant expression. A.2.2.3's
+/// `delay_value` and the `mintypmax_expression` in `delay3`'s parentheses may
+/// read a variable too (`Run.driver_delays`).
+fn constantDelay(r: *Run, d: Ast.Delay3) Error!bool {
+    for ([_]Ast.ExprId{ d.rise, d.fall, d.off }) |x| if (x != .none) {
+        try compile.checkExpr(r, x);
+        if (!compile.constantExpression(r, x)) return false;
+    };
+    return true;
+}
+
+/// The bits [lo, hi) of its `width`-bit net that driver `d` drives: a port
+/// window's, or an instance-array member's one output bit; else all of them.
+fn driverBits(d: @import("net.zig").Driver, width: u32) [2]u32 {
+    const bit: ?u32 = switch (d.source) {
+        .bridge => |b| return .{ b.dst_lo, b.dst_lo + b.width },
+        .gate => |g| g.out_bit,
+        .mos => |m| m.out_bit,
+        .udp => |u| u.out_bit,
+        .expr, .pull => null,
+    };
+    return if (bit) |b| .{ b, b + 1 } else .{ 0, width };
 }
 
 /// Compiles each of `blocks` in `r.scope` and queues it at time 0.
@@ -2262,6 +2406,56 @@ test "§3.3 a packed range wider than u32 bits is refused, not wrapped" {
     try expectRejected("module m; reg [4294967295:0] a; endmodule", "packed range is outside the supported u32 width");
 }
 
+test "A.2.2.3 a driver's variable delay is read when the driver schedules" {
+    // y follows x 3 units late, then 1 unit late once d is 1: at t5, where
+    // the first delay would still hold it until t6.
+    try expectRun(
+        \\module m;
+        \\reg [31:0] d; reg x; wire y;
+        \\assign #d y = x;
+        \\initial begin
+        \\  d = 3; x = 0;
+        \\  #2 $display("%b", y);
+        \\  #1 $display("%b", y);
+        \\  d = 1; x = 1;
+        \\  #2 $display("%b", y);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    , "z\n0\n1\n");
+}
+
+test "§12.4.1 a genvar-indexed hierarchical name finds its iteration's scope unspelled" {
+    // No `g[0]` or `g[1]` appears in the source.
+    try expectRun(
+        \\module m;
+        \\  genvar i;
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : g reg r; end endgenerate
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : s
+        \\    initial begin g[i].r = i; #1 $display("%0d %b", i, g[i].r); end
+        \\  end endgenerate
+        \\endmodule
+    , "0 0\n1 1\n");
+    try expectRejected(
+        \\module m;
+        \\  genvar i;
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : g reg r; end endgenerate
+        \\  generate for (i = 1; i < 3; i = i + 1) begin : s initial g[i].r = 0; end endgenerate
+        \\endmodule
+    , "`g[2]`: an instance select out of range");
+}
+
+test "§4.6.5 uwire drivers of disjoint bits are legal" {
+    try expectRun(
+        \\module m;
+        \\uwire [3:0] w;
+        \\assign w[1:0] = 2'b01; assign w[3:2] = 2'b10;
+        \\initial #1 $display("%b", w);
+        \\endmodule
+    , "1001\n");
+    try expectRejected("module m; uwire [3:0] w; assign w[2:0] = 0; assign w[3:2] = 0; endmodule", "single driver per bit");
+}
+
 test "§7.9 a uwire with two drivers is an error, not a resolution" {
-    try expectRejected("module m; uwire w; assign w = 1'b0; assign w = 1'b1; endmodule", "a uwire net accepts a single driver");
+    try expectRejected("module m; uwire w; assign w = 1'b0; assign w = 1'b1; endmodule", "a uwire net accepts a single driver per bit");
 }

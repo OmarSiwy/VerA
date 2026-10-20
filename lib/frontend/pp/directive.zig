@@ -74,6 +74,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     // take their operands to the end of the line.
     const end = switch (kind) {
         .celldefine, .endcelldefine, .nounconnected_drive, .resetall => j,
+        .default_nettype, .unconnected_drive => operandLineEnd(text, j),
         else => logicalLineEnd(text, j), // else: every other directive reads its operand from the rest of the line
     };
     if (!pp.emitting()) {
@@ -213,6 +214,17 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
     const end = after_name + r.i;
     try pp.putNewlines(text[at..end]);
     return end;
+}
+
+/// Returns the end of the line holding the operand of a directive whose word
+/// ends at `i`. IEEE 1364 Syntax 19-2 and 19-9 put no line break between the
+/// word and its operand, so a word alone on its line takes the next nonblank
+/// line (iverilog br_gh782f, br_gh782c).
+fn operandLineEnd(text: []const u8, i: usize) usize {
+    const end = logicalLineEnd(text, i);
+    var k = i;
+    while (k < text.len and isSpace(text[k])) k += 1;
+    return if (k < end) end else logicalLineEnd(text, k);
 }
 
 /// Returns the end of the logical line at `i`: the next unescaped newline, or EOF.

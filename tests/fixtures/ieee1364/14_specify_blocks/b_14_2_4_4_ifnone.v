@@ -21,14 +21,15 @@
 //
 // Logic: c1 OUT = IN; alu as in b_14_2_4_state_dependent_paths.v (00 add,
 // 01 i1, 10 i2, 11 zero); ff Q takes D on posedge CLK; lone Y = ~A.
-// VerA reads the paths and applies no delay (W0251); the transcript is
-// sampled 40 or more after each change, past the longest delay (25.0):
+// Each output change takes the delay its active paths select, an ifnone
+// path only while its state-dependent paths are not active (§14.2.4.4,
+// §14.3.3); the transcript is sampled 40 or more after each change, past the
+// longest delay (25.0):
 //   t = 1:   IN=1 C1=0; i1=8'h05 i2=8'h07 opcode=11; D=1 CLK x -> 0; A=0
 //   t = 11:  CLK rises: Q <= 1.
 //   t = 51:  prints OUT=1 o1=00 Q=1 Y=1. Then IN=0 C1=1 opcode=10 D=0 A=1.
 //   t = 61:  CLK falls (Q keeps 1).
 //   t = 101: prints OUT=0 o1=07 Q=1 Y=0.
-// digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.2.4.4
 `timescale 1ns/1ns
 module b_14_2_4_4_ifnone_c1(C1, IN, OUT);

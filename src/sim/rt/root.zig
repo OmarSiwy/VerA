@@ -303,10 +303,12 @@ pub const Reach = packed struct(u8) {
     mon: bool = false,
     /// A §18 dump.
     dump: bool = false,
-    _: u2 = 0,
+    /// A §14.3.3 module path source (`net.pathSeen`).
+    path: bool = false,
+    _: u1 = 0,
 
     /// Everything: the reach of a store `plan` could not narrow.
-    pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
+    pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true, .path = true };
 };
 
 /// `waiters.Susp`: where the process resumes, in which §10.2.3 activation
@@ -758,6 +760,7 @@ pub const State = struct {
             .buf = undefined,
         };
         self.stdout = std.Io.File.stdout().writer(io, &self.buf);
+        try net.seedPaths(&self.nets, gpa, d.v, d.x);
         self.sink = &self.stdout.interface;
         self.out = self.sink;
         @memset(self.terms, .empty);
@@ -1466,6 +1469,7 @@ pub const State = struct {
 
     /// `wake` of what `reach` names alone.
     inline fn wakeOf(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
+        if (reach.path) net.pathSeen(self, slot);
         if (reach.mon and self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
         if (reach.dump and self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
         if (reach.fan and slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {

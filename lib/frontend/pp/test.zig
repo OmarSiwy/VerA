@@ -479,6 +479,13 @@ test "IEEE 1364 §19.2 `default_nettype publishes a region per directive" {
     try testing.expectEqual(NetType.uwire, all.nettypes[9].value);
     try testing.expectEqual(NetType.none, all.nettypes[10].value);
 
+    // Syntax 19-2 has no line break between the word and its operand, so a
+    // word alone on its line takes the next one, and the line count survives.
+    const next = try regionsOf(arena, "`default_nettype\n\n  none\n`unconnected_drive\npull1\n");
+    try testing.expectEqual(NetType.none, next.nettypes[0].value);
+    try testing.expectEqual(Drive.pull1, next.drives[0].value);
+    try expectPp("`default_nettype\n\n\n`unconnected_drive\n\n", "`default_nettype\n\n  none\n`unconnected_drive\npull1\n");
+
     // §19.2's list is closed, and it is not §10.2's: `reg`, `real` and
     // `supply0` are `default_discipline qualifiers and not net types.
     for ([_][]const u8{
@@ -1217,6 +1224,12 @@ test "§2.4 comment corners: end of file, `/*/`, and markers inside opaque token
     // An unterminated string ends at its line (the lexer reports it), and the
     // comment on the next line is still stripped.
     try expectPp("\"abc\n\nx", "\"abc\n// c\nx");
+    // IEEE 1364 §19.3.1: a `//` comment in macro text is dropped, but the `\`
+    // ending it still continues the macro. Outside a `define the `\` goes with
+    // the comment.
+    try expectPp("\n\na b\n", "`define M a // c \\\n  b\n`M\n");
+    try expectPp("\n\n\na b\n", "`define M \\\n  a // c \\\n  b\n`M\n");
+    try expectPp("a \nb", "a // c \\\nb");
 }
 
 test "stripComments: every kept byte maps back to itself, and stripping twice changes nothing" {

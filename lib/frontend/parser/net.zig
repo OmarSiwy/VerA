@@ -289,6 +289,21 @@ pub fn parseDelay2(self: *Parser) Error!Ast.Delay3 {
     return parseDelays(self, false);
 }
 
+/// Parses an A.2.2.3 `delay_value ::= unsigned_number | real_number |
+/// identifier`, the operand of a `#` with no parenthesis (A.6.5's
+/// `delay_control` too): one primary, never an expression. `wire #3 [7:0] w`
+/// must not read `3[7:0]` (#63), and `buf #d (g, in)` must not read the call
+/// `d(g, in)`. A sized or based number is no unsigned_number (E0207): it needs
+/// the parenthesized form, `#(4'd2)`.
+pub fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
+    const tok = self.pos;
+    if (self.identLike(tok) and self.peekAt(1) != .dot)
+        return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = try self.expectIdent() });
+    if (self.peek() == .int_literal and std.mem.findScalar(u8, self.tokenText(tok), '\'') != null)
+        return self.failAt(tok, .E0207, "found {s}", .{self.found(tok)});
+    return parse_expr.parsePrimary(self);
+}
+
 /// The body of `parseDelay3` (`three`) and `parseDelay2`. Holds
 /// `in_digital_delay` for the whole bracket, so §2.6.2's scale-factor check
 /// (E0247) sees every value, a discarded min/max arm included.
@@ -298,10 +313,7 @@ fn parseDelays(self: *Parser, three: bool) Error!Ast.Delay3 {
     defer self.in_digital_delay = saved_delay;
     _ = try self.expect(.hash);
     if (!self.eat(.lparen)) {
-        // A.2.2.3 `delay_value ::= unsigned_number | real_number |
-        // identifier`: one primary, as A.6.5's `delay_control` reads it, never
-        // an expression. `wire #3 [7:0] w` must not read `3[7:0]` (#63).
-        const v = try parse_expr.parsePrimary(self);
+        const v = try parseDelayValue(self);
         return .{ .rise = v, .fall = v, .off = v };
     }
     var out: Ast.Delay3 = .{};
@@ -385,7 +397,11 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // A discipline declaration is §7.4.4's to judge (E0902).
         if (port != null and b.ansi and disc == .none) try self.report(tok, .E0218, "`{s}`", .{self.file.str(name)});
         if (port != null and signed) port.?.is_signed = true;
-        if (port != null and port.?.discipline == .none) {
+        // IEEE 1364-2005 §12.3.3 completes a port with one type declaration;
+        // a second `wire x;` in a digital parse is a net of its own, for the
+        // engine's duplicate check (§4.11).
+        if (port != null and port.?.discipline == .none and !port.?.typed) {
+            if (self.digital) port.?.typed = true;
             // §3.6.3.1: "the description attribute may also be specified on
             // the port declaration line ... the last attribute value shall be
             // used". This line appends no row, so its prefix joins the port's.

@@ -2499,13 +2499,17 @@ fn infoOf(c: Code) Info {
             \\silence gives you a cell whose timing the compiler discarded with
             \\nothing in the output saying so.
             \\
-            \\A digital run (`vera --run` of a `.v`) is the exception for the
-            \\timing checks: its event queue does evaluate them (IEEE 1364-2005
-            \\clause 15, src/sim/digital/tchk.zig), reporting each violation
-            \\(W1199) or refusing a form it does not run (E1149). There the
-            \\warning is only for what no run applies, the A.7.2 path delays and
+            \\A digital run (`vera --run` of a `.v`) is the exception: its event
+            \\queue evaluates the timing checks (IEEE 1364-2005 clause 15,
+            \\src/sim/digital/tchk.zig), reporting each violation (W1199) or
+            \\refusing a form it does not run (E1149), and applies the module
+            \\path delays (14.2-14.4: simple, edge-sensitive and state-dependent
+            \\paths, `ifnone`, 1/2/3/6/12 delays, chosen per 14.3.3 when the
+            \\destination is scheduled to change). There the warning is only for
             \\the 14.6 pulse controls (pulsestyle, showcancelled, PATHPULSE$),
-            \\and a block of timing checks and specparams alone raises none.
+            \\which are ignored: 14.6's default pulse handling applies instead,
+            \\inertial, with the reject and error limits equal to the path delay.
+            \\A block without pulse controls raises none.
             \\
             \\  --deny=W0251    refuse the module instead, for a design whose
             \\                  answer depends on the timing being honoured
