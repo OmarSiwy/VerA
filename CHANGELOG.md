@@ -4,6 +4,10 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+### Fixed
+
+- VerA builds for Windows again: a size check on a file-table slot assumed an 8-byte OS file handle, and Windows' is wider, so v0.11.0 did not compile there.
+
 ## v0.11.0 — 2026-10-19
 
 | Measure | Number | Remaining to v1.0.0 | Command |
