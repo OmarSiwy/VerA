@@ -3043,6 +3043,10 @@ test "IEEE 1364-2005 triage: pull arrays, event-array control, per-bit path driv
     try std.testing.expectEqual(@as(usize, 0), disc.file.modules[0].nets.len);
     try std.testing.expectEqualStrings("ddiscrete", disc.file.str(disc.file.modules[0].ports[0].discipline));
     try std.testing.expectEqual(Ast.NetKind.tri0, disc.file.modules[0].ports[0].kind);
+    const dnet = try parseDigitalForTest(arena, "module m(dnet);\ninput dnet;\nwire dnet;\nddiscrete dnet;\nendmodule");
+    try std.testing.expectEqual(@as(?diag.Code, null), firstError(dnet));
+    try std.testing.expectEqual(@as(usize, 0), dnet.file.modules[0].nets.len);
+    try std.testing.expectEqualStrings("ddiscrete", dnet.file.str(dnet.file.modules[0].ports[0].discipline));
 
     // §10.2.1: `input x; real x;` is one formal, typed real.
     const r = try parseDigitalForTest(arena, "module m; task t; input x; real x; begin end endtask endmodule");
