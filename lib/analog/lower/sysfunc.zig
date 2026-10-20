@@ -30,6 +30,7 @@ const Mir = @import("ir").Mir;
 const Elaborate = @import("elab").Elaborate;
 const Lexer = @import("frontend").Lexer;
 const simparam = @import("ir").simparam;
+const fopen_types = @import("kernels").fopen_types;
 const simparamValueIn = simparam.simparamValueIn;
 const simparamIsRuntime = simparam.simparamIsRuntime;
 const host_simparams = simparam.host_simparams;
@@ -515,11 +516,7 @@ pub fn checkDescriptor(self: *Lower, name: []const u8, i: usize, arg: Ast.ExprId
 fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
     if (args.len != 2 or args[1] == .none) return false;
     const s = constStrArg(self, args[1]) orelse return false;
-    const forms = [_][]const u8{
-        "r",   "rb", "w",   "wb",  "a",  "ab",  "r+",  "r+b",
-        "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+",
-    };
-    for (forms) |f| if (std.mem.eql(u8, s, f)) return false;
+    if (fopen_types.has(s)) return false;
     try self.err(self.file.exprs.mainTok(args[1]), .E0889, "`\"{s}\"`", .{s});
     return true;
 }
@@ -624,7 +621,7 @@ fn sysFuncTy(name: []const u8) Ty {
 /// inlined into one).
 pub fn isDigitalOnlySysFunc(name: []const u8) bool {
     // ponytail: add the flag when a §7 digital block is lowered here.
-    const digital_only = [_][]const u8{
+    const digital_only = comptime nameSet(&.{
         // Table 9-1 (§9.4.1) — radix variants and the $monitor mode switches.
         "$displayb",         "$displayh",         "$displayo",
         "$strobeb",          "$strobeh",          "$strobeo",
@@ -670,15 +667,14 @@ pub fn isDigitalOnlySysFunc(name: []const u8) bool {
         // analog context". Table 9-8's analog column agrees — only $signed and
         // $unsigned read No, and both presuppose a sized vector.
                 "$signed",           "$unsigned",
-    };
-    for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
-    return false;
+    });
+    return digital_only.has(name);
 }
 
 /// Whether `name` is analog-only: its §9.2 "Supported in digital context" cell
 /// is No and its analog cell Yes. §9.7 says it of the severity tasks in prose.
 pub fn isAnalogOnlySysFunc(name: []const u8) bool {
-    const analog_only = [_][]const u8{
+    const analog_only = comptime nameSet(&.{
         "$debug", "$fdebug", // Tables 9-1/9-2
         "$fatal", "$warning", "$error", "$info", // Table 9-4
         "$simprobe", // §9.15
@@ -686,9 +682,8 @@ pub fn isAnalogOnlySysFunc(name: []const u8) bool {
         "$vera_reject_step", // VerA's step rejection
         "$param_given", "$port_connected", // §9.19
         "$analog_node_alias", "$analog_port_alias", // §9.20
-    };
-    for (analog_only) |d| if (std.mem.eql(u8, name, d)) return true;
-    return false;
+    });
+    return analog_only.has(name);
 }
 
 /// §9.22 paragraph 3, second sentence: "Driver access functions can only be
@@ -709,16 +704,22 @@ pub fn isAnalogOnlySysFunc(name: []const u8) bool {
 /// sits inside §9.22, takes the same `signal_name` argument, and Table 9-19
 /// carries it with the rest.
 fn isConnectModuleOnlySysFunc(name: []const u8) bool {
-    const cm_only = [_][]const u8{
+    const cm_only = comptime nameSet(&.{
         // §9.22.1–§9.22.3 and the §9.22.1 non-normative paragraph.
         "$driver_count",         "$receiver_count", "$driver_state",
         "$driver_strength",
         // §9.23.1–§9.23.4, the supplementary pending-event queries.
              "$driver_delay",   "$driver_next_state",
         "$driver_next_strength", "$driver_type",
-    };
-    for (cm_only) |d| if (std.mem.eql(u8, name, d)) return true;
-    return false;
+    });
+    return cm_only.has(name);
+}
+
+/// `names` as a comptime set, so each list above keeps its per-table comments.
+fn nameSet(comptime names: []const []const u8) std.StaticStringMap(void) {
+    var kvs: [names.len]struct { []const u8 } = undefined;
+    for (names, &kvs) |n, *kv| kv.* = .{n};
+    return .initComptime(kvs);
 }
 
 /// §9.15 Table 9-28: the string parameter names `$simparam$str` "shall"

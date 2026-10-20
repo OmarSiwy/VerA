@@ -82,6 +82,13 @@ pub fn find(name: []const u8, domain: Domain) ?*Systf {
     return null;
 }
 
+/// `find` for call object `o`, in its own domain. The running call's
+/// registration is `active_reg`, so a query on its own handle skips the scan.
+pub fn regOf(o: *const root.Obj) ?*Systf {
+    if (active) |at| if (&root.design.?.objects[at] == o) return active_reg.?;
+    return find(o.name, if (o.in_analog) .analog else .digital);
+}
+
 /// The analog system functions registered with sysfunctype vpiIntFunc: the
 /// names a device is compiled to call as integers (§12.32.1,
 /// `vera.Options.int_systfs`). The slice is `a`'s; the names are this file's
@@ -153,11 +160,12 @@ fn callDigital(_: *digital.Run, scope: u32, tok: u32, returned: ?Int.Literal) di
     const at = sites.get(.{ scope, tok }) orelse return;
     const s = find(d.objects[at].name, .digital) orelse return;
     const f = s.digital.calltf orelse return;
-    const outer = .{ active, result };
+    const outer = .{ active, active_reg, result };
     defer {
-        active, result = outer;
+        active, active_reg, result = outer;
     }
     active = at;
+    active_reg = s;
     result = returned;
     _ = f(s.digital.user_data);
 }
@@ -182,6 +190,9 @@ pub var misuse: ?[]const u8 = null;
 /// object index into the open design: §11.6.16 NOTE 1's
 /// `vpi_handle(vpiSysTfCall, NULL)`. Null outside one.
 pub var active: ?u32 = null;
+/// `active`'s registration, found once as the call starts (`regOf`). Set and
+/// cleared with `active`.
+pub var active_reg: ?*Systf = null;
 
 /// The host instance whose analog calltf is running (`analog_run.Binding.call`,
 /// VerA #84): the key, beside the call, of the state an application keeps
@@ -208,7 +219,11 @@ pub fn buildCalls() void {
             continue;
         }
         active = @intCast(i);
-        defer active = null;
+        active_reg = reg;
+        defer {
+            active = null;
+            active_reg = null;
+        }
         switch (reg.domain) {
             .digital => {
                 const ud = reg.digital.user_data;
@@ -252,6 +267,7 @@ pub fn partialsOf(call: u32) []const Pair {
 /// and user data are the design's, freed with it (`Design.deinit`).
 pub fn reset() void {
     active = null;
+    active_reg = null;
     result = null;
     misuse = null;
     active_inst = 0;

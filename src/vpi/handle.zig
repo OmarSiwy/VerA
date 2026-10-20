@@ -113,7 +113,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // §11.6.16: sys task/func call -> user systf, for a name some
     // application registered (NOTE 3); NULL for a built-in one.
     if (o.kind == .code and obj_type == systf.vpiUserSystf and (o.vtype == code.vpiSysTaskCall or o.vtype == code.vpiSysFuncCall)) {
-        const reg = systf.find(o.name, if (o.in_analog) .analog else .digital) orelse return null;
+        const reg = systf.regOf(o) orelse return null;
         return @ptrCast(reg);
     }
     if (analogEdge(o, obj_type)) |edge| {

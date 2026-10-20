@@ -232,7 +232,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
 /// then the object's own `props` rows.
 pub fn codeProp(o: *const Obj, prop: c_int) c_int {
     if (o.vtype == code.vpiSysTaskCall or o.vtype == code.vpiSysFuncCall) {
-        const reg = systf.find(o.name, if (o.in_analog) .analog else .digital);
+        const reg = systf.regOf(o);
         if (prop == systf.vpiUserDefn) return @intFromBool(reg != null);
         if (prop == systf.vpiSysFuncType and o.vtype == code.vpiSysFuncCall) {
             const r = reg orelse return propFail(prop, o);

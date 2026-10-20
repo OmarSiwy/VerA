@@ -66,11 +66,17 @@ comptime {
     }
 }
 
-/// The Table 9-10 row `name` spells, or null. A linear scan of 16 rows.
+/// The Table 9-10 row `name` spells, or null.
 pub fn of(name: []const u8) ?*const Dist {
-    for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
-    return null;
+    return &dists[by_name.get(name) orelse return null];
 }
+
+/// Each row's `name` -> its index in `dists`.
+const by_name = std.StaticStringMap(u8).initComptime(blk: {
+    var kvs: [dists.len]struct { []const u8, u8 } = undefined;
+    for (dists, &kvs, 0..) |d, *kv, i| kv.* = .{ d.name, i };
+    break :blk kvs;
+});
 
 /// The name §9.13.2 gives parameter `i` of `d`, for the diagnostics.
 /// Asserts that `i` is a parameter of `d` (`i < d.nparam`): both callers

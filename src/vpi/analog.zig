@@ -399,12 +399,13 @@ pub const Binding = struct {
             @memset(rec.part(), 0);
         }
         var st: Active = .{ .b = b, .obj = obj, .k = k, .inst = inst, .result = 0, .partials = partials };
-        const outer = .{ active_call, systf.active, systf.active_inst };
+        const outer = .{ active_call, systf.active, systf.active_reg, systf.active_inst };
         active_call = &st;
         systf.active = obj;
+        systf.active_reg = reg;
         systf.active_inst = inst;
         defer {
-            active_call, systf.active, systf.active_inst = outer;
+            active_call, systf.active, systf.active_reg, systf.active_inst = outer;
         }
         var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(o), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
         _ = f(&cb);
