@@ -3034,6 +3034,16 @@ test "IEEE 1364-2005 triage: pull arrays, event-array control, per-bit path driv
         .{ .src = "module m; initial #(4'd2) ; endmodule", .code = null },
     }, true);
 
+    // §12.3.3: `wire x;` completes port x, and a second `wire x;` is a net
+    // of its own (the engine refuses the duplicate); a discipline after the
+    // net type still completes it (VAMS §7.3.2's `wire dnet; ddiscrete dnet;`).
+    const twice = try parseDigitalForTest(arena, "module m(x); input x; wire x; wire x; endmodule");
+    try std.testing.expectEqual(@as(usize, 1), twice.file.modules[0].nets.len);
+    const disc = try parseDigitalForTest(arena, "module m(x); input x; tri0 x; ddiscrete x; endmodule");
+    try std.testing.expectEqual(@as(usize, 0), disc.file.modules[0].nets.len);
+    try std.testing.expectEqualStrings("ddiscrete", disc.file.str(disc.file.modules[0].ports[0].discipline));
+    try std.testing.expectEqual(Ast.NetKind.tri0, disc.file.modules[0].ports[0].kind);
+
     // §10.2.1: `input x; real x;` is one formal, typed real.
     const r = try parseDigitalForTest(arena, "module m; task t; input x; real x; begin end endtask endmodule");
     try std.testing.expectEqual(@as(?diag.Code, null), firstError(r));

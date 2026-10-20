@@ -1270,7 +1270,7 @@ test "nesting has no bound: 10,000 levels lint and generate a device" {
     for ([_]DeepCase{
         .{ .pre = "r = 1.0", .open = "", .mid = "", .close = " + 1.0", .post = ";" },
         .{ .pre = "r = ", .open = "(", .mid = "1.0", .close = ")", .post = ";" },
-        .{ .pre = "r = ", .open = "-", .mid = "1.0", .post = ";" },
+        .{ .pre = "r = ", .open = "-(", .mid = "1.0", .close = ")", .post = ";" }, // A.8.3: a unary operand is a primary
         .{ .pre = "k = ", .open = "{", .mid = "1'b1", .close = "}", .post = "; r = k;" },
         .{ .open = "begin ", .mid = "r = 1.0;", .close = " end" },
         .{ .pre = "r = ", .open = "V(p) > 1 ? 1 : ", .mid = "0", .post = ";", .device = false },

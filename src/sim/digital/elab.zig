@@ -248,7 +248,11 @@ pub fn checkDefparams(r: *Run) Error!void {
         // is spelled (`defparamBase` refuses the upward relative form early).
         // §12.2.1: the hierarchical name names a parameter: E0901 when no
         // scope holds it, E0907 when a named instance has no such parameter.
-        const target = defparamScope(r, b.at, b.rest) orelse
+        // A mixed design's defparam may name a VAMS §7.8.5 inserted connect
+        // module, which only the analog elaboration builds.
+        const target = defparamScope(r, b.at, b.rest) orelse if (r.mixed)
+            continue
+        else
             return r.failWith(.E0901, b.tok, "§12.2.1: this defparam's hierarchical name `{s}` names nothing in the design", .{b.path});
         const leaf = b.rest[if (std.mem.findScalarLast(u8, b.rest, '.')) |d| d + 1 else 0..];
         const slot = if (r.file.strings.find(leaf)) |str| r.names.get(.{ .scope = target, .str = str }) else null;
@@ -409,7 +413,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             // port (`Port.typed`), so a net already bound here is a second
             // one, unless it is the entry a folded `wire p = e;` leaves for
             // its initializer.
-            if (r.net_of.contains(var_slot)) for (m.nets) |n| if (n.name == p.name and n.init == .none) return r.fail(n.main_tok, "duplicate digital variable", .{});
+            if (r.net_of.contains(var_slot)) for (m.nets) |n| if (n.name == p.name and n.init == .none and n.discipline == .none) return r.fail(n.main_tok, "duplicate digital variable", .{});
             if (p.direction != .output) return r.fail(p.main_tok, "§12.3.3: only an output port may be declared as a variable", .{});
             switch (bind) {
                 .open => {},
@@ -725,7 +729,7 @@ fn implicitNet(r: *Run, e: *Elab, scope: u32, m: *const Ast.ModuleDecl, x: Ast.E
         // §4.5: "has not been declared previously". A net declared after
         // this use was already implicitly declared here, so it declares
         // the name a second time.
-        for (m.nets) |n| if (n.name == ex.strOf(x) and n.main_tok > tok) return r.fail(n.main_tok, "duplicate digital variable", .{});
+        for (m.nets) |n| if (n.name == ex.strOf(x) and n.main_tok > tok and n.discipline == .none) return r.fail(n.main_tok, "duplicate digital variable", .{});
         return;
     }
     const t = Front.Preprocessor.NetTypeRegion.inForce(r.nettypes, r.starts[@min(tok, r.starts.len - 1)], .default);

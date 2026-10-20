@@ -399,8 +399,11 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         if (port != null and signed) port.?.is_signed = true;
         // IEEE 1364-2005 §12.3.3 completes a port with one type declaration;
         // a second `wire x;` in a digital parse is a net of its own, for the
-        // engine's duplicate check (§4.11).
-        if (port != null and port.?.discipline == .none and !port.?.typed) {
+        // engine's duplicate check (§4.11). A discipline after the net type
+        // (`wire x; ddiscrete x;`, VAMS §7.3.2) still completes the port: it
+        // sets the discipline and keeps the type already folded.
+        const again = port != null and port.?.typed;
+        if (port != null and port.?.discipline == .none and (!again or disc != .none)) {
             if (self.digital) port.?.typed = true;
             // §3.6.3.1: "the description attribute may also be specified on
             // the port declaration line ... the last attribute value shall be
@@ -409,11 +412,11 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
             port.?.discipline = disc;
             // §6.5.2.2: this is the port type declaration. Recorded beside the
             // direction declaration's range, not over it (`Ast.Port.type_range`).
-            port.?.type_range = range;
+            if (!again) port.?.type_range = range;
             // The net type too: §7.9 resolves by it, so `tri0 p;` on a port
             // must not stay a `wire`. A discipline-only declaration passes
             // `.wire`, A.2.1.3's default.
-            port.?.kind = kind;
+            if (!again) port.?.kind = kind;
             // A Port has no initializer slot, so `electrical p = 5.0;` on a
             // header port gets a net entry with no discipline for the
             // nodeset. The empty discipline keeps it out of §7.4.4 (E0902),
