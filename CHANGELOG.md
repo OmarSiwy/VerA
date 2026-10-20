@@ -9,6 +9,7 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 - `--emit-osdi` merges a 0 V short's two nodes (`V(a, b) <+ 0`, as PSP, BSIM and HiSIM write their switched-off parasitics) as an OSDI collapsible pair, the way OpenVAF does, instead of keeping the short's branch current as an unknown. That unknown was a zero-diagonal row that SPARSE 1.3 pivoted around: a 51-stage PSP103 ring oscillator spent 13.8 s in matrix factorization and now spends 2.4 ms (OpenVAF: 3.5 ms), and the device's Jacobian entries drop from 92 to 57. Results match OpenVAF's to 1e-13 V.
 - `--emit-osdi` lists as instance parameters only those the source marks `(* type = "instance" *)` (PSP103: 33 instead of all 846), as OpenVAF does; a module that marks none keeps every parameter settable per instance. The instance shrinks accordingly (PSP103: 22.5 KB to 14.1 KB).
 - `--emit-osdi` builds a large device as parallel objects: `eval` and every callback the simulator calls per iterate on LLVM, noise in its own object, and the once-per-instance code (parameter access, setup, setup's chunks) on the self-hosted backend on x86_64 Linux. PSP103 builds in about half the time.
+- `$simparam$str` with a literal name compiles to its one answer instead of comparing strings at every evaluation; a variable name still compares at run time.
 - A finished `.osdi` is cached in Zig's global cache directory (`vera-osdi`), keyed by everything that decides its bytes, so rebuilding a model already built in any work directory copies it.
 
 ## v0.11.3 — 2026-10-20
