@@ -25,6 +25,7 @@
 // "The initializer shall be a constant_expression", E0365).
 //
 //! lrm 3.6.3.2
+//! lrm 3.6.3.2:1
 //! lrm F.2.1
 //! bias V(g) = 0.0
 //! solve

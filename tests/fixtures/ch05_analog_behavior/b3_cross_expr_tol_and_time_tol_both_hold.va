@@ -31,11 +31,13 @@
 //
 //! lrm 5.10.3.1
 //! lrm 5.10.3.1:6
+//! lrm 5.10.3.1:5
 //! lrm 7.3.5
 //! analysis tran
 //! time 0, 2n, 4n, 6n
 //! wave V(p) = 0.0, 0.2, 0.4, 0.6
 //! checks 4
+//! lrm 5.10.3.1:1004
 `timescale 1ns/1ps
 `include "check.vh"
 module b3_cross_expr_tol_and_time_tol_both_hold(p);

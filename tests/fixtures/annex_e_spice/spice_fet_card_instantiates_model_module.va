@@ -46,6 +46,7 @@
 // syntax error in any conforming reader.
 //
 //! lrm E.2
+//! lrm E.2:2
 //! lrm E.1.1
 //! lrm E.2.1
 //! lrm E.4.1

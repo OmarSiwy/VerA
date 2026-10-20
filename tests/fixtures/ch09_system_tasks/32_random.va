@@ -36,6 +36,7 @@
 //! lrm 9.13.1:1
 //! lrm 9.13.1:3
 //! lrm 9.13.1:5
+//! lrm 9.13.1:1001
 `include "check.vh"
 module ch09_random(p, n);
   inout p, n; electrical p, n;

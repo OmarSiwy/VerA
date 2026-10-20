@@ -16,6 +16,8 @@
 //! lrm 12.33.2
 //! lrm 12.35
 //! lrm 12.20:1
+//! lrm 12.20:1001
+//! lrm 12.21:1001
 //! design ieee_pli/audit_module_array.v
 //! stderr pli-module-array members=2 indices=0,1
 

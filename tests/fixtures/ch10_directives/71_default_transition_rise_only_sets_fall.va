@@ -21,6 +21,7 @@
 // 3n whichever sample detects the edge.
 //
 //! lrm 4.5.8
+//! lrm 4.5.8:2
 //! lrm 10.3
 //! analysis tran
 //! time 0, 1n, 2n, 3n

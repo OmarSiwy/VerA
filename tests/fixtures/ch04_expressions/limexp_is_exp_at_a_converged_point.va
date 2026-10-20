@@ -19,6 +19,7 @@
 // for bit (CHECKEQ, tolerance 0: no digits of its own).
 //
 //! lrm 4.5.13
+//! lrm 4.5.13:1001
 //! bias V(p) = 100, V(n) = 0
 //! checks 3
 `include "check.vh"

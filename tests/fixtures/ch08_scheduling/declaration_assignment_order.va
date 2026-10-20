@@ -25,6 +25,7 @@
 //
 //! lrm 8.2
 //! lrm 8.2:1
+//! lrm 8.2:1001
 `include "check.vh"
 module ch8_decl_assign_order(p);
   inout p; electrical p;

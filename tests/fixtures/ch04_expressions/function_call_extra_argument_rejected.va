@@ -7,6 +7,7 @@
 // call is 28_user_function.va.
 //
 //! lrm 4.7.3
+//! lrm 4.7.3:1001
 //! reject-only E0511
 //! neighbour 28_user_function.va
 `include "disciplines.vams"

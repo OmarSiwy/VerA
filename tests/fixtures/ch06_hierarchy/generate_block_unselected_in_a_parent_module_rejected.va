@@ -13,6 +13,7 @@
 //
 //! lrm 6.6.2
 //! lrm 6.8
+//! lrm 6.8:1001
 //! reject-only E0901
 //! neighbour b4_generate_block_name_found_in_a_parent_module.va
 module ch6_gbu_top(p, n);

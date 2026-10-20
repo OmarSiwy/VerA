@@ -10,6 +10,7 @@
 // a real remainder by the probe-dependent divisor 3.75 (2.5);
 // audit_real_modulus_zero_rejected.va is the compile-time zero.
 //! lrm 4.2.4
+//! lrm 4.2.4:1
 //! sweep V(p) = 2, 0
 //! exit 1
 //! checks 1

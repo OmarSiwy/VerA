@@ -563,14 +563,15 @@ fn runAndCheck(
         .work_dir = work,
         .contract = options.contract,
         .name = result.mir.name,
-        .mixed = dm.mixed != null,
+        // `lib/root.zig`'s rule: a `//! tran`/`//! onoise` deck runs on `sim.spice`.
+        .mixed = dm.mixed != null or dm.tran != null or dm.onoise != null,
         .zig_exe = options.zig_exe,
         .optimize = cfg.fixture_opt,
         .backend = cfg.fixture_backend,
         .strip = true,
     };
     if (stage_into) |s| {
-        if (dm.mixed == null) s.* = try vera.tb.stageExe(arena, io, device, runner, build_opts);
+        if (!build_opts.mixed) s.* = try vera.tb.stageExe(arena, io, device, runner, build_opts);
         return .met;
     }
     const built = (if (ctx.batched.get(f.path)) |b| linkBatched(gpa, io, arena, work, b) else vera.tb.buildExe(gpa, io, device, runner, build_opts)) catch |err| {

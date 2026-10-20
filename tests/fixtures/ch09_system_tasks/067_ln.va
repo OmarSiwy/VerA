@@ -9,6 +9,7 @@
 // with no value of its own, hence CHECKEQ.
 //
 //! lrm 9.14
+//! lrm 9.14:1001
 `include "check.vh"
 module ch09_atomic_ln(p, n);
   inout p, n; electrical p, n;

@@ -18,6 +18,7 @@
 //! lrm 7.4.4:3
 //! lrm 3.11
 //! reject-only more than one discipline declaration
+//! neighbour lrm_7_4_4_1.va
 nature ch7_conf_potential;
   units = "V";
   access = V;

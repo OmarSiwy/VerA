@@ -13,6 +13,7 @@
 //! lrm 9.16
 //! lrm 9.16:1
 //! reject-only E0817
+//! neighbour simprobe_string_parameter_name_resolves.va
 `include "disciplines.vams"
 module ch9_simprobe_unresolved(p, n);
   inout p, n;

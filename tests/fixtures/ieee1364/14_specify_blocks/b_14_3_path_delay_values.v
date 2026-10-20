@@ -40,7 +40,7 @@
 //   t = 1:  C = 1: every output 1
 //   t = 51: C = 0: every output 0
 // digital-runner: warning W0251
-//! inherited IEEE 1364-2005 14.3 14.3.1
+//! inherited IEEE 1364-2005 14.3 14.3.1 14.3.2
 `timescale 1ns/1ns
 module b_14_3_path_delay_values_cell(C, Q1, Q2, Q2b, Q3, Q6, Q12);
   input C;

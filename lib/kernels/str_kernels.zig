@@ -44,8 +44,8 @@ const zstd = @import("std");
 /// what lets a failed match be retried against the same bytes.
 pub const ZScan = struct { n: i64 = 0, i: i64 = 0, r: f64 = 0.0, s: []const u8 = "", used: usize = 0 };
 
-/// §9.5.4.2 `$sscanf`. `want` is the index of the assigned item whose value is
-/// reported; -1 asks for the count alone.
+/// §9.5.4.2 `$sscanf`/`$fscanf`. `want` is the index of the assigned item whose
+/// value is reported; -1 asks for the count alone.
 ///
 /// The control string is walked once. §9.5.4.2: "An input field is defined as a
 /// string of nonspace characters; it extends to the next inappropriate character
@@ -54,14 +54,27 @@ pub const ZScan = struct { n: i64 = 0, i: i64 = 0, r: f64 = 0.0, s: []const u8 =
 /// field is ignored".
 pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
     var out: ZScan = .{};
-    zScanRun(src, fmt, want, &out);
+    zScanRun(src, fmt, want, &out, false);
     return out;
+}
+
+/// §9.5.4.2's `$sscanf` spelling: "For $sscanf, null characters shall also be
+/// considered white space." `$fscanf` keeps C's set, so the two entry points
+/// differ by this one flag.
+pub fn zScanNul(src: []const u8, fmt: []const u8, want: i64) ZScan {
+    var out: ZScan = .{};
+    zScanRun(src, fmt, want, &out, true);
+    return out;
+}
+
+fn zSpace(ch: u8, nul: bool) bool {
+    return zstd.ascii.isWhitespace(ch) or (nul and ch == 0);
 }
 
 /// The walk itself, split out only so `out.used` is written on EVERY exit —
 /// there are seven, one per matching failure the clause names, and each has to
 /// report the position the offending character was left at.
-fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
+fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan, nul: bool) void {
     var si: usize = 0;
     defer out.used = si;
     var fi: usize = 0;
@@ -70,9 +83,9 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
         const fc = fmt[fi];
         // Whitespace in the control string matches any run of whitespace,
         // including none.
-        if (zstd.ascii.isWhitespace(fc)) {
+        if (zSpace(fc, nul)) {
             fi += 1;
-            while (si < src.len and zstd.ascii.isWhitespace(src[si])) si += 1;
+            while (si < src.len and zSpace(src[si], nul)) si += 1;
             continue;
         }
         if (fc != '%') { // ordinary character: it must be there
@@ -121,7 +134,7 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
             continue;
         }
         if (conv != 'c') {
-            while (si < src.len and zstd.ascii.isWhitespace(src[si])) si += 1;
+            while (si < src.len and zSpace(src[si], nul)) si += 1;
         }
         if (si >= src.len) return zScanEof(out, tried);
         tried = true;
@@ -143,7 +156,7 @@ fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
             // string operand has everywhere else, which nothing needs but which
             // costs one loop.
             's' => {
-                while (end < lim and !zstd.ascii.isWhitespace(src[end])) end += 1;
+                while (end < lim and !zSpace(src[end], nul)) end += 1;
                 item.s = src[si..end];
                 for (item.s) |ch| item.i = item.i *% 256 +% ch;
                 item.r = @floatFromInt(item.i);
@@ -275,6 +288,20 @@ pub fn zScanR(src: []const u8, fmt: []const u8, k: i64) f64 {
 /// Item `k` as a string: a slice of `src`, valid while `src` is; see `zScanI`.
 pub fn zScanS(src: []const u8, fmt: []const u8, k: i64) []const u8 {
     return zScan(src, fmt, k).s;
+}
+
+// `$sscanf`'s four entry points, over `zScanNul` (above).
+pub fn zScanNulN(src: []const u8, fmt: []const u8) i64 {
+    return zScanNul(src, fmt, -1).n;
+}
+pub fn zScanNulI(src: []const u8, fmt: []const u8, k: i64) i64 {
+    return zScanNul(src, fmt, k).i;
+}
+pub fn zScanNulR(src: []const u8, fmt: []const u8, k: i64) f64 {
+    return zScanNul(src, fmt, k).r;
+}
+pub fn zScanNulS(src: []const u8, fmt: []const u8, k: i64) []const u8 {
+    return zScanNul(src, fmt, k).s;
 }
 
 // ---- §9.4.3 Table 9-23: the real conversions -------------------------------

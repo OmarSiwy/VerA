@@ -35,7 +35,9 @@
 // declared analog timepoint.
 //
 //! lrm 8.4.3.2
+//! lrm 8.4.3.2:1001
 //! lrm 8.5
+//! lrm 8.5:1002
 //! analysis tran
 //! time 0, 2n, 4n, 8n, 12n, 16n
 `timescale 1ns/1ns

@@ -6,6 +6,7 @@
 //! lrm 2.4
 //! lrm 2.4:2
 //! reject-only E0102
+//! neighbour 01_whitespace_comments.va
 module ch02_unclosed_comment;
 /* this block comment never terminates
 endmodule

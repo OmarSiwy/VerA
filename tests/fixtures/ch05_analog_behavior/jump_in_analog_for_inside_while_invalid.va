@@ -10,7 +10,8 @@
 //
 //! lrm 5.11
 //! lrm 5.9.3
-//! reject E0440
+//! reject-only E0440
+//! neighbour jump_in_runtime_for_in_analog_for.va
 module ch5_jump_in_analog_for_inside_while(p);
   inout p; electrical p; genvar k; integer n; real x;
   analog begin

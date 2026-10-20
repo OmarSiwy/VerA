@@ -19,7 +19,8 @@
 //! lrm 6.7.1
 //! lrm 6.7.1:2
 //! lrm 6.9.4
-//! reject E0924
+//! reject-only E0924
+//! reject E0901
 //! neighbour oomr_parameter_unsupported.va
 `include "disciplines.vams"
 module ch6_oomr_in_parameter_declaration(p);

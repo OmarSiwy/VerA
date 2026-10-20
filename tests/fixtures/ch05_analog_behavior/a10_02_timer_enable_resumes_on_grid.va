@@ -22,6 +22,7 @@
 //! wave V(en) = 1, 1, 0, 0, 1, 1
 //! bias V(p) = 0
 //! print none
+//! lrm 5.10.3.3:1005
 `include "check.vh"
 module a10_timer_enable_resume(p, en);
   inout p, en;

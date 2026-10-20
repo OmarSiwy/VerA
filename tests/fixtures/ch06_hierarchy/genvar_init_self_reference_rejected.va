@@ -26,6 +26,7 @@
 //! lrm 6.6.1
 //! lrm 6.6.1:4
 //! reject-only E0417
+//! neighbour generate_loop.va
 module ch6_genvar_init_self_reference(p);
   inout p; electrical p;
   genvar i;

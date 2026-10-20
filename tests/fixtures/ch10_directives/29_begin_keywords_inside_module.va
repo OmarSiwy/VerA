@@ -18,7 +18,9 @@
 // line earlier.
 //
 //! lrm 10.6
+//! lrm 10.6:1001
 //! reject-only E0202
+//! neighbour 16_begin_keywords_verilog.va
 module ch10_begin_keywords_inside_module(p, n);
   inout p, n;
   electrical p, n;

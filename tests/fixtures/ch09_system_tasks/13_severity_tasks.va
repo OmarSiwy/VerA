@@ -24,6 +24,7 @@
 //
 //! lrm 9.7.3
 //! lrm 9.7.3:4
+//! lrm 9.7.3:1004
 //! bias V(p) = 3.0, V(n) = 0.5
 `include "check.vh"
 module ch09_severity_tasks(p, n);

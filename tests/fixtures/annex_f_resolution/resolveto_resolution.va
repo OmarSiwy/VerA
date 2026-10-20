@@ -49,6 +49,7 @@
 //! lrm 7.4.1:1000
 //! lrm 7.7.2:1000
 //! lrm F.2.1:6
+//! lrm F.2.1:1004
 //! bias sig = 0.75
 `include "check.vh"
 nature annex_f_r_pot;

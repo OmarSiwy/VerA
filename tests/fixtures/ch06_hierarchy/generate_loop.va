@@ -28,6 +28,7 @@
 // and generate_loop_descending.va pins the order.
 //
 //! lrm 6.6.1
+//! lrm 6.6.1:1001
 //! lrm 6.6
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

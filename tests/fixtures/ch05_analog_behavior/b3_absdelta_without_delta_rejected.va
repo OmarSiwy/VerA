@@ -15,7 +15,7 @@
 //! lrm 5.10.3.4
 //! lrm 5.10.3.4:1
 //! reject-only E0517
-//! neighbour ../ch07_mixed_signal/event_bounds_mixed_legal.va
+//! neighbour absdelta_samples_analog_changes.va
 `timescale 1ns/1ps
 module b3_absdelta_without_delta(p);
   inout p; electrical p;

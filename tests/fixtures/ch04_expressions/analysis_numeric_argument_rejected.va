@@ -14,6 +14,7 @@
 // compile — an engine error with no source position. E0574 names the argument.
 //
 //! lrm 4.6.1
+//! lrm 4.6.1:1001
 //! reject-only E0574
 //! neighbour 26_analysis.va
 module ch04_analysis_numeric_argument(p, n);

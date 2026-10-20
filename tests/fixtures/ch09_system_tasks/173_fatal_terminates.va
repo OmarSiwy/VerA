@@ -20,6 +20,7 @@
 //
 //! lrm 9.7.3
 //! lrm 9.7.3:1
+//! lrm 9.7.3:1002
 //! exit 1
 //! sweep V(p) = 1.0, 2.0
 `include "check.vh"

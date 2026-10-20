@@ -24,6 +24,7 @@
  */
 
 //! lrm 12.36:6
+//! lrm 12.31.4:1002
 //! design ch12_vpi_routines/b7_digital.v
 //! stdout b7_reset_every_run: requests=1001 resets=1000
 //! refuse more than 1000 vpiReset requests
@@ -81,7 +82,21 @@ static PLI_INT32 end_of_reset(p_cb_data d)
 
 static PLI_INT32 on_error(p_cb_data d)
 {
+  s_vpi_error_info info;
   (void)d;
+  /* LRM 12.31.4: "On a cbError callback, the routine vpi_chk_error() can be
+   * called to retrieve error information." Read it FIRST: 12.2 resets the
+   * status on every other VPI routine, so a routine called before this would
+   * hide the error the callback exists to report. */
+  CHECK(vpi_chk_error(&info) != 0,
+        "a cbError callback must find an error status to retrieve");
+  CHECK(info.level == vpiError,
+        "the status level is vpiError, got %d", (int)info.level);
+  CHECK(info.code != NULL && strstr(info.code, "RUNTIME") != NULL,
+        "the status code names the run-time error, got %s",
+        info.code ? info.code : "(null)");
+  CHECK(info.message != NULL && info.message[0] != '\0',
+        "the status carries a message");
   printf("b7_reset_every_run: requests=%d resets=%d\n", requests, resets);
   fflush(stdout);
   return 0;

@@ -30,7 +30,9 @@
 // replication_real_count_negative_rejected.va.
 //
 //! lrm 4.2.1
+//! lrm 4.2.1:1002
 //! lrm 4.2.1.1
+//! lrm 4.2.1.1:1001
 //! lrm 4.2.1.1:1
 //! bias V(p) = 1.0
 `include "check.vh"

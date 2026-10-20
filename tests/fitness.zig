@@ -232,7 +232,10 @@ const r3_rows = [_]Row{
     .{ .path = "lib/elab/elaborate.zig", .n = 1 },
     .{ .path = "lib/elab/elaborate/clone.zig", .n = 9 },
     .{ .path = "lib/elab/elaborate/insert.zig", .n = 1 },
-    .{ .path = "lib/elab/elaborate/instance.zig", .n = 2 },
+    // 2 -> 3 (2026-10-19): §6.2.2's expression actual on a digital input
+    // port is a synthesized net driven by `assign`, whose target is a new
+    // identifier row; no existing helper mints a bare identifier.
+    .{ .path = "lib/elab/elaborate/instance.zig", .n = 3 },
     .{ .path = "lib/elab/elaborate/names.zig", .n = 3 },
     .{ .path = "lib/elab/hier_param.zig", .n = 1 },
     .{ .path = "src/sim/digital/root.zig", .n = 1 },

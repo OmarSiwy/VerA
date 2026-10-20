@@ -19,6 +19,7 @@
 // here and it is 73 that says whether the value is right.
 //
 //! lrm 3.3
+//! lrm 3.3:1001
 //! reject-only E0354
 //! neighbour 73_string_literal_to_integral.va
 module ch3_string_to_integral(p, n);

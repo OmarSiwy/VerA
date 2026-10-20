@@ -885,6 +885,18 @@ test "§9.5.4.2 zScan: white space, literals, %%, %m, and what a scan leaves unr
     // EOF: the input ends before any conversion was tried.
     try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("   ", "%d"));
     try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("", "%c"));
+}
+
+test "§9.5.4.2 $sscanf: a null character is white space, for it only" {
+    // "For $sscanf, null characters shall also be considered white space."
+    // Between two fields, in the format's white-space run, and as a `%s`
+    // terminator.
+    try std.testing.expectEqual(@as(i64, 2), str_k.zScanNulN("1\x002", "%d %d"));
+    try std.testing.expectEqual(@as(i64, 7), str_k.zScanNulI("1\x00 7", "%d %d", 1));
+    try std.testing.expectEqualStrings("ab", str_k.zScanNulS("ab\x00cd", "%s", 0));
+    // `$fscanf` keeps C's set: the same input stops it.
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("1\x002", "%d %d"));
+    try std.testing.expectEqualStrings("ab\x00cd", str_k.zScanS("ab\x00cd", "%s", 0));
     try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("a", "a%d"));
 }
 

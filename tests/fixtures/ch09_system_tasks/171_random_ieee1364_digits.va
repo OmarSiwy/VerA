@@ -35,6 +35,7 @@
 //! lrm 9.13.1
 //! lrm 9.13.1:5
 //! lrm 9.13.3:1000
+//! lrm 9.13.1:1003
 `include "check.vh"
 module ch09_random_ieee1364_digits(p, n);
   inout p, n; electrical p, n;

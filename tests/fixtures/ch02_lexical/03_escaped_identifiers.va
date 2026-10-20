@@ -26,6 +26,7 @@
 //! lrm 2.8
 //! lrm 2.8:2
 //! lrm 2.8.1:1
+//! lrm 2.8.1:1001
 `include "check.vh"
 module ch02_escaped_identifiers(p, n);
     inout p, n;

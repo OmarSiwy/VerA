@@ -37,7 +37,8 @@
 //! lrm 7.4.1
 //! lrm F.2.1
 //! lrm F.2.1:7
-//! reject E0903
+//! reject-only E0903
+//! reject E0922
 //! neighbour figure_7_2_resolveto_two_levels.va
 //
 // No `include "disciplines.vams"`: ch724_i and ch724_v are base natures with

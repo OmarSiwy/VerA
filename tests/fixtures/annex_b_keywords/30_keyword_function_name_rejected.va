@@ -10,6 +10,7 @@
 //! lrm 2.8
 //! reject E0208
 //! reject found `repeat`
+//! neighbour 26_escaped_keyword_name_positions.va
 `include "disciplines.vams"
 module annex_b_kw_function(p, n);
   inout p, n; electrical p, n;

@@ -44,6 +44,8 @@
 //! lrm 12.2
 //! lrm 12.22.1
 //! lrm-reject 12.22.1
+//! lrm 12.22.1:1001
+//! lrm-reject 12.22.1:1001
 //! lrm-reject 12.30
 //! design ch12_vpi_routines/p03_systf_devices.va
 //! stdout p03-90: declared=1 undeclared=0 undeclared_wrt_param=0 put_null=0 errs=3 vres=1

@@ -17,6 +17,7 @@
 //! lrm 6.5.2.2
 //! lrm 6.5.2.2:1
 //! lrm 6.2
+//! lrm 6.2:5
 //! reject-only E0376
 //! neighbour port_directions.va
 module ch6_port_without_direction(c);

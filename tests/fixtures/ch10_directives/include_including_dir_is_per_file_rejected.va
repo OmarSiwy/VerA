@@ -10,8 +10,9 @@
 // neighbour, differs only in naming include_dir/vd091_outer.vh instead.
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
-//! reject E0126
+//! reject-only E0126
 //! reject "vd091_nested_only.vh"
+//! neighbour include_searches_the_including_files_directory.va
 `include "vd091_nested_only.vh"
 module include_including_dir_is_per_file_rejected(p, n);
   inout p, n; electrical p, n;

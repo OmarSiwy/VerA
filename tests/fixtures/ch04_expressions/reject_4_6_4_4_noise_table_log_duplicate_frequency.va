@@ -12,7 +12,9 @@
 // for noise_table itself; this file is the logarithmic form, which inherits it.
 //
 //! lrm 4.6.4.4
+//! lrm 4.6.4.4:1001
 //! reject-only E0519
+//! neighbour a06_noisetables_a06_ntab.assets_a06_ntab_log.va
 //! reject appears twice
 `include "disciplines.vams"
 module ch4_noise_table_log_duplicate(p, n);

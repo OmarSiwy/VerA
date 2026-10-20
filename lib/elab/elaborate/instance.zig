@@ -799,10 +799,47 @@ fn inlineInstance(
             continue;
         };
         const actual: ?Ast.StrId = if (conn) |c| elab_names.netRefName(self, c.expr) else null;
+        if (actual == null) if (conn) |c| if (c.expr != .none) {
+            // §6.2.2: "A connection can be a simple reference to a variable or
+            // a net identifier, an expression or a blank. An expression can be
+            // used for supplying a value to a module input port if it is a
+            // digital port." A continuous (analog) input takes a net, so the
+            // expression arm is the non-continuous one only.
+            const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
+            if (p.direction == .input and !discipline.isContinuous(self.ctx.file, local)) {
+                // One synthesized net per port of this instance, named by the
+                // child port's own hierarchical path (unique per instance),
+                // driven by a continuous assignment in the parent's scope.
+                const flat = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(p.name) });
+                const name = try self.ctx.file.intern(self.ctx.arena, flat);
+                try unit.rename.put(self.ctx.arena, p.name, name);
+                try self.names.put(self.ctx.arena, flat, flat);
+                try elab_resolve.addNet(self, .{ .name = name, .discipline = local, .main_tok = c.main_tok });
+                const target = try self.ctx.file.exprs.add(self.ctx.arena, .{
+                    .tag = .ident,
+                    .str = name,
+                    .main_tok = c.main_tok,
+                });
+                try self.assigns.append(self.ctx.arena, .{
+                    .target = target,
+                    .value = try elab_clone.cloneExpr(self, c.expr),
+                    .main_tok = c.main_tok,
+                });
+                continue;
+            }
+        };
         if (actual) |n| {
             // The port is the parent's net: no new node, no new declaration.
             // ponytail: the parent map already owns this lookup and fallback.
             const bound = parent.rename.get(n) orelse n;
+            // §3.7: "When the two nets connected by a port are of net type
+            // wreal and wire/tri, the resulting single net will be assigned
+            // as wreal." The runtime digital elaboration promotes the same
+            // net (`sim.digital.elab.promoteWreal`); this half is what lets
+            // analog lowering type the discrete input as a real.
+            if (p.kind == .wreal) for (self.nets.items) |*net| {
+                if (net.name == bound and (net.kind == .wire or net.kind == .tri)) net.kind = .wreal;
+            };
             try unit.rename.put(self.ctx.arena, p.name, bound);
             // §6.7.1 the port still has a hierarchical name that may be
             // probed, so the path resolves to the net it was joined to.

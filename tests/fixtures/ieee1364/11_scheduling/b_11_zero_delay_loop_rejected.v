@@ -10,8 +10,10 @@
 // to the inactive region of the SAME time).
 // digital-runner: --event-budget=1000
 // digital-runner: reject
+//! inherited IEEE 1364-2005 11.4
 //! reject E1100
 //! reject more than 1000 events at time 0
+//! neighbour b_11_3_region_order.v
 module b_11_zero_delay_loop_rejected;
   reg a;
   initial a = 0;

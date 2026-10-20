@@ -15,7 +15,7 @@
 //   t=21,22 top.a2.f1/f2 aLib.foo (top.a2's list, inherited).
 // digital-runner: --libmap ex13_5/lib.map
 // digital-runner: files ex13_5/top.v ex13_5/adder.v ex13_5/adder.vg
-//! inherited IEEE 1364-2005 13.3.1.3 13.3.1.5
+//! inherited IEEE 1364-2005 13.5.4 13.3.1.3 13.3.1.5
 `timescale 1ns/1ns
 config cfg4;
     design rtlLib.top ;

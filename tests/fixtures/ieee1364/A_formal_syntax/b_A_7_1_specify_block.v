@@ -18,7 +18,7 @@
 // The $width check runs and stays quiet: a's x -> 1 at 0 opens a high pulse
 // that no fall closes. Output: "y=1 z=0".
 // digital-runner: warning W0251
-//! inherited IEEE 1364-2005 A.7.1
+//! inherited IEEE 1364-2005 A.7.1 14.6 14.6.4 14.6.4.1 14.6.4.2
 `timescale 1ns/1ns
 module b_A_7_1_buf (a, y, z);
   input a;

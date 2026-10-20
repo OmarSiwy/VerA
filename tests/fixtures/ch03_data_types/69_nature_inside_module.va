@@ -22,6 +22,7 @@
 //! lrm 3.6.1:1
 //! lrm 3.13.1:1000
 //! reject-only E0240
+//! neighbour 10_nature_declarations.va
 module ch3_nature_inside_module(p);
     inout p;
     electrical p;

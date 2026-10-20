@@ -28,6 +28,7 @@ const Mir = @import("ir").Mir;
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
 const VarSlot = Lower.VarSlot;
+const Ssa = @import("../ssa.zig");
 
 /// This file's private state on `Lower` (`Lower.event_state`).
 pub const State = struct {
@@ -209,17 +210,84 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
         // §5.10.4 `@ hierarchical_event_identifier`: the event's flag is the
         // guard. In scope for Verilog-A: §5.10 lists named events as an analog
         // event kind, and annex C.7 excludes only digital behaviour and events.
-        .ident => {
-            const name = self.file.str(ex.strOf(e));
-            if (self.events.get(name)) |p| return try self.builder.readVariable(p, self.cur);
-            try self.err(self.file.exprs.mainTok(e), .E0705, "`{s}`", .{name});
-            return null;
+        // §5.10.4 an event array element: active when the element the
+        // subscript names now was triggered.
+        .ident, .index => {
+            const r = try eventRef(self, e) orelse return null;
+            var any: Mir.Value = .zero;
+            for (r.places, r.conds) |p, c| {
+                const hit = try self.emit(.logand, &.{ c, try self.builder.readVariable(p, self.cur) });
+                any = if (any == .zero) hit else try self.emit(.logor, &.{ any, hit });
+            }
+            return any;
         },
         else => { // else: not an event expression: E0706
             try self.err(self.file.exprs.mainTok(e), .E0706, "", .{});
             return null;
         },
     }
+}
+
+/// The §5.10.4 event flags an event reference names, each with the condition
+/// that it is the one named at this evaluation.
+pub const EventRef = struct { places: []const Ssa.Place, conds: []const Mir.Value };
+
+/// Resolves `ev` or `ev[i]…` (A.6.5 `hierarchical_event_identifier
+/// { [ expression ] }`) to its flags. A scalar event and a constant subscript
+/// name one flag; a runtime subscript names every element, the element `k`
+/// guarded by "the flat index is `k`" (`lower_stmt.runtimeArrayIndex`'s
+/// order, -1 when out of range). So a trigger raises, and a detection reads,
+/// only the element the subscript selects now: §5.10.4 "an event is not made
+/// to occur by changing the index of an event array in an event control
+/// expression", since a changed index reads a flag nothing raised. Null after
+/// a diagnostic.
+pub fn eventRef(self: *Lower, e: Ast.ExprId) Oom!?EventRef {
+    const ex = &self.file.exprs;
+    const tok = ex.mainTok(e);
+    if (ex.tag(e) == .ident) {
+        const name = self.file.str(ex.strOf(e));
+        if (self.event_arrays.contains(name)) {
+            try self.err(tok, .E0356, "`{s}` is an event array; an event control or trigger names one element", .{name});
+            return null;
+        }
+        const p = self.events.get(name) orelse {
+            try self.err(tok, .E0705, "`{s}`", .{name});
+            return null;
+        };
+        return .{ .places = try self.arena.dupe(Ssa.Place, &.{p}), .conds = try self.arena.dupe(Mir.Value, &.{.one}) };
+    }
+    var subs_buf: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
+    const chain = (try lower_stmt.indexChain(self, e, &subs_buf)) orelse {
+        try self.err(tok, .E0706, "", .{});
+        return null;
+    };
+    const name = self.file.str(chain.name);
+    const bounds = self.event_arrays.get(name) orelse {
+        try self.err(tok, .E0705, "`{s}` is not an event array", .{name});
+        return null;
+    };
+    if (!try lower_stmt.checkSubscriptCount(self, e, name, .{ .dims = bounds, .ty = .integer }, chain.subs.len)) return null;
+    var buf: [lower_shape.max_stack_dims]i64 = undefined;
+    const idx = try lower_shape.subscriptBuf(self, &buf, bounds.len);
+    const constant = for (chain.subs, idx) |s, *o| {
+        const c = lower_constfold.constEval(self, s) orelse break false;
+        o.* = c.asIntExact() orelse break false;
+    } else true;
+    if (constant) {
+        if (!try lower_stmt.checkSubscripts(self, e, name, .{ .dims = bounds, .ty = .integer }, idx)) return null;
+        const p = self.events.get(try lower_shape.elemName(self, name, idx)).?;
+        return .{ .places = try self.arena.dupe(Ssa.Place, &.{p}), .conds = try self.arena.dupe(Mir.Value, &.{.one}) };
+    }
+    const flat = try lower_stmt.runtimeArrayIndex(self, chain.subs, bounds);
+    const n = lower_shape.shapeCells(bounds);
+    const places = try self.arena.alloc(Ssa.Place, n);
+    const conds = try self.arena.alloc(Mir.Value, n);
+    for (places, conds, 0..) |*p, *c, k| {
+        lower_shape.shapeSubscripts(bounds, k, idx);
+        p.* = self.events.get(try lower_shape.elemName(self, name, idx)).?;
+        c.* = try self.emit(.ieq, &.{ flat, try self.mir.addIntConst(self.arena, @intCast(k)) });
+    }
+    return .{ .places = places, .conds = conds };
 }
 
 /// Checks §5.10.3's monitored-event arguments (E0517), in both analog and

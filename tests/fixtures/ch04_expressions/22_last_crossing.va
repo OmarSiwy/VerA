@@ -27,6 +27,7 @@
 // VerA does not implement them and one file cannot be both green and xfail.
 //
 //! lrm 4.5.10
+//! lrm 4.5.10:1001
 //! bias V(n) = 0
 //! wave V(p) = -1, -1, 1, 1, 1
 //! time 0, 1n, 2n, 3n, 4n

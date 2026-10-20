@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 8.1.4
 //! reject E0248
 //! reject entries 1 and 2 share an input combination and give it 1 and 0
+//! neighbour b_8_1_4_overlapping_entries_agree.v
 primitive conflict_udp(q, a, b);
   output q;
   input a, b;

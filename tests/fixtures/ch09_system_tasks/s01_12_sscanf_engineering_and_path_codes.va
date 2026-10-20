@@ -46,6 +46,7 @@
 //
 //! lrm 9.5.4.2
 //! lrm 2.6.2
+//! lrm 9.5.4.2:1004
 //! print none
 `include "check.vh"
 module s01_scan_engineering(p, n);

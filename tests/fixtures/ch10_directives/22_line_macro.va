@@ -19,9 +19,10 @@
 // 0.75 - 0.25 = 0.5 V exactly (§1.3.1), both operands binary-exact.
 //
 //! lrm 10.7
+//! lrm 10.7:1002
 //! bias V(p) = 0.75, V(n) = 0.25
 //! print none
-// NOTE: this file's LINE COUNT is load-bearing — 30 below is its own line number.
+// NOTE: this file's LINE COUNT is load-bearing — 31 below is its own line number.
 `include "check.vh"
 module ch10_line_macro(p, n);
   inout p, n; electrical p, n;
@@ -30,7 +31,7 @@ module ch10_line_macro(p, n);
     lineno = `__LINE__;
     // §10.7's own worked example, verbatim in shape.
     $display("Internal error: null handle at line %d.", `__LINE__);
-    `CHECKI("`__LINE__ is the physical index of the line it appears on", lineno, 30);
+    `CHECKI("`__LINE__ is the physical index of the line it appears on", lineno, 31);
     `CHECKX("branch potential", V(p, n), 0.5);
     I(p, n) <+ V(p, n);
   end

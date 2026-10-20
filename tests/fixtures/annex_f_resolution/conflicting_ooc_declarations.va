@@ -39,6 +39,7 @@
 //! lrm 7.4.4
 //! lrm 7.4.4:3
 //! reject-only E0902
+//! neighbour out_of_context_declaration.va
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 module annex_f_ooc_leaf(p);

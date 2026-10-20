@@ -13,6 +13,7 @@
 //   r = 2: inside (0:inf) but excluded, so `checkRange` names `r` and the
 //          run ends before the second card evaluates anything.
 //! lrm 3.4.2
+//! lrm 3.4.2:2
 //! psweep r = 3, 2
 //! bias V(p) = 1, V(n) = 0
 //! reject-run E0377

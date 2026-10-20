@@ -22,6 +22,8 @@
 //! lrm 5.6.7
 //! bias V(ctrl) = 1.5
 //! solve
+//! lrm 5.6.7:1
+//! lrm 5.6.7:1001
 `include "check.vh"
 module ch5_indirect(p, n, ctrl);
   inout p, n, ctrl; electrical p, n, ctrl;

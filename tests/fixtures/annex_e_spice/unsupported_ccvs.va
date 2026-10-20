@@ -23,6 +23,7 @@
 //! lrm E.3.1
 //! lrm E.3.1:1000
 //! reject-only E0904
+//! neighbour vcvs_inside_a_spice_subcircuit.va
 module annex_e_unsupported_ccvs(p, n);
   inout p, n; electrical p, n;
   // Third argument is a controlling INSTANCE name, which E.3.1 has no way to pass.

@@ -20,6 +20,7 @@
 //! lrm 6.6.1:1
 //! lrm A.4.2:1000
 //! reject-only E0238
+//! neighbour 09_generate.va
 `include "disciplines.vams"
 module annex_a_generate_integer_index(p, n);
   inout p, n;

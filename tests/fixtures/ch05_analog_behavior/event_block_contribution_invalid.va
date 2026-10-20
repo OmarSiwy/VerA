@@ -13,6 +13,7 @@
 //! lrm 5.6.5:4
 //! lrm 5.10:2
 //! reject-only E0406
+//! neighbour conditional_contribution.va
 module ch5_event_block_contribution(p);
   inout p; electrical p;
   analog @(initial_step) I(p) <+ 1m;

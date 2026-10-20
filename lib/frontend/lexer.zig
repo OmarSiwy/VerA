@@ -233,7 +233,7 @@ pub const Lexer = struct {
         if (std.mem.eql(u8, text, "end_keywords")) return .dir_end_keywords;
         if (std.mem.eql(u8, text, "resetall")) return .dir_resetall;
         if (std.mem.eql(u8, text, "default_nettype") or std.mem.eql(u8, text, "unconnected_drive") or
-            std.mem.eql(u8, text, "nounconnected_drive")) return .dir_outside_module;
+            std.mem.eql(u8, text, "nounconnected_drive") or std.mem.eql(u8, text, "default_transition")) return .dir_outside_module;
         self.pos = start + 1;
         return .invalid;
     }

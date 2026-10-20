@@ -25,6 +25,7 @@
 // is an error — is 147_simparam_unknown_no_fallback_rejected.va.
 //
 //! lrm 9.15
+//! lrm 9.15:1003
 `include "check.vh"
 module ch09_simparam(p, n);
   inout p, n; electrical p, n;

@@ -46,6 +46,7 @@
 //! lrm 12.9
 //! lrm 12.31.3
 //! lrm 12.7:1
+//! lrm 12.7:1001
 //! lrm 12.9:1
 //! lrm 12.31.3:1
 //! design ch12_vpi_routines/p03_ramp_load.va

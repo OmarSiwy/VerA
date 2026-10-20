@@ -4,6 +4,7 @@
 //! lrm 2.9.2
 //! lrm 2.9.2:4
 //! reject-only E0358
+//! neighbour 74_standard_attributes_on_declarations.va
 module ch02_multiplicity_attribute_value_rejected(p, n);
     inout p, n;
     electrical p, n;

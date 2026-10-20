@@ -2,15 +2,19 @@
 //
 // THE REJECTED ITERATION, borrowed from 184_limit_veto_after_correction.va,
 // whose two checks this file repeats. `//! solve` frees p; the branch is
-// I = v - 1e-10. Newton's first step lands on v = 1e-10 at iteration 1, and
-// there the block calls $discontinuity(-1), which §9.17.3 says is used "to
-// prevent convergence": that iterate is not accepted, and the solver accepts
-// the next one, iteration 2, at the same voltage. So the guarded $finish IS
-// evaluated, and only in an iteration that is rejected.
+// I = v - 1e-10. Newton's first step lands on v = 1e-10, which is already
+// inside abstol, so the iteration would be accepted. The block calls
+// $discontinuity(-1) under `$simparam("iteration") == 1`; `limit` evaluates
+// that request at `old`, the updated vector, so iteration 1 is rejected and
+// iteration 2, at the same voltage, is accepted. The guard must not read V:
+// `limit` sees old = 1e-10, but the display pass sees the pre-update x = 0,
+// where V > 0 is false.
 //
-// THE OBSERVABLE. Both checks print at the accepted solution. Had the $finish
-// in iteration 1 taken effect, the run would have ended before the accepted
-// solution existed and printed neither (`//! checks 2` then fails).
+// THE OBSERVABLE. The display pass of iteration 1 reaches the guarded
+// $finish; only the pass gate keeps it from stopping the run. Both checks
+// print at the accepted solution. Had the $finish in iteration 1 taken
+// effect, the run would have ended before the accepted solution existed and
+// printed neither (`//! checks 2` then fails).
 //
 //   iteration at acceptance = 2  (the vetoed iterate was iteration 1)
 //   V(p,n) = 1e-10
@@ -25,7 +29,7 @@
 module b6_finish_in_rejected_iteration_has_no_effect(p, n);
   inout p, n; electrical p, n;
   analog begin
-    if ($simparam("iteration") == 1 && V(p, n) > 0.0) begin
+    if ($simparam("iteration") == 1) begin
       $discontinuity(-1);
       $finish(1);
     end

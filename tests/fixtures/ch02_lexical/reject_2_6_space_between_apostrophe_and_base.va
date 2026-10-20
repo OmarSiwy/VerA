@@ -16,6 +16,7 @@
 //! lrm 2.6.1
 //! lrm 2.6.1:7
 //! reject-only E0131
+//! neighbour 66_number_positions.va
 `include "disciplines.vams"
 module ch2_space_in_base(p, n);
   inout p, n;

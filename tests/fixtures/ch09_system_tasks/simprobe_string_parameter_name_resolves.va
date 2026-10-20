@@ -10,6 +10,7 @@
 // chosen so that a probe that fails to resolve cannot pass.
 //
 //! lrm 9.16
+//! lrm 9.16:1001
 //! bias V(p) = 0.75, V(n) = 0.25
 //! checks 1
 `include "check.vh"

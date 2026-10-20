@@ -11,8 +11,9 @@
 //! lrm E.4.2
 //! lrm E.1.2
 //! bias V(d) = 1.0, V(g) = 0.75, V(s) = 0.25, V(b) = 0.0
-//! reject E0928
+//! reject-only E0928
 //! reject has no `.lib SS` entry
+//! neighbour spice_lib_include_hdl.va
 //! spice .LIB "spice_lib_models.lib" SS
 //! spice .INCLUDE "spice_lib_cell.inc"
 module annex_e_reject_lib_entry_missing(d, g, s, b);

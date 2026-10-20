@@ -2,6 +2,8 @@
 // 0.5 V per iteration; accepting a clamped residual would give the wrong root.
 //! lrm 9.17.3
 //! lrm 9.17.1
+//! lrm 9.17.1:1001
+//! lrm 9.17.3:1001
 //! solve
 //! bias V(n) = 0
 `include "check.vh"

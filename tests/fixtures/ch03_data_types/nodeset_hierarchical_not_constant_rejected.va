@@ -6,7 +6,8 @@
 // Legal neighbour: nodeset_hierarchical_declaration.va.
 //
 //! lrm 3.6.3.2
-//! reject E0365
+//! reject-only E0365
+//! neighbour nodeset_hierarchical_declaration.va
 module ns_bad_child(g);
   inout g; electrical g;
   electrical w;

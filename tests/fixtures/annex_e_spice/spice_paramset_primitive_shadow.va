@@ -6,6 +6,8 @@
 // The mandatory model/subcircuit warning has separate shadow_warning cases.
 // A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm E.3.3
+//! lrm E.3.3:1001
+//! lrm E.3.3:1002
 //! nowarn
 //! bias V(p) = 1, V(n) = 0
 //! checks 1

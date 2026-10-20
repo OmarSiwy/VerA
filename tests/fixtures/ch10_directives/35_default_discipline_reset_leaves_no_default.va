@@ -38,6 +38,7 @@
 //! lrm 3.6.1
 //! lrm 10.2:1000
 //! reject-only E0337
+//! neighbour 41_default_discipline_undeclared_net.va
 `default_discipline electrical
 `default_discipline
 module ch10_default_discipline_reset_leaves_no_default(p, n);

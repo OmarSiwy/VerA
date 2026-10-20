@@ -7,6 +7,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 17.2.9
 //! reject start or finish address evaluates to x or z
+//! neighbour b_17_2_9_readmem_variable_bounds.v
 module b_17_2_9_readmem_unknown_bound_rejected;
   reg [3:0] m [0:7];
   integer first;

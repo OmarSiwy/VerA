@@ -9,6 +9,7 @@
 // Celsius. A $temperature that answered in Celsius would land on 350 there.
 //
 //! lrm 9.15
+//! lrm 9.15:1001
 //! temp 350
 `include "check.vh"
 module ch09_atomic_temperature(p, n);

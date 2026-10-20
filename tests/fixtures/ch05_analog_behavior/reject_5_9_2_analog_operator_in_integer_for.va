@@ -13,6 +13,7 @@
 //! lrm 5.9.2
 //! lrm 5.9.2:1
 //! reject-only E0514
+//! neighbour analog_genvar_loop.va
 `include "disciplines.vams"
 module ch5_analog_operator_in_integer_for(p, n);
   inout p, n;

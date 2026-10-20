@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 13.4.4
 //! reject E0243
 //! reject every configuration is named by another's `use` clause
+//! neighbour b_13_3_2_hierarchical_config.v
 config cfg_a;
   design work.top;
   instance top.u use work.cfg_b:config;

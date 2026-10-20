@@ -9,6 +9,7 @@
 //! lrm 5.7
 //! lrm 5.7:1
 //! bias V(p) = 0.75
+//! lrm 5.7:1002
 `include "check.vh"
 module ch5_proc_assign(p);
   inout p; electrical p; real x; integer select;

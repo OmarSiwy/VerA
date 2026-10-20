@@ -95,13 +95,13 @@ pub fn simulate() digital.Error!void {
         // end; neither 12.36 nor C.7 bounds the count (Vague_Decisions §7).
         if (resets == max_resets) {
             const e = r.fail(0, "more than {d} vpiReset requests in one run: an application that resets every run never lets it end", .{max_resets});
-            callback.runError();
+            callback.runError(e);
             return e;
         }
         resets += 1;
         callback.startOfReset();
         r.reset() catch |e| {
-            callback.runError();
+            callback.runError(e);
             return e;
         };
         value.dropScheduled();
@@ -149,7 +149,7 @@ fn timeSteps(r: *digital.Run) digital.Error!void {
         passes += 1;
         if (passes > r.budget) {
             const e = r.fail(0, "more than {d} callback passes at time {d}: a time callback that registers another at its own time keeps simulation time from advancing", .{ r.budget, t });
-            callback.runError();
+            callback.runError(e);
             return e;
         }
         if (t > clock) {
@@ -166,15 +166,21 @@ fn timeSteps(r: *digital.Run) digital.Error!void {
         started = true;
         callback.fireDue(callback.cbAfterDelay, t);
         if (stopped(r)) break;
-        try runUntil(r, t);
-        // A read-write callback may schedule more work at `t`; it runs before
-        // the time is left, and a second read-write pass sees its effect.
-        while (!stopped(r)) {
-            callback.fireDue(callback.cbReadWriteSynch, t);
-            if (r.scheduler.peekTime() != t) break;
-            try runUntil(r, t);
-        }
+        // VAMS §8.5.1: a read-write callback "shall be treated as inactive
+        // events": after the active events at `t`, before its nonblocking
+        // updates. A due one asks the engine to stop at `t`'s inactive point
+        // (`Scheduler.sync_at`), where it runs. What is left of `t` (the
+        // updates, work a callback scheduled, a callback a change registered)
+        // is another pass of this loop, so the pass budget above bounds a
+        // callback that keeps registering another at its own time.
+        if (callback.isDue(callback.cbReadWriteSynch, t)) r.scheduler.sync_at = t;
+        const stop = try runUntil(r, t);
+        r.scheduler.sync_at = null;
         if (stopped(r)) break;
+        if (stop == .vpi_sync or callback.isDue(callback.cbReadWriteSynch, t)) {
+            callback.fireDue(callback.cbReadWriteSynch, t);
+            continue;
+        }
         read_only = true;
         callback.fireDue(callback.cbReadOnlySynch, t);
         read_only = false;
@@ -191,9 +197,9 @@ pub var started: bool = false;
 
 /// The engine's events at `t`; a failure fires cbError first (IEEE 1364-2005
 /// §27.33.3 "Simulation run-time error occurred").
-fn runUntil(r: *digital.Run, t: u64) digital.Error!void {
-    _ = r.runUntil(t) catch |e| {
-        callback.runError();
+fn runUntil(r: *digital.Run, t: u64) digital.Error!digital.Stop {
+    return r.runUntil(t) catch |e| {
+        callback.runError(e);
         return e;
     };
 }

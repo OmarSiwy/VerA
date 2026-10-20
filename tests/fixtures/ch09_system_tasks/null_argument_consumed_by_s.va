@@ -21,6 +21,7 @@
 //! lrm 9.4.1
 //! lrm 9.4.5
 //! lrm 9.5.3
+//! lrm 9.4.1:1001
 //! checks 2
 `include "check.vh"
 module null_argument_consumed_by_s(p, n);

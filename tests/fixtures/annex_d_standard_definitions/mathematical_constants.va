@@ -22,6 +22,7 @@
 // its way into the expression.
 //
 //! lrm D.2
+//! lrm D.2:1001
 `include "check.vh"
 `include "constants.vams"
 `include "disciplines.vams"

@@ -10,8 +10,9 @@
 // spice_supported_model_type_neighbour.va is the legal neighbour: the same
 // card with a Table E.1 type compiles and runs.
 //! lrm E.1.2
-//! reject E0952
+//! reject-only E0952
 //! reject `sw1` is a SPICE `.MODEL` of type `sw`
+//! neighbour spice_supported_model_type_neighbour.va
 //! spice .MODEL SW1 SW RON=1 ROFF=1MEG VT=0.5
 module spice_unsupported_model_type_rejected(p, n);
   inout p, n; electrical p, n;

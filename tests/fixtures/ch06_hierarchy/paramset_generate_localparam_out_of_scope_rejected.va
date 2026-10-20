@@ -8,8 +8,9 @@
 // leaves every member applicable and is reported as E0914 first.)
 //! lrm 6.6.2
 //! lrm 6.9.2
-//! reject E0314
+//! reject-only E0314
 //! reject `ww`
+//! neighbour paramset_selected_by_generate_localparam.va
 paramset ch6_pglo_sel ch6_pglo_leaf;
   parameter real w = 10.0 from [5.0:inf);
   .w = w;

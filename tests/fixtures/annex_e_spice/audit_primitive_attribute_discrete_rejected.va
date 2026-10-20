@@ -3,6 +3,7 @@
 //! lrm E.3.2.1
 //! lrm E.3.2.1:3
 //! reject-only port_discipline requires a continuous discipline
+//! neighbour primitive_discipline.va
 discipline audit_e_discrete; domain discrete; enddiscipline
 module audit_e_bad_attribute_discrete(p,n);
   inout p,n; electrical p,n;

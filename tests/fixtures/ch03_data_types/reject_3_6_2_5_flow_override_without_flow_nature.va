@@ -18,6 +18,7 @@
 //! lrm 3.6.2.5
 //! lrm 3.6.2.5:1000
 //! reject-only E0370
+//! neighbour b1_3_6_2_5_discipline_overrides_flow_abstol.va
 nature ch3_ovr_volt;
   units = "V";
   access = V;

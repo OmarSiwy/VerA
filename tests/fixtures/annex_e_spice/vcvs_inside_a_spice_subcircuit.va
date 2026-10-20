@@ -21,6 +21,7 @@
 // E card leaves V(out) at 0; swapped control nodes give -2.0.
 //
 //! lrm E.3.1
+//! lrm E.3.1:1000
 //! lrm E.2
 //! bias V(in) = 1.0, V(gnd) = 0.0
 //! solve

@@ -21,6 +21,7 @@
 //! lrm 2.6.1
 //! lrm 2.6.1:2
 //! reject-only E0133
+//! neighbour 04_integer_bases.va
 module ch02_hex_without_base_rejected;
     integer value;
     analog value = 4af;

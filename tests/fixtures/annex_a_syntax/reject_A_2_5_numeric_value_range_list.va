@@ -17,6 +17,7 @@
 //! lrm A.2.5
 //! lrm A.2.5:1000
 //! reject-only E0207
+//! neighbour b8_specparam_range_and_select.va
 `include "disciplines.vams"
 module annex_a_numeric_value_list(p, n);
   inout p, n;

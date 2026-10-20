@@ -154,6 +154,7 @@
 
 //! lrm 12.31.1
 //! lrm 12.31.1:5
+//! lrm 12.31.2:1002
 //! inherited IEEE 1364-2005 26.2.1
 //! inherited IEEE 1364-2005 27.7
 //! inherited-reject IEEE 1364-2005 27.7

@@ -6,7 +6,7 @@
 // buffer: its constant input 1 reaches y before the t=1 sample, so y=1.
 // The invalid neighbour is b_A_2_4_pathpulse_missing_corner_rejected.v.
 // digital-runner: warning W0251
-//! inherited IEEE 1364-2005 A.2.4
+//! inherited IEEE 1364-2005 A.2.4 14.6 14.6.1
 `timescale 1ns/1ns
 module pathpulse_mintypmax_leaf(a, y);
   input a;

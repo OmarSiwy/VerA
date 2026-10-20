@@ -113,7 +113,14 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             return j;
         },
         .default_discipline => try handleDefaultDiscipline(pp, text[j..end], j),
-        .default_transition => try handleDefaultTransition(pp, text[j..end], j),
+        // Applied here, and the word passed through for the parser to refuse
+        // inside a module: §10.3 "can be used only outside of module definitions".
+        .default_transition => {
+            try handleDefaultTransition(pp, text[j..end], j);
+            try pp.out.appendSlice(pp.scratch, text[at..j]);
+            try pp.putNewlines(text[j..end]);
+            return end;
+        },
         .line => try handleLine(pp, text[j..end], at, j),
         .timescale => try handleTimescale(pp, text[j..end], j),
         // Applied here, and the word passed through, as `resetall's is, for

@@ -29,6 +29,7 @@
 // and unbound_nature_access_rejected.va.
 //
 //! lrm D.1
+//! lrm D.1:1001
 //! lrm 5.5.3
 //! lrm 3.6.1.2
 //! checks 36

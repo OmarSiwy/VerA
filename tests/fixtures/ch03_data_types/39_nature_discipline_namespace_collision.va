@@ -18,6 +18,7 @@
 //! lrm 3.6.1:2
 //! lrm 3.13.1:1000
 //! reject-only E0336
+//! neighbour 10_nature_declarations.va
 nature ch3_collision; units="V"; access=CollisionV; abstol=1u; endnature
 discipline ch3_collision; domain continuous; enddiscipline
 module ch3_collision_user; endmodule

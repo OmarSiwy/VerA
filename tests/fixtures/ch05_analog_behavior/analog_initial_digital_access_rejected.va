@@ -24,6 +24,8 @@
 //! lrm 5.2.1
 //! reject-only analog initial
 //! reject digital
+//! lrm 5.2.1:1002
+//! neighbour analog_initial.va
 module ch5_initial_digital_access_rejected;
   reg digital_value;
   real initialized;

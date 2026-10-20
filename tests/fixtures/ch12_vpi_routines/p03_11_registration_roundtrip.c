@@ -43,6 +43,12 @@
  * name registered through vpi_register_systf() must SUCCEED — is P02's routine
  * and is deliberately not asserted here.
  *
+ * The DOMAIN, as 12.32 says, is the registration function's: the same name is
+ * registered in the analog domain by vpi_register_analog_systf() and in the
+ * digital domain by vpi_register_systf(). Each handle reads back through its
+ * own info routine and is refused by the other (12.13/12.14), so the context
+ * a callback will be invoked in is fixed at registration, not by the name.
+ *
  *! design   p03_dc_divider.va
  *! analysis tran 0 5m
  *! expect   11_registration_roundtrip.expected.txt
@@ -56,6 +62,8 @@
 //! lrm 12.6:2
 //! lrm 12.13:1
 //! lrm 12.13:3
+//! lrm 12.32:2
+//! lrm-reject 12.32:2
 //! lrm-reject 12.32:3
 //! lrm 12.32:4
 //! design ch12_vpi_routines/p03_dc_divider.va
@@ -74,6 +82,9 @@ static PLI_INT32 probe_calltf(p_cb_data cb)   { (void)cb; return 0; }
 static PLI_INT32 probe_compiletf(p_cb_data cb){ (void)cb; return 0; }
 static PLI_INT32 probe_sizetf(p_cb_data cb)   { (void)cb; return 64; }
 static p_vpi_stf_partials probe_derivtf(p_cb_data cb) { (void)cb; return 0; }
+/* The digital registration's calltf has the IEEE 1364-2005 prototype, not the
+ * analog one; it is never called, but 12.14's round trip compares the field. */
+static PLI_INT32 probe_digital_calltf(PLI_BYTE8 *u) { (void)u; return 0; }
 
 static PLI_INT32 on_probe(p_cb_data cb)
 {
@@ -99,7 +110,7 @@ static PLI_INT32 on_final(p_cb_data cb)
 
 /* IEEE 1364-2005 26.2.4: the startup routine registers; the read-backs and
  * the analog callback wait for cbEndOfCompile. */
-static vpiHandle sh;
+static vpiHandle sh, dh;
 
 static void p03_11_after_compile(void)
 {
@@ -145,6 +156,24 @@ static void p03_11_after_compile(void)
   P03_NEAR(cb_back.time->real, T_PROBE, 0.0, "12.6 the registered callback time");
   cb_roundtrip = 1;
 
+  /* 12.32: the registration function fixes the domain. The same name is both
+   * an analog and a digital registration; each handle is readable only
+   * through its own domain's info routine, and the other refuses it. */
+  {
+    s_vpi_systf_data dinfo;
+    memset(&dinfo, 0, sizeof dinfo);
+    vpi_get_systf_info(dh, &dinfo);
+    p03_no_error("vpi_get_systf_info(digital $p03_probe)");
+    P03_CHECK(dinfo.type == vpiSysFunc && dinfo.sysfunctype == vpiRealFunc &&
+              dinfo.tfname != NULL && strcmp((char *)dinfo.tfname, "$p03_probe") == 0 &&
+              dinfo.calltf == probe_digital_calltf,
+              "12.32: the digital registration reads back as registered");
+    vpi_get_analog_systf_info(dh, &back);
+    (void)p03_saw_error("12.32: vpi_get_analog_systf_info on a digital registration");
+    vpi_get_systf_info(sh, &dinfo);
+    (void)p03_saw_error("12.32: vpi_get_systf_info on an analog registration");
+  }
+
   fin_cb.reason = acbFinalStep; fin_cb.cb_rtn = on_final;
   P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
 }
@@ -152,6 +181,7 @@ static void p03_11_after_compile(void)
 static void p03_11_startup(void)
 {
   static s_vpi_analog_systf_data systf, dup;
+  static s_vpi_systf_data dsystf;
 
   systf.type        = vpiAnalogSysFunc;
   systf.sysfunctype = vpiRealFunc;
@@ -164,6 +194,19 @@ static void p03_11_startup(void)
   sh = vpi_register_analog_systf(&systf);
   P03_CHECK(sh != NULL, "12.32: registering $p03_probe failed");
   p03_no_error("vpi_register_analog_systf");
+
+  /* 12.32: the other registration function is the other domain. The name is
+   * unique per domain, so this one is a second, independent registration. */
+  dsystf.type        = vpiSysFunc;
+  dsystf.sysfunctype = vpiRealFunc;
+  dsystf.tfname      = (PLI_BYTE8 *)"$p03_probe";
+  dsystf.calltf      = probe_digital_calltf;
+  dsystf.compiletf   = NULL;
+  dsystf.sizetf      = NULL;
+  dsystf.user_data   = (PLI_BYTE8 *)probe_ctx;
+  dh = vpi_register_systf(&dsystf);
+  P03_CHECK(dh != NULL, "12.32: the same name was refused in the digital domain");
+  p03_no_error("vpi_register_systf(same name, digital domain)");
 
   /* 12.32: "The task or function name shall be unique in the domain in which it
    * is registered." */

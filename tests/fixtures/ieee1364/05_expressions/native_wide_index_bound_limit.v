@@ -6,6 +6,7 @@
 //! inherited IEEE 1364-2005 5.2.1
 //! reject E1100
 //! reject a part-select bound is outside the supported i64 range
+//! neighbour native_wide_index_values.v
 // digital-runner: reject
 module native_wide_index_bound_limit;
   reg [7:0] v;

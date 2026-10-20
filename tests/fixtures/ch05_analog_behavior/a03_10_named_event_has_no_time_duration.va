@@ -87,6 +87,8 @@
 //! lrm 5.10.4
 //! analysis tran
 //! time 0, 1n, 2n, 3n, 4n
+//! lrm 5.10:1001
+//! lrm 5.10:1002
 `include "check.vh"
 module a03_named_event_duration(p);
   inout p; electrical p;

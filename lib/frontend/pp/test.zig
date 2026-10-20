@@ -419,7 +419,9 @@ test "directives that contribute no text, and rejected ones" {
     try expectPp("`default_nettype\n`unconnected_drive\n", "`default_nettype wire\n`unconnected_drive pull1\n");
     try expectFail("`pragma\n", .E0147);
     try expectFail("`line 3 \"f.v\" 0 // no\n", .E0128);
-    try expectPp("\n\n", "`default_discipline electrical\n`default_transition 1n\n");
+    // §10.3's word is passed through too (§10.3: only outside module
+    // definitions), so the parser can refuse it there.
+    try expectPp("\n`default_transition\n", "`default_discipline electrical\n`default_transition 1n\n");
     // §10.6 is the exception: passed through verbatim for the parser, which is
     // the only stage that knows where a design element starts.
     try expectPp(

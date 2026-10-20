@@ -48,6 +48,8 @@
 // zero-count evaluation independently of these value cases.
 //
 //! lrm 4.2.13
+//! lrm 4.2.13:1001
+//! lrm 4.2.13:1002
 //! lrm 4.2.13:4
 //! bias V(p) = 0.0
 `include "check.vh"

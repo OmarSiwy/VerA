@@ -885,10 +885,12 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // §9.5.4.2 `$sscanf`: the count and three item flavours, each a pure
         // function of the two strings. `Lower.lowerScan` guards each
         // destination write with count > index.
-        .@"$sscanf" => return gen_render.emitScan(self, "zScanN", args, .int),
-        .@"$sscanf$int" => return gen_render.emitScan(self, "zScanI", args, .int),
-        .@"$sscanf$real" => return gen_render.emitScan(self, "zScanR", args, .real),
-        .@"$sscanf$str" => return gen_render.emitScan(self, "zScanS", args, .str),
+        // §9.5.4.2 "For $sscanf, null characters shall also be considered
+        // white space" — the `Nul` kernels, not the `$fscanf` ones.
+        .@"$sscanf" => return gen_render.emitScan(self, "zScanNulN", args, .int),
+        .@"$sscanf$int" => return gen_render.emitScan(self, "zScanNulI", args, .int),
+        .@"$sscanf$real" => return gen_render.emitScan(self, "zScanNulR", args, .real),
+        .@"$sscanf$str" => return gen_render.emitScan(self, "zScanNulS", args, .str),
         // IEEE 1364 §17.11 math functions are their bare spellings, resolved at
         // comptime. A wrong arity is an unregistered `$name`.
         inline .@"$sqrt",
@@ -1188,10 +1190,16 @@ pub fn emitSystfTable(self: *Gen) Error!void {
 fn gateOpen(self: *Gen, c: Mir.Callee, inst: Mir.Inst) Error!bool {
     if (!self.passes or !self.emitting_display or Mir.callee.family(c) == .file_read) return false;
     self.uses.pass = true;
-    const every = c == .@"$debug" or c == .@"$fdebug";
+    // §9.7.3: `$fatal` "terminates the simulation without checking whether the
+    // iteration would be rejected", so it is performed at the iterate like
+    // `$debug`, not held back to the accepted point with the display tasks.
+    const every = c == .@"$debug" or c == .@"$fdebug" or c == .@"$fatal";
     const init = std.mem.findScalar(Mir.Inst, self.init_calls, inst) != null and (every or Mir.callee.isFileCall(c));
     if (init) self.uses.sim = true;
-    try self.b("(if ({s}) ", .{if (init)
+    // §9.7.1/§9.7.2: a `$finish`/`$stop` that already ran means the run ends
+    // at the enclosing wrapper (`zFinishPass`); no later task of this pass
+    // may print, the way an immediate exit would have stopped them.
+    try self.b("(if (zFinish == 0 and ({s})) ", .{if (init)
         "pass == .all or (pass == .iteration and sim.iteration == 1)"
     else if (every)
         "pass != .accepted"

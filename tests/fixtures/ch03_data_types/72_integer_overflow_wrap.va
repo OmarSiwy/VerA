@@ -17,6 +17,7 @@
 // keyword, annex B.)
 //
 //! lrm 3.2
+//! lrm 3.2:1001
 `include "check.vh"
 module ch03_integer_overflow_wrap(p, n);
     inout p, n;

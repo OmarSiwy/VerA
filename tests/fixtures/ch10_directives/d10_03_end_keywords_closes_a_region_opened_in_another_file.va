@@ -37,8 +37,10 @@
 // states no code, only "shall result in an error".
 //
 //! lrm 10.6
+//! lrm 10.6:1002
 //! lrm 10.1
 //! reject-only E0208
+//! neighbour d10_02_begin_keywords_region_survives_the_include_that_opened_it.va
 `begin_keywords "VAMS-2023"
 `include "d10_keywords_1364_2005.vh"
 module d10_end_keywords_cross_file_inner(sin, n); // OK: 1364-2005 is in force

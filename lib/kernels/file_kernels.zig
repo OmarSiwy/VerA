@@ -447,6 +447,48 @@ pub fn zFLine(n: i64, d: i64) []const u8 {
     return zf_slots.items[k].line[0..zf_slots.items[k].line_len];
 }
 
+/// The bytes call site `site`'s `$fgets`/`$fscanf` read, as of its own
+/// statement. A reader is a pure value that codegen may place at its first
+/// use, which can come after a `$fclose` (no slot: `zFLine` reads "") or a
+/// second read of the same descriptor (the channel's line moved on). So the
+/// count copies the line here when it runs (`zFLatch`), and the readers take
+/// this copy (`zFLineAt`).
+fn ZfLatch(comptime site: usize) type {
+    return struct {
+        const n = site;
+        var text: []u8 = &.{};
+    };
+}
+
+/// Performs the count `n` of call site `site` on descriptor `d`: copies the
+/// line it left on the channel into the site's latch and returns `n`. A string
+/// variable may still view an earlier copy, so every copy is owned by
+/// `zf_retired` from birth and freed with it (`zFFreeAll`). An allocation that
+/// fails is E1011.
+// ponytail: one copy per performed read, kept until the run ends; reuse the
+// buffer once no string can still view it if a run reads millions of lines.
+pub fn zFLatch(comptime site: usize, n: i64, d: i64) i64 {
+    const L = ZfLatch(site);
+    const k = zfSlot(d) orelse {
+        L.text = &.{};
+        return n;
+    };
+    const s = &zf_slots.items[k];
+    zf_retired.ensureUnusedCapacity(zf_gpa, 1) catch zfOver();
+    const copy = zf_gpa.dupe(u8, s.line[0..s.line_len]) catch zfOver();
+    zf_retired.appendAssumeCapacity(copy);
+    L.text = copy;
+    return n;
+}
+
+/// `zFLine` over call site `site`'s latch: the line that site's read left,
+/// whatever the descriptor has done since. Empty when the count `n` says
+/// nothing was transferred (§9.5.4.1).
+pub fn zFLineAt(comptime site: usize, n: i64) []const u8 {
+    if (n <= 0) return "";
+    return ZfLatch(site).text;
+}
+
 /// §9.5.4.2's INPUT: the unread remainder of the file, up to one buffer, read
 /// WITHOUT moving the position. The scanner itself is not duplicated here —
 /// `$fscanf` "reads from the file specified by fd" what `$sscanf` reads from a

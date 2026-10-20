@@ -4,7 +4,8 @@
 // on no search path, and so is E0126.
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
-//! reject E0126
+//! reject-only E0126
+//! neighbour 52_include_verilog_a_1_0_header_names.va
 `include "disciplines.h"
 module include_unknown_header_name_rejected(p, n);
   inout p, n; electrical p, n;

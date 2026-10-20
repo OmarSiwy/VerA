@@ -2227,7 +2227,9 @@ def fixture_tags(path):
     reject-only (and reject-run, which is always exclusive), neighbours,
     xfail. A `.c` fixture's polarity is per line
     (`lrm` / `lrm-reject`)."""
-    tags = {"cites": [], "reject": False, "only": False, "neighbours": [], "xfail": False, "c": path.suffix == ".c"}
+    tags = {"cites": [], "reject": False, "only": False, "neighbours": [], "xfail": False, "c": path.suffix == ".c",
+            # A digital case judged against its `.expected.txt` byte for byte.
+            "golden": path.suffix == ".v" and path.with_suffix(".expected.txt").exists()}
     lines = path.read_text(errors="replace").split("\n")
     rejecting = any(re.match(r"\s*//!\s*reject(-only|-run)?\s", ln) for ln in lines)
     for line in lines:
@@ -2247,7 +2249,9 @@ def fixture_tags(path):
             # `error[` line the run prints must match (tests/torture.zig).
             tags["reject"] = tags["only"] = True
         elif word == "neighbour":
-            tags["neighbours"].append(str((path.parent / rest).relative_to(ROOT / "tests/fixtures")))
+            # Normalise `..` so a legal twin in another chapter resolves to the
+            # same root-relative key the verdicts file uses.
+            tags["neighbours"].append(os.path.relpath(os.path.normpath(path.parent / rest), ROOT / "tests/fixtures"))
         elif word == "xfail":
             tags["xfail"] = True
     return tags
@@ -2309,6 +2313,10 @@ def levels(ledger, fixtures, verdicts, perturbed, killed, oracles=None):
             # A C check is a condition with no want to perturb; the run's
             # exact stdout is the contract, and E5's mutants are its proof.
             return side == "pos" or any(s == "pos" for _, s in t["cites"])
+        if side == "pos" and t.get("golden"):
+            # A digital transcript is compared whole against its golden: any
+            # output the rule changes fails it, so there is nothing to perturb.
+            return True
         if side == "pos":
             return perturbed.get(p) == "pass"
         return t["only"] and bool(t["neighbours"]) and all(passed(n) for n in t["neighbours"])
@@ -2375,10 +2383,13 @@ def chapter_of(clause):
 
 
 def metric(argv):
-    """`metric --verdicts=F [--perturbed=F] [--killed=F] [--levels=OUT]`: the
-    evidence-level table. F files are `zig build benchmark -- --strict
-    --verdicts=F` (and `--perturb --verdicts=F`) outputs; `--killed` is one row
-    id per line. `--levels` writes `<id>\t<level>`, the ratchet file."""
+    """`metric --verdicts=F [--digital=F] [--perturbed=F] [--killed=F]
+    [--levels=OUT]`: the evidence-level table. F files are `zig build benchmark
+    -- --strict --verdicts=F` (and `--perturb --verdicts=F`) outputs;
+    `--digital` is `zig build test-devices -- --verdicts=F`'s, the digital
+    runner's cases (`.v` with a golden or `// digital-runner: reject`), which
+    the .va suite never collects. `--killed` is one row id per line.
+    `--levels` writes `<id>\t<level>`, the ratchet file."""
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
     if "verdicts" not in opts:
         print("metric: --verdicts=<file> from a strict run is required", file=sys.stderr)
@@ -2393,6 +2404,10 @@ def metric(argv):
     fixtures = {str(p.relative_to(root)): fixture_tags(p) for p in paths}
     fixtures = {p: t for p, t in fixtures.items() if t["cites"] or t["reject"]}
     verdicts = read_verdicts(opts["verdicts"])
+    # The digital runner's cases: a disjoint set of paths from the .va suite's.
+    if "digital" in opts:
+        for path, v in read_verdicts(opts["digital"]).items():
+            verdicts.setdefault(path, v)
     # `vpi_runs` run under `zig build test`, the merge gate: a run whose
     # `test` passed has met each, and an xfail entry is a known gap.
     verdicts.update(runs)

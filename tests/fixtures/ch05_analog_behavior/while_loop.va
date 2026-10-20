@@ -11,6 +11,7 @@
 //
 //! lrm 5.9.1
 //! bias V(p) = 0.25
+//! lrm 5.9.1:1001
 `include "check.vh"
 module ch5_while(p);
   inout p; electrical p;

@@ -20,6 +20,7 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.1:1
+//! lrm 9.5.1:2
 //! bias V(p) = 0
 //! checks 6
 `include "check.vh"

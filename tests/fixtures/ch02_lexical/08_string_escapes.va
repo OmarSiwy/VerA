@@ -16,6 +16,7 @@
 // Every escape here is in Table 2-2, so none warns W0149: this is the legal
 // neighbour of undefined_escape_keeps_character.va.
 //! lrm 2.7
+//! lrm 2.7:1001
 //! lrm 2.7:1
 //! lrm 2.3
 //! nowarn

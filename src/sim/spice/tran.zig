@@ -301,8 +301,11 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
         // §9.17.2 `$bound_step` caps the next step whichever rule chose it
         // (the truncation error's included), after every one of them. It is
         // read after the step, since devices set it in `updateState`, so it
-        // cannot be folded into effective_dt_max.
-        if (ckt.boundStep()) |bs| dt_next = @min(dt_next, bs);
+        // cannot be folded into effective_dt_max. "If the value is less than
+        // the simulator's minimum allowable time step, the simulator's
+        // minimum time step shall be used instead": floored at `dt_min`, so a
+        // tiny bound shortens the step instead of ending the analysis.
+        if (ckt.boundStep()) |bs| dt_next = @min(dt_next, @max(bs, options.dt_min));
         dt_prev2 = dt_prev;
         dt_prev = dt;
 

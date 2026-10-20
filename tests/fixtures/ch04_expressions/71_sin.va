@@ -4,6 +4,7 @@
 // degree-based implementation would answer 0.0087, so the unit is pinned too.
 //
 //! lrm 4.3.2
+//! lrm 4.3.2:1001
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_sin(p, n);
