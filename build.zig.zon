@@ -1,6 +1,6 @@
 .{
     .name = .vera,
-    .version = "0.11.4",
+    .version = "0.11.5",
     .fingerprint = 0x6b0632dec2e307f,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},

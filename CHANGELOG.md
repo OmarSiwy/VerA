@@ -4,6 +4,31 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+## v0.11.5 — 2026-10-20
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2750 / 2750 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **383 / 808 — 47.4%** | 4 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 3 · 1 · 0 · 421 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
+### Changed
+
+- No compiler change. The external IEEE 1364 suites (ivtest, iverilog-diff) are re-triaged after v0.11.3's fixes: 229 rows that now agree are dropped, and the 97 new disagreements each have a verdict. One is a known VerA bug: a non-ANSI task port declared twice, or redeclared with another range or type, is still accepted; VerA already refuses the same for module ports (§12.3.3).
+
 ## v0.11.4 — 2026-10-20
 
 | Measure | Number | Remaining to v1.0.0 | Command |
