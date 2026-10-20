@@ -4,6 +4,59 @@ What a user of VerA notices, newest release first. A fix names its GitHub issue 
 
 ## Unreleased
 
+## v0.11.2 — 2026-10-20
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
+### Fixed
+
+- VerA's own test suite passes on Windows: bit masks of width 64 (`span`, driven-part masks) were built behind a branch that Windows' Debug build still range-checked, so `zig build test` panicked there ("integer does not fit in destination type").
+- The flake's source package builds again: its configure step read test fixtures the package does not ship.
+- Cached test devices (`-Dva-cache`) are regenerated when `tools/contract.zig` changes, so a release's version bump no longer leaves stale devices failing the version check. v0.11.1's changelog row for `zig build test` recorded such a stale local run (FAIL); the tree passed.
+
+## v0.11.1 — 2026-10-20
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **FAIL** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
+### Fixed
+
+- A device whose `$strobe`/`$display` compares against a constant that folds from several operands, one of them a value the core caches, failed to compile ("use of undeclared identifier `c`"); `zig build benchmark -- --perturb` showed it on many_timers_instance_defaults.
+- VerA builds for Windows again: a size check on a file-table slot assumed an 8-byte OS file handle, and Windows' is wider, so v0.11.0 did not compile there.
+
 ## v0.11.0 — 2026-10-19
 
 | Measure | Number | Remaining to v1.0.0 | Command |

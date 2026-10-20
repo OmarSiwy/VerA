@@ -1630,7 +1630,7 @@ pub const State = struct {
             v |= self.v[r.word + 1] << up;
             if (!two) x |= self.x[r.word + 1] << up;
         }
-        const m = if (r.width == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(r.width)) - 1;
+        const m = std.math.shl(u64, 1, r.width) -% 1;
         return .{ .v = v & m, .x = x & m };
     }
 

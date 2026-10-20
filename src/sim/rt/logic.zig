@@ -83,7 +83,9 @@ pub fn span(j: usize, lo: i64, hi: i64) u64 {
 }
 
 fn below(n: i64) u64 {
-    return if (n >= 64) ones else (@as(u64, 1) << @intCast(n)) - 1;
+    // No cast guarded by the branch: Windows' LLVM Debug build ran the cast's
+    // safety check at n == 64. A shift by 64 or more is 0, so 0 -% 1 = ones.
+    return std.math.shl(u64, 1, n) -% 1;
 }
 
 /// The 64 bits of `p` from bit `pos` up; bits outside `p` read 0.
@@ -1155,7 +1157,7 @@ test "span is bits [lo, hi) of word j, clamped: the mask root.forcedBits once bu
         if (b > 0 and a < 64) {
             const p: u7 = @intCast(@max(a, 0));
             const q: u7 = @intCast(@min(b, 64));
-            want = (if (q == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(q)) - 1) & ~((@as(u64, 1) << @intCast(p)) - 1);
+            want = (std.math.shl(u64, 1, q) -% 1) & ~(std.math.shl(u64, 1, p) -% 1);
         }
         try std.testing.expectEqual(want, span(j, @intCast(lo), @intCast(lo + width)));
     };

@@ -93,9 +93,11 @@ const ZFSlot = struct {
     back: [16]u8 = undefined,
     nback: u8 = 0,
 
-    // One cache line per channel: `err` is a u8 errno for that reason.
+    // One cache line per channel where the OS handle is 8 bytes: `err` is a
+    // u8 errno for that reason. The budget excludes the handle, whose size is
+    // the OS's (Windows' `Io.File` is wider than a POSIX fd).
     comptime {
-        zfstd.debug.assert(@sizeOf(ZFSlot) <= 64);
+        zfstd.debug.assert(@sizeOf(ZFSlot) - @sizeOf(zfstd.Io.File) <= 56);
     }
 };
 

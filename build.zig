@@ -523,13 +523,22 @@ fn genRun(b: *Build, gen: Gen, src: []const u8) *Run {
     const run = b.addSystemCommand(&.{b.fmt("./{s}", .{copy})});
     run.step.dependOn(&usf.step);
     addIncludes(b, run, src);
+    // The device embeds contract.zig's `vera_version` and targets its
+    // contract: a release bump or a contract edit regenerates it.
+    run.addFileInput(b.path("tools/contract.zig"));
     return run;
 }
 
 /// Declares every file `src` reaches by `` `include "name" `` as an input of
 /// `run`, searched in `src`'s directory then tests/fixtures (the `-I`).
 fn addIncludes(b: *Build, run: *Run, src: []const u8) void {
-    var lines = std.mem.splitScalar(u8, configText(b, src), '\n');
+    // A tree without tests/ (the flake's source package) declares no test
+    // devices' includes; only a test step would run them.
+    const text = b.root.root_dir.handle.readFileAlloc(b.graph.io, src, b.allocator, .unlimited) catch |e| switch (e) {
+        error.FileNotFound => return,
+        else => std.debug.panic("{s}: {t}", .{ src, e }),
+    };
+    var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         const rest = std.mem.cutPrefix(u8, std.mem.trim(u8, line, " \t\r"), "`include") orelse continue;
         var q = std.mem.tokenizeScalar(u8, rest, '"');

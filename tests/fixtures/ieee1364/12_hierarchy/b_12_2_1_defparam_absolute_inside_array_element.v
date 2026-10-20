@@ -8,7 +8,7 @@
 // top.u[1].x.p = 5 (absolute, its own element) and x.q = 7 (relative).
 // Each g[i] holds defparam top.g[i].l.p = i + 20 (absolute, its own block).
 // Expected at t=1: u[1] p=5 q=7, g[0] p=20, g[1] p=21.
-//! lrm 6.3.1:4
+//! lrm 6.3.1
 //! inherited IEEE 1364-2005 12.2.1
 //! neighbour b_12_2_1_defparam_absolute_out_of_array_element_rejected.v
 `timescale 1ns/1ns
