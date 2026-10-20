@@ -16,7 +16,7 @@ fixtures), never by either tool's say-so:
 - `out-of-scope`: not a 1364-2005 question (SystemVerilog, Verilog-AMS, SDF files, an Icarus-only behaviour).
 - `flaky`: nondeterministic; the reason says what varies.
 
-Measured against `vera` at 61627771 on 2026-10-16 (1 disagreements).
+Measured against `vera` at 05438e97 on 2026-10-20 (1 disagreements).
 
 | names | verdict | reason |
 |---|---|---|
