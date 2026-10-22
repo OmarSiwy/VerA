@@ -5,7 +5,6 @@
 //! lrm 11.6.8
 //! lrm 12.23:2
 //! design ch11_vpi/vpi_design.va
-//! xfail empty analog port relation:
 //! stdout empty_analog_port_relation: required behavior verified
 #include "p02_check.h"
 static void verify(void)

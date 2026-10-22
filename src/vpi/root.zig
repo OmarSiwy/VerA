@@ -533,7 +533,16 @@ pub const Cold = struct {
     /// override ranges retain this identity, so traversal can distinguish
     /// two source statements that write the same target (§26.6.6 i, j).
     override_expr: Ast.ExprId = .none,
+    /// IEEE 1364-2005 §26.3.3 vpiLineNo and vpiFile, resolved when the model
+    /// was built: the analog model's instances (model/analog.zig), whose
+    /// compilation is freed after `open`. The digital model resolves its
+    /// `Obj.src_tok` through its run instead. Null: none recorded.
+    loc: ?Loc = null,
 };
+
+/// IEEE 1364-2005 §26.3.3: a 1-based line of a named source file, as
+/// written (no §19.7 `line renumbering).
+pub const Loc = struct { line: c_int, file: []const u8 };
 
 const empty_cold: Cold = .{};
 

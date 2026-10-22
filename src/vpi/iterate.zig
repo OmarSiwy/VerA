@@ -63,7 +63,7 @@ const vpiVariables = root.vpiVariables;
 ///
 /// So an EMPTY set and an UNSUPPORTED relationship have the same return value,
 /// and the difference between them is the error status: a module with no regs
-/// is NULL with no error, `vpi_iterate(vpiPort, some_net)` is NULL with one. An
+/// is NULL with no error, `vpi_iterate(vpiPort, some_reg)` is NULL with one. An
 /// application that does not check errors sees the documented empty loop either
 /// way; one that does can tell a fact about the design from a limit of VerA's.
 pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
@@ -131,6 +131,10 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no relationship {d}", .{ typeName(o.vtype), obj_type });
         return null;
     }
+    // §11.6.8 net ->> port, IEEE 1364-2005 §26.6.6: the ports of the net's
+    // own module whose low connection it is. None is an empty set — NULL
+    // without an error (§12.23) — not a missing relationship.
+    if (o.kind == .net and obj_type == vpiPort) return lowConnPorts(d, o);
     // §11.6.11 (IEEE 1364 §26.6.7-9): an array's elements. A memory's words by
     // the legacy vpiMemoryWord tag or as vpiReg; a variable array's by
     // vpiVarSelect; an instance array's members by vpiModule.
@@ -222,6 +226,22 @@ fn uses(d: *Design, o: *const Obj) vpiHandle {
 fn useFail(o: *const Obj) vpiHandle {
     fail("NOTRAVERSE", "vpi_iterate: a {s} is no simple expression, so it has no vpiUse", .{typeName(typeOf(o))});
     return null;
+}
+
+/// §11.6.8 / IEEE 1364-2005 §26.6.6: the ports of net `o`'s module it is the
+/// low connection of. A port's low connection is the net its name declares in
+/// the same scope, so these are the ports sharing `o`'s name, as `driversLoads`
+/// finds them. The analog model's nets never are one — a port-connected name
+/// is its `.port` row there (model/analog.zig) — so its set is always empty.
+fn lowConnPorts(d: *Design, o: *const Obj) vpiHandle {
+    const owner = o.owner.get() orelse return null;
+    const ports = d.scopes[owner].ports;
+    var out = std.ArrayList(vpiHandle).initCapacity(d.gpa, ports.len) catch return oomIter();
+    for (ports) |p| if (std.mem.eql(u8, d.objects[p].name, o.name)) out.appendAssumeCapacity(handleOf(&d.objects[p]));
+    return newHandleIter(d, out.toOwnedSlice(d.gpa) catch {
+        out.deinit(d.gpa);
+        return oomIter();
+    });
 }
 
 /// IEEE 1364-2005 §26.6.22/§26.6.23: the drivers (`drivers`) or loads of net

@@ -1161,6 +1161,15 @@ pub const display_txt =
     \\    std.process.exit(code);
     \\}
     \\
+    \\/// §9.7.1/§9.7.3 the moment a diagnostic reports, with no newline: the
+    \\/// host's (`veraDiag` in the root: a dc sweep's variable in place of the
+    \\/// time, and Table 9-25 level 2's statistics), or the time `t` when the
+    \\/// root has none.
+    \\fn zWhen(t: f64, level: u8) void {
+    \\    if (comptime @hasDecl(@import("root"), "veraDiag")) return @import("root").veraDiag(t, level);
+    \\    std.debug.print("t={d}", .{t});
+    \\}
+    \\
     \\/// §5.10.2 a `$finish` (1) or `$stop` (2) call, which the enclosing
     \\/// display wrapper (`zFinishPass`) performs after the pass: it can raise
     \\/// `final_step` and re-run the chain, which the per-task site cannot do

@@ -217,34 +217,28 @@ class DiagnosticObservations(unittest.TestCase):
     def test_finish_zero_has_no_diagnostic(self):
         self.assertEqual(self.output.strip(), "")
 
-    @unittest.expectedFailure
     def test_finish_two_reports_time_location_and_statistics(self):
         self.assertLocation()
         self.assertTime()
         self.assertRegex(self.output, r"(?i)memory")
         self.assertRegex(self.output, r"(?i)cpu")
 
-    @unittest.expectedFailure
     def test_finish_initial_reports_initialization(self):
         self.assertLocation()
         self.assertRegex(self.output, r"(?i)initiali[sz]")
 
-    @unittest.expectedFailure
     def test_finish_dc_reports_swept_value(self):
         self.assertLocation()
         self.assertRegex(self.output, r"\bdrive\b[^\n]*\b2(?:\.0*)?\b")
 
-    @unittest.expectedFailure
     def test_info_reports_simulation_time(self):
         self.assertIn("observe-info", self.output)
         self.assertTime()
 
-    @unittest.expectedFailure
     def test_info_initial_reports_initialization(self):
         self.assertIn("observe-info", self.output)
         self.assertRegex(self.output, r"(?i)initiali[sz]")
 
-    @unittest.expectedFailure
     def test_info_dc_reports_swept_value(self):
         self.assertIn("observe-info", self.output)
         self.assertRegex(self.output, r"\bdrive\b[^\n]*\b2(?:\.0*)?\b")

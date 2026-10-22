@@ -13182,8 +13182,9 @@ pub const codegen_tests = struct {
         try std.testing.expect(std.mem.find(u8, exe, "zCReal(&zb0, (S.con(model.g)).val(), 'g', 0, 0, -1)") != null);
         // §9.4.1 `$write` is the one that does not end the line.
         try std.testing.expect(std.mem.find(u8, exe, "\"no newline\"") != null);
-        // §9.7.3 the severity is a prefix, not something a reader must infer.
-        try std.testing.expect(std.mem.find(u8, exe, "ERROR: bad") != null);
+        // §9.7.3 the severity is a prefix, not something a reader must infer,
+        // and the moment (`zWhen`) sits between it and the message.
+        try std.testing.expect(std.mem.find(u8, exe, "\"ERROR: \", .{}); zWhen(sim.t, 1); std.debug.print(\" bad") != null);
         // No `$debug`/`$fdebug`: one pass, no `pass` parameter.
         try std.testing.expect(std.mem.find(u8, exe, "SayPass") == null);
     }

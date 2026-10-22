@@ -311,16 +311,14 @@ fn renderPrintArgs(g: *Gen, ops: []const PrintArg, first: usize) Error!void {
 
 /// Emits one §9.4.1 display or §9.7.3 severity task as a labeled block that
 /// prints to stderr (the transcript; stdout belongs to a host that pipes
-/// data). `site` keys `$monitor`'s scratch row. `$fatal` also halts.
-pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
+/// data). `inst` keys `$monitor`'s scratch row. `$fatal` also halts.
+pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, inst: Mir.Inst) Error!void {
+    const site: usize = @backingInt(inst);
     var fmt: std.ArrayList(u8) = .empty;
     var ops: Ops = .empty;
-    // §9.7.3: the severity is the message's whole reason for existing, and a
-    // reader cannot recover it from the text.
-    if (severityWord(c)) |word| {
-        try fmt.appendSlice(g.arena, word);
-        try fmt.appendSlice(g.arena, ": ");
-    }
+    // §9.7.3 the severity and the moment open the line (`emitWhen`, below);
+    // the message follows a space.
+    if (severityWord(c) != null) try fmt.append(g.arena, ' ');
     // §9.7.3 Syntax 9-7: `$fatal ( finish_number [, message_argument … ] )`.
     // The finish_number sets the $finish diagnostic level; it is not part of
     // the message, so it must not print. Dropped only when it is not a string,
@@ -342,6 +340,11 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     // in this block.
     try g.b("zd: {{ ", .{});
     try emitScratch(g, ops.items, site);
+    // §9.7.3: the severity is the message's whole reason for existing, and a
+    // reader cannot recover it from the text; "these tasks shall also report
+    // the simulation run time", at the Table 9-25 level `$fatal`'s
+    // finish_number sets.
+    if (severityWord(c)) |word| try emitWhen(g, word, inst, if (c == .@"$fatal") finishLevel(g, args) else 1);
     if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
         // only when a watched argument VALUE differs from the step this site
@@ -445,7 +448,7 @@ pub fn planPasses(g: *Gen) Error!void {
         try init.append(g.arena, def.inst_result);
     }
     assert(init.items.len <= g.lowered.displays.items.len);
-    if (g.passes) g.init_calls = init.items;
+    g.init_calls = init.items;
 }
 
 /// Whether a `.record` device records task `c` (`planSay`).
@@ -579,13 +582,15 @@ fn finishLevel(g: *Gen, args: []const Mir.Value) i64 {
 
 /// Emits §9.7.1 `$finish` / §9.7.2 `$stop` in the printing artifact: the run
 /// ends at the call, after every print before it. Table 9-25 level 0 prints
-/// nothing, level >= 1 prints `sim.t` and the module. Both exit 0: the display
-/// phase runs on the accepted solution, which is where §9.7.1 exits.
+/// nothing; level >= 1 prints the moment (`emitWhen`) and the location, the
+/// module; level 2's memory and CPU statistics are the host's (`zWhen`).
+/// Both exit 0: the display phase runs on the accepted solution, which is
+/// where §9.7.1 exits.
 ///
-/// ponytail: level 2 prints what level 1 does (no CPU/memory bookkeeping), and
-/// `$stop` exits because a batch artifact has nothing to suspend into; add a
-/// debugger hook in the runner when something interactive can resume.
-pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+/// ponytail: `$stop` exits because a batch artifact has nothing to suspend
+/// into; add a debugger hook in the runner when something interactive can
+/// resume.
+pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value, inst: Mir.Inst) Error!void {
     const level = finishLevel(g, args);
     try g.b("zd: {{ ", .{});
     // §5.10.2: "final_step will also generate a global event upon the
@@ -597,12 +602,22 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
     const kind: u8 = if (Mir.Callee.fromName(name) == .@"$finish") 1 else 2;
     try g.b("if (zFinish == 0) {{ ", .{});
     if (level >= 1) {
-        g.uses.sim = true;
-        try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{sim.t}}); ", .{
-            name, std.zig.fmtString(g.mir.name),
-        });
+        try emitWhen(g, name, inst, level);
+        try g.b("std.debug.print(\" ({f})\\n\", .{{}}); ", .{std.zig.fmtString(g.mir.name)});
     }
     try g.b("zFinish = {d}; }} break :zd S.con(0.0); }}", .{kind});
+}
+
+/// Emits a diagnostic's opening, `task: ` then the moment it reports, with no
+/// newline. §9.7.1/§9.7.3: a task in an `analog initial` block reports "that
+/// the call was made during initialization" in place of the time; every other
+/// one reports the simulation time, or the host's dc sweep point, through
+/// `zWhen` at `sim.t`, which also prints Table 9-25 `level` 2's statistics.
+fn emitWhen(g: *Gen, task: []const u8, inst: Mir.Inst, level: i64) Error!void {
+    if (std.mem.findScalar(Mir.Inst, g.init_calls, inst) != null)
+        return g.b("std.debug.print(\"{s}: initialization\", .{{}}); ", .{task});
+    g.uses.sim = true;
+    try g.b("std.debug.print(\"{s}: \", .{{}}); zWhen(sim.t, {d}); ", .{ task, std.math.clamp(level, 0, 2) });
 }
 
 /// Emits §9.5.3 `$swrite`/`$sformat` ("the same as their counterparts ...
@@ -1411,8 +1426,10 @@ test "§9.7.3 $fatal's finish_number is a diagnostic level, not message text" {
     defer arena_state.deinit();
     const a = arena_state.allocator();
     const out = try emitBody(a, "$fatal(0, \"died %d\", 7);");
-    // The 0 is consumed by the skip, not printed by the walk.
-    try std.testing.expect(has(out, "\"FATAL: died {s:>11}\\n\""));
+    // The 0 is consumed by the skip, not printed by the walk; it is the
+    // Table 9-25 level the moment prints at (`emitWhen`).
+    try std.testing.expect(has(out, "std.debug.print(\"FATAL: \", .{}); zWhen(sim.t, 0); "));
+    try std.testing.expect(has(out, "\" died {s:>11}\\n\""));
     try std.testing.expect(!has(out, "}died"));
 }
 
@@ -1601,7 +1618,8 @@ test "§9.7 simulation control: the run ends at the call, with the pinned status
     // §9.7.3: $fatal prints its message, then exits with the finish_number as
     // the errorcode (fatal_terminates.va checks the run's exit status).
     const fat = try emitBody(a, "$fatal(2, \"died %0d\", 7);");
-    try std.testing.expect(has(fat, "\"FATAL: died {d}\\n\""));
+    try std.testing.expect(has(fat, "std.debug.print(\"FATAL: \", .{}); zWhen(sim.t, 2); "));
+    try std.testing.expect(has(fat, "\" died {d}\\n\""));
     try std.testing.expect(has(fat, "_ = zHalt(2); "));
     // ...floored at 1, so a $fatal never reads as success to a shell.
     const fat0 = try emitBody(a, "$fatal(0, \"boom\");");
@@ -1618,21 +1636,47 @@ test "§9.7 simulation control: the run ends at the call, with the pinned status
     // display wrapper's job, so the site records the request (`zFinish`: 1
     // for `$finish`, 2 for `$stop`) and the wrapper halts.
     const fin = try emitBody(a, "$finish;");
-    try std.testing.expect(has(fin, "\"$finish: t={d} (t)\\n\""));
-    try std.testing.expect(has(fin, "zFinish = 1; "));
-    // Table 9-25 level 0 prints nothing (and still exits).
+    try std.testing.expect(has(fin, "std.debug.print(\"$finish: \", .{}); zWhen(sim.t, 1); std.debug.print(\" (t)\\n\", .{}); zFinish = 1; "));
+    // Table 9-25 level 0 prints nothing (and still exits); level 2 asks the
+    // host's hook for its statistics.
     const fin0 = try emitBody(a, "$finish(0);");
-    try std.testing.expect(!has(fin0, "$finish: t="));
+    try std.testing.expect(!has(fin0, "$finish: "));
     try std.testing.expect(has(fin0, "zFinish = 1; "));
+    const fin2 = try emitBody(a, "$finish(2);");
+    try std.testing.expect(has(fin2, "std.debug.print(\"$finish: \", .{}); zWhen(sim.t, 2); "));
     // §9.7.2 $stop, non-interactive artifact: diagnostic then exit 0. Not
     // `$finish`, so §5.10.2's final_step event is not raised.
     const stp = try emitBody(a, "$stop(1);");
-    try std.testing.expect(has(stp, "\"$stop: t={d} (t)\\n\""));
-    try std.testing.expect(has(stp, "zFinish = 2; "));
+    try std.testing.expect(has(stp, "std.debug.print(\"$stop: \", .{}); zWhen(sim.t, 1); std.debug.print(\" (t)\\n\", .{}); zFinish = 2; "));
 
     // The kernel is `std.process.exit`, f64-typed so the legal dead code
     // after a terminating call still compiles.
     try std.testing.expect(has(fin, "fn zHalt(code: u8) f64 {\n    std.process.exit(code);\n}"));
+}
+
+test "§9.7.1/§9.7.3 a diagnostic's moment: the time, or initialization in analog initial" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var h: Harness = undefined;
+    try Harness.run(a,
+        \\module t(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog initial $info("i");
+        \\  analog begin
+        \\    $warning("w");
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+        \\
+    , &h);
+    const out = try h.genDisplay(a);
+    // "The call was made during initialization" in place of the time: a
+    // property of the block, decided here, not of `sim`.
+    try std.testing.expect(has(out, "std.debug.print(\"INFO: initialization\", .{}); std.debug.print(\" i\\n\", .{}); "));
+    // Everywhere else the host's hook picks the time or the dc sweep's variable.
+    try std.testing.expect(has(out, "std.debug.print(\"WARNING: \", .{}); zWhen(sim.t, 1); std.debug.print(\" w\\n\", .{}); "));
 }
 
 test "§9.4.3 Table 9-22: %h shows the operand's two's-complement bit pattern" {

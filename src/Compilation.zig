@@ -209,6 +209,11 @@ pub const CompileResult = struct {
     /// §9.15/§9.16 the module and instance path of each inlined analog
     /// block, by `Ast.AnalogBlock.unit` (`Lower.Output.unit_paths`).
     unit_paths: []const Elaborate.UnitPath = &.{},
+    /// The compilation's diagnostics (arena): its file table and source map
+    /// turn a `Lowered.tok_starts` offset into a file and line, the VPI's
+    /// IEEE 1364-2005 §26.3.3 vpiLineNo. The messages go to the caller's
+    /// `Options.diags` copy when one was asked for; this bag keeps its own.
+    diags: *const diag.Bag,
     /// Its `unit_modes` slice is gpa-owned.
     verdict: proof.Verdict,
     /// What the caller asked for; `buildArtifact` refuses a `.lint` result.
@@ -297,10 +302,15 @@ pub fn compileSourceOpts(
     const arena_state = try gpa.create(BigArena);
     arena_state.* = .init(gpa);
 
-    var bag = diag.Bag.init(arena_state.allocator());
+    // In the arena, not on this stack: the result keeps it (`CompileResult.diags`).
+    const bag = arena_state.allocator().create(diag.Bag) catch |err| {
+        freeArena(gpa, arena_state);
+        return err;
+    };
+    bag.* = diag.Bag.init(arena_state.allocator());
     bag.levels = opts.lint;
 
-    const result = compileInArena(gpa, arena_state, source, target, opts, &bag);
+    const result = compileInArena(gpa, arena_state, source, target, opts, bag);
 
     // A `--deny`ed warning is an error, so a compilation that only tripped one
     // still fails. Read before detaching, which moves the bag out.
@@ -308,16 +318,18 @@ pub fn compileSourceOpts(
 
     // The bag's messages, labels and file texts live in the compilation arena,
     // so they are copied out before the arena can be freed. This is why no
-    // stage frees the arena on error.
+    // stage frees the arena on error. A COPY is detached: the arena bag stays
+    // whole for `CompileResult.diags`.
     if (opts.diags) |out| {
-        bag.detach(gpa) catch |err| {
+        var copy = bag.*;
+        copy.detach(gpa) catch |err| {
             if (result) |r| {
                 var ok = r;
                 ok.deinit();
             } else |_| freeArena(gpa, arena_state);
             return err;
         };
-        out.* = bag;
+        out.* = copy;
     }
 
     var ok = result catch |err| {
@@ -520,6 +532,7 @@ fn lowerAndProve(
         .file = file,
         .module = out.module,
         .unit_paths = out.unit_paths,
+        .diags = bag,
         .verdict = verdict,
         .target = target,
         .nesting = nesting,

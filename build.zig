@@ -269,7 +269,7 @@ pub fn build(b: *Build) void {
     all_step.dependOn(&vpi_host.step);
     const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/fixtures/ch11_vpi/vpi_app.c");
     vpi_app.expectExitCode(0);
-    vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
+    vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=702\n");
     test_step.dependOn(&vpi_app.step);
     test_vpi.dependOn(&vpi_app.step);
     if (results_dir) |dir| {

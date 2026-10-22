@@ -5,7 +5,6 @@
 //! lrm 11.6.1
 //! lrm 12.5:3
 //! design ch11_vpi/vpi_design.va
-//! xfail instance source location:
 //! stdout instance_source_line: required behavior verified
 #include "p02_check.h"
 static void verify(void)

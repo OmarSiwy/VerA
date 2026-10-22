@@ -353,6 +353,27 @@ pub const runner_body =
     \\
     \\/// The analysis in force, as every entry point reads it.
     \\var sim_state: contract.SimState = .{};
+    \\/// §9.7.1 Table 9-25, §9.7.3: the testbench's part of a device diagnostic
+    \\/// (its `zWhen`), with no newline. In a dc sweep "the current value of
+    \\/// the swept variable in place of the simulation time" (`diag_sweep`),
+    \\/// else `t=` the time; `level` 2 adds the run's memory and CPU use.
+    \\pub fn veraDiag(t: f64, level: u8) void {
+    \\    const swept = diag_sweep.len != 0 and switch (sim_state.kind) {
+    \\        .static, .dc, .nodeset => true,
+    \\        .ic, .tran, .ac, .noise => false,
+    \\    };
+    \\    if (swept) std.debug.print("{s}", .{diag_sweep}) else std.debug.print("t={d}", .{t});
+    \\    if (level < 2) return;
+    \\    // ponytail: `maxrss` is kB on Linux and bytes on macOS; 0 on an OS without rusage.
+    \\    if (comptime std.posix.rusage != void) { // os: comptime-gated on `rusage`, else the zeros below
+    \\        const ru = std.posix.getrusage(std.posix.rusage.SELF); // os: inside the `rusage != void` branch
+    \\        const cpu = @as(f64, @floatFromInt(ru.utime.sec + ru.stime.sec)) + @as(f64, @floatFromInt(ru.utime.usec + ru.stime.usec)) / 1e6;
+    \\        std.debug.print(" memory={d} kB cpu={d:.3} s", .{ ru.maxrss, cpu });
+    \\    } else std.debug.print(" memory=0 kB cpu=0 s", .{});
+    \\}
+    \\/// The `//! sweep`/`//! psweep` point in force, `name=value` per swept
+    \\/// variable (`sweepPoint`); "" when nothing is swept.
+    \\var diag_sweep: []const u8 = "";
     \\/// True while `point`'s self-checks evaluate the device around the
     \\/// point: the printing artifact's `zDomain` (§4.3.2) reads it from the
     \\/// root module and stays quiet, since no analysis asked for those inputs.

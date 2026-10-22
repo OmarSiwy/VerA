@@ -31,8 +31,8 @@
  * §11.6.8/§11.6.9/§11.6.12 iterations at every level; §11.2.2 instance
  * uniqueness; §12.21's two name forms and §6.7's upward search; §12.3 identity;
  * §12.4/§12.35 iterator lifetime; invalid requests and implementation-specific
- * handle robustness; and separately labelled required-positive XFAIL probes.
- * Unsupported required capabilities are not successful negative tests.
+ * handle robustness; and separately labelled required-positive checks, each
+ * reporting `PASS <ID>:` on stderr for the evidence ledger (build.zig).
  *
  * Failure is `exit(1)` with a message naming the check; success prints one
  * census line, which is what proves the startup routine and its callback
@@ -422,62 +422,51 @@ static void check_failures(vpiHandle top)
   CHECK(vpi_get(vpiType, top) == vpiModule, "an object died when its handle was released");
 }
 
-/* Required-positive capabilities. An implementation improvement must fail as
- * XPASS until its marker is removed and the positive check becomes ordinary.
- * Each still-missing branch retains the previous failure-value/error guards,
- * but those are implementation regression checks, NOT normative rejection
- * requirements. Other wrong results fail rather than being accepted as XFAIL.
- *
- * Numeric constants missing from VerA's partial header are local test names;
- * IEEE 1364-2005 Annex G gives vpiLineNo=6. Do not add a production constant
- * while its required property remains unimplemented.
+/* Required-positive capabilities, each a named `// evidence: pass <ID>` check
+ * that build.zig matches against a `PASS <ID>:` line on stderr. Once these
+ * were `evidence: xfail` probes with XPASS guards; the guards went when the
+ * behaviour arrived, and the positive oracle stayed.
  */
-static void required_xpass(const char *name)
+static void check_required_positive(void)
 {
-  fprintf(stderr, "XPASS %s: remove XFAIL and retain the positive oracle\n", name);
-  exit(1);
-}
-
-static void check_required_positive_xfails(void)
-{
-  enum { lrm_vpiLineNo = 6 };
   vpiHandle u1 = vpi_handle_by_name("vpi_top.u1", NULL);
-  PLI_INT32 line = vpi_get(lrm_vpiLineNo, u1);
-  PLI_INT32 error = vpi_chk_error(NULL);
-  vpiHandle bit, itr;
+  PLI_INT32 line = vpi_get(vpiLineNo, u1);
+  vpiHandle bus, bit, itr;
+  char name[256];
 
   /* AMS §§11.6.1,12.5; IEEE Annex G: location is where the object
    * is USED, not its definition. vpi_design.va:38 instantiates u1;
    * the vpi_mid definition is line48. No `line directive changes either. */
-  // evidence: xfail VPI-LINE-INSTANCE
-  if (line == 38 && error == 0) required_xpass("VPI-LINE-INSTANCE");
-  CHECK(u1 != NULL && line == vpiUndefined,
-        "VPI-LINE-INSTANCE: expected source line38, observed %d", (int)line);
-  expect_error("XFAIL VPI-LINE-INSTANCE missing location property");
-  fprintf(stderr, "XFAIL VPI-LINE-INSTANCE: required vpiLineNo=38 unavailable\n");
+  // evidence: pass VPI-LINE-INSTANCE
+  CHECK(u1 != NULL && line == 38, "VPI-LINE-INSTANCE: expected source line 38, observed %d", (int)line);
+  expect_no_error("vpi_get(vpiLineNo) on an instance");
+  fprintf(stderr, "PASS VPI-LINE-INSTANCE: u1 is instantiated on line %d\n", (int)line);
 
   /* AMS §11.6.8 NOTE1 requires vector bits even without expansion;
-   * §12.20 returns the indexed child. bus is [0:3], so zero is IN range.
-   * The bounded oracle here is handle availability, not all bit properties. */
-  bit = vpi_handle_by_index(vpi_handle_by_name("vpi_top.bus", NULL), 0);
-  error = vpi_chk_error(NULL);
-  // evidence: xfail VPI-INDEX-VALID-BIT
-  if (bit != NULL && error == 0) required_xpass("VPI-INDEX-VALID-BIT");
-  CHECK(bit == NULL, "VPI-INDEX-VALID-BIT returned a handle with an error");
-  expect_error("XFAIL VPI-INDEX-VALID-BIT missing indexed object");
-  fprintf(stderr, "XFAIL VPI-INDEX-VALID-BIT: required bus[0] handle unavailable\n");
+   * §12.20 returns the indexed child. bus is [0:3], so zero is IN range,
+   * and IEEE 1364-2005 §26.6.6 makes the child a one-bit vpiNetBit whose
+   * vpiParent is the vector. */
+  bus = vpi_handle_by_name("vpi_top.bus", NULL);
+  bit = vpi_handle_by_index(bus, 0);
+  // evidence: pass VPI-INDEX-VALID-BIT
+  CHECK(bit != NULL, "VPI-INDEX-VALID-BIT: bus[0] has no handle");
+  expect_no_error("vpi_handle_by_index(bus, 0)");
+  CHECK(vpi_get(vpiSize, bit) == 1, "VPI-INDEX-VALID-BIT: bus[0] is %d bits wide", (int)vpi_get(vpiSize, bit));
+  take(name, sizeof name, vpiName, bit);
+  CHECK(strcmp(name, "bus[0]") == 0, "VPI-INDEX-VALID-BIT: the bit is named `%s`", name);
+  CHECK(vpi_compare_objects(vpi_handle(vpiParent, bit), bus) == 1, "VPI-INDEX-VALID-BIT: bus[0]'s vpiParent is not bus");
+  expect_no_error("the bit's property block");
+  fprintf(stderr, "PASS VPI-INDEX-VALID-BIT: bus[0] is a one-bit net bit of bus\n");
 
   /* §11.6.8 includes vpiPort (low connection), distinct from vpiPortInst
    * (high connection). mid is internal to vpi_top, not one of its ports;
    * child connections do not make it a low connection of a parent port.
    * §12.23 therefore requires an EMPTY successful iteration, not an error. */
   itr = vpi_iterate(vpiPort, vpi_handle_by_name("vpi_top.mid", NULL));
-  error = vpi_chk_error(NULL);
-  // evidence: xfail VPI-PORT-EMPTY-RELATION
-  if (itr == NULL && error == 0) required_xpass("VPI-PORT-EMPTY-RELATION");
-  CHECK(itr == NULL, "VPI-PORT-EMPTY-RELATION returned a spurious port iterator");
-  expect_error("XFAIL VPI-PORT-EMPTY-RELATION missing valid relationship");
-  fprintf(stderr, "XFAIL VPI-PORT-EMPTY-RELATION: valid empty relation rejected\n");
+  // evidence: pass VPI-PORT-EMPTY-RELATION
+  CHECK(itr == NULL, "VPI-PORT-EMPTY-RELATION: an internal net yielded a port iterator");
+  expect_no_error("vpi_iterate(vpiPort) over an internal net");
+  fprintf(stderr, "PASS VPI-PORT-EMPTY-RELATION: an internal net's port set is empty, without an error\n");
 }
 
 /* ------------------------------------------------------------------------- */
@@ -497,7 +486,7 @@ static void vpi_app_main(void)
   check_names(top);
   check_properties();
   check_failures(top);
-  check_required_positive_xfails();
+  check_required_positive();
 
   printf("vpi: scopes=%d ports=%d nets=%d regs=%d params=%d checks=%d\n",
          c.scopes, c.ports, c.nets, c.regs, c.params, checks);

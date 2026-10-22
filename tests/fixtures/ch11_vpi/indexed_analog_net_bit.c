@@ -5,7 +5,6 @@
 //! lrm 11.6.8
 //! lrm 12.20:1
 //! design ch11_vpi/vpi_design.va
-//! xfail indexed analog net bit:
 //! stdout indexed_analog_net_bit: required behavior verified
 #include "p02_check.h"
 static void verify(void)

@@ -582,7 +582,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         => return switch (self.display) {
             .emit => {
                 const gated = try gateOpen(self, c, inst);
-                try cg_display.emitDisplayTask(self, c, args, @backingInt(inst));
+                try cg_display.emitDisplayTask(self, c, args, inst);
                 return if (gated) gateClose(self) else {};
             },
             // A device's `say` records the task (`contract.SaySite`); a task
@@ -595,7 +595,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$finish", .@"$stop" => {
             if (self.display != .emit) return voidTask(self);
             const gated = try gateOpen(self, c, inst);
-            try cg_display.emitSimCtl(self, name, args);
+            try cg_display.emitSimCtl(self, name, args, inst);
             return if (gated) gateClose(self) else {};
         },
         // §9.4.1 a monitor's registration is a side effect, performed only by

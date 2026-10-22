@@ -31,10 +31,8 @@ const joinPath = model.joinPath;
 const lastComponent = model.lastComponent;
 const nameTable = model.nameTable;
 const vpiArray = root.vpiArray;
-const vpiBit = root.vpiBit;
 const vpiIndex = root.vpiIndex;
 const vpiNet = root.vpiNet;
-const vpiParent = root.vpiParent;
 const vpiScope = root.vpiScope;
 const vpiSize = root.vpiSize;
 
@@ -401,47 +399,12 @@ fn pathComponent(arena: std.mem.Allocator, file: *const Ast.SourceFile, info: an
     return arena.print("{s}[{d}]", .{ name, k });
 }
 
-/// IEEE 1364-2005 §26.6.6 Details a / §26.6.7: the bits of the vector net or
-/// reg last appended, `vtype` vpiNetBit or vpiRegBit, from its declared msb
-/// to its lsb, each named `v[i]`, with vpiParent the vector and vpiIndex
-/// `i`. The vector reaches them by vpiBit; a scalar's set is empty.
+/// `model.addBits` over the engine's declared range of the vector last
+/// appended (`Run.vecRange`); a row without an engine slot gets none.
 fn addBits(arena: std.mem.Allocator, objects: *model.Rows, r: *const sim.digital.Run, vtype: c_int) Error!void {
-    const v: u32 = @intCast(objects.hot.items.len - 1);
-    const vec = objects.hot.items[v];
-    const slot = vec.slot.get() orelse return;
-    if (vec.size < 2) {
-        objects.hot.items[v].lists = &.{.{ .tag = vpiBit, .items = &.{} }};
-        return;
-    }
+    const slot = objects.hot.items[objects.hot.items.len - 1].slot.get() orelse return;
     const range = r.vecRange(slot);
-    const bits = try arena.alloc(u32, vec.size);
-    const step: i64 = if (range.msb >= range.lsb) -1 else 1;
-    // A generated vector's module owner is not its enclosing gen scope.
-    // §26.6.6/§26.6.44: each bit retains the vector's containing scope.
-    const scope: ?code.Edge = for (vec.edges) |edge| {
-        if (edge.tag == vpiScope) break edge;
-    } else null;
-    for (bits, 0..) |*bit, k| {
-        const i = range.msb + step * @as(i64, @intCast(k));
-        const c: u32 = @intCast(objects.hot.items.len);
-        try objects.append(.{ .kind = .constant, .owner = vec.owner, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
-        const edges = try arena.alloc(code.Edge, if (scope != null) 3 else 2);
-        edges[0] = .{ .tag = vpiParent, .to = v };
-        edges[1] = .{ .tag = vpiIndex, .to = c };
-        if (scope) |edge| edges[2] = edge;
-        bit.* = @intCast(objects.hot.items.len);
-        try objects.append(.{
-            .kind = .code,
-            .vtype = vtype,
-            .owner = vec.owner,
-            .name = try arena.print("{s}[{d}]", .{ vec.name, i }),
-            .full = try arena.print("{s}[{d}]", .{ vec.full, i }),
-            .src_tok = vec.src_tok,
-            .edges = edges,
-            .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = 1 }}),
-        });
-    }
-    objects.hot.items[v].lists = try arena.dupe(code.List, &.{.{ .tag = vpiBit, .items = bits }});
+    try model.addBits(arena, objects, range.msb, range.lsb, vtype);
 }
 
 /// IEEE 1364-2005 §26.6.44: each §12.4.1 loop generate directly inside an

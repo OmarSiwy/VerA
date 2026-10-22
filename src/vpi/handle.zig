@@ -272,8 +272,8 @@ pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle
 /// net or reg (IEEE 1364-2005 §26.6.6/§26.6.7). `index` is the element's own
 /// declared index, the value its vpiIndex constant holds.
 ///
-/// ponytail: the analog model and port bits have no bit objects, so indexing
-/// one of those vectors is still §12.2's error indication.
+/// ponytail: port bits and the analog model's reg bits have no bit objects,
+/// so indexing one of those vectors is still §12.2's error indication.
 pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     const d = enter("vpi_handle_by_index") orelse return null;
     const o = object("vpi_handle_by_index", obj) orelse return null;
@@ -300,7 +300,7 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no element {d}", .{ o.full, index });
         return null;
     }
-    if (o.kind != .code) for (o.lists) |l| if (l.tag == vpiBit and l.items.len != 0) {
+    if (o.kind != .code) for (o.lists) |l| if (l.tag == vpiBit) {
         for (l.items) |bit| for (d.objects[bit].edges) |e| {
             if (e.tag == vpiIndex and d.objects[e.to].value.?.int == index) return handleOf(&d.objects[bit]);
         };

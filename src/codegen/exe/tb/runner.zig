@@ -297,6 +297,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points) |pt| {
         try out.appendSlice(arena, "    {\n");
+        try sweepPoint(&out, arena, d, pt);
         // §9.5.1.1 a block after the first is a following analysis of the same
         // process, so a file it reopens "w" keeps earlier output.
         if (per_block and n != 0)
@@ -656,6 +657,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points, 0..) |pt, pi| {
         try out.appendSlice(arena, "    {\n");
+        try sweepPoint(&out, arena, d, pt);
         // §9.5.1.1, as in the fixed-grid runner: every point here is an analysis.
         if (pi != 0)
             try out.appendSlice(arena, "        if (comptime contract.fileIo(D)) |f| if (f.new_analysis) |g| g();\n");
@@ -768,6 +770,20 @@ fn setCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, card: 
     try out.print(arena, "{s}if (comptime @hasField(D.Model, \"{f}__given\")) @field({s}, \"{f}__given\") = true;\n", .{
         indent, std.zig.fmtString(name), card, std.zig.fmtString(name),
     });
+}
+
+/// Writes the host's §9.7.1/§9.7.3 sweep point for row `pt` of `expand`:
+/// `name=value` per swept variable, which `veraDiag` reports in place of the
+/// time during a dc sweep. Nothing when nothing is swept.
+fn sweepPoint(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: []const f64) Error!void {
+    assert(pt.len == d.sweeps.len + d.psweeps.len);
+    if (pt.len == 0) return;
+    try out.appendSlice(arena, "        diag_sweep = \"");
+    for (pt, 0..) |v, k| {
+        const s = if (k < d.sweeps.len) d.sweeps[k] else d.psweeps[k - d.sweeps.len];
+        try out.print(arena, "{s}{f}={d}", .{ if (k == 0) "" else " ", std.zig.fmtString(s.name), v });
+    }
+    try out.appendSlice(arena, "\";\n");
 }
 
 /// Writes, at `indent`, the §9.10 temperature into `card` when `temp` is

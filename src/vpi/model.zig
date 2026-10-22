@@ -1,6 +1,7 @@
 //! The rows every model builder shares: `Building` (a scope under
-//! construction), the §11.6.10/§11.6.11 array rows, IEEE 1364-2005 §26.6.10
-//! range rows, §6.2.2 instance-array rows, and `freeze`, which turns a
+//! construction), the §11.6.10/§11.6.11 array rows, IEEE 1364-2005 §26.6.6
+//! vector-bit rows, §26.6.10 range rows, §6.2.2 instance-array rows, and
+//! `freeze`, which turns a
 //! builder's growable lists into the fixed `Design` tables. The builders are
 //! model_analog.zig (over `Lowered`) and model_digital.zig (over a
 //! `sim.digital.Run`); both append rows to one `Rows`.
@@ -22,6 +23,10 @@ const Kind = root.Kind;
 const Obj = root.Obj;
 const Cold = root.Cold;
 const Scope = root.Scope;
+const vpiBit = root.vpiBit;
+const vpiIndex = root.vpiIndex;
+const vpiParent = root.vpiParent;
+const vpiScope = root.vpiScope;
 const vpiSize = root.vpiSize;
 
 /// The rows a builder appends: the `Obj` table and the `Cold` rows its
@@ -268,6 +273,50 @@ pub fn addRange(arena: std.mem.Allocator, objects: *Rows, owner: u32, left: i64,
     const props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = size }});
     try objects.append(.{ .kind = .code, .vtype = code.vpiRange, .owner = .of(owner), .name = "", .full = "", .edges = edges, .props = props });
     return l + 2;
+}
+
+/// IEEE 1364-2005 §26.6.6 Details a / §26.6.7: the bits of the vector net or
+/// reg last appended, `vtype` vpiNetBit or vpiRegBit, from its declared `msb`
+/// to its `lsb`, each named `v[i]`, with vpiParent the vector and vpiIndex
+/// `i`. The vector reaches them by vpiBit; a scalar's set is empty, and its
+/// bounds are not read. Asserts that the vector's `size` is the range's.
+/// Invalidates pointers into `objects`.
+pub fn addBits(arena: std.mem.Allocator, objects: *Rows, msb: i64, lsb: i64, vtype: c_int) Error!void {
+    const v: u32 = @intCast(objects.hot.items.len - 1);
+    const vec = objects.hot.items[v];
+    if (vec.size < 2) {
+        objects.hot.items[v].lists = &.{.{ .tag = vpiBit, .items = &.{} }};
+        return;
+    }
+    std.debug.assert(vec.size == @abs(msb - lsb) + 1);
+    const bits = try arena.alloc(u32, vec.size);
+    const step: i64 = if (msb >= lsb) -1 else 1;
+    // A generated vector's module owner is not its enclosing gen scope.
+    // §26.6.6/§26.6.44: each bit retains the vector's containing scope.
+    const scope: ?code.Edge = for (vec.edges) |edge| {
+        if (edge.tag == vpiScope) break edge;
+    } else null;
+    for (bits, 0..) |*bit, k| {
+        const i = msb + step * @as(i64, @intCast(k));
+        const c: u32 = @intCast(objects.hot.items.len);
+        try objects.append(.{ .kind = .constant, .owner = vec.owner, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
+        const edges = try arena.alloc(code.Edge, if (scope != null) 3 else 2);
+        edges[0] = .{ .tag = vpiParent, .to = v };
+        edges[1] = .{ .tag = vpiIndex, .to = c };
+        if (scope) |edge| edges[2] = edge;
+        bit.* = @intCast(objects.hot.items.len);
+        try objects.append(.{
+            .kind = .code,
+            .vtype = vtype,
+            .owner = vec.owner,
+            .name = try arena.print("{s}[{d}]", .{ vec.name, i }),
+            .full = try arena.print("{s}[{d}]", .{ vec.full, i }),
+            .src_tok = vec.src_tok,
+            .edges = edges,
+            .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = 1 }}),
+        });
+    }
+    objects.hot.items[v].lists = try arena.dupe(code.List, &.{.{ .tag = vpiBit, .items = bits }});
 }
 
 /// §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`:

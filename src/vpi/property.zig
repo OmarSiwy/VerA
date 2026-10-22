@@ -329,12 +329,14 @@ fn netType(k: Ast.NetKind) ?c_int {
     };
 }
 
-/// IEEE 1364-2005 §26.3.3 vpiLineNo and vpiFile: where the declaration or
-/// statement `o.src_tok` is, in the source file as written. Only the digital
-/// model records a token.
+/// IEEE 1364-2005 §26.3.3 vpiLineNo and vpiFile: the location the model
+/// resolved when it was built (`Cold.loc`, the analog model's instances),
+/// else where the declaration or statement `o.src_tok` is, in the source
+/// file as written, through the digital run's source map.
 ///
 /// ponytail: the physical line; §19.7's `line renumbering is not applied.
-fn location(o: *const Obj) ?struct { line: c_int, file: []const u8 } {
+fn location(o: *const Obj) ?root.Loc {
+    if (root.coldOf(o).loc) |l| return l;
     if (o.src_tok == 0) return null;
     const r = run.attached() orelse return null;
     const start = r.starts[o.src_tok];

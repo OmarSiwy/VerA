@@ -147,16 +147,22 @@ pub fn build(model_gpa: std.mem.Allocator, res: *const CompileResult) Error!Desi
     for (flat.nets) |n| {
         const flat_name = file.str(n.name);
         const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
+        // §3.6.3's range as lowering folded it (`vectorSize`'s source); a
+        // scalar is `[0:0]`, whose bit set is empty.
+        const range = lowered.vectors.get(flat_name) orelse Lowered.VecRange{ .msb = 0, .lsb = 0 };
         try scopes.items[split.scope].nets.append(gpa, @intCast(objects.hot.items.len));
         try objects.append(.{
             .kind = .net,
             .owner = .of(split.scope),
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
-            .size = vectorSize(lowered, flat_name),
+            .size = range.size(),
             .net_type = n.kind,
             .src_tok = n.main_tok,
         });
+        // IEEE 1364-2005 §26.6.6 Details a: the vector's bits, `bus[0]`..,
+        // reached by vpiBit and §12.20's vpi_handle_by_index.
+        try model.addBits(arena, &objects, range.msb, range.lsb, code.vpiNetBit);
     }
     for (flat.vars) |v| {
         // §11.6.9 is about REGS; `real` and `integer` are §11.6.10's
@@ -610,6 +616,9 @@ fn addAnalogCode(
             var made = heads.get(b.file.str(inst.name)) orelse code.none;
             while (made != code.none) : (made = next[made]) {
                 const child = s.children.items[made];
+                // §11.6.1: the instance is where the module is USED
+                // (IEEE 1364-2005 §26.3.3), the line `u1(...)` is written on.
+                (try objects.coldFor(child)).loc = try srcLoc(arena, res, inst.main_tok);
                 try b.attributes(child, .{ .kind = .declaration, .tok = inst.main_tok }, false);
                 for (inst.ports, 0..) |conn, k| {
                     const pt = if (conn.name == .none) (if (k < scopes[child].ports.items.len) scopes[child].ports.items[k] else continue) else for (scopes[child].ports.items) |p| {
@@ -621,6 +630,23 @@ fn addAnalogCode(
         }
         try b.analogBlocks(flat.analog);
     }
+}
+
+/// IEEE 1364-2005 §26.3.3: the file and 1-based line token `tok` was written
+/// at, through the compilation's source map (an `include`d file names
+/// itself, a macro expansion its invocation); null for a token lowering has
+/// no start for. The file name is copied into `arena`.
+fn srcLoc(arena: std.mem.Allocator, res: *const CompileResult, tok: u32) Error!?root.Loc {
+    const starts = res.lowered.tok_starts;
+    if (tok >= starts.len) return null;
+    const bag = res.diags;
+    const at = bag.locate(.{ .start = starts[tok], .end = starts[tok] }, null);
+    const off = bag.toSourceOffset(at.file, at.offset);
+    const text = bag.sourceText(at.file);
+    return .{
+        .line = @intCast(1 + std.mem.count(u8, text[0..@min(off, text.len)], "\n")),
+        .file = try arena.dupe(u8, bag.fileName(at.file)),
+    };
 }
 
 /// §3.4.5 as the SOURCE wrote it: is `name` a `localparam` of `decl`? `null`

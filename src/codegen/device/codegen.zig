@@ -316,8 +316,9 @@ pub const Gen = struct {
     /// (`contract.SayPass`): set when it has a `$debug` or `$fdebug`, the
     /// tasks that show output at every iteration (`cg_display.planPasses`).
     passes: bool = false,
-    /// §5.2.1 the §9.5 and `$debug`/`$fdebug` calls an `analog initial` block
-    /// makes, which a pass performs once per analysis. Set with `passes`.
+    /// §5.2.1 the calls an `analog initial` block makes: a pass performs its
+    /// §9.5 and `$debug`/`$fdebug` ones once per analysis, and a §9.7
+    /// diagnostic among them reports initialization (`cg_display.emitWhen`).
     init_calls: []const Mir.Inst = &.{},
     /// Set while the caller owns the `core` call (`zResidual`'s `m`, `acceptQ`'s
     /// hoisted line), so `emitStamps` must not open its own.
