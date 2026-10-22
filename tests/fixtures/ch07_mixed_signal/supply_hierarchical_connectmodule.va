@@ -8,7 +8,7 @@
 // argument does not reach the conclusion: annex C describes the Verilog-A
 // SUBSET, A.1.2's `module_keyword ::= module | macromodule | connectmodule`
 // leaves a Verilog-AMS compiler no way to refuse the spelling, and the old
-// expectation contradicted ch09_system_tasks/38_driver_update_connectmodule.va,
+// expectation contradicted ch09_system_tasks/driver_update_connectmodule.va,
 // which requires the same keyword accepted.
 //
 // WHAT THIS FILE PINS THAT connectmodule_accepted.va DOES NOT is the second

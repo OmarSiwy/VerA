@@ -1,4 +1,4 @@
-// The device tests/revert_host.zig runs twice, once with a rejected step and
+// The device tests/fixtures/ch04_expressions/revert_host.zig runs twice, once with a rejected step and
 // once without: one §4.5/§5.10/§9.13 construct that keeps history in the
 // device per output row, each read off its own node, all fed by V(a).
 //

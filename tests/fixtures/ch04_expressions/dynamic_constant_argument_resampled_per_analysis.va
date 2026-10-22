@@ -4,7 +4,7 @@
 // change in value of that expression is ignored during the iterative
 // analysis." Table 4-20 lists `absdelay`'s maxdelay as a constant slot.
 //
-// audit_absdelay_dynamic_maxdelay_sampled.va pins the second sentence inside
+// absdelay_dynamic_maxdelay_sampled.va pins the second sentence inside
 // one analysis. This fixture pins "at the start of THE analysis": a second
 // analysis starts over and samples again. With `//! time`, each `//! sweep`
 // point is its own transient analysis (a fresh state, `initial_step` at its

@@ -65,7 +65,7 @@
 // reference and data) are parsed by a digital run too, which then refuses
 // the design by name (E1149, ieee1364/15_timing_checks/b_15_*_refused.v), so
 // they have no run here; an analog compile accepts them all
-// (annex_a_syntax/b8_timing_checks_design_runs.va).
+// (annex_a_syntax/timing_checks_design_runs.va).
 //
 // The stimulus sets en, d and clk at 0, raises clk at 10 and bus at 20, so no
 // reference event shares its time with a data event, and every check stays

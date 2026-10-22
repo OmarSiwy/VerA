@@ -12,7 +12,7 @@
 // demanding a diagnostic a conforming AMS compiler must not emit. The cites are
 // kept because the clauses are still the ones this file is about — re-scoped to
 // a `--std=verilog-a` gate this compiler does not have, exactly as
-// annex_c_analog_subset/09_default_discipline_accepted.va keeps its `//! lrm C.4`.
+// annex_c_analog_subset/default_discipline_accepted.va keeps its `//! lrm C.4`.
 //
 // WHAT IS ASSERTED, and what is deliberately NOT. Both initializations have
 // happened by the time the ordinary analog block runs, so it reads 1.0 + 1: a

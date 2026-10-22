@@ -4,12 +4,12 @@
 // and `-x` is not one, so `- -x` and `!!k` do not derive. VerA refuses each at
 // its second operator: E0209 "expected an expression".
 //
-// Legal neighbour: 65_operator_arity.va writes the same values as -(-2.0) and
+// Legal neighbour: operator_arity.va writes the same values as -(-2.0) and
 // !(!1), and keeps `3.0 - -2.0` (binary, then unary on a primary).
 //
 //! lrm 2.5
 //! reject-only E0209
-//! neighbour 65_operator_arity.va
+//! neighbour operator_arity.va
 `include "disciplines.vams"
 module ch02_unary_of_unary_rejected(p, n);
   inout p, n;

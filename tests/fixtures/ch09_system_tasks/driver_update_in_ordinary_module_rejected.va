@@ -9,7 +9,7 @@
 // event below parses and is refused by that clause, E0818, the code the driver
 // access functions get outside a connect module (107_..., 112_..., 114_...).
 // The neighbour writes the same event in a connectmodule's `always`, where it
-// is legal; 213_driver_update_in_analog_event_rejected.va is the analog-event
+// is legal; driver_update_in_analog_event_rejected.va is the analog-event
 // refusal (A.6.5's analog_event_expression has no driver_update at all).
 //
 //! lrm 9.22
@@ -17,7 +17,7 @@
 //! lrm A.6.5
 //! reject-only E0818
 //! reject driver_update
-//! neighbour 38_driver_update_connectmodule.va
+//! neighbour driver_update_connectmodule.va
 module ch09_driver_update_in_ordinary_module(p, n);
   inout p, n; electrical p, n;
   wire d;

@@ -36,7 +36,7 @@
 // 9.0, 30, 9, 10.0, 9.0, 1.0.
 //
 // MODULE ORDER IS LOAD-BEARING: the first module is the device (see
-// 12_defparam.va).
+// defparam.va).
 //
 //! lrm A.8.3
 //! lrm A.2.4

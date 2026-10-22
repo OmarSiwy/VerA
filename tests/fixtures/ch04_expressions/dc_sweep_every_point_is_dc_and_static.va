@@ -4,7 +4,7 @@
 // function calls shall return true for a single-point dc analysis and also for
 // every dc point in a sweep analysis."
 //
-// 26_analysis.va pins the single-point half. This is the sweep half: three dc
+// analysis.va pins the single-point half. This is the sweep half: three dc
 // points of ONE sweep (`//! sweep` with no `//! time` line makes the points the
 // steps of one dc sweep, not three analyses), and at every one of them both
 // calls must answer 1 and the calls naming the other analyses 0 (Table 4-22's

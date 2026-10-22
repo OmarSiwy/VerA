@@ -16,7 +16,7 @@
 //! lrm A.3.2:1000
 //! reject-only E0207
 //! reject single-strength bracket
-//! neighbour b8_pull_gate_strength_resolves.va
+//! neighbour pull_gate_strength_resolves.va
 module annex_a_pullup_zero_strength(o);
   output o;
   wire o;

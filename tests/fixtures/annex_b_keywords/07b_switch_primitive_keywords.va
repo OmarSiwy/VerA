@@ -14,7 +14,7 @@
 // rather than the file passing on whichever token the parser tripped over first.
 //
 // `nmos` and `pmos` are not declared here: they are substrings of `rnmos` and
-// `rpmos`. They are censused in 22_shadowed_spellings.va, which explains the
+// `rpmos`. They are censused in shadowed_spellings.va, which explains the
 // mechanism.
 //! lrm B
 //! reject-only E0208

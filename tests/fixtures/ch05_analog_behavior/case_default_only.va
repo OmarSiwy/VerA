@@ -9,11 +9,17 @@
 //! lrm 5.8.3:1002
 `include "check.vh"
 module ch5_case_default(p);
-  inout p; electrical p; integer mode; real x;
+  inout p; electrical p; integer mode; real x, untouched;
   analog begin
     mode = 2;
     case (mode) default: x = V(p); endcase
     `CHECKX("no item matched, so the default arm ran", x, 0.4);
+    untouched = 7.0;
+    case (mode)
+      0: untouched = -1.0;
+      1: untouched = -2.0;
+    endcase
+    `CHECKX("without a default, no matching item leaves the value unchanged", untouched, 7.0);
     I(p) <+ x;
   end
 endmodule

@@ -12,14 +12,14 @@
 // a real element; a real has no bits (1364 §4.8.1), so the second names nothing.
 //
 // (The SHORT form, fewer subscripts than dimensions, is §5.7's slice and is
-// legal; ch04_expressions/a01_01_partial_slice_assignment.va records that VerA
+// legal; ch04_expressions/partial_slice_assignment.va records that VerA
 // refuses it with this same code. This file is the other direction.)
 //
 //! lrm 3.2
 //! lrm A.8.5
 //! inherited IEEE 1364-2005 5.2.2
 //! reject-only E0356
-//! neighbour ../ch04_expressions/a01_01_partial_slice_assignment.va
+//! neighbour ../ch04_expressions/partial_slice_assignment.va
 `include "disciplines.vams"
 module ch3_array_extra_subscript(p, n);
   inout p, n; electrical p, n;

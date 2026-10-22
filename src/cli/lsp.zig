@@ -317,13 +317,14 @@ fn lintAndPublish(s: *Server, arena: Allocator, uri: []const u8, doc: *Doc) !voi
     defer bag.deinit(s.gpa);
     const path = try uriToPath(arena, uri);
     const is_va = if (path) |p| !std.mem.eql(u8, std.fs.path.extension(p), ".v") else true;
-    if (ams and is_va) {
+    if (ams and is_va and s.cli.sim != .verilog) {
         const cli = s.cli;
         if (vera.compileSourceOpts(s.gpa, doc.text, .lint, .{
             .file_name = path orelse "<untitled>",
             .include_dirs = cli.include_dirs.items,
             .std_defs = cli.std_defs,
             .language = cli.language,
+            .sim = cli.sim,
             .diags = &bag,
             .lint = cli.levels,
             .proof = .{ .unknown_bound = cli.unknown_bound },

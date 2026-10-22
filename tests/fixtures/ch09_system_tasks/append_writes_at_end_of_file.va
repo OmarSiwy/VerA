@@ -12,7 +12,7 @@
 // solve until the iteration is accepted, so the write sits under
 // `@(initial_step)` and the read happens at the next time point, where the
 // file holds "1234" whichever way a tool orders the open's truncation against
-// acceptance. Same shape as 047_fscanf.va.
+// acceptance. Same shape as fscanf.va.
 //
 // Two failures need two assertions. If the append open or write is lost the
 // read is "123" and "%d" still matches one item, so the COUNT cannot see it;

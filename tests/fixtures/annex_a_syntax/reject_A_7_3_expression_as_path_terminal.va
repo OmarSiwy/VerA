@@ -17,7 +17,7 @@
 //! reject-only E0207
 //! reject connects its terminals with
 //! reject endspecify
-//! neighbour b8_specify_paths_design_runs.va
+//! neighbour specify_paths_design_runs.va
 module annex_a_expression_path_terminal(o, a, b);
   output o;
   input a, b;

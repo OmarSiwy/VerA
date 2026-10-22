@@ -12,16 +12,16 @@
 // production of combinational_body. The table's first entry decides the
 // alternative, and every later entry must agree.
 //
-// The legal counterpart is b8_udp_declared_and_instantiated.va: its
+// The legal counterpart is udp_declared_and_instantiated.va: its
 // b8_udp_mux is a level-only combinational table and its b8_udp_dff is a
-// sequential one with (01) edges. ieee1364/08_udp/d08_reject_udp_comb_edge.v
+// sequential one with (01) edges. ieee1364/08_udp/reject_udp_comb_edge.v
 // pins the same refusal on the 1364 side.
 //
 //! lrm A.5.3
 //! lrm A.5.3:1000
 //! reject-only combinational
 //! reject edge
-//! neighbour b8_udp_declared_and_instantiated.va
+//! neighbour udp_declared_and_instantiated.va
 `timescale 1ns/1ns
 
 primitive annex_a_udp_comb_edge (o, a, b);

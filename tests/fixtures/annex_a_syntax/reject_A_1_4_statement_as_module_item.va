@@ -23,8 +23,8 @@
 //
 // The legal forms of the same line are the three the grammar offers: inside
 // `analog begin ... end` (A.6.4), inside `initial` (A.6.2), or as a
-// declaration initializer where A.2.4 admits one. 05_behavioral_statements.va
-// runs the first; 16_analog_initial.va runs an assignment in `analog initial`.
+// declaration initializer where A.2.4 admits one. behavioral_statements.va
+// runs the first; analog_initial.va runs an assignment in `analog initial`.
 //
 // VerA refuses it at the module-item dispatch with E0240 "not a module item",
 // naming the identifier that opened the stray statement. The code and that
@@ -37,8 +37,8 @@
 //! lrm A.1.4:1000
 //! reject-only E0240
 //! reject not a module item
-//! neighbour 05_behavioral_statements.va
-//! neighbour 16_analog_initial.va
+//! neighbour behavioral_statements.va
+//! neighbour analog_initial.va
 module annex_a_statement_as_module_item(p, n);
     inout p, n;
     electrical p, n;

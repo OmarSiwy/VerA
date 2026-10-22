@@ -11,14 +11,14 @@
 // empty sum is 0, and H(s) = N(s)/0.
 //
 // Here `d` is written null: `laplace_nd(V(in, n), '{6.0}, )`. With `'{3.0}`
-// in that slot the call is 153_laplace_nd_dc_gain.va's first-order form, H(0)
+// in that slot the call is laplace_nd_dc_gain.va's first-order form, H(0)
 // = 6/3, and compiles (checked by hand when this fixture was written).
 //
 //! lrm 4.5.11.4
 //! lrm 4.5.15
 //! lrm 4.5.15:4
 //! reject-only E0505
-//! neighbour 153_laplace_nd_dc_gain.va
+//! neighbour laplace_nd_dc_gain.va
 module ch04_laplace_nd_null_denominator(in, n);
     inout in, n;
     electrical in, n;

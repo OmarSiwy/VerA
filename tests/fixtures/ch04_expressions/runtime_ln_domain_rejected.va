@@ -1,7 +1,7 @@
 // §4.3.2: "Input values outside of the valid range for the operator shall
 // report an error." Table 4-14: `ln(x)`, C `log(x)`, "Natural logarithm",
 // domain "x > 0". VerA reads the sentence for Table 4-14's Domain column too
-// (114_standard_math_domain_rejected.va refuses the constant ln(-1.0) with
+// (standard_math_domain_rejected.va refuses the constant ln(-1.0) with
 // E0602); this is the half where the argument is a signal (#59).
 //
 //   point 0, V(p) = 1: ln(1) = 0 exactly (C99 F.10.3.7), so CHECKX 0.

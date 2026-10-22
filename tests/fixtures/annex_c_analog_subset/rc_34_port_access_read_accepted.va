@@ -1,4 +1,4 @@
-// The legal neighbour of 34_port_access_contribution_rejected.va. §5.4.3: "The
+// The legal neighbour of port_access_contribution_rejected.va. §5.4.3: "The
 // port access function shall not be used on the left side of a contribution
 // operator <+." This module is 34's with that one thing changed: `I(<p>)` is
 // READ on the right of an assignment instead of written on the left of `<+`.

@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """How conformant VerA is to the specification, measured — never typed.
 
+    tools/conformance.py run                  # execute suites; report fresh fixture and specialized evidence
     tools/conformance.py                      # print the measures block (A, B, C)
     tools/conformance.py --changelog v0.1.0   # set the version literals, prepend it to CHANGELOG.md
     tools/conformance.py --check v0.1.0       # check them, re-measure and diff vs CHANGELOG.md
     tools/conformance.py <subcommand> [...]   # one of the signals below
 
+`run` writes the execution report (one fresh directory under
+`.zig-cache/conformance/`: suite logs, results, `report.md`, `report.json`);
+the older A/B/C release measures below retain their historical meaning (B
+and C inventory citations).
 Every number comes from a command in this file. There is no second place a
 percentage is written down, which is the point: v1.0.0 is defined
 as four measures, and three of them are machine-readable today. Only the
@@ -21,34 +26,529 @@ none of them changes the block or CHANGELOG.md:
     verilator       Verilator as a second engine on the same .v designs
     adversarial     L10 sizes through `vera --check` under a time and memory cap
     determinism     L11: `--emit-zig` device text across runs, cwds and binaries
-    grammar         the R3 oracle: Syntax boxes to BNF (GRAMMAR.tsv), an Earley
+    grammar         the R3 oracle: Syntax boxes to BNF (tests/fixtures/conformance/GRAMMAR.tsv), an Earley
                     recognizer, R3 coverage, and VerA's parse vs the recognizer
-    selftest       regression checks for the subcommands and the LRM text
+    selftest        regression checks: the subcommands, the LRM text, `run`'s
+                    accounting and the fixture layout
 
-ponytail: a regex over the suite's own report, not a --json flag on bench.zig.
+ponytail: a regex over the suite's own report, not a --json flag on suite.zig.
 Both lines parsed here are already machine-shaped — the `pass fail unasserted
-xfail` TSV row (tests/bench.zig) and the coverage tally (tests/harness/
-coverage.zig). If a third consumer ever wants this, add the JSON then.
+xfail` TSV row (tests/suite.zig) and the coverage tally (its `Coverage`
+namespace). If a third consumer ever wants this, add the JSON then.
 """
 import argparse
+import ast
+from collections import Counter
 import datetime
 import difflib
 import hashlib
 import html
+import importlib.util
 import json
 import os
 import re
 import struct
 import subprocess
 import sys
+import tempfile
+import time
 import unicodedata
 from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "tests/fixtures"
+
+
+def fixture_files(*patterns):
+    """Every fixture matching one of `patterns`, sorted. `canary/` holds the
+    wrong-on-purpose fixtures `zig build test-canary` judges on their own;
+    they are evidence of nothing, so no walk sees them."""
+    return sorted(p for pattern in patterns for p in FIXTURES.rglob(pattern)
+                  if p.is_file() and "canary" not in p.relative_to(FIXTURES).parts)
 
 # name -> function(argv) -> exit code. Each section below adds its own.
 SUBCOMMANDS = {}
+
+
+def execution_report(argv):
+    try:
+        return run_suites(argv)
+    except (ValueError, OSError) as error:
+        die(str(error))
+
+
+SUBCOMMANDS["run"] = execution_report
+
+
+# ---------------------------------------------------------------------------
+# run: execution-backed coverage, one fresh report per run
+# ---------------------------------------------------------------------------
+
+STATUSES = {"pass", "fail", "skip", "xfail", "unasserted"}
+SPECIAL_COLUMNS = ("id", "source", "artifact", "test", "standard", "citation", "polarity", "description")
+
+
+def read_results(path):
+    """Reject ambiguous data rather than letting the last duplicate win."""
+    results = {}
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line or line.startswith("#"):
+            continue
+        status, sep, name = line.partition("\t")
+        if not sep or status not in STATUSES or not name or "\t" in name:
+            raise ValueError(f"{path}:{number}: invalid result row")
+        if name in results:
+            raise ValueError(f"{path}:{number}: duplicate result: {name}")
+        results[name] = status
+    return results
+
+
+def merge_results(*tables):
+    result = {}
+    for table in tables:
+        for name, status in table.items():
+            if name in result:
+                raise ValueError(f"test executed by multiple fixture runners: {name}")
+            result[name] = status
+    return result
+
+
+def require_results(results, expected, label):
+    missing = sorted(set(expected) - results.keys())
+    if missing:
+        raise ValueError(f"{label} succeeded without recording {len(missing)} results: {', '.join(missing[:5])}")
+
+
+def assertion_validation(run_dir, normal):
+    """Keep perturbed verdicts separate from ordinary execution evidence."""
+    path = run_dir / "ams-perturbed.tsv"
+    results = read_results(path) if path.exists() else {}
+    unknown = sorted(results.keys() - normal.keys())
+    if unknown:
+        raise ValueError(f"assertion validation has no matching normal execution: {', '.join(unknown[:5])}")
+    return results
+
+
+def read_specialized(root, clauses, ledger):
+    rows, ids, checks = [], set(), {}
+    path = root / "tests/fixtures/conformance/SPECIALIZED.tsv"
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line or line.startswith("#"):
+            continue
+        cells = line.split("\t")
+        if len(cells) != len(SPECIAL_COLUMNS):
+            raise ValueError(f"{path}:{number}: expected {len(SPECIAL_COLUMNS)} columns")
+        row = dict(zip(SPECIAL_COLUMNS, cells))
+        identity = (row["id"], row["standard"], row["citation"], row["polarity"])
+        if identity in ids:
+            raise ValueError(f"{path}:{number}: duplicate specialized citation")
+        ids.add(identity)
+        check = (row["source"], row["artifact"], row["test"])
+        if row["id"] in checks and checks[row["id"]] != check:
+            raise ValueError(f"{path}:{number}: id names different checks")
+        checks[row["id"]] = check
+        source = (root / row["source"]).resolve()
+        if not source.is_relative_to(root.resolve()) or not source.is_file():
+            raise ValueError(f"{path}:{number}: missing or invalid source")
+        # Exact test name, not a file-level claim or a substring of another test.
+        if source.suffix == ".sp":
+            declared = (row["artifact"] == "spice" and
+                        row["test"] == row["source"].removeprefix("tests/fixtures/") and
+                        source.with_suffix(".expected.json").is_file())
+        elif source.suffix == ".py":
+            declared = any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == row["test"]
+                           for node in ast.walk(ast.parse(source.read_text())))
+        else:
+            declaration = (rf"(?m)^\s*// evidence: (?:pass|xfail) {re.escape(row['test'])}$"
+                           if source.suffix == ".c" else
+                           rf'\btest\s+{re.escape(json.dumps(row["test"], ensure_ascii=False))}\s*\{{')
+            declared = bool(re.search(declaration, source.read_text()))
+        if not declared:
+            raise ValueError(f"{path}:{number}: test not declared in {row['source']}: {row['test']}")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", row["artifact"]):
+            raise ValueError(f"{path}:{number}: invalid artifact")
+        clause = row["citation"].partition(":")[0]
+        if (row["standard"], clause) not in clauses or row["polarity"] not in ("pos", "neg"):
+            raise ValueError(f"{path}:{number}: invalid clause or polarity")
+        if ":" in row["citation"]:
+            obligation = ledger.get(row["citation"]) if row["standard"] == "ams" else None
+            if obligation is None or (row["polarity"] == "pos" and obligation["pol"] == "-") or (
+                row["polarity"] == "neg" and obligation["pol"] == "+"
+            ):
+                raise ValueError(f"{path}:{number}: unknown or contradictory sentence citation")
+        if not row["description"]:
+            raise ValueError(f"{path}:{number}: describe what the assertion checks")
+        rows.append(row)
+    return rows
+
+
+def specialized_status(row, artifacts):
+    """Only the named test in the named executable can establish coverage."""
+    tests = artifacts.get(row["artifact"], {})
+    matches = [status for name, status in tests.items()
+               if name.endswith(".test." + row["test"])]
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous specialized test {row['id']}")
+    return matches[0] if matches else "not-run"
+
+
+def require_specialized_results(rows, artifacts):
+    missing = sorted({row["id"] for row in rows if specialized_status(row, artifacts) == "not-run"})
+    if missing:
+        raise ValueError(f"unit suite succeeded without recording specialized tests: {', '.join(missing)}")
+
+
+def read_dispositions(root):
+    """{(standard, clause): disposition} from the GAPS.tsv review inventory.
+
+    Only whole-clause rows are useful here. Sentence rows (`3.4.1:1`) are a
+    different worklist and never make a clause not-applicable."""
+    path = root / "tests/fixtures/conformance/GAPS.tsv"
+    out = {}
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line or line.startswith("#"):
+            continue
+        cells = line.split("\t")
+        if len(cells) < 4:
+            raise ValueError(f"{path}:{number}: expected standard, citation, baseline and disposition")
+        standard, citation, _, disposition = cells[:4]
+        if standard not in ("ams", "ieee") or ":" in citation:
+            continue
+        out[(standard, citation)] = disposition
+    return out
+
+
+def clause_results(clauses, citations, results, dispositions=None):
+    dispositions = dispositions or {}
+    rows = []
+    for (standard, clause), info in sorted(clauses.items()):
+        evidence = []
+        for item in citations.get((standard, clause), []):
+            evidence.append(dict(item, status=results.get(item["test"], "not-run")))
+        passed = [item for item in evidence if item["status"] == "pass"]
+        failed = [item for item in evidence if item["status"] in ("fail", "xfail")]
+        disposition = dispositions.get((standard, clause), "")
+        # A failure remains visible even if another test for the clause passes.
+        if failed:
+            state = "failing"
+        elif info["classification"] == "not-supported":
+            state = "unsupported"
+        elif passed:
+            state = "covered"
+        elif disposition == "no-fixed-oracle":
+            # A non-normative/optional heading or explicitly unspecified
+            # behavior. There is no unconditional outcome for a test to assert,
+            # so this is not a missing test and not a failure.
+            state = "not-applicable"
+        elif evidence:
+            state = "not-run"
+        else:
+            state = "uncovered"
+        rows.append(dict(standard=standard, clause=clause, **info, status=state,
+                         disposition=disposition,
+                         fixture=any(item["kind"] == "fixture" for item in passed),
+                         specialized=any(item["kind"] == "specialized" for item in passed),
+                         positive=any(item["polarity"] == "pos" for item in passed),
+                         negative=any(item["polarity"] == "neg" for item in passed),
+                         evidence=evidence))
+    return rows
+
+
+def feature_groups(path, known_tests, results):
+    """Measure the explicit work breakdown, without inventing a language taxonomy."""
+    rows, ids, assigned = [], set(), set()
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line or line.startswith("#"):
+            continue
+        cells = line.split("\t")
+        if len(cells) != 3 or not all(cells):
+            raise ValueError(f"{path}:{number}: expected id, description and evidence")
+        identity, description, names = cells
+        if identity in ids:
+            raise ValueError(f"{path}:{number}: duplicate behavior group: {identity}")
+        ids.add(identity)
+        checks = []
+        for name in names.split(";"):
+            if name not in known_tests:
+                raise ValueError(f"{path}:{number}: unknown test: {name}")
+            if name in assigned:
+                raise ValueError(f"{path}:{number}: test assigned more than once: {name}")
+            assigned.add(name)
+            checks.append({"test": name, "status": results.get(name, "not-run")})
+        states = {check["status"] for check in checks}
+        state = ("failing" if states & {"fail", "xfail"} else
+                 "covered" if states == {"pass"} else "not-run")
+        rows.append({"id": identity, "description": description, "status": state, "evidence": checks})
+    return rows
+
+
+def source_digest(root):
+    """Content identity includes new files and uncommitted edits, not just HEAD."""
+    digest = hashlib.sha256()
+    paths = [root / name for name in ("build.zig", "build.zig.zon", "flake.nix", "flake.lock")]
+    for directory in ("lib", "src", "tools", "tests", "specification"):
+        paths.extend(p for p in (root / directory).rglob("*")
+                     if p.is_file() and "__pycache__" not in p.parts)
+    for path in sorted(paths):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def clause_inventory():
+    # Match the established AMS clause denominator: numeric chapter headings
+    # organize their sections; annex headings are themselves inventoried.
+    clauses = {("ams", key): {"title": value["title"], "classification": "-"}
+               for key, value in html_sections(ROOT)[0].items() if not key.isdigit()}
+    for line in (FIXTURES / "ieee1364/CLAUSES.tsv").read_text().splitlines():
+        if line and not line.startswith("#"):
+            clause, kind, title, *_ = line.split("\t")
+            clauses["ieee", clause] = {"title": title, "classification": kind}
+    for key, kind in clause_kinds().items():
+        if key not in clauses:
+            raise ValueError(f"classification names an unknown clause: {key}")
+        clauses[key]["classification"] = kind
+    return clauses
+
+
+def collect_report(run_dir, suites):
+    clauses, ledger = clause_inventory(), read_ledger()
+    special = read_specialized(ROOT, clauses, ledger)
+    artifacts = {p.stem: read_results(p) for p in sorted((run_dir / "tests").glob("*.tsv"))}
+    ams_path = run_dir / "ams.tsv"
+    ams_results = read_results(ams_path) if ams_path.exists() else {}
+    perturbed = assertion_validation(run_dir, ams_results)
+    digital_path = run_dir / "digital.tsv"
+    fixtures = merge_results(ams_results, read_results(digital_path) if digital_path.exists() else {})
+    # C markers are written only after build.zig checks the application's
+    # exit, stdout and stderr. A declaration alone is never a passing result.
+    c_results = merge_results(*(table for name, table in artifacts.items() if name.startswith("vpi--")))
+    fixtures = merge_results(fixtures, c_results)
+    for path in fixtures:
+        if not (FIXTURES / path).is_file():
+            raise ValueError(f"result names a missing fixture: {path}")
+    citations = {}
+    for (standard, citation), polarities in fixture_cites().items():
+        clause = citation.partition(":")[0]
+        if (standard, clause) not in clauses:
+            raise ValueError(f"unknown fixture citation: {standard} {citation}")
+        for polarity, paths in polarities.items():
+            for path in paths:
+                test = path.removeprefix("tests/fixtures/")
+                item = {"test": test, "kind": "specialized" if test.endswith(".c") else "fixture",
+                        "polarity": polarity}
+                items = citations.setdefault((standard, clause), [])
+                if item not in items:
+                    items.append(item)
+    results = dict(fixtures)
+    special_results = {}
+    tags = {str(p.relative_to(FIXTURES)): fixture_tags(p) for p in fixture_files("*.va", "*.v", "*.c")}
+    for row in special:
+        key = "specialized:" + row["id"]
+        state = specialized_status(row, artifacts)
+        if key in special_results and special_results[key] != state:
+            raise ValueError(f"inconsistent specialized id {row['id']}")
+        special_results[key] = results[key] = state
+        clause = row["citation"].partition(":")[0]
+        citations.setdefault((row["standard"], clause), []).append(
+            {"test": key, "kind": "specialized", "polarity": row["polarity"],
+             "source": row["source"], "assertion": row["test"], "description": row["description"]})
+        if row["standard"] == "ams":
+            tag = tags.setdefault(key, {"cites": [], "c": False, "only": False,
+                                        "neighbours": [], "golden": False, "specialized": True})
+            tag["cites"].append((row["citation"], row["polarity"]))
+    # E2 is measured execution, not proof that every requirement is tested.
+    # Specialized assertions count as E3 only with an explicit sentence cite.
+    rows, unattributed = levels(ledger, tags, results, perturbed, set(), {})
+    mandatory = {rid: level for rid, level in rows.items() if ledger[rid]["kind"] in MANDATORY_KINDS}
+    return {
+        "schema": 1,
+        "suites": suites,
+        "fixture_results": fixtures,
+        "fixture_counts": dict(Counter(fixtures.values())),
+        "assertion_validation_results": perturbed,
+        "assertion_validation_counts": dict(Counter(perturbed.values())),
+        "specialized_results": special_results,
+        "specialized_counts": dict(Counter(special_results.values())),
+        "specialized_checks": {row["id"]: dict(row, status=special_results["specialized:" + row["id"]])
+                               for row in special},
+        "spice_counts": dict(Counter(artifacts.get("spice", {}).values())),
+        "unit_execution_counts": dict(Counter(v for k, table in artifacts.items()
+                                               if not k.startswith("vpi--") and k != "spice"
+                                               for v in table.values())),
+        "feature_groups": feature_groups(ROOT / "tests/fixtures/conformance/FEATURE_GAPS.tsv",
+                                         tags.keys() | special_results.keys(), results),
+        "clauses": clause_results(clauses, citations, results, read_dispositions(ROOT)),
+        "ams_obligations": {"total": len(ledger), "mandatory": len(mandatory),
+                            "levels": dict(Counter(mandatory.values())),
+                            "rows": rows, "unattributed_failures": unattributed},
+    }
+
+
+def markdown(report):
+    lines = ["# Conformance results", "",
+             f"Measured {report['measured_at']} at `{report['commit']}`.",
+             f"Source SHA-256: `{report['source_sha256']}`.", "",
+             "Coverage means a passing test exercises a cited clause. It does not mean every",
+             "rule or possible program in that clause conforms. Failure takes precedence",
+             "when passing and failing tests cite the same clause.", "",
+             "| Execution | Pass | Fail | XFAIL | Skip | Unasserted | Not run |",
+             "|---|---:|---:|---:|---:|---:|---:|"]
+    for label, key in (("Fixtures and VPI applications", "fixture_counts"),
+                       ("AMS assertion perturbations", "assertion_validation_counts"),
+                       ("SPICE decks", "spice_counts"),
+                       ("Specialized checks", "specialized_counts"),
+                       ("Named test executions", "unit_execution_counts")):
+        counts = report[key]
+        lines.append(f"| {label} | " + " | ".join(str(counts.get(s, 0)) for s in
+                     ("pass", "fail", "xfail", "skip", "unasserted", "not-run")) + " |")
+    lines += ["", "Specialized checks are also present in the execution totals; do not add these rows.",
+              "Perturbation passes mean changed expected values were rejected. They never replace",
+              "normal execution; only matching passing normal assertions can gain evidence.", "",
+              "| Standard | All clauses | Covered | Failing | Unsupported | Not run | Uncovered | No fixed oracle | With fixture evidence | With specialized evidence |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    classifications = []
+    no_fixed = []
+    for standard, label in (("ams", "Verilog-AMS 2023"), ("ieee", "IEEE 1364-2005")):
+        rows = [r for r in report["clauses"] if r["standard"] == standard]
+        states = Counter(r["status"] for r in rows)
+        lines.append(f"| {label} | {len(rows)} | " + " | ".join(str(states[s]) for s in
+                     ("covered", "failing", "unsupported", "not-run", "uncovered", "not-applicable")) +
+                     f" | {sum(r['fixture'] for r in rows)} | {sum(r['specialized'] for r in rows)} |")
+        classes = Counter(r["classification"] for r in rows)
+        classifications.append(f"{label} classifications (included in the denominator): " +
+                               ", ".join(f"{kind}: {count}" for kind, count in sorted(classes.items())) + ".")
+        if states["not-applicable"]:
+            no_fixed.append(f"{label}: {states['not-applicable']}")
+    lines += ["", "**Uncovered** counts only clauses with a testable requirement. **No fixed oracle**",
+              "counts the clauses GAPS.tsv dispositions as non-normative, optional or explicitly",
+              "unspecified; no unconditional executable outcome exists for them, so they are not",
+              "missing tests and not conformance failures. Their rows remain in the denominator."]
+    if no_fixed:
+        lines.append("No fixed oracle clauses (per GAPS.tsv): " + "; ".join(no_fixed) + ".")
+    lines += ["", "Unsupported clauses retain their classification even when a rejection test passes.",
+              "Evidence columns overlap and include passing checks on failing or unsupported clauses.", "",
+              *classifications]
+    groups = report["feature_groups"]
+    states = Counter(row["status"] for row in groups)
+    lines += ["", f"Tracked behavior groups: {states['failing']} failing, {states['covered']} covered, "
+              f"{states['not-run']} not run.",
+              "These groups are defined in tests/fixtures/conformance/FEATURE_GAPS.tsv, not an exhaustive",
+              "language feature count. A group is covered only when every registered check passes.",
+              "Pending host profiles and unmeasured requirements remain in GAPS.tsv.", "",
+              "| Behavior group | Status | Checks |", "|---|---|---:|"]
+    lines += [f"| {row['description']} | {row['status']} | {len(row['evidence'])} |" for row in groups]
+    failures = [row for row in report["specialized_checks"].values() if row["status"] in ("fail", "xfail")]
+    if failures:
+        lines += ["", "| Specialized failure | Status | Assertion |", "|---|---|---|"]
+        lines += [f"| {row['id']} | {row['status']} | {row['description']} |" for row in failures]
+    obligations = report["ams_obligations"]
+    lines += ["", f"AMS sentence ledger: {obligations['mandatory']} mandatory of {obligations['total']} rows.",
+              "Evidence levels: " + ", ".join(f"{k}={obligations['levels'].get(k, 0)}"
+                                             for k in ("E0", "E1", "E2", "E3", "E4", "E5", "F")) + ".",
+              "E0: no citation; E1: cited; E2: executed; E3: required polarities have discriminating checks.",
+              "E4 adds a reviewed independent oracle; E5 additionally requires mutation evidence.",
+              "Historical execution and mutation results are not imported by this run.", "",
+              f"Failures cited to a clause without an exact sentence: {len(obligations['unattributed_failures'])}.", "",
+              *[f"- {clause}: {', '.join(paths)}" for clause, paths in obligations["unattributed_failures"].items()],
+              "", "IEEE coverage uses clauses: no sentence ledger exists for that standard.", "",
+              "Exit status preserves each suite's gate. The strict AMS suite exits nonzero",
+              "on expected failures; other suites retain declared XFAILs without failing",
+              "their development gate. Unexpected failures and missing evidence fail the run.", "",
+              "| Suite | Exit | Log |", "|---|---:|---|"]
+    lines += [f"| {s['name']} | {s['exit']} | [{s['name']}.log]({s['name']}.log) |" for s in report["suites"]]
+    lines += ["", "Full test-to-clause evidence, classifications, and sentence levels: [report.json](report.json).", ""]
+    return "\n".join(lines)
+
+
+def run_suites(argv):
+    """`run`: execute the principal suites into a fresh directory under
+    `--output` and write the execution-backed report (`report.md`,
+    `report.json`). The sentence ledger and the fixture directives remain
+    the source of requirements; every result, specialized tests included,
+    comes from this run."""
+    parser = argparse.ArgumentParser(prog="conformance.py run", description=run_suites.__doc__)
+    parser.add_argument("--output", type=Path, default=ROOT / ".zig-cache/conformance")
+    parser.add_argument("--jobs", type=int, default=4)
+    args = parser.parse_args(argv)
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
+    args.output.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(tempfile.mkdtemp(prefix=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ-"),
+                                  dir=args.output)).resolve()
+    (run_dir / "tests").mkdir()
+    before = source_digest(ROOT)
+    clauses = clause_inventory()
+    special = read_specialized(ROOT, clauses, read_ledger())
+    build = ([] if os.environ.get("IN_NIX_SHELL") else ["nix", "develop", "-c"]) + ["zig", "build"]
+    commands = [
+        ("infrastructure", [sys.executable, "tests/host.py", "selftest"]),
+        ("accounting", [sys.executable, "tools/conformance.py", "selftest",
+                        "EvidenceTests", "GapInventoryTests", "FixtureLayoutTests"]),
+        ("unit", build + ["test", f"-j{args.jobs}", f"-Dtest-results={run_dir / 'tests'}", "--summary", "all"]),
+        ("ams", build + ["test-ams", f"-j{args.jobs}", "--", f"--jobs={args.jobs}", f"--verdicts={run_dir / 'ams.tsv'}"]),
+        ("ams-perturbed", build + ["test-ams", f"-j{args.jobs}", "--", f"--jobs={args.jobs}", "--perturb",
+                                  f"--verdicts={run_dir / 'ams-perturbed.tsv'}"]),
+        ("digital", build + ["test-devices", f"-j{args.jobs}", "--", f"--verdicts={run_dir / 'digital.tsv'}"]),
+        ("vpi-abi", build + ["test-vpi-fixtures", f"-j{args.jobs}"]),
+        ("spice", build + ["test-spice", f"-j{args.jobs}", "--",
+                          f"--results={run_dir / 'tests/spice.tsv'}"]),
+        ("observations", build + ["test-observations", f"-j{args.jobs}",
+                                 f"-Dtest-results={run_dir / 'tests'}"]),
+    ]
+    suites = []
+    for name, command in commands:
+        print(f"conformance: {name} → {run_dir / (name + '.log')}", flush=True)
+        start = time.monotonic()
+        # Zig subprocesses can write stderr at explicit offsets. O_APPEND
+        # keeps their diagnostics from overwriting another process's log.
+        with (run_dir / f"{name}.log").open("a") as log:
+            completed = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        suites.append({"name": name, "command": command, "exit": completed.returncode,
+                       "seconds": round(time.monotonic() - start, 3)})
+        print(f"conformance: {name} exit {completed.returncode}", flush=True)
+        if name in ("ams", "ams-perturbed", "digital") and completed.returncode == 0:
+            verdicts = run_dir / f"{name}.tsv"
+            if not verdicts.exists() or not read_results(verdicts):
+                raise ValueError(f"{name} reported success without any verdicts; see {run_dir}")
+            if name == "ams-perturbed":
+                normal_path = run_dir / "ams.tsv"
+                normal = read_results(normal_path) if normal_path.exists() else {}
+                validation = assertion_validation(run_dir, normal)
+                require_results(validation, normal, "AMS assertion validation")
+        if name == "unit" and completed.returncode == 0:
+            vpi = merge_results(*(read_results(p) for p in (run_dir / "tests").glob("vpi--*.tsv")))
+            require_results(vpi, vpi_runs(), "VPI applications")
+            require_specialized_results([row for row in special if row["artifact"] not in ("spice", "diagnostic_observations")],
+                                        {p.stem: read_results(p) for p in (run_dir / "tests").glob("*.tsv")})
+        if name == "spice" and completed.returncode == 0:
+            path = run_dir / "tests/spice.tsv"
+            expected = {"spice.test." + p.relative_to(FIXTURES).as_posix()
+                        for p in FIXTURES.rglob("*.sp")
+                        if not p.is_relative_to(FIXTURES / "external")}
+            require_results(read_results(path) if path.exists() else {}, expected, "SPICE decks")
+        if name == "observations" and completed.returncode == 0:
+            path = run_dir / "tests/diagnostic_observations.tsv"
+            require_specialized_results(
+                [row for row in special if row["artifact"] == "diagnostic_observations"],
+                {"diagnostic_observations": read_results(path) if path.exists() else {}},
+            )
+    if source_digest(ROOT) != before:
+        raise ValueError(f"source changed during the run; logs retained at {run_dir}, no mixed-version report written")
+    report = collect_report(run_dir, suites)
+    report.update(measured_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                  commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+                  source_sha256=before)
+    (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    (run_dir / "report.md").write_text(markdown(report))
+    print(markdown(report))
+    print(f"conformance: report {run_dir / 'report.md'}", flush=True)
+    bad = ("fail", "unasserted")
+    return int(any(s["exit"] for s in suites) or
+               any(report["fixture_counts"].get(status, 0) or report["specialized_counts"].get(status, 0)
+                   for status in bad))
 
 
 def die(msg):
@@ -101,7 +601,7 @@ def measure():
             sys.exit(2)
 
     # --- Measure A: the fixture suite ---------------------------------------
-    # bench.zig prints a TSV header `pass fail unasserted xfail` and one row
+    # suite.zig prints a TSV header `pass fail unasserted xfail` and one row
     # under it. --strict decides the exit code on it; the counts print either way.
     if strict_log:
         try:
@@ -119,11 +619,11 @@ def measure():
     passed, fail, unas, xfail = (row + ["", "", "", ""])[:4]
     if not is_num(passed):
         print("\n".join(lines[-30:]), file=sys.stderr)
-        die("could not parse the verdict row. bench.zig changed?")
+        die("could not parse the verdict row. suite.zig changed?")
     try:
         total = sum(int(v or 0) for v in (passed, fail, unas, xfail))
     except ValueError:
-        die("could not parse the verdict row. bench.zig changed?")
+        die("could not parse the verdict row. suite.zig changed?")
     p = int(passed)
 
     # --- Measure C: static clause citations, not verified rule coverage -------
@@ -156,7 +656,7 @@ def measure():
     b_classified = first(r"(\d+)(?= classified$)", cov1364)
     b_clauses = first(r"^\d+ of (\d+)(?= IEEE 1364-2005 clauses cited)", cov1364)
     if not all(is_num(v) for v in (b_clauses, b_both, b_acc, b_ref, b_unc, b_classified)):
-        die("could not parse the 1364 coverage tally. tests/ieee1364.zig changed?")
+        die("could not parse the 1364 coverage tally. tests/suite.zig's Ieee1364 changed?")
     if sum(int(v) for v in (b_both, b_acc, b_ref, b_unc, b_classified)) != int(b_clauses):
         die("1364 tally does not sum to its clause denominator")
 
@@ -213,7 +713,7 @@ def section(text, version):
 
 VERSION_LITERALS = (
     (ROOT / "build.zig.zon", re.compile(r'(\.version = ")([^"]*)(")')),
-    (ROOT / "tools" / "contract.zig", re.compile(r'(^pub const vera_version = ")([^"]*)(";)', re.M)),
+    (ROOT / "lib" / "contract.zig", re.compile(r'(^pub const vera_version = ")([^"]*)(";)', re.M)),
 )
 
 
@@ -1011,10 +1511,7 @@ def fixture_cites():
     def add(std, clause, side, path):
         cites.setdefault((std, clause), {"pos": [], "neg": []})[side].append(path)
 
-    root = ROOT / "tests/fixtures"
-    for path in sorted(root.rglob("*")):
-        if path.suffix not in (".va", ".v", ".c") or not path.is_file():
-            continue
+    for path in fixture_files("*.va", "*.v", "*.c"):
         rel = str(path.relative_to(ROOT))
         if path.suffix == ".c" and rel not in runs:
             continue
@@ -1040,11 +1537,11 @@ def fixture_cites():
 
 
 def refusals():
-    """{(standard, clause): [codes]} for every error code in lib/diag_code.zig
+    """{(standard, clause): [codes]} for every error code in lib/diag/code.zig
     whose catalogue row cites a clause: the code's refusal is the code's claim
     about that clause."""
     out, codes = {}, []
-    for line in (ROOT / "lib/diag_code.zig").read_text().split("\n"):
+    for line in (ROOT / "lib/diag/code.zig").read_text().split("\n"):
         m = re.match(r"\s*(\.[EW]\d{4}(?:\s*,\s*\.[EW]\d{4})*)\s*=>", line)
         if m:
             codes = re.findall(r"[EW]\d{4}", m.group(1))
@@ -1150,7 +1647,7 @@ def comments(argv):
     print()
     print(f"read: {sum(len(v) for v in sites.values())} comment cites of {len(sites)} clauses in {nfiles} files "
           f"under lib/ and src/ ({unresolved['ams']} LRM and {unresolved['ieee']} IEEE cites name no heading); "
-          f"{sum(len(v) for v in refused.values())} error codes citing {len(refused)} clauses (lib/diag_code.zig); "
+          f"{sum(len(v) for v in refused.values())} error codes citing {len(refused)} clauses (lib/diag/code.zig); "
           f"{len(fixtures)} clauses cited by fixtures")
     print()
     print(f"1. cited in code, no positive fixture under it:   {len(implemented):4}  ({split(implemented)})")
@@ -1334,7 +1831,7 @@ def verilator_oracle(work):
 def icarus(argv):
     """`icarus [--work=DIR]`: Icarus Verilog (4-state, event-driven) over every
     .v with a committed transcript or a refusal under tests/fixtures/ieee1364
-    and tests/fixtures/digital -> tests/fixtures/ICARUS.tsv, one row each, in
+    and tests/fixtures/digital -> tests/fixtures/conformance/ICARUS.tsv, one row each, in
     VERILATOR.tsv's columns. The second engine:
     Verilator is 2-state, so its x/z disagreements are expected; Icarus's are
     not. A disagreement is data for a reader (VerA bug, Icarus bug, or a
@@ -1347,7 +1844,7 @@ def icarus(argv):
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
     work = Path(opts.get("work") or tempfile.mkdtemp(prefix="vera-icarus-"))
     # Every child is bounded: 2026-10-07, one deliberately oversized design
-    # (ieee1364/12_hierarchy/b_12_instance_array_width_product_rejected.v)
+    # (ieee1364/12_hierarchy/instance_array_width_product_rejected.v)
     # drove `ivl` to 20 GB and a 4.3 GB `sim.vvp`, and the OOM killer took
     # the session. Address space, output size and CPU are capped per process,
     # and at most `JOBS` run at once, so the worst case is JOBS * AS_KIB.
@@ -1408,7 +1905,7 @@ def icarus(argv):
         rows = [r for r in pool.map(oracle, fixtures) if r]
     rows = "".join(sorted(rows))
     version = subprocess.run(["iverilog", "-V"], capture_output=True, text=True).stdout.split("\n")[0]
-    out = ROOT / "tests/fixtures/ICARUS.tsv"
+    out = ROOT / "tests/fixtures/conformance/ICARUS.tsv"
     out.write_text(
         f"# {version} — `iverilog -g2005`, `vvp -n`; written by `tools/conformance.py icarus`.\n"
         "# agrees: a transcript fixture's stdout (vvp's own VCD/$finish notices dropped) equals its\n"
@@ -2063,7 +2560,7 @@ class InformativeSource(unittest.TestCase):
 # the fixtures' cites and one strict run's verdicts.
 # ---------------------------------------------------------------------------
 
-LEDGER = ROOT / "tests/fixtures/OBLIGATIONS.tsv"
+LEDGER = ROOT / "tests/fixtures/conformance/OBLIGATIONS.tsv"
 LEDGER_HEAD = (
     "# The AMS LRM's normative sentences: the requirement ledger.\n"
     "# Rows are extracted by `tools/conformance.py obligations --update`; a reader\n"
@@ -2246,7 +2743,7 @@ def fixture_tags(path):
             tags["reject"] = True
         elif word in ("reject-only", "reject-run"):
             # A run-time refusal (`//! reject-run`) is always exclusive: every
-            # `error[` line the run prints must match (tests/torture.zig).
+            # `error[` line the run prints must match (tests/suite.zig's Analog).
             tags["reject"] = tags["only"] = True
         elif word == "neighbour":
             # Normalise `..` so a legal twin in another chapter resolves to the
@@ -2262,14 +2759,13 @@ def vpi_runs():
     `vpiRuns`, the `.c` fixtures `zig build test` runs in-process: those with
     a `//! design` line. A `.c` that only compiles is not evidence
     and is absent here."""
-    root = ROOT / "tests/fixtures"
     out = {}
-    for path in sorted(root.rglob("*.c")):
+    for path in fixture_files("*.c"):
         text = path.read_text(errors="replace")
         if re.search(r"(?m)^//! design ", text):
             # `//! refuse`: the run is refused by name, and build.zig holds it
             # to that exit and stdout, so a met refusal passes like any run.
-            out[path.relative_to(root).as_posix()] = "xfail" if re.search(r"(?m)^//! xfail ", text) else "pass"
+            out[path.relative_to(FIXTURES).as_posix()] = "xfail" if re.search(r"(?m)^//! xfail ", text) else "pass"
     return out
 
 
@@ -2309,6 +2805,9 @@ def levels(ledger, fixtures, verdicts, perturbed, killed, oracles=None):
 
     def can_fail(p, side):
         t = fixtures[p]
+        if t.get("specialized"):
+            # Exact named assertion, registered and executed by the report.
+            return True
         if t["c"]:
             # A C check is a condition with no want to perturb; the run's
             # exact stdout is the contract, and E5's mutants are its proof.
@@ -2353,7 +2852,7 @@ def levels(ledger, fixtures, verdicts, perturbed, killed, oracles=None):
 def read_oracles():
     """{fixture: [engine]} from the independent engines' agreement tables:
     tests/fixtures/ieee1364/VERILATOR.tsv (`agrees` = yes) and any
-    tests/fixtures/ORACLES.tsv rows `<fixture>\t<engine>` (iverilog, ngspice,
+    tests/fixtures/conformance/ORACLES.tsv rows `<fixture>\t<engine>` (iverilog, ngspice,
     ...). Agreement is evidence, not authority."""
     out = {}
     ver = ROOT / "tests/fixtures/ieee1364/VERILATOR.tsv"
@@ -2362,13 +2861,13 @@ def read_oracles():
             c = line.split("\t")
             if len(c) > 4 and not line.startswith("#") and c[4] == "yes":
                 out.setdefault("ieee1364/" + c[0], []).append("verilator")
-    ica = ROOT / "tests/fixtures/ICARUS.tsv"
+    ica = ROOT / "tests/fixtures/conformance/ICARUS.tsv"
     if ica.exists():
         for line in ica.read_text().split("\n"):
             c = line.split("\t")
             if len(c) > 4 and not line.startswith("#") and c[4] == "yes":
                 out.setdefault(c[0], []).append("icarus")
-    extra = ROOT / "tests/fixtures/ORACLES.tsv"
+    extra = ROOT / "tests/fixtures/conformance/ORACLES.tsv"
     if extra.exists():
         for line in extra.read_text().split("\n"):
             c = line.split("\t")
@@ -2398,9 +2897,9 @@ def metric(argv):
     if not ledger:
         print("metric: no ledger; run `obligations --update` first", file=sys.stderr)
         return 2
-    root = ROOT / "tests/fixtures"
+    root = FIXTURES
     runs = vpi_runs()
-    paths = sorted(root.rglob("*.va")) + sorted(root.rglob("*.v")) + [root / c for c in sorted(runs)]
+    paths = fixture_files("*.va", "*.v") + [root / c for c in sorted(runs)]
     fixtures = {str(p.relative_to(root)): fixture_tags(p) for p in paths}
     fixtures = {p: t for p, t in fixtures.items() if t["cites"] or t["reject"]}
     verdicts = read_verdicts(opts["verdicts"])
@@ -2408,9 +2907,11 @@ def metric(argv):
     if "digital" in opts:
         for path, v in read_verdicts(opts["digital"]).items():
             verdicts.setdefault(path, v)
-    # `vpi_runs` run under `zig build test`, the merge gate: a run whose
-    # `test` passed has met each, and an xfail entry is a known gap.
-    verdicts.update(runs)
+    # A declaration is not an execution result. VPI markers are emitted only
+    # after the build checks the application's exit and exact output.
+    if "specialized" in opts:
+        for result in sorted(Path(opts["specialized"]).glob("vpi--*.tsv")):
+            verdicts.update(read_verdicts(result))
     perturbed = read_verdicts(opts["perturbed"]) if "perturbed" in opts else {}
     killed = set(Path(opts["killed"]).read_text().split()) if "killed" in opts else killed_rows(ledger)
     oracles = read_oracles()
@@ -2463,15 +2964,15 @@ def row_line(name, t, order):
 SUBCOMMANDS["metric"] = metric
 
 
-VERDICTS = ROOT / "tests/fixtures/VERDICTS.tsv"
-LEVELS = ROOT / "tests/fixtures/LEVELS.tsv"
-STEPS = ROOT / "tests/STEPS.txt"
+VERDICTS = ROOT / "tests/fixtures/conformance/VERDICTS.tsv"
+LEVELS = ROOT / "tests/fixtures/conformance/LEVELS.tsv"
+STEPS = ROOT / "tests/fixtures/conformance/STEPS.txt"
 
 
 def ratchet(argv):
     """`ratchet --verdicts=F [--levels=F] [--update]`: the run's per-fixture
-    verdicts (and per-row levels) against the committed VERDICTS.tsv and
-    LEVELS.tsv. Any difference fails, a fix as much as a regression, so the
+    verdicts (and per-row levels) against the committed tests/fixtures/conformance/VERDICTS.tsv and
+    tests/fixtures/conformance/LEVELS.tsv. Any difference fails, a fix as much as a regression, so the
     committed files are always this tree's truth and every change to them is
     reviewed by name.
     `--update` writes the run's files over the committed ones."""
@@ -2507,7 +3008,7 @@ SUBCOMMANDS["ratchet"] = ratchet
 
 
 def steps(argv):
-    """`steps [--update]`: `zig build -l`'s step names against tests/STEPS.txt.
+    """`steps [--update]`: `zig build -l`'s step names against tests/fixtures/conformance/STEPS.txt.
     A step that disappears takes its tests with it and says nothing, which is
     how `2cc1c08` lost twelve (CLAUSE-AUDIT.md, provenance)."""
     out, code = run("zig", "build", "-l")
@@ -2526,7 +3027,7 @@ def steps(argv):
     for n in new:
         print(f"steps: new {n}")
     if gone or new:
-        print("steps: commit tests/STEPS.txt with `steps --update` once the change is intended")
+        print("steps: commit tests/fixtures/conformance/STEPS.txt with `steps --update` once the change is intended")
         return 1
     print(f"steps: {len(names)} build steps, as committed")
     return 0
@@ -2534,8 +3035,6 @@ def steps(argv):
 
 SUBCOMMANDS["steps"] = steps
 
-
-FIXTURES = ROOT / "tests/fixtures"
 
 
 def header_text(source):
@@ -2605,7 +3104,7 @@ def link_neighbours(argv):
     apply = "--apply" in argv
     linked = missing = 0
     worklist = []
-    for path in sorted(list(FIXTURES.rglob("*.va")) + list(FIXTURES.rglob("*.v"))):
+    for path in fixture_files("*.va", "*.v"):
         text = path.read_text(errors="replace")
         if not re.search(r"(?m)^\s*//!\s*reject", text) or re.search(r"(?m)^\s*//!\s*neighbour", text):
             continue
@@ -2649,7 +3148,7 @@ def link_sentences(argv):
         if r["hash"] != "manual":
             rows_of.setdefault(clause, []).append((rid, norm(r["text"])))
     added = files = 0
-    for path in sorted(list(FIXTURES.rglob("*.va")) + list(FIXTURES.rglob("*.v"))):
+    for path in fixture_files("*.va", "*.v"):
         text = path.read_text(errors="replace")
         cites = re.findall(r"(?m)^\s*//!\s*lrm\s+(\S+)\s*$", text)
         have = set(cites)
@@ -2691,7 +3190,7 @@ class FixtureLinking(unittest.TestCase):
         self.assertEqual(out[1], "//! lrm 5.1:2")
 
 
-MUTANTS = ROOT / "tests/fixtures/MUTANTS.tsv"
+MUTANTS = ROOT / "tests/fixtures/conformance/MUTANTS.tsv"
 MUT_TREE = ROOT.parent / "vera-mut"
 VQ = ROOT.parent / ".build-queue/vq"
 # One mutation per site: (name, pattern, replacement). Spaces around the
@@ -2742,7 +3241,7 @@ def apply_mutant(text, line_no, name):
 
 def cites_index():
     idx = {}
-    for p in sorted(list(FIXTURES.rglob("*.va")) + list(FIXTURES.rglob("*.v"))):
+    for p in fixture_files("*.va", "*.v"):
         t = fixture_tags(p)
         if t["xfail"]:
             continue  # a known gap is not evidence a mutant can be judged by
@@ -2769,7 +3268,7 @@ def mutate(argv):
     fixtures that cite the file's header clauses (at most K). A mutant some
     fixture fails is KILLED: that fixture's evidence can fail when the code
     is wrong (the metric's E5). A survivor names a check that cannot see
-    that change. Results are appended to tests/fixtures/MUTANTS.tsv with the
+    that change. Results are appended to tests/fixtures/conformance/MUTANTS.tsv with the
     file's hash, so a kill stops counting once the file changes."""
     import random
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
@@ -2855,7 +3354,7 @@ SUBCOMMANDS["mutate"] = mutate
 def killed_rows(ledger):
     """Row ids with E5 evidence: a passing fixture that cites the row and that
     killed a mutant of a file whose header names the row's clause, recorded
-    against the file as it is now (MUTANTS.tsv's hash)."""
+    against the file as it is now (tests/fixtures/conformance/MUTANTS.tsv's hash)."""
     if not MUTANTS.exists():
         return set()
     out = set()
@@ -2889,7 +3388,7 @@ def killed_rows(ledger):
 # adversarial, determinism: input-size limits and device-text determinism
 # ---------------------------------------------------------------------------
 
-ADVERSARIAL = ROOT / "tests/fixtures/ADVERSARIAL.tsv"
+ADVERSARIAL = ROOT / "tests/fixtures/conformance/ADVERSARIAL.tsv"
 
 
 def binaries(argv):
@@ -2977,7 +3476,7 @@ def adversarial(argv):
     """`adversarial [[NAME=]VERA ...]`: L10's adversarial sizes (deep
     expressions, `begin` and macro nesting, huge statement, generate, module
     and hierarchy counts, a 64k-bit literal) through `vera --check` under
-    `ulimit -v 4194304` and a wall-clock budget -> tests/fixtures/ADVERSARIAL.tsv.
+    `ulimit -v 4194304` and a wall-clock budget -> tests/fixtures/conformance/ADVERSARIAL.tsv.
     Oracle: exit 0 or a named diagnostic; never a signal, a timeout, or an
     unnamed failure. Exit 1 when any row breaks it."""
     import concurrent.futures
@@ -2998,7 +3497,7 @@ def adversarial(argv):
 
     def one(job):
         (bname, vera), case = job
-        cmd = [vera, "--check", "--contract", str(ROOT / "tools/contract.zig"), str(work / f"{case}.va")]
+        cmd = [vera, "--check", "--contract", str(ROOT / "lib/contract.zig"), str(work / f"{case}.va")]
         rc, _, err, secs = bounded(cmd, cwd[bname], TIMEOUT_S, AS_KIB)
         return job, rc, err, secs
 
@@ -3065,7 +3564,7 @@ def determinism(argv):
                              + "\n".join(list(ud)[:12]))
         return diffs
 
-    fixtures = sorted(str(p.relative_to(ROOT)) for p in FIXTURES.rglob("*.va"))
+    fixtures = [str(p.relative_to(ROOT)) for p in fixture_files("*.va")]
     with concurrent.futures.ThreadPoolExecutor(4) as pool:  # one vera per worker
         diffs = [d for ds in pool.map(runs, fixtures) for d in ds]
     for d in diffs:
@@ -3206,7 +3705,7 @@ def lint_cites(argv):
     stays). Unknown ids are reported."""
     ledger = read_ledger()
     bad, unknown, files = 0, [], 0
-    for path in sorted(list(FIXTURES.rglob("*.va")) + list(FIXTURES.rglob("*.v")) + list(FIXTURES.rglob("*.c"))):
+    for path in fixture_files("*.va", "*.v", "*.c"):
         t = fixture_tags(path)
         drop = []
         for cite, side in t["cites"]:
@@ -3284,8 +3783,8 @@ class ObligationLedger(unittest.TestCase):
 # None of it reads VerA's parser: the oracle is the LRM's text.
 # ---------------------------------------------------------------------------
 
-GRAMMAR_TSV = FIXTURES / "GRAMMAR.tsv"
-GRAMMAR_DIFF_TSV = FIXTURES / "GRAMMAR-DIFF.tsv"
+GRAMMAR_TSV = ROOT / "tests/fixtures/conformance/GRAMMAR.tsv"
+GRAMMAR_DIFF_TSV = ROOT / "tests/fixtures/conformance/GRAMMAR-DIFF.tsv"
 # Boxes that are not grammar: 1.4's notation examples, and Annex G's history.
 GRAMMAR_SKIP_FILES = ("ch1-intro.html", "annex-g-changes.html")
 
@@ -3542,7 +4041,7 @@ def write_grammar_tsv(alts, path=None):
 
 
 def grammar_extract(argv):
-    """`extract`: every Syntax box into GRAMMAR.tsv, with the extraction's
+    """`extract`: every Syntax box into tests/fixtures/conformance/GRAMMAR.tsv, with the extraction's
     notes and every name no box defines (a transcription finding, or a
     chapter box's argument placeholder)."""
     alts, notes = read_syntax()
@@ -3685,7 +4184,7 @@ def grammar_undefined(alts):
     return out
 
 
-# Readings of Annex A's undefined names, for the recognizer only (GRAMMAR.tsv
+# Readings of Annex A's undefined names, for the recognizer only (tests/fixtures/conformance/GRAMMAR.tsv
 # keeps the text as printed). Each is the evident intent of a defect the
 # annex's own editorial note lists or the chapters resolve. Without the first
 # three no analog assignment derives at all. A derivation that needs one of
@@ -3711,7 +4210,7 @@ PLACEHOLDER = "analog_expression | expression | constant_assignment_pattern"
 class BNF:
     """A grammar over integer symbols. A symbol's key is ("n", name) for a
     nonterminal, ("t", text) for a token's exact text, ("c", class) for a
-    lexical class. `rules[r] = (lhs, rhs)`; `alt[r]` is the GRAMMAR.tsv id the
+    lexical class. `rules[r] = (lhs, rhs)`; `alt[r]` is the tests/fixtures/conformance/GRAMMAR.tsv id the
     rule is an alternative of (None for a [ ] or { } helper or a reading)."""
 
     def __init__(self, terminal, classes=()):
@@ -4366,7 +4865,7 @@ def verdicts_file(opts):
         return Path(opts["verdicts"])
     if VERDICTS.exists():
         return VERDICTS
-    print("grammar: --verdicts=<file> from a strict run is required (no tests/fixtures/VERDICTS.tsv)", file=sys.stderr)
+    print("grammar: --verdicts=<file> from a strict run is required (no tests/fixtures/conformance/VERDICTS.tsv)", file=sys.stderr)
     return None
 
 
@@ -4463,7 +4962,7 @@ GRAMMAR_COMMANDS["earley"] = grammar_earley
 GENERATOR_AVOID = ("paramset", "primitive", "config", "connectmodule", "macromodule", "connectrules", "(*")
 # A.1.2's first module form needs a port list, whose shortest port is empty,
 # and A.4.2's loop generate an undeclared genvar: fillers VerA refuses for
-# their own reasons (GRAMMAR-DIFF.tsv), which would hide every target.
+# their own reasons (tests/fixtures/conformance/GRAMMAR-DIFF.tsv), which would hide every target.
 GENERATOR_AVOID_ALTS = ("A.1.2/9", "A.4.2/5")
 
 
@@ -4741,7 +5240,7 @@ def grammar_diff(argv):
     at most four at once, each under `ulimit -v 4 GiB`) judge the same text:
     every .va fixture, one-token mutants of the positive ones the recognizer
     derives, and k sentences generated for each alternative. Each
-    disagreement is classified and written to GRAMMAR-DIFF.tsv."""
+    disagreement is classified and written to tests/fixtures/conformance/GRAMMAR-DIFF.tsv."""
     import shutil
     from concurrent.futures import ThreadPoolExecutor
     opts = grammar_opts(argv)
@@ -5094,7 +5593,7 @@ class GrammarOracle(unittest.TestCase):
         head = "".join(ln + "\n" for ln in GRAMMAR_TSV.read_text().split("\n") if ln.startswith("#"))
         rows = [ln for ln in GRAMMAR_TSV.read_text().split("\n") if ln and not ln.startswith("#")]
         self.assertEqual(rows, [f"{a.id}\t{a.lhs}\t{a.text}\t{a.note}" for a in alts],
-                         "GRAMMAR.tsv drifted from docs/: run `grammar extract`")
+                         "tests/fixtures/conformance/GRAMMAR.tsv drifted from docs/: run `grammar extract`")
         self.assertIn("grammar-coverage denominator", head)
 
     def test_tokens(self):
@@ -5142,14 +5641,14 @@ class GrammarOracle(unittest.TestCase):
 
     def test_real_fixtures(self):
         o = self.o
-        for rel in ("ch05_analog_behavior/rlc.va", "annex_a_syntax/05_behavioral_statements.va",
-                    "annex_a_syntax/19_jump_statements.va", "ch04_expressions/19_absdelay.va"):
+        for rel in ("ch05_analog_behavior/rlc.va", "annex_a_syntax/behavioral_statements.va",
+                    "annex_a_syntax/jump_statements.va", "ch04_expressions/absdelay.va"):
             with self.subTest(rel=rel):
                 rel_, status, detail, alts = derive_fixture(rel)
                 self.assertEqual(status, "derived", detail)
                 self.assertIn("A.6.10/1", alts)  # contribution_statement
         # A.1.4 declares no module string (3.3 does): the oracle says so.
-        self.assertEqual(derive_fixture("ch03_data_types/03_string_variables.va")[1], "refused")
+        self.assertEqual(derive_fixture("ch03_data_types/string_variables.va")[1], "refused")
         toks = lex("module m; analog begin x = ; end endmodule")
         c = o.parse(toks)
         self.assertFalse(c.accepted)
@@ -5179,6 +5678,324 @@ class GrammarOracle(unittest.TestCase):
         self.assertEqual(classify_diff(c, "accept", "accept", "", "syntax", "E9999 never seen")[0], "unclassified")
 
 
+
+
+class EvidenceTests(unittest.TestCase):
+    """`run`'s accounting: only the named test in the named artifact counts,
+    a skip or a failure never covers a clause, and a result row cannot be
+    invented or silently overwritten."""
+
+    def test_specialized_requires_the_exact_executed_test(self):
+        row = {"id": "timer", "artifact": "host--timer", "test": "absolute time"}
+        self.assertEqual(specialized_status(row, {}), "not-run")
+        self.assertEqual(specialized_status(row, {
+            "host--different": {"host.test.absolute time": "pass"},
+        }), "not-run")
+        for status in ("pass", "fail", "skip", "xfail"):
+            self.assertEqual(specialized_status(row, {
+                "host--timer": {"host.test.absolute time": status},
+            }), status)
+
+    def test_skips_and_failures_never_cover_a_clause(self):
+        clauses = {("ams", "5.1"): {"title": "Events", "classification": "-"}}
+        citations = {("ams", "5.1"): [{"test": "host", "kind": "specialized", "polarity": "pos"}]}
+        for status, state in (("pass", "covered"), ("fail", "failing"), ("xfail", "failing"),
+                              ("skip", "not-run"), ("not-run", "not-run")):
+            row, = clause_results(clauses, citations, {"host": status})
+            self.assertEqual(row["status"], state)
+            self.assertEqual(row["specialized"], status == "pass")
+
+    def test_passing_specialized_test_counts_without_a_fixture(self):
+        clauses = {("ams", "5.1"): {"title": "Events", "classification": "-"}}
+        cites = {("ams", "5.1"): [{"test": "host", "kind": "specialized", "polarity": "pos"}]}
+        row, = clause_results(clauses, cites, {"host": "pass"})
+        self.assertEqual(row["status"], "covered")
+        self.assertTrue(row["specialized"])
+        self.assertFalse(row["fixture"])
+
+    def test_failure_does_not_disappear_behind_a_passing_test(self):
+        clauses = {("ams", "5.1"): {"title": "Events", "classification": "-"}}
+        citations = {("ams", "5.1"): [
+            {"test": name, "kind": kind, "polarity": "pos"}
+            for name, kind in (("fixture", "fixture"), ("host", "specialized"))
+        ]}
+        row, = clause_results(clauses, citations, {"fixture": "pass", "host": "xfail"})
+        self.assertEqual(row["status"], "failing")
+
+    def test_missing_citations_and_missing_execution_are_distinct(self):
+        clauses = {("ams", "5.1"): {"title": "Events", "classification": "-"}}
+        row, = clause_results(clauses, {}, {})
+        self.assertEqual(row["status"], "uncovered")
+        row, = clause_results(clauses, {("ams", "5.1"): [
+            {"test": "declared-only", "kind": "specialized", "polarity": "pos"}]}, {})
+        self.assertEqual(row["status"], "not-run")
+
+    def test_no_fixed_oracle_is_not_reported_as_a_missing_test(self):
+        clauses = {("ams", "1.4"): {"title": "Conventions", "classification": "non-normative"}}
+        row, = clause_results(clauses, {}, {}, {("ams", "1.4"): "no-fixed-oracle"})
+        self.assertEqual(row["status"], "not-applicable")
+        self.assertEqual(row["disposition"], "no-fixed-oracle")
+        # A passing test still covers a clause that has a disposition: the
+        # disposition explains the absence of a test, not the presence of one.
+        cites = {("ams", "1.4"): [{"test": "doc", "kind": "fixture", "polarity": "pos"}]}
+        row, = clause_results(clauses, cites, {"doc": "pass"}, {("ams", "1.4"): "no-fixed-oracle"})
+        self.assertEqual(row["status"], "covered")
+
+    def test_dispositions_only_name_whole_clauses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "tests/fixtures/conformance/GAPS.tsv"
+            path.parent.mkdir(parents=True)
+            path.write_text("standard\tcitation\tbaseline\tdisposition\tsources\treason\n"
+                            "ams\t1.4\tuncovered\tno-fixed-oracle\t-\tnon-normative\n"
+                            "ams\t3.4.1:1\tF\texecutable\t-\tsentence\n")
+            self.assertEqual(read_dispositions(root), {("ams", "1.4"): "no-fixed-oracle"})
+
+    def test_markdown_separates_no_fixed_oracle_from_uncovered(self):
+        report = {
+            "measured_at": "now", "commit": "c", "source_sha256": "s",
+            "fixture_counts": {}, "assertion_validation_counts": {},
+            "spice_counts": {}, "specialized_counts": {}, "unit_execution_counts": {},
+            "clauses": [{"standard": "ams", "clause": "1.4", "title": "Conventions",
+                         "classification": "non-normative", "status": "not-applicable",
+                         "fixture": False, "specialized": False}],
+            "feature_groups": [], "specialized_checks": {},
+            "ams_obligations": {"mandatory": 0, "total": 0, "levels": {},
+                                "unattributed_failures": {}},
+            "suites": [],
+        }
+        text = markdown(report)
+        self.assertIn("| No fixed oracle |", text)
+        self.assertIn("| Verilog-AMS 2023 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |", text)
+        self.assertIn("not conformance failures", text)
+
+    def test_passing_refusal_does_not_turn_an_unsupported_feature_into_coverage(self):
+        clauses = {("ieee", "7.1"): {"title": "Gates", "classification": "not-supported"}}
+        citations = {("ieee", "7.1"): [{"test": "reject", "kind": "fixture", "polarity": "neg"}]}
+        row, = clause_results(clauses, citations, {"reject": "pass"})
+        self.assertEqual(row["status"], "unsupported")
+        self.assertTrue(row["negative"])
+        row, = clause_results(clauses, citations, {"reject": "xfail"})
+        self.assertEqual(row["status"], "failing")
+
+    def test_result_rows_cannot_silently_overwrite_or_invent_a_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.tsv"
+            for text in ("pass\tx\nfail\tx\n", "success\tx\n", "pass\t\n", "pass\tx\ty\n"):
+                path.write_text(text)
+                with self.assertRaises(ValueError):
+                    read_results(path)
+            path.write_text("pass\tx\nskip\ty\n")
+            self.assertEqual(read_results(path), {"x": "pass", "y": "skip"})
+        with self.assertRaises(ValueError):
+            merge_results({"x": "pass"}, {"x": "pass"})
+
+    def test_successful_build_cannot_substitute_for_missing_execution_records(self):
+        with self.assertRaises(ValueError):
+            require_results({}, {"a.c", "b.c"}, "VPI")
+        with self.assertRaises(ValueError):
+            require_results({"a.c": "pass"}, {"a.c", "b.c"}, "VPI")
+        require_results({"a.c": "pass", "b.c": "xfail"}, {"a.c", "b.c"}, "VPI")
+        row = {"id": "VPI-LINE-INSTANCE", "artifact": "vpi_acceptance", "test": "VPI-LINE-INSTANCE"}
+        with self.assertRaises(ValueError):
+            require_specialized_results([row], {})
+        require_specialized_results([row], {
+            "vpi_acceptance": {"vpi_app.test.VPI-LINE-INSTANCE": "xfail"},
+        })
+
+    def test_catalog_points_to_real_assertions_and_requirements(self):
+        rows = read_specialized(ROOT, clause_inventory(), read_ledger())
+        self.assertTrue(rows)
+        self.assertTrue(any(":" in row["citation"] for row in rows))
+        self.assertTrue(any(row["source"].endswith(".c") for row in rows))
+
+    def test_specialized_assertion_can_evidence_a_sentence(self):
+        ledger = {"5.1:1": {"pol": "+", "kind": "-", "oracle": "?"}}
+        tags = {"host": {"cites": [("5.1:1", "pos")], "specialized": True, "c": False}}
+        for status, expected in (("pass", "E3"), ("skip", "E1"), ("fail", "F"), ("xfail", "F")):
+            rows, _ = levels(ledger, tags, {"host": status}, {}, set())
+            self.assertEqual(rows["5.1:1"], expected)
+
+    def test_perturbation_requires_a_matching_normal_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(assertion_validation(root, {"a.va": "pass"}), {})
+            (root / "ams-perturbed.tsv").write_text("pass\ta.va\n")
+            self.assertEqual(assertion_validation(root, {"a.va": "pass"}), {"a.va": "pass"})
+            with self.assertRaises(ValueError):
+                assertion_validation(root, {"b.va": "pass"})
+            with self.assertRaises(ValueError):
+                require_results({"a.va": "pass"}, {"a.va", "b.va"}, "AMS assertion validation")
+
+    def test_perturbation_never_overwrites_normal_failure_or_missing_execution(self):
+        ledger = {"5.1:1": {"pol": "+", "kind": "-", "oracle": "?"}}
+        tags = {"a.va": {"cites": [("5.1:1", "pos")], "c": False, "only": False, "neighbours": []}}
+        for normal, expected in (("pass", "E3"), ("fail", "F"), ("xfail", "F"), ("skip", "E1")):
+            rows, _ = levels(ledger, tags, {"a.va": normal}, {"a.va": "pass"}, set())
+            self.assertEqual(rows["5.1:1"], expected)
+        for validation in ("fail", "xfail", "skip", "unasserted", None):
+            rows, _ = levels(ledger, tags, {"a.va": "pass"}, {"a.va": validation}, set())
+            self.assertEqual(rows["5.1:1"], "E2")
+
+    def test_unified_collection_uses_fresh_perturbations_and_preserves_normal_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests").mkdir()
+            (root / "ams.tsv").write_text("pass\tch01_intro/current_source.va\n")
+            before = collect_report(root, [])
+            self.assertEqual(before["ams_obligations"]["rows"]["5.6.1:1"], "E2")
+            (root / "ams-perturbed.tsv").write_text("pass\tch01_intro/current_source.va\n")
+            after = collect_report(root, [])
+            self.assertEqual(after["ams_obligations"]["rows"]["5.6.1:1"], "E3")
+            self.assertEqual(after["fixture_results"], before["fixture_results"])
+            self.assertEqual(after["assertion_validation_counts"], {"pass": 1})
+
+    def test_bare_clause_does_not_cover_all_its_sentences(self):
+        ledger = {f"5.1:{i}": {"pol": "+", "kind": "-", "oracle": "?"} for i in (1, 2)}
+        tags = {"host": {"cites": [("5.1", "pos")], "specialized": True, "c": False}}
+        rows, _ = levels(ledger, tags, {"host": "pass"}, {}, set())
+        self.assertEqual(set(rows.values()), {"E1"})
+
+    def test_behavior_group_requires_all_checks_and_preserves_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "groups.tsv"
+            path.write_text("timing\tTiming behavior\ta;b\n")
+            for second, expected in (("pass", "covered"), ("fail", "failing"), ("xfail", "failing"),
+                                     ("skip", "not-run"), ("unasserted", "not-run"), (None, "not-run")):
+                results = {"a": "pass"}
+                if second is not None:
+                    results["b"] = second
+                row, = feature_groups(path, {"a", "b"}, results)
+                self.assertEqual(row["status"], expected)
+            row, = feature_groups(path, {"a", "b"}, {"a": "xfail"})
+            self.assertEqual(row["status"], "failing")
+
+    def test_behavior_groups_reject_unknown_and_double_counted_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "groups.tsv"
+            for text in ("one\tDescription\tmissing\n", "one\tDescription\ta;a\n",
+                         "one\tDescription\ta\ntwo\tDescription\ta\n",
+                         "one\tDescription\ta\none\tDescription\tb\n"):
+                path.write_text(text)
+                with self.assertRaises(ValueError):
+                    feature_groups(path, {"a", "b"}, {})
+
+
+class GapInventoryTests(unittest.TestCase):
+    """GAPS.tsv, PROFILES.json and FEATURE_GAPS.tsv name real clauses, files
+    and checks, and claim no execution."""
+
+    def test_review_inventory_keeps_every_baseline_gap_and_valid_references(self):
+        clauses = clause_inventory()
+        ledger = read_ledger()
+        seen = set()
+        counts = {"ams": 0, "ieee": 0, "sentence": 0}
+        for line in (FIXTURES / "conformance/GAPS.tsv").read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            standard, cite, baseline, disposition, sources, reason = line.split("\t")
+            self.assertNotIn((standard, cite), seen)
+            seen.add((standard, cite))
+            self.assertIn((standard, cite.split(":")[0]), clauses)
+            if ":" in cite:
+                self.assertIn(cite, ledger)
+                self.assertIn(ledger[cite]["kind"], MANDATORY_KINDS)
+                counts["sentence"] += 1
+            else:
+                counts[standard] += 1
+            self.assertIn(baseline, {"uncovered", "unsupported", "failing", "not-run", "E0", "E1", "F"})
+            self.assertIn(disposition, {"executable", "host-profile", "no-fixed-oracle", "existing-partial", "conditional"})
+            self.assertTrue(reason)
+            if sources != "-":
+                for source in sources.split(";"):
+                    path = (ROOT / source).resolve()
+                    self.assertTrue(path.is_relative_to(ROOT) and path.is_file(), source)
+            if disposition == "executable":
+                self.assertNotEqual(sources, "-")
+        # This is the frozen pre-regression review inventory, not live coverage.
+        self.assertEqual(counts, {"ams": 27, "ieee": 231, "sentence": 23})
+
+    def test_pending_profiles_have_inputs_and_explicit_oracles(self):
+        profiles = json.loads((FIXTURES / "conformance/PROFILES.json").read_text())
+        seen = set()
+        for row in profiles["scenarios"]:
+            self.assertNotIn(row["id"], seen)
+            seen.add(row["id"])
+            self.assertTrue(row["setup"] and row["pending"])
+            self.assertTrue((ROOT / row["source"]).is_file())
+            self.assertTrue(row.get("expected") or row.get("expect"))
+            if "expected" in row:
+                self.assertTrue((ROOT / row["expected"]).read_text())
+            if "runner" in row:
+                source = ROOT / row["runner"]
+                names = {node.name for node in ast.walk(ast.parse(source.read_text()))
+                         if isinstance(node, ast.FunctionDef)}
+                self.assertTrue(row["tests"])
+                self.assertTrue(set(row["tests"]) <= names)
+
+    def test_behavior_inventory_names_real_checks_without_claiming_execution(self):
+        specialized = read_specialized(ROOT, clause_inventory(), read_ledger())
+        known = {p.relative_to(FIXTURES).as_posix() for p in FIXTURES.rglob("*") if p.is_file()}
+        known.update("specialized:" + row["id"] for row in specialized)
+        rows = feature_groups(FIXTURES / "conformance/FEATURE_GAPS.tsv", known, {})
+        self.assertTrue(rows)
+        self.assertEqual({row["status"] for row in rows}, {"not-run"})
+
+
+class FixtureLayoutTests(unittest.TestCase):
+    """The path relationships discovery and coverage depend on."""
+
+    def test_host_and_vpi_designs_exist(self):
+        missing = []
+        for path in fixture_files("*_host.zig", "*.c"):
+            key = "design" if path.suffix == ".c" else "device"
+            for rel in re.findall(rf"(?m)^//! {key} (.+)$", path.read_text()):
+                if not (FIXTURES / rel).is_file():
+                    missing.append(f"{path.relative_to(ROOT)}: {rel}")
+        self.assertEqual(missing, [])
+
+    def test_legal_neighbours_exist(self):
+        missing = []
+        for path in fixture_files("*.va", "*.v"):
+            for rel in re.findall(r"(?m)^\s*//! neighbour (.+)$", path.read_text()):
+                if not (path.parent / rel).is_file():
+                    missing.append(f"{path.relative_to(FIXTURES)}: {rel}")
+        self.assertEqual(missing, [])
+
+    def test_spice_models_exist_at_the_declared_relative_path(self):
+        missing = []
+        for path in FIXTURES.rglob("*.sp"):
+            for rel in re.findall(r'(?im)^\s*\.hdl\s+"([^"]+)"', path.read_text()):
+                if not (path.parent / rel).is_file():
+                    missing.append(f"{path.relative_to(FIXTURES)}: {rel}")
+        self.assertEqual(missing, [])
+
+    def test_spice_oracle_hashes_match_the_deck(self):
+        for path in FIXTURES.rglob("*.sp"):
+            oracle = path.with_suffix(".expected.json")
+            if not oracle.exists():
+                continue
+            expected = json.loads(oracle.read_text()).get("netlist_sha256")
+            if expected:
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected, str(path))
+
+    def test_digital_goldens_have_a_source(self):
+        missing = []
+        for path in FIXTURES.rglob("*.expected.txt"):
+            stem = path.name.removesuffix(".expected.txt")
+            if not path.with_name(stem + ".v").is_file():
+                missing.append(str(path.relative_to(FIXTURES)))
+        self.assertEqual(missing, [])
+
+    def test_fixture_verdict_baseline_names_existing_sources(self):
+        missing = []
+        for line in VERDICTS.read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            _, rel = line.split("\t", 1)
+            if not (FIXTURES / rel).is_file():
+                missing.append(rel)
+        self.assertEqual(missing, [])
 
 
 def selftest(argv):

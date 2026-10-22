@@ -1,12 +1,12 @@
 // §5.5.3 forbids the access, ddt_nature and idt_nature attributes in a
 // nature_attribute_reference. Keeping a child's local discipline across a
 // port connection must preserve that refusal. Here the legal neighbour is
-// lrm_7_2_4.va: its bound child reads p.potential.abstol; this child instead
+// mixed_signal_smallest_abstol.va: its bound child reads p.potential.abstol; this child instead
 // reads the forbidden p.potential.access and must receive E0359.
 //! lrm 5.5.3
 //! lrm 5.5.3:1
 //! reject-only E0359
-//! neighbour lrm_7_2_4.va
+//! neighbour mixed_signal_smallest_abstol.va
 nature local_attribute_voltage : Voltage;
   abstol = 1n;
 endnature

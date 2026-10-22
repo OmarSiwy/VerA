@@ -15,7 +15,7 @@
 //
 // The continuous-context twin of this line, `r = V(dn);` inside the `analog`
 // block, is E0501 ("`V` is not an access function of `dn`"). The positive side
-// of the clause is `m01_08_analog_probe_in_a_digital_expression.va`, which
+// of the clause is `analog_probe_in_a_digital_expression.va`, which
 // probes an `electrical` net from an `always` block and asserts the value.
 //
 // WHAT THIS PINS THAT NOTHING ELSE DOES. Before 2026-09-24 VerA accepted this
@@ -30,7 +30,7 @@
 //! lrm 7.3.3
 //! lrm 7.3.6.3
 //! reject-only E0501
-//! neighbour m01_08_analog_probe_in_a_digital_expression.va
+//! neighbour analog_probe_in_a_digital_expression.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_probe_discrete(p, dn);

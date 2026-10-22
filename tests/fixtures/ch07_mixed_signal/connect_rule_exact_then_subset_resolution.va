@@ -12,7 +12,7 @@
 //     "disciplines x,y would resolve to discipline x."        (exact match)
 //     "disciplines y,a would resolve to discipline a."        (subset)
 //
-// m03_13_reject_ambiguous_connect_statements.va is the clause's only other cite
+// reject_ambiguous_connect_statements.va is the clause's only other cite
 // and is a §7.8.4 rejection; this file is the resolution mechanism itself.
 //
 // HOW THE RESOLUTION IS OBSERVED — annex_f_resolution/resolveto_resolution.va's

@@ -4,14 +4,14 @@
 // tasks defined in IEEE Std 1364 Verilog."
 //
 // ONE CONSTRUCT, ONE RULE. $sync$and$array, the call
-// 202_pla_array_in_digital_context.va makes from a digital `initial` block
+// pla_array_in_digital_context.va makes from a digital `initial` block
 // (Table 9-5's "Yes" column), is made here from the analog block. The legal
 // neighbour is that file, so the pair differs in the context and the refusal
 // cannot be a blanket refusal of the task. The operands are analog-owned
 // integer variables, so no digital variable is written from the analog block
 // and the context is the only rule the call can break.
 //
-// Split out of 154_timescale_pla_queue_analog_rejected.va by the reconciler,
+// Split out of timescale_pla_queue_analog_rejected.va by the reconciler,
 // 2026-10-08: there the PLA call followed another refused task and the first
 // diagnostic ended the compile, so this rule was never evidenced.
 //
@@ -23,7 +23,7 @@
 //! lrm 9.2:1000
 //! reject-only analog context
 //! reject E0806
-//! neighbour 202_pla_array_in_digital_context.va
+//! neighbour pla_array_in_digital_context.va
 module rc_154_pla_array_analog_rejected(p, n);
   inout p, n; electrical p, n;
   integer pers [1:2];

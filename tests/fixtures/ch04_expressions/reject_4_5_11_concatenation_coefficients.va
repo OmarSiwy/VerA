@@ -13,7 +13,7 @@
 // concatenation operator)"), and 4.2.13 itself warns that the concatenation
 // "should not be confused with the assignment pattern '{ } which is used ...
 // for ... coefficient arguments to the Laplace analog filters". This file is
-// 153_laplace_nd_dc_gain.va, the legal neighbour, with every `'{` written `{`.
+// laplace_nd_dc_gain.va, the legal neighbour, with every `'{` written `{`.
 //
 // VerA refuses each concatenation in a coefficient slot with E0572 ("filter
 // coefficient argument is not an array"), once per call; the code is pinned.
@@ -25,7 +25,7 @@
 //! lrm A.8.2
 //! reject-only E0572
 //! reject-only is a concatenation
-//! neighbour 153_laplace_nd_dc_gain.va
+//! neighbour laplace_nd_dc_gain.va
 `include "check.vh"
 module ch04_laplace_nd_dc_gain(in, n);
     inout in, n;

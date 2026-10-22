@@ -36,10 +36,9 @@
 //! `kernel_text.timer_txt` and `kernel_text.hist_txt` cut off at the first
 //! blank line. Its bytes are device text, so editing one moves every golden that
 //! embeds it, comments included, and a kernel file holds no `test` block: its
-//! tests are `test.zig`, which this root's `test` block pulls in. No
-//! device imports this root. `zig build test-kernels` runs them.
+//! tests are `tests/unit.zig`. No device imports this root.
 
-/// `tools/contract.zig`'s `vera_version`, re-exported for `device`, which
+/// `lib/contract.zig`'s `vera_version`, re-exported for `device`, which
 /// cannot import `contract` itself: codegen stamps it into every device.
 pub const vera_version = @import("contract").vera_version;
 /// §9.5.3/§9.5.4.2 string formatting and scanning; the digital engine's
@@ -48,7 +47,7 @@ pub const str_kernels = @import("str_kernels.zig");
 /// §9.21 `$table_model` interpolation.
 pub const table_kernels = @import("table_kernels.zig");
 /// §9.13 probabilistic distribution functions; also elaboration's literal
-/// folds (`elab/elaborate/clone.zig`) and the digital engine's IEEE 1364 §17.9
+/// folds (`elab/clone.zig`) and the digital engine's IEEE 1364 §17.9
 /// `$dist_*`, so every path draws the same sequence from a seed.
 pub const rng_kernels = @import("rng_kernels.zig");
 /// §4.5.11/§4.5.12 filter numerics.
@@ -64,7 +63,7 @@ pub const limit_kernels = @import("limit_kernels.zig");
 pub const timer_kernels = @import("timer_kernels.zig");
 /// §4.5.7 the absdelay ring and its thinning.
 pub const hist_kernels = @import("hist_kernels.zig");
-/// IEEE 1364 §5.4 integers of any width (`lower/wide.zig`'s trees).
+/// IEEE 1364 §5.4 integers of any width (`analog/wide.zig`'s trees).
 pub const wide_kernels = @import("wide_kernels.zig");
 /// §4.5 the analog operator kernels (`zIdt`, `zSlew`, `zTransition`, ...): device text only.
 pub const ops_kernels = @import("ops_kernels.zig");
@@ -106,7 +105,6 @@ pub const text = struct {
 
 test {
     @import("std").testing.refAllDecls(@This());
-    _ = @import("test.zig");
     _ = Integer;
     _ = fmt;
     _ = fold;

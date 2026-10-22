@@ -7,12 +7,12 @@
 // So the arrays of an array data source are the COLUMNS of one table, and row k
 // is (xs[k], fs[k]). Below, `xs` has four entries and `fs` three: the fourth
 // sample has an abscissa and no value, which no line of the file format can
-// express. The legal array source, equal lengths, is 131_table_model_array_control.va.
+// express. The legal array source, equal lengths, is table_model_array_control.va.
 //
 //! lrm 9.21
 //! lrm 9.21.1
 //! reject-only E0815
-//! neighbour 131_table_model_array_control.va
+//! neighbour table_model_array_control.va
 `include "disciplines.vams"
 module ch09_table_model_columns_of_unequal_length(p, n);
   inout p, n; electrical p, n;

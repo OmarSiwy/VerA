@@ -6,7 +6,7 @@
 //! lrm 5.11
 //! lrm 5.11:1004
 //! reject-only E0403
-//! neighbour b3_return_expression_of_the_function_type.va
+//! neighbour return_expression_of_the_function_type.va
 module ch5_return_outside_function(p);
   inout p; electrical p;
   analog begin

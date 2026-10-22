@@ -13,16 +13,16 @@
 //
 // DERIVATION OF THE VERDICT. The module breaks only that rule: reading `smpl`
 // in a digital expression is legal (§7.3.3,
-// m01_12_continuous_variable_read_from_digital.va), and the legal neighbour,
+// continuous_variable_read_from_digital.va), and the legal neighbour,
 // the same `always @(smpl)` over a variable assigned only under
-// `@(timer(...))`, is m01_13_same_value_analog_assignment_fires.va.
+// `@(timer(...))`, is same_value_analog_assignment_fires.va.
 //
 //! lrm 7.3.6.1
 //! lrm 8.5.1
 //! lrm 8.5.1:7
 //! reject-only E0484
-//! neighbour m01_12_continuous_variable_read_from_digital.va
-//! neighbour m01_13_same_value_analog_assignment_fires.va
+//! neighbour continuous_variable_read_from_digital.va
+//! neighbour same_value_analog_assignment_fires.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module free_variable_in_digital_event_control(in);

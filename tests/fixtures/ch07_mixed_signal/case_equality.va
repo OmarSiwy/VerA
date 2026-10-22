@@ -5,7 +5,7 @@
 // THIS FILE USED TO DEMAND A REJECTION (E0323) on annex C.5, which removes both
 // operators from the Verilog-A SUBSET only. §7.3.2 is the full-AMS rule and it
 // names them as supported, so a conforming AMS compiler must accept this module:
-// the verdict is inverted, as annex_c_analog_subset/10_case_equality_accepted.va
+// the verdict is inverted, as annex_c_analog_subset/case_equality_accepted.va
 // explains. The x/z halves of §7.3.2 (x/z digits, a four-state net read) are
 // x_case_equality_compared.va and z_case_inequality_compared.va.
 //

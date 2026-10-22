@@ -7,7 +7,7 @@
 // only item and right before `end`: nothing follows it for it to prefix. That
 // is E0207 ("an attribute instance prefixes nothing"), the code the same
 // instance gets before end of file at the top level
-// (ieee1364/03_lexical_conventions/b_3_8_2_dangling_attribute_rejected.v) or
+// (ieee1364/03_lexical_conventions/dangling_attribute_rejected.v) or
 // before `endmodule`. Before #49 the generate block dropped it silently.
 // Nothing else in the source is wrong, so E0207 is the only error.
 //

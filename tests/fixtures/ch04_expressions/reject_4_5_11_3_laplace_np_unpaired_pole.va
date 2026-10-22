@@ -8,14 +8,14 @@
 // ('{-1.0, 1.0, -1.0, -1.0}) makes the same call legal, and VerA compiles
 // that form (probed), so the missing conjugate is the only error.
 //
-// 133_laplace_unpaired_complex_root_rejected.va pins the same sentence for
+// laplace_unpaired_complex_root_rejected.va pins the same sentence for
 // laplace_zp under §4.5.11.1; this file is the numerator-pole form's own cite.
 // VerA enforces it in codegen, so the expectation is the message fragment.
 //
 //! lrm 4.5.11.3
 //! lrm 4.5.11.3:2
 //! reject-only no conjugate partner
-//! neighbour 152_laplace_np_dc_gain.va
+//! neighbour laplace_np_dc_gain.va
 `include "disciplines.vams"
 module ch4_laplace_np_unpaired_pole(p, n);
   inout p, n;

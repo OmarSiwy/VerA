@@ -13,12 +13,12 @@
 // statement and refused `end` as E0209 "expected an expression". Nothing else
 // in the source is wrong, so E0207 is the only error.
 //
-// Legal neighbour: 31_analog_statement_attributes.va, whose analog block has
+// Legal neighbour: analog_statement_attributes.va, whose analog block has
 // instances prefixing each of its statements.
 //
 //! lrm 2.9
 //! reject-only E0207
-//! neighbour 31_analog_statement_attributes.va
+//! neighbour analog_statement_attributes.va
 module ch2_block_attr_before_end(p);
   inout p; electrical p;
   analog begin I(p) <+ V(p); (* a *) end

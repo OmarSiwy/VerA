@@ -8,7 +8,7 @@
 // remaining bits hold a small number indicating what file is opened." VerA
 // used to share one 30-channel table between the two; file descriptors now
 // have their own, as many as memory holds (#29), while the mcd keeps its 30
-// (222_mcd_channels_exhausted_at_bit_31.va).
+// (mcd_channels_exhausted_at_bit_31.va).
 //
 // HAND DERIVATION. 40 files are opened as file descriptors and held open:
 // each open succeeds (nonzero) and they are 40 different values. With all 40

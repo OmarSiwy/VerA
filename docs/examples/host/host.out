@@ -1,5 +1,5 @@
 $ vera --emit-zig --allow=W0650 diode.va -o diode.zig
-$ zig run --dep device --dep contract -Mroot=host.zig --dep contract -Mdevice=diode.zig -Mcontract=../../../tools/contract.zig
+$ zig run --dep device --dep contract -Mroot=host.zig --dep contract -Mdevice=diode.zig -Mcontract=../../../lib/contract.zig
 iteration 1: |f| = 5.187e-4 A
 iteration 2: |f| = 4.641e-4 A
 iteration 3: |f| = 1.046e-4 A

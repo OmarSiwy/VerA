@@ -4,13 +4,13 @@
 // connection corresponds to no port. VerA reports E0906, "`nope` is not a port
 // of `ch6_unn_kid`".
 //
-// b4_named_port_expressions.va is the legal neighbour, every named connection
+// named_port_expressions.va is the legal neighbour, every named connection
 // naming a port the child actually declares.
 //
 //! lrm 6.5.5
 //! lrm 6.5.5:1
 //! reject-only E0906
-//! neighbour b4_named_port_expressions.va
+//! neighbour named_port_expressions.va
 module ch6_unn_top(p);
   inout p; electrical p;
   ch6_unn_kid u(.nope(p));

@@ -18,7 +18,7 @@ This book has four parts.
    the attributes VerA reads, and the choices VerA makes where the standard
    leaves one open.
 3. **[VerA devices in your own simulator](host/why.md)** is for simulator
-   authors. It documents the device contract, `tools/contract.zig`, and walks
+   authors. It documents the device contract, `lib/contract.zig`, and walks
    through a small host that loads a VerA device and solves it.
 4. **[Conformance and performance](conformance.md)** gives the measured
    numbers: how much of the standard VerA covers, and how fast it compiles.

@@ -4,19 +4,27 @@
 // "in the order of their declaration" — and the two sentences compose: the order
 // is over the parameters an assignment CAN modify, so an ordered value steps
 // PAST a localparam declared between two parameters instead of landing on it.
+// §6.3.2 states the same skip for both non-parameters: "Local parameter
+// declarations are not considered when assigning by order; parameter alias
+// declarations are also skipped."
 //
-// The child declares `g1`, then a localparam `lp = 2.0 * g1`, then `g2`, and the
-// instance writes `#(10.0, 100.0)`. The conforming binding is g1 = 10.0 and
-// g2 = 100.0, with lp following its expression to 20.0. A compiler that walks
-// the FULL declaration list positionally instead — the bug this file pins —
-// forces lp to 100.0 (overriding what §3.4.5 says cannot be overridden), leaves
-// g2 at its default 1.0, and reads the sum as 111.0 instead of 130.0.
+// The child declares `g1`, then a localparam `lp = 2.0 * g1`, then an alias
+// `ga` for `g1`, then `g2`, and the instance writes `#(10.0, 100.0)`. The
+// conforming binding is g1 = 10.0 and g2 = 100.0, with lp following its
+// expression to 20.0. A compiler that walks the FULL declaration list
+// positionally instead — the bug this file pins — forces lp to 100.0
+// (overriding what §3.4.5 says cannot be overridden), leaves g2 at its default
+// 1.0, and reads the sum as 111.0 instead of 130.0; if it also counts the alias
+// as a slot it binds the second value to the alias of the already-given g1,
+// which §3.4.7 forbids as setting an original and its alias in one
+// instantiation.
 //
 // Every addend is asserted separately as well as the sum, so the transcript
 // names WHICH binding slipped: g1 discriminates a compiler that refused the
 // whole list, lp one that overrode the localparam, g2 one that dropped the
-// value the localparam absorbed. The defaults (1.0 each) are deliberately
-// unequal to every override so no wrong path lands on a right number.
+// value the localparam (or the alias) absorbed. The defaults (1.0 each) are
+// deliberately unequal to every override so no wrong path lands on a right
+// number.
 //
 // With V(p,n) = 0.5 the module stamps 130.0 * 0.5 = 65.0.
 //
@@ -37,6 +45,7 @@ module ch6_olp_kid(a, b);
   inout a, b; electrical a, b;
   parameter real g1 = 1.0;
   localparam real lp = 2.0 * g1;
+  aliasparam ga = g1;
   parameter real g2 = 1.0;
   analog begin
     `CHECKX("the first ordered value lands on the first parameter", g1, 10.0);

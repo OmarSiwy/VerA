@@ -7,12 +7,12 @@
 // as real". So `x[0]` on the scalar real below names neither an array element
 // (there is no array) nor a bit (a real has none).
 //
-// Indexing a real ARRAY is legal; 02_variable_arrays.va is that side.
+// Indexing a real ARRAY is legal; variable_arrays.va is that side.
 //
 //! lrm 3.2
 //! inherited IEEE 1364-2005 4.8.1
 //! reject-only E0309
-//! neighbour 02_variable_arrays.va
+//! neighbour variable_arrays.va
 `include "disciplines.vams"
 module ch3_real_scalar_is_not_indexable(p, n);
   inout p, n; electrical p, n;

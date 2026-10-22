@@ -3,7 +3,7 @@
 // event fires. Between
 // events nothing writes the variable, so a later evaluation must read the
 // value the last event left, exactly as a real or integer does
-// (a03_04_block_local_is_static_between_events.va). A string never reaches
+// (block_local_is_static_between_events.va). A string never reaches
 // the residual, but a §9.4 task observes it: here $strobe at every point.
 //
 // Points 0, 1n, 2n, 3n (tran). By hand:

@@ -12,7 +12,7 @@
 // The unequal checks name the other arm ("hello there") and the string with
 // the interior literal dropped ("helloworld"), so a device that folded the
 // wrong arm or skipped a constant piece between two run-time ones cannot pass.
-// 27_string_concatenation.va is the all-known neighbour.
+// string_concatenation.va is the all-known neighbour.
 //
 //! lrm 3.3
 //! lrm 3.3:1

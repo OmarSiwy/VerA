@@ -1,7 +1,7 @@
 // AMS §4.2.4: "The result of a modulus operation takes the sign of the first
 // operand." Table 4-6 includes 11 % -3 = 2. A divisor need not be constant;
 // the invalid value is zero, isolated in modulo_integer_dynamic_zero.va and
-// 111_modulus_by_zero_rejected.va.
+// modulus_by_zero_rejected.va.
 //
 // V(p)=3.75: §4.2.1.1 assigns +4/-4 to integers. V(p)-0.25=3.5 and its
 // negative also become +4/-4, rounding ties away from zero;

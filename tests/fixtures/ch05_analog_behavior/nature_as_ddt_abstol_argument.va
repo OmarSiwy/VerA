@@ -16,6 +16,9 @@
 // sides of that agreement at 0.0, so both are written as CHECKX against the
 // digits rather than as one CHECKEQ relating them: two independent literals are
 // strictly stronger than an equality that also holds when both drift together.
+// The operator-output metadata also checks the nature's actual abstol. A
+// derived nature with 9 nV prevents ignoring the nature argument from passing
+// merely because Voltage happens to match an implementation default.
 //
 //! lrm D.1
 //! lrm 5.5.3
@@ -23,13 +26,24 @@
 //! analysis dc
 //! bias V(p) = 0.7
 //! lrm 5.5.3:1002
+//! abstol ddt$0 = 1e-6
+//! abstol ddt$1 = 9e-9
+//! checks 5
 `include "check.vh"
 `include "disciplines.vams"
+nature argument_voltage : Voltage;
+  abstol = 9n;
+endnature
 module ch5_nature_ddt_arg(p);
   inout p; electrical p;
+  real standard_value, derived_value, default_value;
   analog begin
-    `CHECKX("ddt() with a nature as its abstol argument is 0 in DC", ddt(V(p), Voltage), 0.0);
-    `CHECKX("ddt() with no nature argument is 0 in DC, so the nature does not change the value", ddt(V(p)), 0.0);
+    standard_value = ddt(V(p), Voltage);
+    derived_value = ddt(V(p), argument_voltage);
+    default_value = ddt(V(p));
+    `CHECKX("ddt() with a nature as its abstol argument is 0 in DC", standard_value, 0.0);
+    `CHECKX("a derived nature changes the tolerance, not the DC value", derived_value, 0.0);
+    `CHECKX("ddt() with no nature argument is 0 in DC, so the nature does not change the value", default_value, 0.0);
     I(p) <+ ddt(V(p), Voltage);
   end
 endmodule

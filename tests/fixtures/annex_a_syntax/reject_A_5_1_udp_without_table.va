@@ -22,7 +22,7 @@
 //! lrm A.5.1:1000
 //! reject-only E0207
 //! reject a udp_body is a
-//! neighbour b8_udp_declared_and_instantiated.va
+//! neighbour udp_declared_and_instantiated.va
 primitive annex_a_udp_no_table(o, a);
   output o;
   input a;

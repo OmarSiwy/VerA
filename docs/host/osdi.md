@@ -16,7 +16,7 @@ vera --emit-osdi model.va -o lib.osdi  # or names it
 vera --emit-osdi design.v              # a Verilog module's contract device, the same way
 ```
 
-It is `--emit-so` under a `dyn` module VerA ships, `tools/osdi_dyn.zig`,
+It is `--emit-so` under a `dyn` module VerA ships, `lib/osdi_dyn.zig`,
 which `vera` carries inside it and writes beside its own copy of
 `contract.zig` in the work directory (`.zig-cache/vera-tb` unless
 `--work-dir` says otherwise). So it takes neither `--dyn` nor `--emit-zig`,
@@ -32,7 +32,7 @@ whose card (`vdd`, `vss`, `vth`, `vhys`, `trise`, `tfall`, `rout`, `gz`,
 `ttol`) is the library's parameters. So one ngspice deck can `pre_osdi` a
 `.v` library and a `.va` one and wire them together.
 
-`tools/osdi_dyn.zig`'s header is the specification of the mapping. Its
+`lib/osdi_dyn.zig`'s header is the specification of the mapping. Its
 layout follows OpenVAF-Reloaded's `openvaf/osdi/header/osdi_0_4.h` and
 ngspice-45's `src/osdi/`, which reads the OSDI 0.3 prefix of the descriptor.
 In short:

@@ -1,7 +1,7 @@
 // LRM 2.8: "Implementations may set a limit on the maximum length of
 // identifiers, but the limit shall be at least 1024 characters." A module
 // name is an identifier too, and the one below is EXACTLY 1024 characters.
-// 28_identifier_1024_chars.va covers a variable's name; this covers the
+// identifier_1024_chars.va covers a variable's name; this covers the
 // module's, which VerA also uses to name the files it builds the device from
 // and used to overrun the 255-byte file-name limit (NameTooLong).
 //

@@ -8,13 +8,13 @@
 // two keywords. `analog` below is a keyword of the language but not one of the
 // two a domain binding takes.
 //
-// The legal binding, `domain continuous;`, is 11_discipline_declarations.va.
+// The legal binding, `domain continuous;`, is discipline_declarations.va.
 //
 //! lrm 3.6.2.2
 //! lrm A.1.7
 //! lrm A.1.7:1000
 //! reject-only E0212
-//! neighbour 11_discipline_declarations.va
+//! neighbour discipline_declarations.va
 `include "disciplines.vams"
 discipline ch3_domain_analog
   potential Voltage;

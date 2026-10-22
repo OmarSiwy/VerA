@@ -309,7 +309,7 @@ pub const ScopeLists = struct {
     tchks: std.ArrayList(u32) = .empty,
     gen_arrays: std.ArrayList(u32) = .empty,
     /// IEEE 1364-2005 §26.6.12: the `#(...)` assignments overriding this
-    /// instance's parameters, written in its parent (model/digital.zig).
+    /// instance's parameters, written in its parent (model_digital.zig).
     param_assigns: std.ArrayList(u32) = .empty,
     /// IEEE 1364-2005 §26.6.3 the task, function and named block scopes
     /// written directly in the module; `model.freeze` joins its instances
@@ -393,7 +393,7 @@ pub const Builder = struct {
         return @import("attributes.zig").attach(b, at, owner, definition);
     }
 
-    /// The analog model's lookups, built once per design by model/analog.zig
+    /// The analog model's lookups, built once per design by model_analog.zig
     /// and shared by every scope's builder. Owned by that caller (`gpa`).
     pub const Analog = struct {
         /// Final analog parameter types used by constant attribute values.
@@ -1744,7 +1744,7 @@ const tchk_kinds = std.StaticStringMap(TchkKind).initComptime(.{
 
 test "typeName spells every behavioural type the builders make, as its constant is named" {
     // Every vtype a `code`/`add` call above (and model.zig's addRange,
-    // attributes.zig's attach, model/digital.zig's gen scopes) writes.
+    // attributes.zig's attach, model_digital.zig's gen scopes) writes.
     inline for (.{
         "vpiAlways",
         "vpiAssignStmt",

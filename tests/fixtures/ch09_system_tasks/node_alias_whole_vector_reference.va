@@ -2,7 +2,7 @@
 // continuous node declared in the module containing the system function call.
 // If the analog_net_reference is a vector node, it shall reference the full
 // vector node". So `$analog_node_alias(bus, ...)` with `bus` a whole vector
-// is legal; 143_node_alias_bit_select_rejected.va is the invalid neighbour
+// is legal; node_alias_bit_select_rejected.va is the invalid neighbour
 // (a bit select, E0812).
 //
 // The target obeys the validity rules: "The hierarchical_reference_string

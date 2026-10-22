@@ -1,3 +1,5 @@
+// Full operator behavior is observed by tests/host.py;
+// these local value/Jacobian checks alone do not prove the live tolerance or AC rule.
 // §4.5.3 the tolerance argument of ddt() belongs to its OUTPUT, and the device
 // publishes it as that output's absolute tolerance.
 //
@@ -23,7 +25,6 @@
 //! lrm 4.5.3
 //! lrm 4.5.2
 //! lrm 4.5.2:1
-//! lrm 4.5.3:1000
 //! bias V(p) = 1.0
 //! print none
 //! abstol ddt$0 = 1e-3

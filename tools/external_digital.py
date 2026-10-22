@@ -425,7 +425,7 @@ def svtests(vera, report):
 # ---------------------------------------------------------------------------
 
 def runner_args(path):
-    """tests/harness/digital.zig's `// digital-runner:` directives: (vera
+    """tests/suite.zig's `// digital-runner:` directives: (vera
     flags, extra files, skip reason)."""
     flags, files, skip = [], [], None
     for m in re.finditer(r"(?m)^\s*// digital-runner:\s*(\S+)(.*)$", path.read_text(errors="replace")):

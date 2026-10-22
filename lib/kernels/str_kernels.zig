@@ -962,7 +962,7 @@ fn zRtConv(o: *ZRtOut, tmp: []u8, a: anytype, conv: u8, flags: u8, width: usize,
 /// on every step and reported every step. So the emitter hands this kernel one
 /// u64 per watched argument — the bit pattern of a real or integer, a hash of
 /// a string — with the `$abstime`/`$realtime` operands left out, and the text
-/// to write when they changed. `src/sim/digital/display.zig`'s monitor tracks its
+/// to write when they changed. `lib/sim/digital/display.zig`'s monitor tracks its
 /// watched variables the same way (IEEE 1364-2005 §17.1.3's `$time` rule).
 ///
 /// Returns the text when the watched values differ from those this site last

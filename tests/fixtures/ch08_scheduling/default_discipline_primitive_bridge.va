@@ -1,0 +1,36 @@
+// 3.8:1000: the default discrete discipline supplies the primitive's
+// otherwise unknown lower connection to an electrical net. Only the logic
+// connect rule can bridge that connection. The primitive's two logic states
+// become distinct loaded analog voltages; an unrelated biased probe cannot
+// satisfy these checks.
+//! lrm 3.8:1000
+//! solve
+//! checks 2
+`include "check.vh"
+connectmodule default_primitive_d2a(d, e);
+  input d; logic d;
+  output e; electrical e;
+  reg level;
+  initial level = 0;
+  always @(d) level = d;
+  analog I(e) <+ (V(e) - ((level === 1'b1) ? 2.0 : 0.5))/1000.0;
+endmodule
+`default_discipline logic
+module default_discipline_primitive_bridge;
+  electrical high, low;
+  wire a, b;
+  assign a = 1'b1;
+  assign b = 1'b0;
+  and high_gate(high, a, a);
+  and low_gate(low, a, b);
+  analog begin
+    I(high) <+ V(high)/1000.0;
+    I(low) <+ V(low)/1000.0;
+    `CHECK("default logic discipline bridges the high primitive output", V(high), 1.0, 1e-12);
+    `CHECK("the low primitive output remains distinct", V(low), 0.25, 1e-12);
+  end
+endmodule
+`default_discipline
+connectrules default_primitive_rules;
+  connect default_primitive_d2a;
+endconnectrules

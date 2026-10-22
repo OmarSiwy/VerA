@@ -18,7 +18,7 @@
 // hence CHECKX. `//! nowarn`: every default now has a value, so W1050 (and
 // anything else) must not fire. 3 checks.
 //
-// The invalid neighbour is 147_simparam_unknown_no_fallback_rejected.va: an
+// The invalid neighbour is simparam_unknown_no_fallback_rejected.va: an
 // unknown name with no fallback is E0811.
 //! lrm 9.15
 //! nowarn

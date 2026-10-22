@@ -15,13 +15,13 @@
 // with no code and no pointer to the argument); E0572 names the slot. The
 // one-change neighbour writes `'{gain}` — an assignment pattern of one
 // element — and compiles (checked by hand when this fixture was written);
-// 35_filter_parameter_arrays.va is the array-parameter spelling.
+// filter_parameter_arrays.va is the array-parameter spelling.
 //
 //! lrm 4.5.1
 //! lrm 4.5.11.4
 //! lrm 4.5.1:1000
 //! reject-only E0572
-//! neighbour 35_filter_parameter_arrays.va
+//! neighbour filter_parameter_arrays.va
 module ch04_filter_scalar_coefficient(in, n);
     inout in, n;
     electrical in, n;

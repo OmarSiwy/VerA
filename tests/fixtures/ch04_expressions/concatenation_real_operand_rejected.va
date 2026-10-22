@@ -6,13 +6,13 @@
 // §4.2.1 then excludes a real operand outright: "All other operators are
 // considered illegal when used with real operands", and concatenation is not in
 // Table 4-2. `{x}` below concatenates a real variable, which has no bits and no
-// size. Sized-integer concatenation is 30_concatenation.va.
+// size. Sized-integer concatenation is concatenation.va.
 //
 //! lrm 4.2.13
 //! lrm 4.2.1
 //! lrm 4.2.1:1
 //! reject-only E0327
-//! neighbour 30_concatenation.va
+//! neighbour concatenation.va
 `include "disciplines.vams"
 module ch04_concatenation_real_operand(p, n);
   inout p, n; electrical p, n;

@@ -61,7 +61,7 @@ Step by step:
 
 The host compiles against two modules: the generated device, and the
 contract. `contract.zig` is installed as `share/vera/contract.zig` by `zig
-build install`; in the repository it is `tools/contract.zig`, which the
+build install`; in the repository it is `lib/contract.zig`, which the
 command below uses. `zig run` binds modules with `--dep` (which applies to the
 next `-M`) and `-M` (the first one is the root):
 
@@ -103,5 +103,5 @@ state, `$limit` and breakpoints ([charges, truncation error and
 state](state.md)); noise and AC ([tables](tables.md)); evaluating many
 instances per call ([batching](batching.md)); and loading the device from a
 shared library instead of compiling it in ([linking](linking.md)).
-`src/sim/spice/` in the repository is a complete small host (operating
+`lib/sim/spice/` in the repository is a complete small host (operating
 point, LTE-controlled transient and noise over one device) to read next.

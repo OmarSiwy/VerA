@@ -391,6 +391,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         token.isKeyword(self.peek()) and self.identLike(self.pos) and
         (self.identLike(self.pos + 1) or self.peekAt(1) == .hash);
     if (!freed) try self.refuseAms();
+    if (self.verilog_a) if (self.digitalItem()) |w| try self.refuseDigital(self.pos, w);
     switch (if (freed) .identifier else self.peek()) {
         // §10.6: "can only be specified outside of a design element".
         .dir_begin_keywords, .dir_end_keywords => return self.failAt(
@@ -716,6 +717,26 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             // gives arms of its own rather than a `net_type`.
             if (std.mem.eql(u8, w, "wreal")) return parse_net.parseWrealDecl(self, b);
             return parse_inst.unsupportedItem(self);
+        },
+        // §6.2.2: module definitions do not nest. Reported where it stands
+        // (E0240), then the nested definition is skipped whole, so its
+        // `endmodule` does not close the module around it and leave that
+        // one's own `endmodule` as a stray top-level token (E0201).
+        .kw_module, .kw_macromodule, .kw_connectmodule => {
+            try self.report(self.pos, .E0240, "found {s}", .{self.found(self.pos)});
+            var depth: u32 = 0;
+            while (true) : (self.pos += 1) switch (self.peek()) {
+                .eof => return,
+                .kw_module, .kw_macromodule, .kw_connectmodule => depth += 1,
+                .kw_endmodule => {
+                    depth -= 1;
+                    if (depth == 0) {
+                        self.pos += 1;
+                        return;
+                    }
+                },
+                else => {}, // else: every other token is inside the nested definition
+            };
         },
         else => return parse_inst.notAModuleItem(self), // else: begins no A.1.4 module_item: E0240
     }

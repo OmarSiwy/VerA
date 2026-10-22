@@ -165,7 +165,7 @@ const AnalogEnv = struct {
     /// conversion calls the analog validator folds. Null: not a constant.
     pub fn leaf(env: AnalogEnv, e: Ast.ExprId) ?root.Const {
         // These are the conversion calls the analog constant-expression
-        // validator folds (lib/analog/lower/constfold.zig, AMS §9.11/§9.14).
+        // validator folds (src/analog/constfold.zig, AMS §9.11/§9.14).
         if (env.b.file.exprs.tag(e) == .sys_call) {
             const ex = &env.b.file.exprs;
             const args = ex.args(e);

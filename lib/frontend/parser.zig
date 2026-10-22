@@ -73,6 +73,11 @@ pub const Parser = struct {
     /// because IEEE 1364-2005 annex A has no production for it. Set it with
     /// `setLanguage`.
     language: token.KeywordSet = token.default_keyword_set,
+    /// Parsing annex C's Verilog-A subset (`vera --sim=verilogA`): a digital
+    /// or mixed-signal construct is E0250 (`refuseDigital`). The annex D
+    /// prelude is seeded from a parse without it, so its `discrete`
+    /// disciplines stay silent (C.17).
+    verilog_a: bool = false,
     /// Inside an `analog function` body (§4.7.1). Two of that clause's bullets
     /// restrict statements the ordinary statement parser also accepts at
     /// module scope, so only the position tells them apart (E0226, E0227).
@@ -242,6 +247,62 @@ pub const Parser = struct {
         const w = self.tokenText(self.pos);
         if (token.isReserved(w, self.language)) return;
         try self.report(self.pos, .E0242, "`{s}` under \"{s}\"", .{ w, self.language.specifier() });
+    }
+
+    /// Reports E0250 at `tok`: `what` is outside annex C's Verilog-A subset,
+    /// which `vera --sim=verilogA` compiles. Like `refuseAms`, the construct
+    /// is then parsed anyway, so the one error is the only one. Asserts
+    /// `verilog_a`.
+    pub fn refuseDigital(self: *Parser, tok: u32, what: []const u8) error{OutOfMemory}!void {
+        std.debug.assert(self.verilog_a);
+        try self.report(tok, .E0250, "`{s}` under --sim=verilogA", .{what});
+    }
+
+    /// The spelling at the cursor when it opens a description or module item
+    /// annex C removes from Verilog-A, else null. Called where a description
+    /// or a module item is dispatched, beside `refuseAms`. C.5's operators,
+    /// C.7's `casex`/`casez`, C.4's `discrete` domain and `default_discipline`
+    /// are judged where they are parsed.
+    pub fn digitalItem(self: *const Parser) ?[]const u8 {
+        const t = self.peek();
+        return switch (t) {
+            // C.9 and C.16: the mixed-signal descriptions.
+            .kw_connectmodule,
+            .kw_connectrules,
+            // C.7 "No digital behavior or events": the discrete context, its
+            // drivers and its storage, and §4.7's digital function (an analog
+            // one opens with `analog`).
+            .kw_initial,
+            .kw_always,
+            .kw_assign,
+            .kw_reg,
+            .kw_function,
+            .kw_tran,
+            .kw_rtran,
+            .kw_and,
+            .kw_nand,
+            .kw_or,
+            .kw_nor,
+            .kw_xor,
+            .kw_xnor,
+            .kw_buf,
+            .kw_not,
+            .kw_bufif0,
+            .kw_bufif1,
+            .kw_notif0,
+            .kw_notif1,
+            => token.Tag.lexeme(t).?,
+            // The IEEE 1364 spellings annex B reserves without a tag of their
+            // own (`parseModuleItemBody`'s `.kw_reserved` arm), and C.4's `wreal`.
+            .kw_reserved => blk: {
+                const w = self.tokenText(self.pos);
+                for ([_][]const u8{ "primitive", "config", "library", "task", "specify", "specparam", "pullup", "pulldown", "wreal" }) |d| {
+                    if (std.mem.eql(u8, w, d)) break :blk w;
+                }
+                break :blk if (parse_inst.switch_arms.has(w)) w else null;
+            },
+            else => null, // else: every other opener is in the subset, or judged where it is parsed
+        };
     }
 
     // Annex A.1.2 source_text, A.1.1 library source text, A.1.5 configurations
@@ -863,8 +924,46 @@ fn isTerminator(t: token.Tag) bool {
     };
 }
 
-// Parser self-checks: the real lexer drives the real parser.
-const parse_test = @import("parser/test.zig");
+/// A parsed file and the bag holding its diagnostics (`parseForTest`).
+pub const TestResult = struct {
+    file: Ast.SourceFile,
+    bag: *diag.Bag,
+
+    pub fn count(self: TestResult) usize {
+        return self.bag.count();
+    }
+
+    pub fn code(self: TestResult, i: usize) diag.Code {
+        return self.bag.at(i).code;
+    }
+
+    pub fn msg(self: TestResult, i: usize) []const u8 {
+        return self.bag.at(i).message;
+    }
+};
+
+/// Returns a diagnostic bag for `src` as the single file `test.va`,
+/// allocated in `arena`. For tests.
+pub fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
+    const bag = try arena.create(diag.Bag);
+    bag.* = diag.Bag.init(arena);
+    try bag.setSingleFile("test.va", src);
+    return bag;
+}
+
+/// Lexes and parses `src` as an analog source. A `ParseError` still returns
+/// the partial file, so a test can inspect both it and the diagnostics.
+/// For tests (`tests/unit.zig`, `constfold.zig`'s).
+pub fn parseForTest(arena: std.mem.Allocator, src: []const u8) !TestResult {
+    var list = try lexer.Lexer.tokenize(arena, src);
+    const bag = try newBag(arena, src);
+    var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
+    const file = p.parseSourceFile() catch |e| switch (e) {
+        error.ParseError => p.file,
+        else => return e,
+    };
+    return .{ .file = file, .bag = bag };
+}
 
 test {
     _ = Parser.parse_source;
@@ -884,5 +983,4 @@ test {
     _ = Parser.parse_expr;
     _ = Parser.parse_concat;
     _ = Parser.parse_literal;
-    _ = parse_test;
 }

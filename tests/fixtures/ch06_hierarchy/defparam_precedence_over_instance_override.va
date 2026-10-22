@@ -23,6 +23,7 @@
 //! lrm 6.7.1
 //! lrm 6.7.1:1
 //! bias V(p) = 0.75, V(n) = 0.25
+//! checks 6
 `include "check.vh"
 module ch6_defparam_wins(p, n);
   inout p, n;

@@ -6,8 +6,8 @@
 // `max_voltage = vmax_runtime;` names an identifier that is no constant at all
 // — a discipline is declared at source-text level (§3.13.1), outside every
 // module, so there is nothing it could resolve to. With `max_voltage = 48.0;`
-// the file is lrm_3_6_2_7.va's legal discipline (checked by hand when this
-// fixture was written). 68_nonconstant_user_attribute.va is the nature half,
+// the file is discipline_user_attributes.va's legal discipline (checked by hand when this
+// fixture was written). nonconstant_user_attribute.va is the nature half,
 // E0340.
 //
 //! lrm 3.6.2.7
@@ -15,7 +15,7 @@
 //! lrm 3.6.1.3:1
 //! lrm 3.6.2.7:1000
 //! reject-only E0340
-//! neighbour lrm_3_6_2_7.va
+//! neighbour discipline_user_attributes.va
 nature ch3_dna_voltage;
     units = "V";
     access = V;

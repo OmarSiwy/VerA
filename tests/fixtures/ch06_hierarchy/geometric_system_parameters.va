@@ -25,6 +25,7 @@
 module ch6_geometry(p);
   inout p; electrical p;
   analog begin
+    `CHECKX("$mfactor is implicitly declared with identity value", $mfactor, 1.0);
     `CHECKX("$xposition top-level offset", $xposition, 0.0);
     `CHECKX("$yposition top-level offset", $yposition, 0.0);
     `CHECKX("$angle top-level rotation, degrees", $angle, 0.0);

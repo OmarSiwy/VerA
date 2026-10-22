@@ -20,7 +20,7 @@
 // concatenation to zero there is common. The port DEFINITION is the other side
 // of the boundary, and §6.5.1 admits no expression there at all.
 //
-// `annex_a_syntax/42_concatenated_port.va` is the legal form, `{a, b}`, which
+// `annex_a_syntax/concatenated_port.va` is the legal form, `{a, b}`, which
 // runs and asserts that each member keeps its identity.
 //
 // EXACTLY ONE RULE IS BROKEN. The directives pin the parser's refusal and the

@@ -21,7 +21,7 @@
 // The reject line was E0205 "unsupported module item", on the ground that
 // `defparam` is not an analog-subset module item. That ground is gone: §6.3.1
 // defines the parameter_override, A.1.4 makes it a module_or_generate_item, and
-// annex_a_syntax/12_defparam.va requires a conforming compiler to ACCEPT one —
+// annex_a_syntax/defparam.va requires a conforming compiler to ACCEPT one —
 // the two files cannot both be right about the KEYWORD. They can both be right
 // about this file, because a defparam onto an instance that does not exist is
 // refused whatever the subset. Same verdict, and now for the reason the clause
@@ -30,7 +30,7 @@
 //! lrm 7.8.5
 //! lrm 6.3.1
 //! reject-only E0907
-//! neighbour ../annex_a_syntax/12_defparam.va
+//! neighbour ../annex_a_syntax/defparam.va
 module ch7_connect_generated_defparam;
   defparam signal__converter__ddiscrete.threshold = 0.6;
 endmodule

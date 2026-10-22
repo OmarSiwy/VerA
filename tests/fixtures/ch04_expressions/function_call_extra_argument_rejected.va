@@ -4,12 +4,12 @@
 //
 // `f` declares one formal, `a`, and the call below passes two expressions. The
 // second has no declared input, output or inout to be assigned to. The legal
-// call is 28_user_function.va.
+// call is user_function.va.
 //
 //! lrm 4.7.3
 //! lrm 4.7.3:1001
 //! reject-only E0511
-//! neighbour 28_user_function.va
+//! neighbour user_function.va
 `include "disciplines.vams"
 module ch04_function_call_extra_argument(p, n);
   inout p, n; electrical p, n;

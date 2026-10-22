@@ -1,4 +1,4 @@
-// §5.10.3.3 periodic events. tests/timer_host.zig drives the emitted device
+// §5.10.3.3 periodic events. tests/fixtures/ch05_analog_behavior/timer_host.zig drives the emitted device
 // through its public breakpoint, eval, updateState and stateCtl hooks.
 module timer_fixed(out);
   inout out;

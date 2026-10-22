@@ -31,8 +31,14 @@
 // flow equations are solved incrementally with respect to time" — the four
 // time points here are that increment, and each is asserted.
 //
+// 8.3.2:1000's step-control clause has no source-level observer: the solver's
+// transient accuracy-control unit test is registered as the specialized
+// evidence for it. The declared time points are the "solved at individual time
+// points" half — every row evaluates and asserts the substituted ddt.
+//
 //! lrm 8.3
 //! lrm 8.3.2
+//! lrm 8.3.2:1000
 //! lrm 4.5.3
 //! analysis tran
 //! time 0, 1n, 2n, 3n

@@ -11,7 +11,7 @@
 // of any one of the variables or expressions in the argument list changes",
 // except $time, $stime and $realtime.
 //
-// b3_strobe_after_macro_process.va pins $strobe (one call, once). This is the
+// strobe_after_macro_process.va pins $strobe (one call, once). This is the
 // $monitor half: a monitor armed at time 0 on a node potential, V(vo) (a
 // probe in the discrete context, §7.3.3), which an analog solve sets.
 //

@@ -8,7 +8,7 @@
 // and A.2.2.3's `delay2 ::= # delay_value | # ( mintypmax_expression [ ,
 // mintypmax_expression ] )`. This file writes the NAMED udp_instance, with no
 // delay, with a one-value delay2 and with the two-value one — the half of A.5.4
-// 59_udp_instantiation_unsupported.va leaves out, because a named UDP instance
+// udp_instantiation_unsupported.va leaves out, because a named UDP instance
 // is spelled like a module instance and only elaboration can tell them apart.
 // It is the legal twin of reject_A_5_4_udp_three_delays.va (`#(1, 2, 3)`).
 //

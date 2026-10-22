@@ -1,6 +1,6 @@
 // §9.7.3 `$fatal`/`$error` in a device, which cannot print or stop its
 // host: the status channel (`contract.StatusSite`), driven by
-// tests/status_host.zig. `mode` picks which sites can run:
+// tests/fixtures/ch09_system_tasks/status_host.zig. `mode` picks which sites can run:
 //   1  the analog block's `$error`, when V(p,n) > lim, with two arguments
 //   2  `analog initial`'s `$fatal(1, ...)`, two arguments
 //   3  a `vera_timepoint` statement's `$error`, one argument
@@ -27,7 +27,7 @@ module status_ops(p, n);
     I(p, n) <+ ddt(1p * V(p, n));
     // A noise source and an AC stimulus: both are zero outside their analyses,
     // and they give the device `noisePsd` and `acStim`, which the contract
-    // types `*const Instance` (tests/status_host.zig calls them that way).
+    // types `*const Instance` (tests/fixtures/ch09_system_tasks/status_host.zig calls them that way).
     I(p, n) <+ white_noise(4e-21, "th") + ac_stim("ac", 1.0);
   end
 endmodule

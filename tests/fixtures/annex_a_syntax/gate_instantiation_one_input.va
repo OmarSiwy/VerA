@@ -8,12 +8,12 @@
 // have one output and one or more inputs." VerA refused it with E0209 ("at
 // least two inputs").
 //
-// In an analog compile it is 56_gate_instantiation_unsupported.va's case: the
+// In an analog compile it is gate_instantiation_unsupported.va's case: the
 // gate is accepted and modelled by nothing (W0252), so the nets touch nothing
 // the analog block reads and the answer is the same with the gate or without.
 // What the gate COMPUTES — a buffer for and/or/xor, an inverter for
 // nand/nor/xnor — is checked under `vera --run` by
-// ieee1364/07_gate_switch_level/d08_gates_one_input.v.
+// ieee1364/07_gate_switch_level/gates_one_input.v.
 //
 //! lrm A.3.1
 //! lrm 1.1

@@ -12,7 +12,7 @@
 //
 // What the instantiating module may alter is a PARAMETER. `x` below is declared
 // in the child, so the name is "specified in the instantiated module" — this is
-// not the misspelling `audit_hierarchy_empty_unknown_rejected.va` pins — but it
+// not the misspelling `hierarchy_empty_unknown_rejected.va` pins — but it
 // is a `real` VARIABLE, whose value is computed by the child's analog block and
 // has no declaration default for an instantiation to replace. None of §6.3's
 // three mechanisms reaches it.

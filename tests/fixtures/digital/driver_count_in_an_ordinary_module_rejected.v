@@ -3,7 +3,7 @@
 // connect modules. Driver access functions can only be called from connect
 // modules."
 //
-// `107_driver_count_connectmodule_rejected.va` pins the fence for an analog
+// `driver_count_connectmodule_rejected.va` pins the fence for an analog
 // block. This is the DIGITAL context, a plain `.v` module calling
 // `$driver_count` from an `initial` block: still not a connect module, so
 // the call has no result to print and the design is refused.

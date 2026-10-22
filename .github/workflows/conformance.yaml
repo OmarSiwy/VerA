@@ -1,14 +1,5 @@
-# The conformance suites, one job each, every run.
-#
-# The suites GATE: a change that drops any measure is a failed change. Read
-# a failure by NAME: the verdict ratchet compares every
-# fixture's verdict with the committed tests/fixtures/VERDICTS.tsv, so a
-# regression fails by name and an improvement is committed by name
-# (`tools/conformance.py ratchet --update`). Only the sweep and the
-# audit-tool self-tests report without gating.
-#
-# The `fixtures` job uploads `measured` (the measures block); pages.yaml
-# puts it on the book's conformance page.
+# One execution report joins fixture, host, reference and VPI evidence.
+# The native backend, external HDL tools and size sweep remain separate checks.
 name: conformance
 
 on:
@@ -18,155 +9,65 @@ on:
   workflow_dispatch:
 
 jobs:
-  # The ledger and its tooling: the build-step inventory, the requirement
-  # ledger against the LRM text, the sentence cites against the ledger.
   ledger:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-      # Audit-tool regression checks, not language-conformance evidence. The
-      # IEEE extractor tests use synthetic text; no licensed PDF is uploaded.
-      - name: Source audit tooling self-tests
-        continue-on-error: true
-        run: python3 tools/conformance.py selftest
-      - name: Build-step inventory (gate)
-        run: python3 tools/conformance.py steps
-      - name: Requirement ledger matches the LRM text (gate)
-        run: python3 tools/conformance.py obligations
-      # A sentence cite whose fixture polarity contradicts its row cannot be
-      # evidence, and would inflate the metric.
-      - name: Sentence cites agree with the ledger (gate)
-        run: python3 tools/conformance.py lint-cites
+      - uses: cachix/install-nix-action@v31
+      - name: Audit and evidence accounting tests
+        run: |
+          nix develop -c python3 tools/conformance.py selftest
+          nix develop -c python3 tests/host.py selftest
+      - name: Build-step inventory
+        run: nix develop -c python3 tools/conformance.py steps
+      - name: Requirement ledger and citations
+        run: |
+          nix develop -c python3 tools/conformance.py obligations
+          nix develop -c python3 tools/conformance.py lint-cites
 
-  # Measure A, the verdict ratchet, measure C, and the measures block.
   fixtures:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-      # The suite binary is run directly: the build runner truncates a failed
-      # step's output, and --strict exits 1 while any
-      # XFAIL remains. FAIL and unasserted must be 0; every verdict, XFAILs
-      # included, is gated by name by the ratchet below. Verdict prose goes to
-      # stderr and the TSV tables to stdout; both are merged into one log.
-      - name: Verilog-AMS suite, every fixture, strict (measure A)
-        run: |
-          cmd=$(zig build benchmark -- --strict zzz-none 2>&1 | grep '^failed command:' | sed 's/^failed command: //')
-          read -r suite vera _ <<< "$cmd"
-          "$suite" "$vera" --strict --verdicts=/tmp/verdicts.tsv > /tmp/strict.out 2> /tmp/strict.err || true
-          cat /tmp/strict.out /tmp/strict.err > /tmp/strict.txt
-          awk -F'\t' '/^pass\tfail\tunasserted\txfail/ { getline; f = $2; u = $3; n++ }
-            END { print "fail=" f, "unasserted=" u; exit !(n > 0 && f == 0 && u == 0) }' /tmp/strict.out
-      # Membership, not counts: the run's verdicts against the committed list.
-      - name: Verdict ratchet (gate)
+      - uses: cachix/install-nix-action@v31
+      - name: Execute suites and measure coverage
+        run: nix develop -c python3 tools/conformance.py run --jobs=2 --output=/tmp/vera-conformance
+      - name: Fixture verdict ratchet
         if: always()
-        run: python3 tools/conformance.py ratchet --verdicts=/tmp/verdicts.tsv
-      # The inventory exits 0 either way; one-way and uncited clauses are
-      # gated by name by the ledger.
-      - name: LRM clause coverage (measure C)
-        if: always()
+        shell: bash
         run: |
-          zig build benchmark -- --coverage 2>&1 | tee /tmp/coverage.txt
-          exit "${PIPESTATUS[0]}"
-      # The measures block as conformance.py prints it, never a typed number.
-      - name: Job summary
+          runs=(/tmp/vera-conformance/*)
+          python3 tools/conformance.py ratchet --verdicts="${runs[0]}/ams.tsv"
+      - name: Publish the measured summary
         if: always()
-        env:
-          STRICT_LOG: /tmp/strict.txt
-          COVERAGE_LOG: /tmp/coverage.txt
+        shell: bash
         run: |
-          python3 tools/conformance.py > measured.md || echo '(conformance.py could not parse this run)' > measured.md
-          {
-            echo '## Conformance'; echo; cat measured.md; echo
-            echo '## Verilog-AMS suite: verdicts'
-            echo '```'; tail -40 /tmp/strict.txt; echo '```'
-            echo '## Clause coverage'
-            echo '```'; tail -6 /tmp/coverage.txt; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          runs=(/tmp/vera-conformance/*)
+          mkdir -p /tmp/vera-measured
+          cp "${runs[0]}/report.md" /tmp/vera-measured/measured.md
+          cp "${runs[0]}/report.json" "${runs[0]}"/*.log /tmp/vera-measured/
+          cat /tmp/vera-measured/measured.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: suite-logs
-          path: |
-            /tmp/strict.txt
-            /tmp/coverage.txt
-            /tmp/verdicts.tsv
+          name: execution-results
+          path: /tmp/vera-conformance/
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: measured
-          path: measured.md
+          path: /tmp/vera-measured/
 
-  # Measure B, the IEEE 1364-2005 suite and the digital transcripts (each
-  # also through the native executable, `-- --native`), and the VPI .c
-  # fixtures (every one compiles; `vpi_runs` run under `test`).
-  ieee1364:
+  native:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-      - name: IEEE 1364-2005 clause coverage (measure B)
-        run: |
-          zig build test-1364 -- --coverage 2>&1 | tee /tmp/coverage1364.txt
-          exit "${PIPESTATUS[0]}"
-      - name: IEEE 1364-2005 suite
-        if: always()
-        run: |
-          zig build test-1364 2>&1 | tee /tmp/ieee1364.txt
-          exit "${PIPESTATUS[0]}"
-      - name: Digital transcripts, 1364 plus the AMS digital-context cases
-        if: always()
-        run: |
-          zig build test-devices 2>&1 | tee /tmp/devices.txt
-          exit "${PIPESTATUS[0]}"
-      # The same cases through `vera --emit-exe` (src/sim/rt): the native
-      # executable and the interpreter must print the same transcript (#30).
-      - name: IEEE 1364-2005 suite, native
-        if: always()
-        run: |
-          zig build test-1364 -- --native 2>&1 | tee /tmp/ieee1364-native.txt
-          exit "${PIPESTATUS[0]}"
-      - name: Digital transcripts, native
-        if: always()
-        run: |
-          zig build test-devices -- --native 2>&1 | tee /tmp/devices-native.txt
-          exit "${PIPESTATUS[0]}"
-      - name: VPI .c fixtures compile
-        if: always()
-        run: zig build test-vpi-fixtures
-      - name: Job summary
-        if: always()
-        run: |
-          {
-            echo '## IEEE 1364-2005 clause coverage'
-            echo '```'; tail -n 3 /tmp/coverage1364.txt; echo '```'
-            echo '## IEEE 1364-2005 suite'
-            echo '```'; tail -n 20 /tmp/ieee1364.txt; echo '```'
-            echo '## Digital transcripts'
-            echo '```'; tail -n 20 /tmp/devices.txt; echo '```'
-            echo '## Native (vera --emit-exe)'
-            echo '```'; tail -n 3 /tmp/ieee1364-native.txt /tmp/devices-native.txt; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ieee1364-logs
-          path: |
-            /tmp/coverage1364.txt
-            /tmp/ieee1364.txt
-            /tmp/devices.txt
-            /tmp/ieee1364-native.txt
-            /tmp/devices-native.txt
+      - uses: cachix/install-nix-action@v31
+      - name: All digital transcripts through emitted executables
+        run: nix develop -c zig build test-devices -- --native
 
   # --emit-verilog's modules: verilator -Wall lint and an iverilog testbench
   # each. Ubuntu's verilator (5.020) has no rise/fall delays (RISEFALLDLY)
@@ -177,31 +78,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
       - uses: cachix/install-nix-action@v31
       - name: Behavioural Verilog simulates and lints
-        run: nix shell nixpkgs#verilator nixpkgs#iverilog -c zig build test-beh-verilog
-
-  # Every .sp deck runs on sim.spice (ESPice's solver) and is graded against
-  # its .expected.json oracle; any FAIL exits 1. NOT RUN is not a FAIL.
-  spice:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-      - name: SPICE decks run against their oracles
-        run: |
-          zig build test-spice 2>&1 | tee /tmp/spice.txt
-          exit "${PIPESTATUS[0]}"
-      - name: Job summary
-        if: always()
-        run: |
-          { echo '## SPICE decks'; echo '```'; cat /tmp/spice.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        run: nix develop -c zig build test-beh-verilog
 
   # The footprint and speed scaling table: generated-device byte counts and
   # MIR footprint against fixture size. It compiles nothing from
@@ -213,10 +92,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
+      - uses: cachix/install-nix-action@v31
       - name: Benchmark sweep, footprint and speed
         run: |
-          zig build benchmark -- --sweep 2>&1 | tee /tmp/sweep.txt
+          nix develop -c zig build benchmark -- --sweep 2>&1 | tee /tmp/sweep.txt
           { echo '## Footprint and speed sweep'; echo '```'; cat /tmp/sweep.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

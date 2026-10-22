@@ -8,9 +8,9 @@
 // conforms, so this fixture tests VerA's choice, not the clause.
 //
 // HAND DERIVATION. A one-character string in an integer expression is its
-// byte's unsigned value (§2.7, 08_string_escapes.va), so "\q" is 'q' = 113
+// byte's unsigned value (§2.7, string_escapes.va), so "\q" is 'q' = 113
 // and "\%" is '%' = 37. "a\qb" is "aqb" = 97*65536 + 113*256 + 98 = 6356992 + 28928 + 98 = 6386018.
-// Legal neighbour: 08_string_escapes.va uses only Table 2-2 escapes and
+// Legal neighbour: string_escapes.va uses only Table 2-2 escapes and
 // warns nothing.
 //! lrm 2.7
 //! warn W0149

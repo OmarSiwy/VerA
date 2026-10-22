@@ -15,7 +15,7 @@
 //! lrm 6.5.5:4
 //! reject-only E0906
 //! reject a named connection in a list of ordered connections
-//! neighbour b4_named_port_expressions.va
+//! neighbour named_port_expressions.va
 module ch6_mixed_conn_parent(p, n);
   inout p, n; electrical p, n;
   ch6_mixed_conn_kid u(p, .a(n));

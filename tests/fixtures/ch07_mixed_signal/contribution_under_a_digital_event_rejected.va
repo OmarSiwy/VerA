@@ -25,7 +25,7 @@
 // nothing: Syntax 7-2 is one production for `posedge expression`,
 // `cross(...)` and `timer(...)` alike. The legal way to write the intent is the
 // clause's own `sampler3`/§7.3.6.2 shape — assign a variable under the event
-// and contribute it outside — and that is `m01_04_posedge_in_an_analog_event_control.va`,
+// and contribute it outside — and that is `posedge_in_an_analog_event_control.va`,
 // which runs and asserts the sampled value.
 //
 // Everything else is legal: `clk` rises at tick 10 from a delayed `initial`
@@ -35,7 +35,7 @@
 //! lrm 7.3.4
 //! lrm 7.3.6.2
 //! reject-only E0406
-//! neighbour m01_04_posedge_in_an_analog_event_control.va
+//! neighbour posedge_in_an_analog_event_control.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_contrib_under_posedge(p);

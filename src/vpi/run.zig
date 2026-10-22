@@ -1,5 +1,5 @@
 //! The digital run a VPI application's time callbacks live in: the engine's
-//! IEEE 1364 §11.4 loop (`src/sim/digital`), driven one time queue at a time
+//! IEEE 1364 §11.4 loop (`lib/sim/digital`), driven one time queue at a time
 //! with §12.31.2's callback moments cut into it, plus §12.15 vpi_get_time,
 //! §12.36 vpi_sim_control (vpiReset: IEEE 1364-2005 C.7) and §11.6.25 time
 //! queues.

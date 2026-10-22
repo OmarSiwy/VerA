@@ -16,7 +16,7 @@
 //! lrm 1.2
 //! lrm 1.2:1000
 //! reject-only E0435
-//! neighbour lrm_1_2.va
+//! neighbour analog_and_digital_declarations_coexist.va
 `include "disciplines.vams"
 module ch1_contribution_from_always(p, n, clk);
   inout p, n;

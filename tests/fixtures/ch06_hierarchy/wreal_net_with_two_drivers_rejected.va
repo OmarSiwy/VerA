@@ -13,7 +13,7 @@
 // `real_valued_wreal_port.va` is this design with ONE continuous assignment to
 // `stim`: it runs and asserts that the child's wreal port delivers 0.625. Here
 // the parent adds a second `assign` to the same net. The digital runner already
-// refuses the pure-digital form (`digital/m04_20_reject_wreal_two_drivers.v`,
+// refuses the pure-digital form (`digital/reject_wreal_two_drivers.v`,
 // E0918); this is the mixed `.va` form, which used to compile to a device and
 // fail only when its digital half first ran.
 //

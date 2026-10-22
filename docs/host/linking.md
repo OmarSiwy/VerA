@@ -67,9 +67,9 @@ passes its own generation per rebuild, so each rebuild is a fresh file and a
 fresh inode to `dlopen`. The build is ReleaseFast with the LLVM backend by
 default (`--optimize`, `--zig-backend`, `--debug-info` change that).
 
-`tests/arpice_dyn.zig` is a real `dyn` module: it exports one `evalQ` over
+`tools/report.py`'s `DYN` is a real `dyn` module: it exports one `evalQ` over
 the sparse reference family with every operand from the caller.
-`tests/vdev_dyn.zig` exports a digital device's transient as one C call.
+`tests/fixtures/ch07_mixed_signal/vdev_dyn.zig` exports a digital device's transient as one C call.
 
 ### Large devices
 
@@ -86,6 +86,28 @@ export each symbol from exactly one part. Without it, `exportDevice` runs in
 the setup object. A large `setup` comes in chunks (`D.setup_chunks`); a `dyn`
 that also declares `pub fn SetupValue(comptime D: type) type`, the value
 scalar it passes `setup`, gets each chunk compiled in its own object.
+
+### Build time
+
+What a device costs to compile is LLVM's time over the core, the one
+function every entry point inlines, once per family it is instantiated
+with. Measured on psp103 (12 unknowns, 1.5 MB of Zig) and bsimcmg (2.4 MB)
+with Zig's LLVM backend at ReleaseFast on one 2024 desktop core: Zig's own
+frontend takes about a quarter of a second, each instantiation of the core
+takes 2 s (psp103) to 4 s (bsimcmg) on x86-64, and an AMDGPU kernel over the
+same core 6 to 10 s, half of it in LLVM's machine scheduler, which is
+superlinear in the size of a straight-line region. ReleaseSmall is slower,
+not faster. So:
+
+- Reference `evalQ`, or `eval` and `q`, but not `evalQ` beside `eval`: each
+  distinct entry point a `dyn` reaches inlines the core again, and a host
+  that references both pays twice. `lib/osdi_dyn.zig` picks one at comptime.
+- Instantiate one family. A value-only family (`RefFamily` with every lane
+  `no_lane`) beside the dual family costs a second, cheaper core.
+- Let the split build run: with `exportDevicePart` the parts compile in
+  parallel and the wall time is the `eval` part's alone.
+- On a GPU target the kernel is one object and inlines the core once; its
+  time is the scheduler's, and a smaller model is the only lever today.
 
 ## Validation
 
@@ -139,9 +161,9 @@ builtins or `std.math`, so a GPU result may differ slightly from the CPU's
 `gm` too. So the same `device.zig` compiles for `nvptx64-cuda` and
 `amdgcn-amdhsa` with the LLVM backend.
 
-`tests/status_gpu.zig` is the pattern: a `callconv(.kernel)` export that
+`tests/fixtures/ch09_system_tasks/status_gpu.zig` is the pattern: a `callconv(.kernel)` export that
 runs `evalQ` and `updateState` over a `RefFamily`
-(`tests/say_gpu.zig` does the same for `say`). `zig build test` compiles both
+(`tests/fixtures/ch09_system_tasks/say_gpu.zig` does the same for `say`). `zig build test` compiles both
 for `nvptx64-cuda` (`sm_70`, to LLVM IR, because the NVPTX backend refuses
 the alias `@export` of a kernel makes; a host rewrites the IR) and for
 `amdgcn-amdhsa` (`gfx906`, to an object). No GPU runs them in CI.

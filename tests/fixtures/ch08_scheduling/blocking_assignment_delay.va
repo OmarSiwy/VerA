@@ -41,6 +41,16 @@
 // The xfail this row used to carry (E1100, no default time unit for `#5`) went
 // stale when the delay started compiling; what then stopped it was the x above.
 //
+// THE ZERO-DELAY SENTENCE has its own observation. At t = 10 the second initial
+// block writes d = 2 in the active region, then `d = #0 3;` suspends and its
+// resume is an inactive event for the same tick. The analog block reads d, so
+// each write is an implicit D2A event and the analog macro-process event is
+// processed after the active and inactive regions (§8.5.1), so the 10 s
+// solution reads 3. A tool that treats #0 as an immediate active write and
+// solves the macro-process on the intermediate change reads d = 2 there. The
+// intermediate 2 must never be a solved value — that is what scheduling the
+// process as an inactive event buys.
+//
 // §8.5.3, the parent, is cited too: "Assignments are translated into processes
 // and events as follows" — this is its blocking-assignment row, run.
 //
@@ -48,13 +58,13 @@
 //! lrm 8.5.3.3
 //! lrm 8.5.3.3:1001
 //! analysis tran
-//! time 0, 25
+//! time 0, 10, 25
 `include "check.vh"
 module ch8_blocking_delay(p);
   inout p;
   electrical p;
 
-  integer x, y;
+  integer x, y, d;
 
   initial begin
     y = 0;
@@ -63,9 +73,17 @@ module ch8_blocking_delay(p);
     x = 2;
   end
 
+  initial begin
+    d = 1;
+    #10 d = 2;
+    d = #0 3;
+  end
+
   analog begin
     `CHECKI("a delayed blocking assignment samples its right-hand side first",
             ($abstime > 5.0) ? y : 1, 1);
+    `CHECKI("the #0 resume is an inactive event, so the solve sees only d = 3",
+            ($abstime >= 10.0) ? d : 3, 3);
     I(p) <+ V(p);
   end
 endmodule

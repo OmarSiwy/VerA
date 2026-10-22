@@ -48,7 +48,7 @@ var log_file: ?Io.File = null;
 
 /// Names the product log file channel 3 writes, in the working directory
 /// unless `path` says otherwise. The LRM names no file; a host picks one
-/// (tests/vpi_host.zig: the application's name with `.log`).
+/// (tests/fixtures/ch11_vpi/vpi_host.zig: the application's name with `.log`).
 pub fn setLogFile(path: []const u8) error{OutOfMemory}!void {
     // The copy first: on failure the old name stays named.
     const name = try gpa.dupeSentinel(u8, path, 0);
@@ -699,7 +699,7 @@ fn stripZeros(s: []const u8) []const u8 {
 // ---------------------------------------------------------------------------
 // Tests. The C-side check — that the header's prototypes and these exports
 // agree, and that the channels hit the disk — is tests/fixtures/ch11_vpi/
-// p02_09_printf_mcd.c, run by `zig build test-vpi`.
+// printf_mcd.c, run by `zig build test-vpi`.
 // ---------------------------------------------------------------------------
 
 /// `cformat` into `buf`, for `varargs.c`'s `vera_vpi_format`: 0 when it fails.

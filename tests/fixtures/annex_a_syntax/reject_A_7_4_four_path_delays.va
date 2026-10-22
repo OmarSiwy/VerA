@@ -18,7 +18,7 @@
 //! lrm A.7.4:1000
 //! reject-only path delay
 //! reject endspecify
-//! neighbour b8_specify_path_delay_mintypmax_list.va
+//! neighbour specify_path_delay_mintypmax_list.va
 module annex_a_four_path_delays(o, a, b);
   output o;
   input a, b;

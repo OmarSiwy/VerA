@@ -469,6 +469,10 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
 const pp_prelude = @import("pp/prelude.zig");
 pub const preludeTokens = pp_prelude.preludeTokens;
 pub const preludeAst = pp_prelude.preludeAst;
+/// The prelude's snapshot itself, for a test that compares a fresh run with it.
+pub const preludeSnapshot = pp_prelude.preludeSnapshot;
+/// Annex D.1's text, for a test that compares the prelude with its source.
+pub const disciplines_vams = pp_annex_d.disciplines_vams;
 
 // ---------------------------------------------------------------------------
 // State
@@ -848,6 +852,8 @@ pub const Pp = struct {
 
 // §2.4 comment stripping (pp/comments.zig).
 const pp_comments = @import("pp/comments.zig");
+/// §2.4 comment stripping on its own, for the differential tests.
+pub const stripComments = pp_comments.stripComments;
 
 // ---------------------------------------------------------------------------
 // Main scan
@@ -1028,9 +1034,6 @@ const pp_annex_e = @import("pp/annex_e.zig");
 pub const spice_primitives = pp_annex_e.spice_primitives;
 pub const spice_module_count = pp_annex_e.spice_module_count;
 
-// Preprocessor tests (pp/test.zig).
-const pp_test = @import("pp/test.zig");
-
 test {
     _ = pp_prelude;
     _ = pp_comments;
@@ -1038,5 +1041,4 @@ test {
     _ = pp_directive;
     _ = pp_annex_d;
     _ = pp_annex_e;
-    _ = pp_test;
 }

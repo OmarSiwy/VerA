@@ -1,4 +1,4 @@
-// §4.6.1 Table 4-22, the TRAN column's two halves, which 143_analysis_transient.va
+// §4.6.1 Table 4-22, the TRAN column's two halves, which analysis_transient.va
 // leaves out. Table 4-21: "ic" is "The initial-condition analysis which
 // precedes a transient analysis"; "static" is "Any equilibrium point
 // calculation, including ... the IC analysis which precedes a transient

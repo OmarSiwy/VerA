@@ -14,7 +14,7 @@
 //! lrm 6.5.7
 //! lrm 6.5.7:1
 //! reject-only E0355
-//! neighbour lrm_6_5_7.va
+//! neighbour compatible_port_disciplines_share_potential.va
 `include "disciplines.vams"
 module ch6_thermal_child(p);
   inout p;

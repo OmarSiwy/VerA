@@ -5,7 +5,7 @@
 // The positive half, for two of the three legal shapes the sentence names:
 // a vector port on a vector net of matching width, and a scalar port on a
 // scalar net. matching_size_concatenation.va is the third shape (a
-// concatenated net expression); lrm_6_5_7_1.va pins the refusal of a mismatch.
+// concatenated net expression); vector_port_scalar_net_width_mismatch_rejected.va pins the refusal of a mismatch.
 //
 //   u_vec   2-bit port `v`  <- 2-bit vector net `bus`
 //   u_vec   scalar port `c` <- the parent's scalar `p`

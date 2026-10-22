@@ -7,11 +7,11 @@
 // written with E1014, which names the reservation.
 //
 // The legal neighbour is any other unregistered name: `$sampler` in
-// ch12_vpi_routines/02_analog_systf_sampler_call.va compiles with W0852 and
+// ch12_vpi_routines/analog_systf_sampler_call.va compiles with W0852 and
 // is handed to a VPI host.
 //
 //! reject-only E1014
-//! neighbour ../ch12_vpi_routines/02_analog_systf_sampler_call.va
+//! neighbour ../ch12_vpi_routines/analog_systf_sampler_call.va
 module reserved_system_function_name_rejected(p, n);
   inout p, n; electrical p, n;
   real r;

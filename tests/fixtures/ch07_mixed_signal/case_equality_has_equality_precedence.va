@@ -28,6 +28,7 @@
 //! lrm 7.3.2
 //! lrm 7.3.2:1001
 //! bias V(p) = 0.0
+//! lrm 4.2.6:1000
 `include "check.vh"
 module ch7_case_equality_precedence(p);
   inout p; electrical p;

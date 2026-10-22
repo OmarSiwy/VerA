@@ -16,7 +16,7 @@
 // read: an A2D event that is not an analog event controlled statement, with no
 // monitored function for the solver to locate. That is what the note rules out.
 //
-// The positive half is `ch07_mixed_signal/m01_09_cross_event_in_a_digital_always.va`,
+// The positive half is `ch07_mixed_signal/cross_event_in_a_digital_always.va`,
 // which writes the threshold as `cross()` in an `always` block and asserts it
 // fires once on the rising crossing. The probe itself is legal in a digital
 // EXPRESSION (§7.3.3, `ch07_mixed_signal/m01_08`); what is refused is waiting
@@ -26,7 +26,7 @@
 //! lrm 8.5.1:7
 //! lrm 7.3.5
 //! reject-only E0484
-//! neighbour ../ch07_mixed_signal/m01_09_cross_event_in_a_digital_always.va
+//! neighbour ../ch07_mixed_signal/cross_event_in_a_digital_always.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch851_a2d_probe(in, out);

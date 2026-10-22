@@ -13,7 +13,7 @@
 // Dyadic, so exact. A net vector this long is one unknown per element; the
 // codegen unit test "`U` is enum(u8) to 256 unknowns..." covers 70000 of them.
 //
-// Legal neighbour of the old refusal: annex_a_syntax/39_branch_array.va.
+// Legal neighbour of the old refusal: annex_a_syntax/branch_array.va.
 //
 //! lrm 3.6.3
 //! lrm A.2.3

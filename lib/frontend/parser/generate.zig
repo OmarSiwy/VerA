@@ -216,7 +216,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // §6.6: a generate block "brings the objects, behavioral constructs, and
     // module instances within the block into existence" only as its scheme
     // selects. Instances stay on the block: the digital engine decides their
-    // scheme (`src/sim/digital/root.zig`), and analog elaboration gates an
+    // scheme (`lib/sim/digital/root.zig`), and analog elaboration gates an
     // if-generate's instances and refuses the rest (`Flatten.genInstances`).
     // A digital parse keeps the events, processes and drivers on the block
     // too, for the digital engine to elaborate per selected block. An analog

@@ -12,14 +12,14 @@
 // name of the nature `electrical` binds (that is `Voltage`, and a nature name
 // is not a potential_or_flow either).
 //
-// The legal spelling, `: electrical.potential`, is 20_derived_nature_from_discipline.va.
+// The legal spelling, `: electrical.potential`, is derived_nature_from_discipline.va.
 //
 //! lrm 3.6.2.6
 //! lrm A.1.6
 //! lrm 3.6.2.6:2
 //! lrm A.1.6:1000
 //! reject-only E0211
-//! neighbour 20_derived_nature_from_discipline.va
+//! neighbour derived_nature_from_discipline.va
 `include "disciplines.vams"
 nature ch3_parent_access_n : electrical.voltage
 endnature

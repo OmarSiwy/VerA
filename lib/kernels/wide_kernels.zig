@@ -4,7 +4,7 @@
 // by `kernels/test.zig`, so the numerics the tests check are the numerics the
 // device runs. Verilog-AMS §7.3.1 gives the analog context read access to a
 // discrete bit grouping; a `reg` the analog context assigns is computed with
-// the bits IEEE 1364 gives it (`lower/wide.zig` sizes each operand).
+// the bits IEEE 1364 gives it (`analog/wide.zig` sizes each operand).
 //
 // A value `n` bits wide is `ZW(n)`: one native unsigned integer up to
 // `zw_native_max` bits, and above that an array of 32-bit limbs, least
@@ -16,7 +16,7 @@
 //
 // A bit pattern carries no sign: the signed operations (`zwDiv`, `zwLt`,
 // `zwResize`, `zwShr`, `zwPow`, `zwToReal`) take `signed` from the operand
-// type `lower/wide.zig` computed. The analog context has no x or z (§7.3.2),
+// type `analog/wide.zig` computed. The analog context has no x or z (§7.3.2),
 // so the IEEE 1364 operations that yield x yield 0 here: a division or
 // remainder by zero, and zero to a negative power
 // (specification/Vague_Decisions.md VD-116).

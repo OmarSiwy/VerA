@@ -54,7 +54,7 @@
 // by a relative d (by d itself at zero; by one for CHECKI), so a check that
 // still prints ok=1 cannot see an error of that size in its own expectation.
 // No `abs`: under `begin_keywords "1364-2005" there is none, and CHECKX and
-// CHECKI must still expand there (ch10_directives/16_begin_keywords_verilog.va).
+// CHECKI must still expand there (ch10_directives/begin_keywords_verilog.va).
 // Arithmetic, not `?:`: a CHECKEQ want may hold an analog operator, which
 // §5.8.1 does not allow under a condition (E0514).
 `define VERA_PW(WANT) ((WANT) * (1 + (`VERA_PERTURB)) + ((WANT) == 0) * (`VERA_PERTURB))
@@ -109,7 +109,7 @@
 // It is still restricting — a compiler that lowers the two sides differently
 // fails it — but it is NOT independent: an error common to both sides passes.
 // So it is a separate macro rather than a relaxation of `CHECK`, which keeps
-// the weaker claims greppable and lets tests/torture.zig hold the strict
+// the weaker claims greppable and lets tests/suite.zig hold the strict
 // literal rule everywhere else. Reach for it only when there is genuinely no
 // literal to write; if you can write the digits, write the digits.
 `define CHECKEQ(NAME, GOT, WANT, TOL) \

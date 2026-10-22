@@ -70,6 +70,8 @@ vera model.va --run                                      # run the testbench its
 vera model.va --emit-so --dyn dyn.zig --work-dir build   # a shared library
 vera model.va --emit-osdi -o model.osdi                  # an OSDI 0.4 library for ngspice
 vera --run design.v                                      # an IEEE 1364 design
+vera design.v --emit-rtlil -o design.il                  # Yosys RTLIL, for synthesis
+vera --sim=verilogA model.va                             # refuse anything outside annex C's Verilog-A subset
 vera --explain W0650                                     # the long form of a diagnostic
 ```
 
@@ -93,19 +95,18 @@ builds a host step by step.
 - **Languages:** Verilog-AMS and IEEE 1364-2005 Verilog. SystemVerilog (E1104)
   and VHDL are out of scope.
 - **Open bugs** are `//! xfail` fixtures, each naming its clause; CI's verdict
-  ratchet ([`tests/fixtures/VERDICTS.tsv`](tests/fixtures/VERDICTS.tsv)) fails
+  ratchet ([`tests/fixtures/conformance/VERDICTS.tsv`](tests/fixtures/conformance/VERDICTS.tsv)) fails
   on any verdict change. Operating-point variables are not exported to OSDI yet.
 
 ## Conformance
 
-Every fixture under `tests/fixtures/` names the LRM clause or sentence it
-tests. `tools/conformance.py` measures the evidence for each normative sentence;
-the numbers are in
-[`CHANGELOG.md`](CHANGELOG.md) and the [live report](https://omarsiwy.github.io/VerA/report/).
+Run `nix develop -c python3 tools/conformance.py run` for measured fixture,
+host, reference and VPI results, with per-clause evidence and uncovered requirements.
+See [the test guide](tests/README.md) and the [live report](https://omarsiwy.github.io/VerA/report/).
 
 ## Contributing
 
-Make `zig build test` exit 0.
+Run `nix develop -c zig build test` and the relevant language fixtures; see [tests/README.md](tests/README.md).
 Questions and bugs go to [GitHub issues](https://github.com/OmarSiwy/VerA/issues).
 
 ## License

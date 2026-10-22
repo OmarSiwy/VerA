@@ -39,7 +39,8 @@
 //! time 0, 1n, 2n
 //! wave V(p) = 0, 0.5, 1.5
 //! lrm 5.10.3.1:1003
-//! lrm 5.10.3.1:1004
+// Timestep control itself is checked by cross_expr_tol_and_time_tol_both_hold.va;
+// this fixed-grid fixture only observes the event and its retained value.
 `include "check.vh"
 module ch5_cross_fires(p);
   inout p; electrical p; real x; integer n;

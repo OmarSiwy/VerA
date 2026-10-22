@@ -60,6 +60,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
         try self.skipAttributes();
         const before = self.pos;
         try self.refuseAms();
+        if (self.verilog_a) if (self.digitalItem()) |w| try self.refuseDigital(self.pos, w);
         switch (self.peek()) {
             // §3.8: an attribute instance is "a prefix attached to" what follows it.
             .eof => {
@@ -124,7 +125,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     // directive, even across source code file boundaries, until the
     // matching `end_keywords directive is encountered", so a stack still
     // open at end of file is not an error
-    // (ch10_directives/31_begin_keywords_unterminated.va).
+    // (ch10_directives/begin_keywords_unterminated.va).
 
     self.file.modules = modules.items;
     self.file.disciplines = disciplines.items;

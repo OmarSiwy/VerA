@@ -8,7 +8,7 @@ followed by more `.v` files holding the library cells it instantiates.
 ```text
 vera [options] FILE.va
 vera --run|--emit-exe [options] FILE.v [MORE.v ...]
-vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
+vera --emit-zig|--check|--emit-so|--emit-osdi|--emit-rtlil [options] FILE.v [MORE.v ...]
 vera --explain CODE
 vera --version
 ```
@@ -32,11 +32,12 @@ flag never silently wins over an earlier one of another kind.
 | `--emit-zig` | write the device's Zig source to stdout, or to `-o PATH` | no |
 | `-o PATH` | implies `--emit-zig`, writing to `PATH` | no |
 | `--emit-verilog` | a behavioural Verilog model of a `.va`, for digital simulators | no |
+| `--emit-rtlil` | a `.v` design as Yosys RTLIL text, for synthesis: `yosys -p 'read_rtlil design.il; synth'`. One module per source module, a `process` per `always` block, parameters at their defaults; a construct outside the synthesizable subset (a loop, a memory, a real, a hierarchical name, a parameter override of a module outside the source) is refused by name with its line | no |
 | `--check` | generate the device and type-check it with Zig against the contract, running the contract's conformance checks | yes |
 | `--emit-exe` | build a self-checking testbench from the source's `//!` directives (or a `.v` design's executable) and print its path | yes |
 | `--run` | `--emit-exe`, then run it; the testbench's exit status is `vera`'s | yes |
 | `--emit-so` | build the device as a shared library for your simulator, through your `--dyn` module | yes |
-| `--emit-osdi` | build the device (of a `.va`, or a `.v` design's top module) as an OSDI 0.4 library that ngspice loads with `pre_osdi` (`--emit-so` under the `tools/osdi_dyn.zig` built into `vera`); `-o PATH` names it, default `<module>.osdi`, and its path is printed | yes |
+| `--emit-osdi` | build the device (of a `.va`, or a `.v` design's top module) as an OSDI 0.4 library that ngspice loads with `pre_osdi` (`--emit-so` under the `lib/osdi_dyn.zig` built into `vera`); `-o PATH` names it, default `<module>.osdi`, and its path is printed | yes |
 | `--explain CODE` | print the long explanation of a diagnostic code | no |
 | `--version` | print `vera <release>`: the VerA release, which every device it generates carries as `vera_version` | no |
 | `--lsp` | a language server for an editor, on stdin/stdout (below) | no |
@@ -80,6 +81,7 @@ Neovim 0.11 and later needs `editors/nvim` on its runtime path and
 | `--param NAME=VALUE` | compile with top-module parameter `NAME` set to `VALUE` (LRM §3.4). A parameter that sizes an array or selects a generate arm is fixed at that value; any other stays a value the model card can change |
 | `--spice PATH` | read a SPICE netlist; its `.MODEL` and `.SUBCKT` cards become modules the source can instantiate (LRM Annex E.2) |
 | `--std=SPEC` | the source language, as a `` `begin_keywords `` specifier: `1364-1995`, `1364-2001`, `1364-2005` or `VAMS-2023` (the default). A 1364 language frees every AMS keyword as an identifier. Verilog-AMS is compiled as VAMS-2023 only; `` `begin_keywords "VAMS-2.3" `` in the source still selects that keyword set (LRM §10.6) |
+| `--sim=verilogAMS\|verilogA\|verilog` | the language family: all of Verilog-AMS (the default); annex C's Verilog-A subset, in which a digital or mixed-signal construct is E0250 (`vera --explain E0250`) and a `.v` design is refused; or IEEE 1364-2005 Verilog alone, which reads as `--std=1364-2005` unless `--std` names another 1364 set, and refuses a `.va` model |
 | `--no-std-defs` | do not prepend the LRM Annex D prelude (`disciplines.vams`, `constants.vams`) |
 | `--discipline-resolution=basic\|detail` | LRM §7.4.4's mode for undeclared interconnect (default `basic`; `detail` is Annex F.2.2) |
 | `--libmap FILE`, `-L LIB` | a `.v` design's IEEE 1364-2005 §13 libraries: a library map file (repeatable), and the libraries an instance's cell is searched in |
@@ -88,6 +90,12 @@ Neovim 0.11 and later needs `editors/nvim` on its runtime path and
 `` `include "disciplines.vams" `` and `` `include "constants.vams" `` always
 resolve to VerA's built-in copies of LRM Annex D, so a model needs no files
 beside it.
+
+The macro `__VERA__` is predefined by VerA, the tool-specific macro LRM
+§10.5 asks every simulator to provide: text under `` `ifdef __VERA__ `` is
+compiled by VerA and skipped by any other tool, and `` `ifndef __VERA__ ``
+the reverse. The LRM's own `__VAMS_ENABLE__` and `__VAMS_COMPACT_MODELING__`
+are predefined too.
 
 ## Diagnostics
 

@@ -9,14 +9,14 @@
 //
 // An operand of `*` is none of these. `'{1.0, 2.0}` below is a list of two
 // values multiplied by a scalar probe, which has no meaning. The legal uses are
-// 09_assignment_pattern.va and 23_laplace_filters.va.
+// assignment_pattern.va and laplace_filters.va.
 //
 //! lrm 4.2.14
 //! lrm 4.2.14:1001
 //! lrm 4.2.14:1000
 //! reject-only E0509
-//! neighbour 09_assignment_pattern.va
-//! neighbour 23_laplace_filters.va
+//! neighbour assignment_pattern.va
+//! neighbour laplace_filters.va
 `include "disciplines.vams"
 module ch04_assignment_pattern_as_scalar_operand(p, n);
   inout p, n; electrical p, n;

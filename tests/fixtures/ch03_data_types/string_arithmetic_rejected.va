@@ -9,12 +9,12 @@
 // to a real parameter."
 //
 // `s + 1` below adds an integer to a string parameter. The legal string
-// operations are 03_string_variables.va and audit_string_comparison_context.va.
+// operations are string_variables.va and string_comparison_context.va.
 //
 //! lrm 3.3
 //! reject-only E0321
-//! neighbour 03_string_variables.va
-//! neighbour audit_string_comparison_context.va
+//! neighbour string_variables.va
+//! neighbour string_comparison_context.va
 `include "disciplines.vams"
 module ch3_string_arithmetic(p, n);
   inout p, n; electrical p, n;

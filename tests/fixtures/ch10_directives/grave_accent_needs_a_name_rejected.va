@@ -10,12 +10,12 @@
 // `define the writer did not type; one that dropped the accent would leave
 // `define B 2` as stray source text.
 //
-// The legal spelling, `define with no gap, is 04_define_object.va.
+// The legal spelling, `define with no gap, is define_object.va.
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.3.1
 //! reject-only E0103
-//! neighbour 04_define_object.va
+//! neighbour define_object.va
 ` define B 2
 module ch10_grave_accent_needs_a_name(p, n);
   inout p, n; electrical p, n;

@@ -23,7 +23,7 @@ const Error = parser.Error;
 /// Names are not resolved: the connect module of a §7.7.1 insertion and
 /// the disciplines of a §7.7.2 resolution may be declared after the block
 /// (A.1.2 puts no order on descriptions), so elaboration checks them
-/// (`elaborate/resolve.zig`, `checkConnectRules`).
+/// (`elab/resolve.zig`, `checkConnectRules`).
 pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
     const main_tok = self.pos;
     self.pos += 1; // 'connectrules'

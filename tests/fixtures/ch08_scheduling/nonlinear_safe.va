@@ -30,8 +30,9 @@
 // writes the §9.15 host field `reltol__` from `//! param` below, and
 // `$simparam("reltol")` returns the option the iteration criterion consults. A
 // tool with no reltol option, or one that answered something other than the
-// host's value, fails the check. (The per-iteration inequality itself has no
-// source-level observer; only the option it reads does.)
+// host's value, fails the check. The per-iteration inequality itself has no
+// source-level observer; it is asserted by the solver's acceptance-gate unit
+// test registered as the specialized evidence for this sentence.
 //
 //! lrm 8.3.3
 //! lrm 8.3.3:1

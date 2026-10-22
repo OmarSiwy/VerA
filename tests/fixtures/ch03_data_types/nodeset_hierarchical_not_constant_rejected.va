@@ -1,7 +1,7 @@
 // §3.6.3.2: "The initializer shall be a constant_expression and will be used
 // as a nodeset value for the potential of the net by the analog solver." The
 // hierarchical form is held to the same rule as a local one
-// (91_nodeset_not_constant.va): `V(g)` is not a constant expression.
+// (nodeset_not_constant.va): `V(g)` is not a constant expression.
 //
 // Legal neighbour: nodeset_hierarchical_declaration.va.
 //

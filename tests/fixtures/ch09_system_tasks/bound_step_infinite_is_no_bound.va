@@ -5,7 +5,7 @@
 // $bound_step() argument currently active."
 //
 // An infinite argument is non-negative, so the clause gives no ground to
-// refuse it (136_bound_step_negative_rejected.va is the one invalid form, E0803).
+// refuse it (bound_step_negative_rejected.va is the one invalid form, E0803).
 // Read literally it is a maximum step of +inf: no bound, and as an operand of
 // "the smallest ... argument currently active" it never wins against a finite
 // one. So this device publishes:

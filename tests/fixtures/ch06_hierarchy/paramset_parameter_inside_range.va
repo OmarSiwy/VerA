@@ -3,7 +3,7 @@
 // paramset parameter declaration." This is the positive half: the paramset
 // declares `l = 1.0 from [0.5:2.0]`; the instance overrides l = 1.5, inside
 // the range, so the paramset is applicable and selected. The localparam-free
-// form isolates rule 2 from rule 3 (b4_paramset_local_range_in_range.va is the
+// form isolates rule 2 from rule 3 (paramset_local_range_in_range.va is the
 // rule-3 pair).
 //
 // BY HAND. `.k = 2.0 * l`, so k = 2.0 * 1.5 = 3.0 (the module default is 9.0,

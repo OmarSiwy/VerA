@@ -11,7 +11,7 @@
 // A connect module that does NOT assign its digital port does not leave the
 // receivers undefined or at z, and does not route them through the analog
 // kernel: the ordinary receivers read the ordinary driver's resolved value
-// directly. The design below is m04_14_receiver_default_bypass.va's, reduced
+// directly. The design below is receiver_default_bypass.va's, reduced
 // to what the clause needs.
 //
 // HAND DERIVATION — one ordinary driver, one ordinary receiver, no receiver

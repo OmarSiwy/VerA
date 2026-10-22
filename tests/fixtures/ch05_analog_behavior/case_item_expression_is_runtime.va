@@ -8,16 +8,18 @@
 //
 //! lrm 5.8.3
 //! lrm 5.8.3:1003
-//! bias V(sel) = 1.0
+//! sweep V(sel) = 1.0, 2.0
 `include "check.vh"
 module ch5_case_runtime_item(sel);
   inout sel; electrical sel; real x;
   analog begin
     case (V(sel))
-      V(sel): x = 2.0;
-      default: x = 0.0;
+      V(sel) + 1.0: x = -1.0;
+      3.0 - V(sel): x = 2.0;
+      default: x = 5.0;
     endcase
-    `CHECKX("a case item computed from a probe matches the probe", x, 2.0);
+    `CHECKX("the runtime item matches at 1 V and misses at 2 V",
+            x, (V(sel) < 1.5) ? 2.0 : 5.0);
     I(sel) <+ 0.0;
   end
 endmodule

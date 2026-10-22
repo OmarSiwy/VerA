@@ -1,4 +1,4 @@
-$ zig test --dep contract -Mroot=shapes.zig -Mcontract=../../../tools/contract.zig
+$ zig test --dep contract -Mroot=shapes.zig -Mcontract=../../../lib/contract.zig
 1/6 shapes.test.every contract declaration the pages name exists...OK
 2/6 shapes.test.device.md: SimState, AnalysisKind...OK
 3/6 shapes.test.families.md: family_fns, family_primitives, JacConst, LaneUse, Constant, RefOptions...OK

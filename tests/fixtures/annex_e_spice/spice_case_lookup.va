@@ -82,3 +82,12 @@ module annex_e_spice_case_lookup(c1, b1, e1);
     `CHECKX("and whose port 2 is b", V(mixed_case.b, mixed_case.e), 0.5);
   end
 endmodule
+
+// This Verilog-AMS name differs in case from both VeRtNpN and the SPICE
+// VERTNPN card. E.3.3 requires it not to intercept the case-insensitive SPICE
+// lookup. Its deliberately different interface makes accidental selection
+// fail before the hierarchical c/b/e port assertions could pass.
+module VertNpn(unused);
+  inout unused; electrical unused;
+  analog I(unused) <+ V(unused);
+endmodule

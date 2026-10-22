@@ -5,7 +5,7 @@
 //!
 //! The spine, in the order a host drives it:
 //!
-//!   open / openDigital   model/analog.zig, model/digital.zig build the rows;
+//!   open / openDigital   model_analog.zig, model_digital.zig build the rows;
 //!                        model.zig freezes them into the one `Design`
 //!   runStartupRoutines   §12.33.2: the application registers (systf.zig,
 //!                        callback.zig)
@@ -43,12 +43,12 @@ pub const systf = @import("systf.zig");
 pub const code = @import("code.zig");
 /// The analog analysis a host attaches a device library to and runs.
 pub const analog_run = @import("analog.zig");
-const handle = @import("handle.zig");
-const iterate = @import("iterate.zig");
-const property = @import("property.zig");
-const delays = @import("delays.zig");
-const analog_model = @import("model/analog.zig");
-const digital_model = @import("model/digital.zig");
+pub const handle = @import("handle.zig");
+pub const iterate = @import("iterate.zig");
+pub const property = @import("property.zig");
+pub const delays = @import("delays.zig");
+const analog_model = @import("model_analog.zig");
+const digital_model = @import("model_digital.zig");
 comptime {
     _ = print;
     _ = run;
@@ -76,8 +76,6 @@ test {
     _ = delays;
     _ = @import("model.zig");
     _ = @import("decompile.zig");
-    _ = @import("test.zig");
-    _ = @import("vpi_a_test.zig");
 }
 
 /// A folded constant (§11.6.12 NOTE 1's "the value of the parameter"), as
@@ -369,7 +367,7 @@ pub const Obj = struct {
     /// §11.6 `vpiFullName` — the hierarchical name, top module included.
     full: []const u8,
     /// §11.6.4/§11.6.8/§11.6.9 `vpiSize`; 1 for a scalar, 0 for a declared
-    /// range that did not fold (see model/analog.zig `packedWidth`).
+    /// range that did not fold (see model_analog.zig `packedWidth`).
     /// Meaningless for a `.module` and a `.parameter`, which report
     /// `vpiUndefined` for it.
     size: u32 = 1,

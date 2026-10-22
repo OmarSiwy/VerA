@@ -7,7 +7,7 @@
 // behaviorally, so nothing coerces the net. The top then reads the hierarchical
 // name `u.a` in its own analog block, which designates that undisciplined
 // implicit net; with no discipline there is no potential access and lowering
-// refuses with E0337, "net has no declared discipline".
+// refuses with E0901, "hierarchical name names nothing in the elaborated design".
 //
 // The legal neighbour implicit_net_hierarchical_reference_coerced.va is the
 // same shape with the child's port declared electrical: the coercion the

@@ -18,7 +18,7 @@
 //! lrm A.1.8:1000
 //! reject-only E0207
 //! reject endconnectrules
-//! neighbour 60_connectrules_declaration.va
+//! neighbour connectrules_declaration.va
 `include "disciplines.vams"
 module annex_a_cr_top(p, n);
   inout p, n;

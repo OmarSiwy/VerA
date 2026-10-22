@@ -19,7 +19,7 @@
 //! lrm 3.6.3
 //! lrm 3.6:1000
 //! reject-only E0371
-//! neighbour 12_scalar_nets.va
+//! neighbour scalar_nets.va
 module ch3_net_declared_with_nature_name(p, n);
     inout p, n;
     electrical p, n;

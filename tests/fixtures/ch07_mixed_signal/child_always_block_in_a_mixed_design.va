@@ -3,7 +3,7 @@
 // processes in every instance (IEEE 1364 Clause 12, which §6.2 builds on). So
 // the `always` below is a clock that runs inside instance `u`, and the child's
 // own analog block reads it through §7.3.1 Table 7-1 — the same design as
-// m02_06_unit_delay_tick_alignment.va's, one level down.
+// unit_delay_tick_alignment.va's, one level down.
 //
 // DERIVATION. `timescale 1ns/1ns. clk is 0 from the time-zero `initial` and
 // toggles every 10 ticks: 0 on [0, 10) ns, 1 on [10, 20) ns. §7.3.6.5: the

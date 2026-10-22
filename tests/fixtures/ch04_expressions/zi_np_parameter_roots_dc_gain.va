@@ -4,7 +4,7 @@
 //   H(z) = 1 / ((1 − z⁻¹ρ)(1 − z⁻¹ρ*)),  ρ = 0.5 + 0.25j.
 //
 // HAND DERIVATION. The pair multiplies out to 1 − 2·Re(ρ)z⁻¹ + |ρ|²z⁻²
-// = 1 − z⁻¹ + 0.3125z⁻². A static analysis is z = 1 (155_zi_dc_gains.va says
+// = 1 − z⁻¹ + 0.3125z⁻². A static analysis is z = 1 (zi_dc_gains.va says
 // why), so H(1) = 1/(1 − 1 + 0.3125) = 3.2, and V(in) = 1 reads 3.2.
 //
 //! lrm 4.5.12.3

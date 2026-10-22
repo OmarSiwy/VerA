@@ -32,6 +32,7 @@
 //! lrm F.2.2
 //! lrm 7.7.2:1000
 //! reject-only E0917
+//! neighbour resolveto_resolution.va
 discipline annex_f_e18; domain continuous; enddiscipline
 discipline annex_f_e33; domain continuous; enddiscipline
 connectrules annex_f_supply_walls;

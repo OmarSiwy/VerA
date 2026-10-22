@@ -52,6 +52,7 @@
 //! lrm 6.5.7.2:1000
 //! lrm 6.7.1:1
 //! bias s1 = 2.0, s2 = 0.0
+//! checks 2
 `include "check.vh"
 module annex_e_primitive_segment_scan;
   (* port_discipline="rotational" *) resistor #(.r(1k)) r1(s1, s2);

@@ -10,7 +10,7 @@
 // reject substring `identifier` was hit at the VECTOR PORT, several tokens before
 // the loop. The port is scalar now, so the only thing left to fail is the loop,
 // and it stays scalar now that vector nets do elaborate — §3.6.3 belongs to
-// 32_vector_nets.va, not here.
+// vector_nets.va, not here.
 //
 // The body accumulates i*i over an ASCENDING loop, which is the sum every
 // unrolled copy contributes exactly once:

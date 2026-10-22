@@ -7,7 +7,7 @@
 // §4.11 ("the name shall not be used again to declare another module")
 // predates libraries; §13.2.1.1 names this exact case and is the specific
 // rule (Vague_Decisions VD-009). The digital path already binds the later
-// cell (`ieee1364/13_configuration/b_13_2_1_1_same_name_cell_last_wins.v`);
+// cell (`ieee1364/13_configuration/same_name_cell_last_wins.v`);
 // this is the analog elaborator agreeing with it.
 //
 // Two `vd9_leaf` modules load the node with different conductances. The top

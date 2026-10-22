@@ -4,7 +4,7 @@
 //! clause: the flags and their levels are VerA's own.
 
 const std = @import("std");
-const diag = @import("../diag.zig");
+const diag = @import("root.zig");
 const Allocator = std.mem.Allocator;
 const Code = diag.Code;
 

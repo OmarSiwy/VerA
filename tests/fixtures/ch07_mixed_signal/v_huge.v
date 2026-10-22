@@ -1,4 +1,4 @@
-// 1202 pins (tests/vdev_host.zig), past 1024 and past the old 256-pin cap,
+// 1202 pins (tests/fixtures/ch07_mixed_signal/vdev_host.zig), past 1024 and past the old 256-pin cap,
 // so `U` is an enum(u11): a 600-bit register q loads the 600-bit input
 // bus d on each rising clk, and y reads d[599].
 `timescale 1ns/1ps

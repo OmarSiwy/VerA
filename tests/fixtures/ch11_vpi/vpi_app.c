@@ -449,6 +449,7 @@ static void check_required_positive_xfails(void)
   /* AMS §§11.6.1,12.5; IEEE Annex G: location is where the object
    * is USED, not its definition. vpi_design.va:38 instantiates u1;
    * the vpi_mid definition is line48. No `line directive changes either. */
+  // evidence: xfail VPI-LINE-INSTANCE
   if (line == 38 && error == 0) required_xpass("VPI-LINE-INSTANCE");
   CHECK(u1 != NULL && line == vpiUndefined,
         "VPI-LINE-INSTANCE: expected source line38, observed %d", (int)line);
@@ -460,6 +461,7 @@ static void check_required_positive_xfails(void)
    * The bounded oracle here is handle availability, not all bit properties. */
   bit = vpi_handle_by_index(vpi_handle_by_name("vpi_top.bus", NULL), 0);
   error = vpi_chk_error(NULL);
+  // evidence: xfail VPI-INDEX-VALID-BIT
   if (bit != NULL && error == 0) required_xpass("VPI-INDEX-VALID-BIT");
   CHECK(bit == NULL, "VPI-INDEX-VALID-BIT returned a handle with an error");
   expect_error("XFAIL VPI-INDEX-VALID-BIT missing indexed object");
@@ -471,6 +473,7 @@ static void check_required_positive_xfails(void)
    * §12.23 therefore requires an EMPTY successful iteration, not an error. */
   itr = vpi_iterate(vpiPort, vpi_handle_by_name("vpi_top.mid", NULL));
   error = vpi_chk_error(NULL);
+  // evidence: xfail VPI-PORT-EMPTY-RELATION
   if (itr == NULL && error == 0) required_xpass("VPI-PORT-EMPTY-RELATION");
   CHECK(itr == NULL, "VPI-PORT-EMPTY-RELATION returned a spurious port iterator");
   expect_error("XFAIL VPI-PORT-EMPTY-RELATION missing valid relationship");

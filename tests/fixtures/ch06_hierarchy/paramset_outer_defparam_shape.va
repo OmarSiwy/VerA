@@ -3,7 +3,7 @@
 // At 1/2 V the branch currents are 2, 2.5 and 3 A. Integer choice=1 selects
 // a zero-current member, so the extra selection leaves that total unchanged.
 //
-// The accompanying tests/paramset_host.zig executes the emitted device after
+// The accompanying tests/fixtures/ch06_hierarchy/paramset_host.zig executes the emitted device after
 // actual host card writes: drive may change without changing any selection,
 // while base/mode changes require re-elaboration through checkShape. The host
 // refusal is an implementation limit, not an invalid-source LRM rule.

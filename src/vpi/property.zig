@@ -151,7 +151,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
                 else => return propFail(prop, o),
             }
             // A width of 0 means the declared range did not fold (see
-            // model/analog.zig `packedWidth`): unknown, which is not the
+            // model_analog.zig `packedWidth`): unknown, which is not the
             // same as zero-width.
             if (o.size == 0) {
                 fail("NOFOLD", "vpi_get: the declared range of `{s}` is not a constant this model folded", .{o.full});

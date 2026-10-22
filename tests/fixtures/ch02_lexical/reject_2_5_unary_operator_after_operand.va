@@ -13,7 +13,7 @@
 //! lrm 2.5:1
 //! lrm 2.5:2
 //! reject-only E0209
-//! neighbour 65_operator_arity.va
+//! neighbour operator_arity.va
 `include "disciplines.vams"
 module ch2_unary_after_operand(p, n);
   inout p, n;

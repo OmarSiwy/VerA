@@ -45,9 +45,9 @@ recorded with `contract.formatSay`. That is how the model's `$strobe`,
 `$display` and the other display tasks reach your output; [tables](tables.md)
 has the details.
 
-`src/sim/spice/` (the role of ESPice's CPU paths, rewritten for one device:
+`lib/sim/spice/` (the role of ESPice's CPU paths, rewritten for one device:
 Newton, LTE-controlled transient and noise) is a small host to read beside
-this list; `src/sim/spice/circuit.zig` is the device-facing part, one call
+this list; `lib/sim/spice/circuit.zig` is the device-facing part, one call
 into the contract per hook.
 
 ## Charges

@@ -4,7 +4,7 @@
 // every integer parameter as i64, so a host can write a value an `integer`
 // cannot hold. The device must read the converted value.
 //
-// This file is the device `tests/integer_param_host.zig` drives: the host
+// This file is the device `tests/fixtures/ch03_data_types/integer_param_host.zig` drives: the host
 // writes word = 4294967297 (2^32 + 1, low 32 bits 1) and expects the branch
 // current word * V(p) at V(p) = 0.5 to be 0.5 A, not 2147483648.5 A; and
 // word = 4294967295 (low 32 bits all ones) to read -1, so -0.5 A. The

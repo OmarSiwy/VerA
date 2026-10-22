@@ -1,4 +1,4 @@
-// v_edge counting every change of clk (tests/vdev_host.zig): both of its
+// v_edge counting every change of clk (tests/fixtures/ch07_mixed_signal/vdev_host.zig): both of its
 // edges wake the counter, so both crossings are located.
 `timescale 1ns/1ps
 module v_any(clk, q);

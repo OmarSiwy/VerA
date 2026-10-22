@@ -18,7 +18,7 @@
 //! lrm 4.2.1.2
 //! lrm 4.2.1.2:2
 //! reject-only E0130
-//! neighbour b2_implicit_conversion_to_real.va
+//! neighbour implicit_conversion_to_real.va
 module ch04_integer_to_real_xz_bit(p, n);
     inout p, n;
     electrical p, n;

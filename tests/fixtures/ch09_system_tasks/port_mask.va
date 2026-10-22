@@ -3,7 +3,7 @@
 // the host's to say, through the Model row's `port_connected__` mask (bit p =
 // port p in declaration order; all ones by default). HiSIM_HV is the model
 // that needs it: a 4-terminal card for its 6-port module must take the
-// 4-node path (ESPice, 2026-10-02). tests/port_mask_host.zig clears the bits
+// 4-node path (ESPice, 2026-10-02). tests/fixtures/ch09_system_tasks/port_mask_host.zig clears the bits
 // of `sub` and `temp` and checks both the setup-time and the eval-time read.
 `include "disciplines.vams"
 module port_mask(d, g, s, b, sub, temp);

@@ -14,7 +14,7 @@
 //! lrm 9.21.2:2
 //! lrm 9.21.2:1001
 //! reject-only E0815
-//! neighbour a05_03_cubic_spline_mixed_ends.va
+//! neighbour cubic_spline_mixed_ends.va
 `include "disciplines.vams"
 module ch9_control_substring_too_long(p, n);
   inout p, n;

@@ -18,7 +18,7 @@
 // update event.
 //
 // The positive half is `ch07_mixed_signal/ddiscrete_net_continuously_assigned.va`
-// and `ch07_mixed_signal/m02_01_dc_time_zero_settle.va`, which drive NETS by
+// and `ch07_mixed_signal/dc_time_zero_settle.va`, which drive NETS by
 // continuous assignment and assert the value the analog block reads.
 //
 //! lrm 8.5.3.1
@@ -26,7 +26,7 @@
 //! lrm A.6.1:1000
 //! reject-only E0438
 //! neighbour ../ch07_mixed_signal/ddiscrete_net_continuously_assigned.va
-//! neighbour ../ch07_mixed_signal/m02_01_dc_time_zero_settle.va
+//! neighbour ../ch07_mixed_signal/dc_time_zero_settle.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch8531_assign_reg(p);

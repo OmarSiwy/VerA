@@ -16,6 +16,11 @@
 // port-binding check that refused every pair of DIFFERENT disciplines would
 // pass that file and fail this one.
 //
+// The second child is the SELF RULE's own instance: an electrical port on the
+// parent's electrical net, which is legal for no reason other than "A
+// discipline is compatible with itself." Together the two children exercise
+// both accepted shapes — the same discipline and a different compatible one.
+//
 // The value: `p` is biased to 0.75 V; the child's `a` is the same signal
 // (§6.2.2, a port connection joins the two), so V(a) reads 0.75.
 //
@@ -34,9 +39,16 @@ module ch07_compatible_port_child(a);
     analog `CHECKX("the voltage port reads the electrical net it is joined to", V(a), 0.75);
 endmodule
 
+module ch07_compatible_port_same(b);
+    input b;
+    electrical b;
+    analog `CHECKX("an electrical port joins an electrical net: a discipline is compatible with itself", V(b), 0.75);
+endmodule
+
 module ch07_compatible_port_discipline(p, n);
     inout p, n;
     electrical p, n;
     ch07_compatible_port_child u(p);
+    ch07_compatible_port_same u2(p);
     analog I(p, n) <+ V(p, n) * 1.0e-3;
 endmodule

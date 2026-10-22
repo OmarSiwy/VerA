@@ -1,4 +1,4 @@
-// The legal neighbour of 88_operator_in_event.va. §4.5.15: "Analog operators
+// The legal neighbour of operator_in_event.va. §4.5.15: "Analog operators
 // shall not be used inside event triggered statements." This module is 88's
 // module with that one thing changed: `ddt(V(p))` is evaluated in the analog
 // block itself, every iteration, and the event body only copies the result.

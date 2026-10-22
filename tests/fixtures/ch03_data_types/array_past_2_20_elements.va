@@ -12,7 +12,7 @@
 //   x[0] + x[1048576] = 4.0
 // Dyadic, so exact.
 //
-// Legal neighbour of the old refusal: 02_variable_arrays.va.
+// Legal neighbour of the old refusal: variable_arrays.va.
 //
 //! lrm 3.2
 //! checks 3

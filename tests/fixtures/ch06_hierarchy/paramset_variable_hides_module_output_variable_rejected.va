@@ -16,7 +16,7 @@
 //    supplied, then an error shall be generated."
 //
 // The module `ch6_pshide_dev` declares `id` WITH a description — an output
-// variable, which `a10_09_simprobe_reads_a_sibling_output_variable.va` shows
+// variable, which `simprobe_reads_a_sibling_output_variable.va` shows
 // $simprobe reads from a plain module instance. Here the instance `u_dev` uses
 // the paramset `ch6_pshide_ps`, which declares its own `real id;` WITHOUT a
 // description. For this instance the module's `id` "shall not be available", so

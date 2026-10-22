@@ -3,7 +3,7 @@
 //! format is VerA's own.
 
 const std = @import("std");
-const diag = @import("../diag.zig");
+const diag = @import("root.zig");
 const diag_bag = @import("bag.zig");
 const diag_entry = @import("entry.zig");
 const diag_location = @import("location.zig");

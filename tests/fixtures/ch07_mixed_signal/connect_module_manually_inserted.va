@@ -7,7 +7,7 @@
 //
 // The bridge is §7.6 EXAMPLE 2's direction, an a2d (`electrical` input,
 // `ddiscrete` output), carrying §7.8.2 Figure 7-7's loading model: one `rin` to
-// ground on its analog side. m03_01_merged_is_the_default_one_instance.va counts
+// ground on its analog side. merged_is_the_default_one_instance.va counts
 // AUTOMATIC insertions with the same load; here exactly one instance is written
 // by hand and there is no connectrules block, so nothing else is inserted.
 //

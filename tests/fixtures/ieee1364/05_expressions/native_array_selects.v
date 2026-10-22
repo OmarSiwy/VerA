@@ -2,7 +2,7 @@
 // §5.2.1 packed select rules apply. Signed words retain their sign, but
 // packed selects are unsigned (§5.5.1). Unknown/out-of-bounds addresses
 // read x and cannot write a word. Invalid partial addresses are covered by
-// b_5_2_2_partial_address_rejected.v; the legal neighbour supplies both.
+// partial_address_rejected.v; the legal neighbour supplies both.
 //
 // m[2][-1] starts at a5: low nibble 5, bit 2 = 1, bits 5:2 = 9.
 // Replacing the top nibble by b, clearing bit 2, then writing bits 5:2

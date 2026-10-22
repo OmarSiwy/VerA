@@ -64,6 +64,8 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         const prec = binopPrec(op);
         if (prec < min_prec) return lhs;
         const tok = self.pos;
+        // Annex C.5: "The case equality operators (===, !==) are not supported in Verilog-A."
+        if (self.verilog_a and (op == .case_eq or op == .case_neq)) try self.refuseDigital(tok, self.tokenText(tok));
         self.nest();
         self.pos += 1;
         try self.ownedAttributes(.{ .kind = .expression, .tok = tok }); // A.8.3 binary suffix
@@ -629,8 +631,8 @@ fn binopPrec(op: Ast.BinaryOp) u8 {
 const prec_ternary: u8 = 1;
 
 /// A.8.6 binary_operator → `Ast.BinaryOp`, null for a token that is not one.
-/// `===`/`!==`/`<<<`/`>>>` are mapped, not rejected: lowering owns the annex
-/// C.5 refusal.
+/// `===`/`!==`/`<<<`/`>>>` are mapped, not rejected: lowering judges them in
+/// Verilog-AMS, and `--sim=verilogA` refuses the first two (annex C.5, E0250).
 fn binOp(tag: token.Tag) ?Ast.BinaryOp {
     return switch (tag) {
         .plus => .add,

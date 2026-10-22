@@ -9,7 +9,7 @@
 // `Instance.cwd`/`analysis_name` slices). This
 // testbench names its analysis with the second word of `//! analysis`, so
 // "analysis_name" must read "mydc", while "analysis_type" still reads the
-// kind, "dc" (23_simparam_string.va): the two rows are different strings.
+// kind, "dc" (simparam_string.va): the two rows are different strings.
 // A working directory is never the empty string, so "cwd" must read
 // something; its digits are the host's filesystem and are not asserted.
 // The name may also be a string variable (§9.15: "a string literal, a string

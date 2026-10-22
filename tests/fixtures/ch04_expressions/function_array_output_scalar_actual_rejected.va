@@ -5,7 +5,7 @@
 // `out` is the two-element array formal `[0:1]`; the call passes the scalar
 // `a`, which is neither an array variable of two elements nor a two-element
 // pattern. The legal call, `fill(V(p), '{a, b})`, is
-// 108_function_array_output_pattern.va.
+// function_array_output_pattern.va.
 //
 // VerA used to accept this and copy nothing back: `a` silently kept its old
 // value, as if the output argument did not exist.
@@ -13,7 +13,7 @@
 //! lrm 4.7.2.3
 //! lrm 4.7.2.3:2
 //! reject-only E0511
-//! neighbour 108_function_array_output_pattern.va
+//! neighbour function_array_output_pattern.va
 `include "disciplines.vams"
 module ch04_fn_array_out_scalar(p);
   inout p;

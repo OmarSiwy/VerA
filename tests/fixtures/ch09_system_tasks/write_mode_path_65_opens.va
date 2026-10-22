@@ -9,10 +9,12 @@
 // 65 nonzero descriptors, and $ferror after the 65th reports no error (§9.5.7:
 // "If the most recent operation did not result in an error, then the value
 // returned shall be zero"). Path 1 is remembered, so reopening it succeeds.
+// That is the PATH-MEMORY half only; the append half of §9.5.1.1's sentence is
+// asserted by write_mode_reopen_appends_across_analyses.va, which writes in
+// each analysis and counts the surviving lines.
 //
 //! lrm 9.5.1
 //! lrm 9.5.1.1
-//! lrm 9.5.1.1:1
 //! lrm 9.5.7
 //! lrm 9.5.7:1
 //! bias V(p) = 0

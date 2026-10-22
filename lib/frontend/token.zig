@@ -554,6 +554,27 @@ pub const KeywordSet = enum(u8) {
 /// (§10.6: "the implementation's default set of reserved keywords").
 pub const default_keyword_set: KeywordSet = .vams_2023;
 
+/// The language family `vera --sim=` compiles: all of Verilog-AMS, annex C's
+/// Verilog-A subset of it (`Parser.verilog_a`: a digital or mixed-signal
+/// construct is E0250), or IEEE 1364-2005 Verilog alone (a `.v` design under
+/// a 1364 `KeywordSet`, so a Verilog-AMS construct is E0242).
+pub const Sim = enum(u8) {
+    verilog_ams,
+    verilog_a,
+    verilog,
+
+    /// Parses the flag's value: `verilogAMS`, `verilogA` or `verilog`.
+    pub fn fromFlag(text: []const u8) ?Sim {
+        return sim_map.get(text);
+    }
+};
+
+const sim_map = std.StaticStringMap(Sim).initComptime(.{
+    .{ "verilogAMS", Sim.verilog_ams },
+    .{ "verilogA", Sim.verilog_a },
+    .{ "verilog", Sim.verilog },
+});
+
 const specifier_map = std.StaticStringMap(KeywordSet).initComptime(.{
     .{ "1364-1995", KeywordSet.v1364_1995 },
     .{ "1364-2001", KeywordSet.v1364_2001 },

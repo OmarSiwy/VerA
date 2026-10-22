@@ -13,7 +13,7 @@
 //! lrm A.10
 //! lrm A.10:2
 //! reject-only E0208
-//! neighbour 70_identifier_details_positive.va
+//! neighbour identifier_details_positive.va
 `include "disciplines.vams"
 module annex_a_identifier_digit_first(p, n);
   inout p, n;

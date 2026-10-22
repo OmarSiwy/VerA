@@ -61,7 +61,45 @@ MODELS = ["diode", "mos1", "bsim4va", "psp103", "psp103_nqs", "vbic13_4t"]
 # dense one failed to build psp103_nqs on 2026-10-04) with every operand from the
 # caller, so the device's eval and charge code is compiled. A real host
 # (ARPice's vtable) also compiles updateState and the rest: a lower bound.
-DYN = (Path(__file__).resolve().parent.parent / "tests" / "arpice_dyn.zig").read_text()
+DYN = """//! The `--dyn` host for checking a Verilog-A device really compiles.
+//! In: a VerA device type D. Out: one exported C symbol, `bench_evalq`, that
+//! runs `D.evalQ` over the sparse reference family with every operand taken
+//! from the caller, so nothing folds and the device's eval and charge code is
+//! compiled. A no-op dyn exports nothing and Zig never analyses the device
+//! (measured 2026-10-04: every model's .so was 1312-1320 bytes).
+//! A real host (ARPice's vtable) also compiles updateState: a lower bound.
+//! Used by tools/report.py's model-build timing.
+
+/// Opt into the contract's conformance checks.
+pub const vera_validate_contract = true;
+
+const contract = @import("contract");
+
+/// The `--dyn` hook (`src/zigbuild/orchestrator.zig`): exports `bench_evalq`
+/// for `D`. `name` is unused: one device per `.so`, under a fixed symbol.
+pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
+    _ = name;
+    @export(&Bench(D).evalQ, .{ .name = "bench_evalq" });
+}
+
+fn Bench(comptime D: type) type {
+    return struct {
+        const n = contract.nU(D);
+        const S = contract.RefFamily(f64, &lanes, .{});
+        const lanes = blk: {
+            var a: [n]u8 = undefined;
+            for (&a, 0..) |*l, i| l.* = i;
+            break :blk a;
+        };
+        // Every operand comes from the caller, so nothing folds: the whole
+        // device is compiled, as a host's Newton loop would compile it.
+        fn evalQ(x: *const [n]f64, m: *const D.Model, inst: *D.Instance, sim: *const contract.SimState, out: *anyopaque) callconv(.c) void {
+            const r = D.evalQ(S, x, m, inst, sim.*);
+            @as(*@TypeOf(r), @ptrCast(@alignCast(out))).* = r;
+        }
+    };
+}
+"""
 # A no-op `dyn`: exports nothing, so no device code compiles.
 NOOP_DYN = "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"
 BUILD_TIMEOUT_S = 1800
@@ -167,7 +205,7 @@ ROW = re.compile(r"^§(\S+) (.*?)(?:  \[([\w-]+)\])?(?:  \((.+?)\))?(?:  ~ .*)?$
 
 def buckets(text):
     """{clause: (bucket, title)} from the one-way, uncited and classified lists
-    the coverage reports print (harness/coverage.zig, tests/ieee1364.zig)."""
+    the coverage reports print (tests/suite.zig's Coverage and Ieee1364)."""
     out, current = {}, None
     for line in text.split("\n"):
         head = next((b for h, b in BUCKETS.items() if line.startswith(h + " ")), None)
@@ -235,7 +273,7 @@ def clause_rows(cov, cov1364):
     cites = C.fixture_cites()
     bk = buckets(cov1364)
     for cid, title in sorted(ieee_titles().items(), key=lambda kv: C.sort_key(kv[0])):
-        # tests/ieee1364.zig counts ieee1364/*.v and the `.c` VPI runs only.
+        # tests/suite.zig's Ieee1364 counts ieee1364/*.v and the `.c` VPI runs only.
         c = cites.get(("ieee", cid), {"pos": [], "neg": []})
         keep = [p for p in c["pos"] if "/ieee1364/" in p or p.endswith(".c")]
         keepn = [p for p in c["neg"] if "/ieee1364/" in p or p.endswith(".c")]
@@ -317,7 +355,7 @@ def vague_open():
 # ---------------------------------------------------------------------------
 
 def quantile(sorted_vals, p):
-    """bench.zig's `pct`: the element at index n*p/100."""
+    """suite.zig's `pct`: the element at index n*p/100."""
     return sorted_vals[min(len(sorted_vals) * p // 100, len(sorted_vals) - 1)]
 
 
@@ -359,7 +397,7 @@ def time_models(models, reps, scratch):
     Median of `reps`. The front end alone (`--emit-zig`) is timed too, so the
     split between VerA and the Zig compile of its output is visible."""
     vera = ROOT / "zig-out/bin/vera"
-    contract = ROOT / "tools/contract.zig"
+    contract = ROOT / "lib/contract.zig"
     dyn, noop = scratch / "dyn.zig", scratch / "noop.zig"
     dyn.write_text(DYN)
     noop.write_text(NOOP_DYN)
@@ -970,11 +1008,10 @@ def main(argv):
             print(f"report.py: {std} rule map has {n} rows, the tally says {measures[key]['clauses']}", file=sys.stderr)
 
     xfail = []
-    for p in sorted((ROOT / "tests/fixtures").rglob("*")):
-        if p.suffix in (".va", ".v") and p.is_file():
-            _, reason = fixture_tags(str(p.relative_to(ROOT)))
-            if reason is not None:
-                xfail.append({"path": str(p.relative_to(ROOT)), "reason": reason})
+    for p in C.fixture_files("*.va", "*.v"):
+        _, reason = fixture_tags(str(p.relative_to(ROOT)))
+        if reason is not None:
+            xfail.append({"path": str(p.relative_to(ROOT)), "reason": reason})
 
     models = None
     if args.models:
@@ -993,7 +1030,7 @@ def main(argv):
                  "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
                  "zig": zig, "machine": machine(), "load": load(),
                  "commands": [" ".join(c) for c in SUITES.values()]
-                 + ([f"vera --emit-so --contract tools/contract.zig --dyn dyn.zig (report.py's DYN) -I {args.models} --work-dir out <model>.va"
+                 + ([f"vera --emit-so --contract lib/contract.zig --dyn dyn.zig (report.py's DYN) -I {args.models} --work-dir out <model>.va"
                      f"  (x{args.reps}, median; and vera --emit-zig)"] if args.models else [])},
         "measures": measures,
         "chapters": {"ams": chapter_table(clauses, "ams"), "ieee": chapter_table(clauses, "ieee")},

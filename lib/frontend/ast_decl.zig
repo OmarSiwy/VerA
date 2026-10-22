@@ -75,7 +75,7 @@ pub const ParamDecl = struct {
     packed_range: ?Dim = null,
     /// §6.3 this parameter's value came from an instance parameter value
     /// assignment (or a paramset), not from its own declaration. Set only by
-    /// elaboration (`elab/elaborate/clone.zig`) when it turns a flattened child's
+    /// elaboration (`elab/clone.zig`) when it turns a flattened child's
     /// parameter into a `localparam` carrying the override as its default.
     ///
     /// It separates the two halves of §3.4.2: a declared default is judged only
@@ -596,7 +596,7 @@ pub const PrimTerm = struct {
 
 /// Every terminal of `m`'s primitives, named by VAMS §7.8.5.1, in source
 /// order. The one naming rule for the analog compile's insertion
-/// (`elaborate/insert.zig`) and the mixed runner's (`src/sim/digital/elab.zig`
+/// (`elab/insert.zig`) and the mixed runner's (`lib/sim/digital/elab.zig`
 /// `bridged`), which meet only through these strings.
 ///
 /// - "For N-input gates (and, nand, nor, or, xnor, xor) the output will be
@@ -961,7 +961,7 @@ pub const ConnectRulesDecl = struct {
 /// auto-insertion phase (§7.8) would place on a mixed net of the bridged
 /// discipline pair.
 ///
-/// Consumed by `elab/elaborate/insert.zig` (§7.8 insertion, analog half):
+/// Consumed by `elab/insert.zig` (§7.8 insertion, analog half):
 /// `mode` picks merged vs split segments (§7.7.4), `params` is passed to the
 /// inserted instance (§7.7.3), and `overrides` re-types a port's discipline
 /// and direction before matching (§7.7.1).

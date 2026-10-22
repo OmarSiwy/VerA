@@ -13,7 +13,7 @@
 // "When one terminal is a vector and the other is a scalar, a singular scalar
 // branch connects to each scalar net in the vector terminal"; "If the range of
 // the vector branch is not specified then the indexing of the vector branch
-// shall start at 0" (33_vector_branches.va). A
+// shall start at 0" (vector_branches.va). A
 // part-select is a vector of its elements in declaration order; IEEE
 // 1364-2005 §5.2.1 gives the indexed forms, which "select bits starting at the
 // base and ascending [+:] / descending [-:] the bit range" (its examples:

@@ -20,7 +20,7 @@
 // and the two overrides are one continuous and one discrete (§7.8's E0923 has
 // nothing to say), so the continuous side is the only thing wrong.
 //
-// The positive twin is `m03_07_discipline_and_direction_overrides.va`, whose
+// The positive twin is `discipline_and_direction_overrides.va`, whose
 // override names a discipline compatible with the port and is inserted.
 //
 // WHY THIS NEEDED A FIX. The compatibility was judged only while inserting into
@@ -33,7 +33,7 @@
 //! lrm 3.11.1:1
 //! lrm 7.7.1:2
 //! reject-only cannot stand for
-//! neighbour m03_07_discipline_and_direction_overrides.va
+//! neighbour discipline_and_direction_overrides.va
 `include "disciplines.vams"
 connectmodule ch7_ovr_a2d(el, dg);
   input el;

@@ -3,7 +3,7 @@
 // SEED argument's type, so the fixture exercises all three and asserts that
 // each is a real inout seed rather than a read-only snapshot.
 //
-// THE DIGITS ARE 171_random_ieee1364_digits.va's, from the IEEE 1364-2005
+// THE DIGITS ARE random_ieee1364_digits.va's, from the IEEE 1364-2005
 // §17.9.3 listing: seed 7 draws -2146999808 and is updated to 69069*7+1 =
 // 483484. That fixture does the derivation in the analog context; this one
 // crosses only the context boundary the row names, so the same listing values

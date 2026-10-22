@@ -18,7 +18,7 @@
 //
 // The positive half of the same sentence — a wreal port joined to a `wire`,
 // promoted to wreal — is what `analog_event_variable_drives_wreal_assign.va`
-// and ch03's wreal fixtures run. `digital/m04_21_reject_wreal_connected_to_wand.v`
+// and ch03's wreal fixtures run. `digital/reject_wreal_connected_to_wand.v`
 // states this rule for the `.v` digital runner; this is the `.va` compile,
 // where the two modules are a mixed design VerA elaborates itself.
 //

@@ -5,7 +5,7 @@
 // the build as "out of memory". They are now sized for the longest name a
 // model can declare.
 //
-// HAND DERIVATION. As m02_01_dc_time_zero_settle.va: axx... is 1, so
+// HAND DERIVATION. As dc_time_zero_settle.va: axx... is 1, so
 // bxx... = ~1 = 0 and cxx... = ~0 = 1 after the time-zero settle;
 // the two checks read 1.0 and 0.0.
 //

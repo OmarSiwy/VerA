@@ -11,7 +11,7 @@
 // runs this device's updateState at both biases and reads
 // `Instance.bound_step`: 1e-9, then 2e-9. The transcript below checks the
 // branch current only. The invalid input, "The expression argument shall be
-// non-negative", is 136_bound_step_negative_rejected.va.
+// non-negative", is bound_step_negative_rejected.va.
 //! lrm 9.17.2
 //! lrm 9.17.2:3
 //! analysis tran

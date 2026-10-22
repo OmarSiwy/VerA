@@ -9,7 +9,7 @@
 //
 // `(* desc = 7 *) electrical d;` is §3.6.3.1's own example with the string
 // replaced by an integer constant, and nothing else in the file is wrong: with
-// `desc = "drain terminal"` it is lrm_3_6_3_1.va's legal form (checked by hand
+// `desc = "drain terminal"` it is net_and_port_description_attributes.va's legal form (checked by hand
 // when this fixture was written).
 //
 //! lrm 3.6.3.1
@@ -17,7 +17,7 @@
 //! lrm 2.9.2:1
 //! lrm 2.9.2:2
 //! reject-only E0358
-//! neighbour lrm_3_6_3_1.va
+//! neighbour net_and_port_description_attributes.va
 module ch3_net_desc_attribute_numeric(p, n);
     inout p, n;
     electrical p, n;

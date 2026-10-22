@@ -10,7 +10,7 @@
 const std = @import("std");
 const vera = @import("vera");
 const digital = @import("sim").digital;
-/// The native emitter (lib/digital/): `--emit-exe` roots and `.v` devices.
+/// The native emitter (src/codegen/digital/): `--emit-exe` roots and `.v` devices.
 const native = @import("digital");
 const diag = vera.diag;
 const Io = std.Io;
@@ -39,7 +39,7 @@ pub fn run(
 ) !u8 {
     const json = cli.json;
     const device = cli.emit_zig or cli.check or cli.emit_so;
-    if ((cli.exe_flag == null) == !device or cli.lint_flag or (cli.out_path != null and !cli.emit_zig and !cli.emit_osdi)) {
+    if (!cli.emit_rtlil and ((cli.exe_flag == null) == !device or cli.lint_flag or (cli.out_path != null and !cli.emit_zig and !cli.emit_osdi))) {
         try err.writeAll("error: digital .v source takes --run or --emit-exe, or --emit-zig, --check or --emit-so for a contract device\n");
         return 2;
     }
@@ -50,6 +50,7 @@ pub fn run(
     digital_bag.levels = cli.levels;
     var opts: digital.Options = .{ .file_name = in_path, .include_dirs = cli.include_dirs.items, .io = io, .language = cli.language, .event_budget = cli.event_budget };
     if (!try libraries(arena.allocator(), io, cli.paths.items, cli.libmaps.items, cli.search.items, &opts, err, json, use_color)) return 1;
+    if (cli.emit_rtlil) return emitRtlil(io, arena.allocator(), &digital_bag, source, opts, cli.out_path, out, err, json, use_color);
     if (device) return emitDevice(gpa, io, arena.allocator(), &digital_bag, source, opts, cli.schedule, if (cli.logic_flag != null) cli.logic else .four, .{
         .zig = cli.emit_zig,
         .check = cli.check,
@@ -84,6 +85,34 @@ pub fn run(
     try report(&digital_bag, err, json, use_color);
     // A warning the run raised and --deny made an error still fails it.
     return if (digital_bag.failed()) 1 else 0;
+}
+
+/// `vera --emit-rtlil design.v`: the design as Yosys RTLIL (`native.rtlil`),
+/// to `out_path` or stdout. A construct outside the synthesizable subset is
+/// refused by name, with nothing written.
+fn emitRtlil(io: Io, arena: std.mem.Allocator, bag: *diag.Bag, source: []const u8, opts: digital.Options, out_path: ?[]const u8, out: *Io.Writer, err: *Io.Writer, json: bool, use_color: bool) !u8 {
+    var why: []const u8 = "";
+    const text = native.rtlil.emit(arena, source, opts, bag, &why) catch |e| switch (e) {
+        error.Refused => {
+            try report(bag, err, json, use_color);
+            try err.print("error: {s}: --emit-rtlil: {s}\n", .{ opts.file_name, why });
+            return 1;
+        },
+        error.DigitalFailed => {
+            try report(bag, err, json, use_color);
+            return 1;
+        },
+        error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+    };
+    try report(bag, err, json, use_color);
+    if (bag.failed()) return 1;
+    if (out_path) |p| {
+        Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = text }) catch |e| {
+            try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
+            return 1;
+        };
+    } else try out.writeAll(text);
+    return 0;
 }
 
 /// `vera --emit-exe design.v`: elaborate here, so a design the engine refuses
@@ -162,7 +191,7 @@ const DeviceFlags = struct {
     zig: bool,
     check: bool,
     so: bool,
-    /// `--emit-osdi`: `so` under `tools/osdi_dyn.zig` (`dyn`), copied to
+    /// `--emit-osdi`: `so` under `lib/osdi_dyn.zig` (`dyn`), copied to
     /// `out_path` or `<module>.osdi`.
     osdi: bool,
     out_path: ?[]const u8,
@@ -181,7 +210,7 @@ const DeviceFlags = struct {
 /// as a contract device (`native.emitDevice`). `--check` builds it beside a
 /// root that validates it and calls every hook; `--emit-so` builds it over
 /// the VerA tree `--contract` sits in, and `--emit-osdi` is `--emit-so`
-/// under that tree's `tools/osdi_dyn.zig`.
+/// under that tree's `lib/osdi_dyn.zig`.
 fn emitDevice(
     gpa: std.mem.Allocator,
     io: Io,
@@ -235,18 +264,12 @@ fn emitDevice(
     if (f.so) {
         const wd = f.work_dir orelse if (f.osdi) ".zig-cache/vera-tb" else return missing(err, "--emit-so", "--work-dir DIR");
         const dyn = f.dyn orelse return missing(err, "--emit-so", "--dyn PATH");
-        const tree = std.fs.path.dirname(std.fs.path.dirname(f.contract.?) orelse ".") orelse ".";
-        const join = std.fs.path.join;
-        // build.zig's `module_specs` rows for `sim` and what it imports.
-        const modules = [_]vera.orchestrator.Module{
-            .{ .name = "contract", .root = f.contract.? },
-            .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
-            .{ .name = "sim", .root = try join(arena, &.{ tree, "src/sim/root.zig" }), .deps = &.{ "contract", "base", "diag", "frontend", "kernels" } },
-            .{ .name = "base", .root = try join(arena, &.{ tree, "lib/base/root.zig" }) },
-            .{ .name = "diag", .root = try join(arena, &.{ tree, "lib/diag.zig" }) },
-            .{ .name = "frontend", .root = try join(arena, &.{ tree, "lib/frontend/root.zig" }), .deps = &.{ "base", "diag", "kernels" } },
-            .{ .name = "kernels", .root = try join(arena, &.{ tree, "lib/kernels/root.zig" }), .deps = &.{"contract"} },
-        };
+        const tree = vera.orchestrator.treeOf(f.contract.?);
+        const runtime = vera.orchestrator.runtime_modules;
+        var modules: [2 + runtime.len]vera.orchestrator.Module = undefined;
+        modules[0] = .{ .name = "contract", .root = f.contract.? };
+        modules[1] = .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} };
+        for (runtime, modules[2..]) |rm, *m| m.* = .{ .name = rm.name, .root = try std.fs.path.join(arena, &.{ tree, rm.root }), .deps = rm.deps };
         var o: vera.orchestrator.Options = .{
             .work_dir = wd,
             .name = dev.name,

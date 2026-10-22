@@ -32,7 +32,7 @@
 // are in `initial` builds no table and every digital $fopen answers 0, so the
 // @(initial_step) open/close below is what makes the table exist. Its result is
 // ignored: the open may run before the digital block creates the file, and only
-// the table's existence matters. 194_file_descriptor_shared_across_contexts.va
+// the table's existence matters. file_descriptor_shared_across_contexts.va
 // asserts the sharing itself.
 //
 // A $strobe prints at the end of its time step, so the checks sit one tick

@@ -41,7 +41,7 @@ Require exit0, empty HDL stdout and its mandatory stderr marker. As with the
 other probes, missing production APIs block compilation/execution today.
 # Lazy argument evaluation
 
-`audit_lazy_arguments.c` + `.v` is the required-positive IEEE26.6.19(e)
+`argument_handle_delays_evaluation.c` + `.v` is the required-positive IEEE26.6.19(e)
 application. Load before elaboration; compare HDL stdout to its
 `.expected.txt`, stderr to `.expected.stderr.txt`, and require exit0.
 The first unread side-effect function argument must not execute; the second

@@ -8,7 +8,7 @@
 // `analysis(1)` passes a number, which Table 4-21 has no row for and which is
 // not a string at all. The rest of the file is the clause's own nodeset/ic
 // pattern. With `analysis("ic")` the file compiles (checked by hand when this
-// fixture was written); 26_analysis.va runs that form and asserts it.
+// fixture was written); analysis.va runs that form and asserts it.
 //
 // VerA used to accept the call and hand codegen a Zig expression that did not
 // compile — an engine error with no source position. E0574 names the argument.
@@ -16,7 +16,7 @@
 //! lrm 4.6.1
 //! lrm 4.6.1:1001
 //! reject-only E0574
-//! neighbour 26_analysis.va
+//! neighbour analysis.va
 module ch04_analysis_numeric_argument(p, n);
     inout p, n;
     electrical p, n;

@@ -5,7 +5,7 @@ top level, and a simulator (the *host*) imports it as a module and calls
 them. Nothing is behind a vtable: every entry point is a generic Zig
 function the host instantiates at compile time with its own arithmetic.
 
-The rules every device follows are one file, `tools/contract.zig` in the
+The rules every device follows are one file, `lib/contract.zig` in the
 repository, installed as `share/vera/contract.zig` by `zig build install`.
 The generated device imports it as the module `contract`, and so does your
 host. The rest of this part quotes it by declaration name; when this book
@@ -137,8 +137,8 @@ changelog under that version says what changed. A host that supports one
 release pins it at compile time:
 
 ```zig
-if (comptime !std.mem.eql(u8, D.vera_version, "0.11.5"))
-    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.11.5");
+if (comptime !std.mem.eql(u8, D.vera_version, "0.12.0"))
+    @compileError("regenerate " ++ @typeName(D) ++ " with VerA 0.12.0");
 ```
 
 An optional declaration a later release adds stays optional: a host that

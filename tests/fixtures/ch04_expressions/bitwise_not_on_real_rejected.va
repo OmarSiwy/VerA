@@ -7,7 +7,7 @@
 // language.
 //
 // `~x` below applies unary bitwise negation to a real variable. The legal side,
-// the bitwise operators on integers, is 05_bitwise_shift.va. (A BINARY bitwise
+// the bitwise operators on integers, is bitwise_shift.va. (A BINARY bitwise
 // operator with a real operand is E0322, a separate code.)
 //
 //! lrm 4.2.1

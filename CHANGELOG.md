@@ -1,35 +1,85 @@
 # Changelog
 
-What a user of VerA notices, newest release first. A fix names its GitHub issue as `(#123)`.
-
 ## Unreleased
+
+- **Layout**: the tree is laid out like the Zig compiler. `src/` is the
+  compiler (`Compilation.zig`, `elab/`, `ir/`, `analog/`, `prove/`, one
+  backend per directory under `codegen/`, `zigbuild/`, `vpi/`, `cli/`); `lib/`
+  is only what a built artifact links or a host compiles against
+  (`contract.zig`, `osdi_dyn.zig`, `sim/`, `base/`, `diag/`, `frontend/`,
+  `kernels/`), and `vera` embeds all of it. `tools/contract.zig` is now
+  `lib/contract.zig` (still installed as `share/vera/contract.zig`). The
+  runtime module table that `--emit-exe` and `--emit-so` build against is one
+  list (`zigbuild.runtime_modules`). `tests/` is flat: `fixtures/` is its
+  only directory (the hosts that drive a device, the canary, `--emit-verilog`
+  and `--emit-rtlil` inputs and the conformance ledgers moved under it), and
+  every other file is one root: `unit.zig` holds every module's public-API
+  tests as a namespace (a `test` block beside the private declaration it
+  checks stays in `src/` or `lib/`), `suite.zig` the whole fixture runner,
+  `host.py` every host observation runner and its selftests;
+  `tools/conformance.py` owns `run`'s evidence accounting. The one-child
+  directories are flat: `src/analog/lower/`, `src/elab/elaborate/`,
+  `src/prove/proof/` and `src/vpi/model/` are their parents
+  (`vpi/model_analog.zig`, `vpi/model_digital.zig`).
+- **Nested module definitions** (§6.2.2): a `module` inside a module is one
+  E0240 and the nested definition is skipped whole, so its `endmodule` no
+  longer closes the outer module and leaves a stray `endmodule` (E0201).
+- The manual documents the predefined `__VERA__` macro (LRM §10.5), and the
+  two Annex F.2.2 pass-boundary observations parse their fixtures through
+  the preprocessor, so both run.
+- **`--sim=verilogAMS|verilogA|verilog`** picks the language family. `verilogA`
+  compiles annex C's subset: a digital or mixed-signal construct is **E0250**
+  (`vera --explain E0250`), and a `.v` design is refused. `verilog` is IEEE
+  1364-2005 alone (`--std=1364-2005` unless `--std` names another 1364 set)
+  and refuses a `.va` model. A `--std` of the other family conflicts.
+- **`--emit-rtlil`**: a `.v` design as Yosys RTLIL, for synthesis. One module
+  per source module, a `process` per `always` block, parameters at their
+  defaults; a construct outside the synthesizable subset is refused by name
+  with its line. `zig build test-rtlil` has Yosys read, `proc` and
+  `check -assert` `tests/fixtures/rtlil/*.v`.
+
+- Organized fixtures and unified execution reports, including specialized host tests.
+- Added **49 conformance checks: 42 expected failures and 7 passes**, grouped into
+  [21 behavior gaps](tests/fixtures/conformance/FEATURE_GAPS.tsv). No engine implementation changes.
+- Recorded remaining [gaps](tests/fixtures/conformance/GAPS.tsv) and
+  [pending host scenarios](tests/fixtures/conformance/PROFILES.json); they earn no passing credit.
+
+### Current evidence — 2026-10-20
+
+Measured with `nix develop -c python3 tools/conformance.py run --jobs=8`.
+
+- **AMS mandatory requirements (E3+): 523 / 1435 (36.4%)**; 889 executed below E3, 13 unexecuted, 10 failing.
+- **AMS clauses: 582 / 612 (95.1%)**; 8 failing, 22 uncovered.
+- **IEEE 1364 clauses: 575 / 808 (71.2%)**; 87 failing, 45 unsupported, 101 uncovered.
+
+These measure test evidence, not the percentage of compiler features implemented.
+E3 requires passing, discriminating checks for every required polarity. Clause
+coverage is coarser and retains optional/non-normative sections. IEEE 1364 has
+no requirement-level ledger yet, so its comparable requirement percentage is unknown.
+Missing fixtures remain in the existing denominators and receive no credit.
+
+Validation: 4,096 fixture/C passes and 36 XFAILs; 48 specialized passes and
+9 XFAILs; 12 SPICE passes. These categories overlap. No unexpected failures;
+the strict AMS gate exits 1 because expected failures remain.
+
+### v1.0 target: 100% verified mandatory-requirement coverage
+
+- Complete and review the requirement inventory for **both Verilog-AMS 2023 and IEEE 1364-2005**.
+- Give every applicable mandatory requirement passing E3-or-better evidence,
+  including specialized host tests and every required positive/negative case.
+- Require zero failures, XFAILs, skipped required checks, unasserted cases or missing results.
+- Document conditional applicability, implementation-defined choices and justified
+  exclusions. Unsupported mandatory behavior remains a gap.
+
+<!-- Evidence: 2026-10-20T17:50:46.787602+00:00; source SHA-256 dd5b723adf52a4968a2fb5749840dcbbfdeb225997f7b354765c50555c8fbdc9 -->
 
 ## v0.11.5 — 2026-10-20
 
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2750 / 2750 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **383 / 808 — 47.4%** | 4 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 3 · 1 · 0 · 421 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+- Re-triaged external IEEE suites: removed 229 resolved disagreements and classified
+  97 new ones. Duplicate or inconsistent non-ANSI task-port declarations remain a known bug.
 
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Changed
-
-- No compiler change. The external IEEE 1364 suites (ivtest, iverilog-diff) are re-triaged after v0.11.3's fixes: 229 rows that now agree are dropped, and the 97 new disagreements each have a verdict. One is a known VerA bug: a non-ANSI task port declared twice, or redeclared with another range or type, is still accepted; VerA already refuses the same for module ports (§12.3.3).
-
-## v0.11.4 — 2026-10-20
+<details>
+<summary>Historical release measurements (A: fixture pass rate; B/C: static citations)</summary>
 
 | Measure | Number | Remaining to v1.0.0 | Command |
 |---|---|---|---|
@@ -50,334 +100,6 @@ B and C count citations without executing fixtures. It is not a conformance scor
 XFAILs and implementation-limit rejections can supply citations, and a clause
 can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
 
-### Changed
+</details>
 
-- `--emit-osdi` merges a 0 V short's two nodes (`V(a, b) <+ 0`, as PSP, BSIM and HiSIM write their switched-off parasitics) as an OSDI collapsible pair, the way OpenVAF does, instead of keeping the short's branch current as an unknown. That unknown was a zero-diagonal row that SPARSE 1.3 pivoted around: a 51-stage PSP103 ring oscillator spent 13.8 s in matrix factorization and now spends 2.4 ms (OpenVAF: 3.5 ms), and the device's Jacobian entries drop from 92 to 57. Results match OpenVAF's to 1e-13 V.
-- `--emit-osdi` lists as instance parameters only those the source marks `(* type = "instance" *)` (PSP103: 33 instead of all 846), as OpenVAF does; a module that marks none keeps every parameter settable per instance. The instance shrinks accordingly (PSP103: 22.5 KB to 14.1 KB).
-- `--emit-osdi` builds a large device as parallel objects: `eval` and every callback the simulator calls per iterate on LLVM, noise in its own object, and the once-per-instance code (parameter access, setup, setup's chunks) on the self-hosted backend on x86_64 Linux. PSP103 builds in about half the time.
-- `$simparam$str` with a literal name compiles to its one answer instead of comparing strings at every evaluation; a variable name still compares at run time.
-- A finished `.osdi` is cached in Zig's global cache directory (`vera-osdi`), keyed by everything that decides its bytes, so rebuilding a model already built in any work directory copies it.
-
-## v0.11.3 — 2026-10-20
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2750 / 2750 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **383 / 808 — 47.4%** | 4 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 3 · 1 · 0 · 421 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### New
-
-- Module path delays (IEEE 1364-2005 §14) are applied, in `vera --run` and natively: the delay of the active path whose source changed most recently, per transition (Tables 14-2/14-3, all 1/2/3/6/12-value lists), with state-dependent paths, `ifnone` and edge-sensitive paths, and the larger of path and distributed delay (§14.4). W0251 now warns only for §14.6 pulse controls, which are still ignored (default inertial handling).
-- §15.8 explicit delayed signals in `$setuphold`/`$recrem` with non-negative limits (an undelayed copy); `$fmonitor`, `$fstrobe`; `%u`/`%z` in output and input, `%t` input scaled by `$timeformat`; genvar-indexed hierarchical names and task enables (`g[i].x`, `g[i].t;`); instance arrays of MOS, `tran` and pull gates; net-array element selects, `force` of a net-array element; continuous assignments with a variable delay.
-- Analog event arrays (§5.10.4); `final_step` runs on `$finish` (§5.10.2); `$fatal` in a rejected iteration ends the run (§9.7.3); an expression as the actual of a digital input port (§6.2.2); wreal child ports promote the parent's wire (§3.7); `$bound_step` is floored at the minimum step (§9.17.2); VPI cbError (§12.31.4) and cbReadWriteSynch as an inactive event (§8.5.1).
-
-### Changed
-
-- A unary operator's operand must be a primary (1364-2005 A.8.3, VAMS-2023 annex A): `- -x`, `!!x` and `~ &x` are refused with E0209; write `-(-x)`. A binary-then-unary form such as `a + - b` is unaffected.
-- A delay of a sized constant needs parentheses (`#(64'd5)`, A.2.2.3); `@ev[0]` is written `@(ev[0])` (A.6.5); a module instance takes no delay (A.4.1.1).
-- A port connected to a net of another width is converted as a continuous assignment (§12.3.9.2, §5.6) under `--std=1364-*`; under VAMS-2023 (the default) it is refused (§6.5.7.1).
-- A `force`/`assign` takes effect before the next statement; a strength-only change on a net a MOS switch reads re-runs the switch (§7.11).
-
-### Fixed
-
-- `$fgets`/`$fscanf` read their line lazily, so a read after `$fclose` or another read returned an empty string or 0.
-- A parameter's declared range and width, untyped parameter width, and `time` parameters (unsigned 64-bit); a real converted to an integer wider than 64 bits; `$rtoi`-style rounding of a real parameter used as a delay.
-- defparams naming nothing or no parameter are refused (E0901/E0907); non-ANSI port redeclarations of another range or type are refused; a port typed by a later declaration works for functions and tasks; implicit nets inside instance expressions; generate-scope localparams, functions and named blocks; constant functions with named blocks or system tasks; hierarchical task calls that suspend; automatic variables refused where §10 forbids them; attribute values must be constant (§3.8).
-- `$monitor` prints when one of its arguments changes, not when any bit of the underlying variable does; part-select drivers keep their strength; `uwire` refuses only overlapping driver bits.
-- `$sscanf` treats NUL as whitespace (§9.5.4.2:3); `` `default_nettype ``/`` `unconnected_drive `` operands may be on the next line; a backslash-newline inside a `//` comment in a macro; AMS keywords are identifiers under a 1364 `--std`; `1364-2001-noconfig` is accepted.
-
-## v0.11.2 — 2026-10-20
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Fixed
-
-- VerA's own test suite passes on Windows: bit masks of width 64 (`span`, driven-part masks) were built behind a branch that Windows' Debug build still range-checked, so `zig build test` panicked there ("integer does not fit in destination type").
-- The flake's source package builds again: its configure step read test fixtures the package does not ship.
-- Cached test devices (`-Dva-cache`) are regenerated when `tools/contract.zig` changes, so a release's version bump no longer leaves stale devices failing the version check. v0.11.1's changelog row for `zig build test` recorded such a stale local run (FAIL); the tree passed.
-
-## v0.11.1 — 2026-10-20
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **FAIL** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Fixed
-
-- A device whose `$strobe`/`$display` compares against a constant that folds from several operands, one of them a value the core caches, failed to compile ("use of undeclared identifier `c`"); `zig build benchmark -- --perturb` showed it on many_timers_instance_defaults.
-- VerA builds for Windows again: a size check on a file-table slot assumed an 8-byte OS file handle, and Windows' is wider, so v0.11.0 did not compile there.
-
-## v0.11.0 — 2026-10-19
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Changed
-
-- **Hosts evaluate devices on the sparse value family only.** `contract.RefDense` and `RefOptions.dense` are removed: `RefFamily` is always sparse, so `.dense = …` no longer compiles. A sparse value carries only the partials it can have, so `evalQ` runs 3.2× faster on diode_cmc (2102 → 655 cycles) and 4.2× on bsim4 (6134 → 1454), with bit-identical values and partials. `contract.denseRow` spreads a sparse row for a host that indexes it at run time.
-- **Dependency masks are exact at any unknown count.** A device past 64 unknowns used to declare every value at the all-ones mask; its masks are now exact, typed `MaskOf(n_u)`. The n×n pattern tables (`jac_pattern`, `q_pattern`, `q_site_pattern`) are emitted up to about 2048 unknowns; above that a host takes each row's lanes from `deriv_reads`.
-- `--std=VAMS-2.3` is refused: Verilog-AMS compiles as VAMS-2023. `` `begin_keywords "VAMS-2.3" `` in source still selects that keyword set, as VAMS-2023 §10.6 requires.
-- A generated testbench's Newton `solve` fails, naming the unknown, when a step comes out NaN; it used to report convergence.
-- The `zFill` helper is gone from generated devices: zero fills use `@memset`, 2.6× faster.
-- `vera --lsp` frees each message's memory after the message instead of holding the largest document for the whole session.
-- Faster compiles on large models: elaboration of wide levels (4096 ports: 75× fewer instructions), lowering (psp103 573M → 186M instructions), the dependency analysis (psp103 11.35 → 5.3 ms), lexing and preprocessing (−16% / −13%), parsing (a 20k-port module 322 → 5.2 ms), and the digital engine (a 64-instance design 1.88 → 1.17 s; multi-driver buses 4.5×).
-
-### Fixed
-
-- A compile reported success with an error in it when 64 warnings had already filled the diagnostic cap; the error count now includes every diagnostic past the cap.
-- A defparam inside an array-of-instances element that reaches a sibling element through an absolute path (`defparam top.u[1].x.p`) is refused with E1100, as the relative form already was (§12.2.1).
-- `repeat` with a count wider than 64 bits, negative, x or z runs 0 times (or, for a huge count, until `$finish`) in both the interpreter and native digital code; a wide count was refused and a negative one errored.
-- `$rtoi(-2147483648.0)` and a real −2^63 converted to a 64-bit integer gave x; they now give the exact value.
-- A NaN tolerance passed the SPICE engine's Newton convergence check.
-- OSDI: `write_jacobian_array_resist`/`_react` wrote the host's compact array by Jacobian entry number, so a device with a resist-only or react-only entry got values in the wrong slots and wrote past the buffer; an out-of-range integer parameter into a narrow field crashed instead of being refused.
-- `vpi_put_delays` in ticks stored raw ticks (2000 instead of 2 under `1us/1ns`); path delays accepted NaN, infinite and negative values. `vpi_get_analog_value` with vpiStringVal used the imaginary part's format; `vpi_printf` with a huge `%.N` precision trapped.
-- A bsim4-class model whose `$strobe` prints an integer of a computed expression generated a testbench that did not compile.
-- A dynamically indexed multidimensional real array could type a stored value as depending on no unknown, dropping its partial.
-- A deep chain of parameters, each default reading the previous one, overflowed the stack in elaboration; so did a deep defparam index in the parser.
-- `` `default_transition `` accepted text that is not a number (`0x10`, `.5`); a `$table_model` file with no data rows was a compile-time error instead of a first-call one; domain-error messages (E0601–E0609, W0653) dropped a long operand range.
-- `vera --lsp` leaked and doubled `.vera-flags` on a second `initialize`, and linted a `.v` document as Verilog-A when memory ran out.
-- Several out-of-memory paths left tables inconsistent or leaked (MIR builders, the SSA builder, `pruneUnits`, `setLogFile`).
-
-## v0.10.4 — 2026-10-19
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Fixed
-
-- A device using `asinh`, `acosh`, `atanh` or `ln1p` builds for AMDGCN again: they called `std.math.log1p`, whose inline asm the AMDGCN backend cannot lower ("Could not match memory address. Inline asm failure!"). `gm.log1p` is now device-safe, as `gm.expm1` already was.
-- `last_crossing` carries the derivative of its input at the step where the crossing is interpolated; it was a constant there, so its Jacobian entries were 0.
-
-## v0.10.3 — 2026-10-19
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Fixed
-
-- On Windows every device library VerA builds uses LLVM: the self-hosted linker wrote a DLL at a fixed base with no relocations, so a host could not load a second one.
-- A host that loads VerA's device libraries can name the target they are built for (`orchestrator.Options.target`), so they link the host's own libc; inside a Nix sandbox the detected native target is musl, which a glibc host cannot load.
-
-## v0.10.2 — 2026-10-18
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Fixed
-
-- A large device built by `--emit-so` or `--emit-osdi` compiles again: its split unit files did not see the `inline fn` helpers 0.10.0 added (`zPick`), so diode_cmc, psp103, bsimcmg, hicum2, vbic, mosvar and the mextram 504 variants failed with "use of undeclared identifier 'zPick'" (#81).
-
-## v0.10.1 — 2026-10-18
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2653 / 2653 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-### Fixed
-
-- A strict device whose solve-dependent branch has a model-only arm (a diode's junction capacitance past `fc`, for one) compiles again: 0.10.0 hoisted that arm's guarded row into `setup`, where it read the solution and failed `--check` with "use of undeclared identifier 'x'". The branchless selects stay; only the guard now counts as a dependency (#81).
-
-## v0.10.0 — 2026-10-18
-
-| Measure | Number | Remaining to v1.0.0 | Command |
-|---|---|---|---|
-| **A** — fixtures behaving as stated | **2652 / 2652 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
-| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **490 / 612 — 80.1%** | 0 clauses | `zig build benchmark -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 0 · 0 | requires rule-level review | same run |
-| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **378 / 808 — 46.8%** | 1 clauses | `zig build test-1364 -- --coverage` |
-| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 1 · 0 · 0 · 429 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
-| `zig build test` | **pass** | pass | `zig build test` |
-| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
-
-`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A, B and C are measured by this script and nothing else may write them.
-
-B and C count citations without executing fixtures. It is not a conformance score:
-XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
-
-The first release. VerA compiles Verilog-AMS models into Zig device code for any circuit simulator, and runs IEEE 1364-2005 Verilog and mixed-signal designs.
-
-### New
-
-- `vera --emit-osdi`: an OSDI 0.4 library ngspice loads, from a `.va` model or a `.v` design.
-- `vera --lsp`: a language server (diagnostics and quick fixes as `--lint` reports them); `editors/` has Neovim and VS Code configurations.
-- `vera --version`. Every device declares `vera_version`, and a host compiled against another VerA release refuses it at compile time.
-- `vera --run` runs a `.v` design's timing checks (`$setup`, `$hold`, `$setuphold`, `$removal`, `$recovery`, `$recrem`, `$width`, `$period`; IEEE 1364-2005 §15).
-- A device publishes more to its host:
-  - its `desc` and `units` attributes (`decl_meta`);
-  - its `$display`, `$strobe` and `$debug` output, for the host to print (`say`), at every Newton iteration for `$debug`;
-  - a check of host-written model-card values against their `from`/`exclude` ranges (`checkRange`, E0377).
-- `--spice` netlists: subcircuit parameters, `{expr}` values, X cards that instantiate a subcircuit or a module, and M/Q/J/D cards inside `.subckt`.
-- VPI: a host that solves the circuit itself can run a VPI application's analog system functions. It can attach several device libraries, each with several instances (`vpi.analog_run.Binding`).
-- `$simparam$str`, and `ac_stim` sources active in a named small-signal analysis.
-- User documentation: an mdBook site, `docs/`.
-- Nix: `nix run github:OmarSiwy/VerA`, an overlay, release packages and `nix flake check`.
-
-### Changed
-
-- VerA builds with Zig master (0.18.0-dev), and `vera` builds devices with the same Zig.
-- `limexp(x)` is `exp(x)` at every argument, as §4.5.13 requires at a converged point (#52).
-- A run-time argument outside a math function's domain (`ln(0)`, `sqrt(-1)`, `pow(-0.5, 2.5)`) is an error in the executable, not a silent NaN (#59).
-- `asinh`, `acosh`, `atanh`, `log`, `asin`, `acos` and `atan2` compute what their C functions do, and a folded constant equals the run-time value bit for bit (#60).
-- Analog `%d`, `%h`, `%o` and `%b` size an integer as IEEE 1364 §17.1.1.3 does: an `integer` prints 11 decimal columns or 32 bits (#61, #77).
-- GPU device code:
-  - the lossy-line models (txl, coupled_ltra) fit the GPU stack, with frames of 165–612 KB down to under 26 KB (#82);
-  - a strict device's core is branch-free on NVPTX and AMDGCN, which avoids an LLVM crash on L-UTSOI 102 (#81).
-- Limits lifted: more than 256 solver unknowns, any nesting or instance depth, and any number of format conversions.
-- For embedders: the compiler is one call, `vera.compile`, and its modules are `base`, `kernels`, `frontend`, `elab`, `ir`, `analog`, `prove`, `device`, `verilog`, `exe`, `zigbuild` and `digital`.
-- License: Apache 2.0.
-
-### Fixed
-
-- A shared library VerA builds (`--emit-so`, `--emit-osdi`, a VPI host) links libc, so a device that prints no longer crashes when a host loads it under Zig 0.18.
-- Model cards:
-  - a value written through an `aliasparam` sets the parameter and its `$param_given` (#76);
-  - a `$simparam` default answers as the analog block does (#51).
-- A device no longer claims a constant Jacobian when a `?:` or `if` on the solution picks its conductance (#78).
-- `--emit-osdi` builds a module with no parameters (#79).
-- `last_crossing()` reports the crossing at the point that creates it (#54).
-- A port with no direction (E0376) or no discipline (E0337) is refused in every module (#73, #74).
-- Elaboration is linear in the instance count: 2048 instances take 0.03 s, not 34 s (#75).
-- Digital engine:
-  - net delays apply to the whole vector (#55);
-  - a declaration assignment's delay times that assignment only;
-  - a `$readmem` address out of range ends the load, not the run (#65);
-  - `%t` of a real is exact;
-  - `$abstime`, `$ln1p` and `$expm1` run (#58).
-- Refused by name instead of hanging or crashing:
-  - an attribute before a list's closer (#48, #49, #50);
-  - an empty path flag (#47);
-  - an untimed loop, or a VPI reset loop (#37);
-  - an out-of-range format width (E0828).
-- Format details: C's `#`, `-`, `+` and `0` flags on real formats, `%%`, and null arguments.
-- VPI: §12 analog routines, callbacks, `vpiReset` and Annex G constants.
-- Hierarchy: upward names and `defparam`s, generate scopes and connect modules on every primitive.
-- Noise: `ddx()` inside a noise power, and `$mfactor` on named branches.
+[Earlier releases](docs/CHANGELOG-HISTORY.md).

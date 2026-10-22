@@ -20,7 +20,7 @@
 //! lrm A.2.6:1000
 //! lrm A.2.8:1000
 //! reject-only E0209
-//! neighbour 04_analog_function.va
+//! neighbour analog_function.va
 `include "disciplines.vams"
 module annex_a_reg_in_analog_function(p, n);
   inout p, n;

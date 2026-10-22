@@ -17,7 +17,7 @@
 //! lrm 3.6.2:1
 //! lrm A.1.7:1000
 //! reject-only E0213
-//! neighbour 11_discipline_declarations.va
+//! neighbour discipline_declarations.va
 `include "disciplines.vams"
 discipline ch3_unbound_item
   potential Voltage;

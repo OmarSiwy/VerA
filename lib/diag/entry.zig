@@ -5,7 +5,7 @@
 //! Cites no LRM clause (the stage that reports a diagnostic cites it).
 
 const std = @import("std");
-const diag = @import("../diag.zig");
+const diag = @import("root.zig");
 const diag_location = @import("location.zig");
 const Code = diag.Code;
 const Severity = diag.Severity;

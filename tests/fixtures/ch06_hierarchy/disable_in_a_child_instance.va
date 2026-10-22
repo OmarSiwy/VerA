@@ -1,5 +1,5 @@
 // A.6.5 `disable hierarchical_block_identifier` inside an instantiated module:
-// ch05_analog_behavior/a03_01_disable_resumes_after_the_named_block.va's
+// ch05_analog_behavior/disable_resumes_after_the_named_block.va's
 // derivation, one level down. Flattening renames the child's block `seg` onto
 // the instance path (§6.7), so the disable written inside the child must name
 // that same flattened block, or nothing encloses it (E0402).

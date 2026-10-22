@@ -9,7 +9,7 @@
 //! starting from the last instant where assert was nonzero", and a discarded
 //! trial point is not an instant of the waveform.
 //!
-//! THE HAND DERIVATION (device: a04_idt_hold_revert.va, integrand 1e9,
+//! THE HAND DERIVATION (device: idt_hold_revert.va, integrand 1e9,
 //! ic = 7). The host solves ds/dt = 1e9 and holds s still while assert is
 //! nonzero, so it hands the device these s values:
 //!
@@ -23,7 +23,7 @@
 //! A revert that leaves the trial's offset reads 8.5 - 1 = 7.5 at the retry.
 //!
 //! `zig build test` emits the device and runs this file.
-//! device ch04_expressions/a04_idt_hold_revert.va
+//! device ch04_expressions/idt_hold_revert.va
 
 const std = @import("std");
 const contract = @import("contract");

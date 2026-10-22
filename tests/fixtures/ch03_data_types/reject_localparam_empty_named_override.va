@@ -7,18 +7,18 @@
 // instantiation document are the child's overridable parameters, and IEEE
 // 1364-2005 12.2.2.1 keeps local parameters out of the assignment lists
 // entirely. So the empty form is refused like the valued one
-// (`audit_localparam_override_rejected.va`), and a later edit to
+// (`localparam_override_rejected.va`), and a later edit to
 // `.derived(9.0)` is not the first moment the error appears (Vague_Decisions
 // VD-011).
 //
-// Legal neighbour: `ch06_hierarchy/audit_hierarchy_empty_named_parameter.va`,
+// Legal neighbour: `ch06_hierarchy/hierarchy_empty_named_parameter.va`,
 // the same empty `.gain()` on a plain parameter, which compiles and keeps the
 // default.
 //
 //! lrm 3.4.5
 //! reject-only E0907
 //! reject `derived` is a localparam
-//! neighbour ../ch06_hierarchy/audit_hierarchy_empty_named_parameter.va
+//! neighbour ../ch06_hierarchy/hierarchy_empty_named_parameter.va
 module reject_lp_empty_target;
   parameter real base = 2.0;
   localparam real derived = 2.0 * base;

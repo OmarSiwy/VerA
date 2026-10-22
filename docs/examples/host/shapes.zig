@@ -1,4 +1,4 @@
-//! The `tools/contract.zig` declarations Part 3 of the book quotes or names,
+//! The `lib/contract.zig` declarations Part 3 of the book quotes or names,
 //! pinned: each test fails when the contract renames a declaration a page
 //! names, or changes the fields, tags or defaults a page shows.
 //! tools/doctest.py runs it through shapes.out on every push.

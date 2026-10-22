@@ -10,7 +10,7 @@
 // is a driver, and only a net has drivers to resolve; a variable holds the
 // last value a procedural statement stored (§8.5.3.1).
 //
-// The legal counterpart is b8_net_delay_observed.va, whose continuous
+// The legal counterpart is net_delay_observed.va, whose continuous
 // assignments all drive wires. ch08_scheduling/
 // continuous_assignment_to_a_variable_rejected.va pins the same refusal
 // with the §8.5.3.1 derivation.
@@ -18,7 +18,7 @@
 //! lrm A.6.1
 //! lrm A.6.1:1000
 //! reject-only E0438
-//! neighbour b8_net_delay_observed.va
+//! neighbour net_delay_observed.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module annex_a_assign_reg(p);

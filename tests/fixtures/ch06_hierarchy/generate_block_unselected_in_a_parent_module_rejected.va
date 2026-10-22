@@ -4,7 +4,7 @@
 // searches "first at the current level and then in higher level modules until
 // found" for a path that starts with a generate block name.
 //
-// THE DESIGN. b4_generate_block_name_found_in_a_parent_module.va with the
+// THE DESIGN. generate_block_name_found_in_a_parent_module.va with the
 // if-generate's condition 0 instead of 1. The top's generate block gb, and its
 // localparam k, are never instantiated, so the child's `gb.k` names nothing:
 // the upward search finds the block's declaration and the scheme deselects it.
@@ -15,7 +15,7 @@
 //! lrm 6.8
 //! lrm 6.8:1001
 //! reject-only E0901
-//! neighbour b4_generate_block_name_found_in_a_parent_module.va
+//! neighbour generate_block_name_found_in_a_parent_module.va
 module ch6_gbu_top(p, n);
   inout p, n; electrical p, n;
   generate

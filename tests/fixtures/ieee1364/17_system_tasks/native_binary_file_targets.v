@@ -11,7 +11,7 @@
 // Reading at EOF leaves wide alone. After
 // rewind, a singleton memory at maxInt64 takes byte 41 once; advancing past
 // its last address must not overflow the host. Invalid memory dimensions
-// are separately refused by b_17_2_4_4_fread_multidim_rejected.v.
+// are separately refused by fread_multidim_rejected.v.
 //! inherited IEEE 1364-2005 17.2.4.4
 // native-required
 // native-state: 4

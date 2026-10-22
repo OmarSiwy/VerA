@@ -25,7 +25,7 @@
 // pays for it with a relative tolerance).
 //
 // This language test does not exercise VPI relationships. Its former
-// §11.6.2 citation belongs to ch11_vpi/p04_06_analog_objects.c, which
+// §11.6.2 citation belongs to ch11_vpi/analog_objects.c, which
 // traverses nature and discipline handles in the in-process VPI host.
 //
 //! lrm A.8.9
@@ -40,6 +40,10 @@ module ch5_nature_attribute(a, b, n1, n2);
   branch (n1, n2) cap;
   parameter real c = 1p;
   analog begin
+    `CHECKR("net potential attribute carries Voltage abstol", a.potential.abstol, 1e-6, 1e-12);
+    `CHECKR("net flow attribute carries Current abstol", a.flow.abstol, 1e-12, 1e-12);
+    `CHECKR("named branch potential attribute is accessible", cap.potential.abstol, 1e-6, 1e-12);
+    `CHECKR("named branch flow attribute is accessible", cap.flow.abstol, 1e-12, 1e-12);
     `CHECKX("the probed branch potential is nonzero", V(a, b), 0.5);
     `CHECKX("ddt() with a net-attribute abstol is still zero in dc", ddt(V(a, b), a.potential.abstol), 0.0);
     `CHECKX("and so is the named-branch form", ddt(V(cap), n1.potential.abstol), 0.0);

@@ -11,14 +11,14 @@
 // sum is 0: H(z) = N(z)/0 is no filter.
 //
 // Here `d` is written null. With `'{1.0, 0.5}` in its place the call is
-// 155_zi_dc_gains.va's zi_nd, which settles to 2, and the file compiles
+// zi_dc_gains.va's zi_nd, which settles to 2, and the file compiles
 // (checked by hand when this fixture was written).
 //
 //! lrm 4.5.12.4
 //! lrm 4.5.15
 //! lrm 4.5.15:4
 //! reject-only E0505
-//! neighbour 155_zi_dc_gains.va
+//! neighbour zi_dc_gains.va
 module ch04_zi_nd_null_denominator(in, n);
     inout in, n;
     electrical in, n;

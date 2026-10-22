@@ -8,7 +8,7 @@
 //! fields and its `bit` accessor, and the first test checks that crossing.
 //! Exhaustive at widths 1-4 (every value of each operand, every width pair,
 //! every signedness pair); seeded random at the widths the digital fuzzer draws
-//! (`tests/harness/fuzz.zig` `fuzz_widths`).
+//! (`tests/suite.zig` `fuzz_widths`).
 //! Clauses: 1364-2005 §5.1.5 (Tables 5-5 to 5-8), §§5.1.7-5.1.14 (Tables 5-10
 //! to 5-21), §5.4.1 (Table 5-22), §§5.5.1, 5.5.2, 5.5.4.
 //!
@@ -608,7 +608,7 @@ test "ref4 §5.1.13 Table 5-21: the conditional, exhaustive over 1-2 bit conditi
     for (conds) |*c| for (arms) |*y| for (arms) |*n| try condOp(&sc, c, y, n);
 }
 
-/// tests/harness/fuzz.zig's `fuzz_widths`: where the one-word and multiword
+/// tests/suite.zig's `fuzz_widths`: where the one-word and multiword
 /// paths of `integer.zig` meet.
 const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64, 65, 100, 128, 129 };
 

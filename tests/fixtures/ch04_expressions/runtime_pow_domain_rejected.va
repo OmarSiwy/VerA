@@ -21,7 +21,7 @@
 //! sweep V(p) = 2, 2.5
 //! reject-run E0609
 //! neighbour runtime_domain_legal_neighbour.va
-//! neighbour 158_pow_negative_base_runtime_exponent.va
+//! neighbour pow_negative_base_runtime_exponent.va
 //! checks 2
 //! print none
 `include "check.vh"

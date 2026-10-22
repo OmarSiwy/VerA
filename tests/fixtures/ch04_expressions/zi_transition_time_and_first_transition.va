@@ -27,7 +27,7 @@
 // value above is read at its own point.
 //
 // The refusal neighbour is zi_negative_transition_time_rejected.va (τ < 0);
-// 24_z_transform_filters.va is the τ/t0-free form.
+// z_transform_filters.va is the τ/t0-free form.
 //
 // Corrected 2026-10-08 (construct only, the wants are unchanged): the
 // coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's

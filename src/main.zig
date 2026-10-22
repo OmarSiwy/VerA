@@ -106,7 +106,16 @@ pub fn main(init: std.process.Init) !u8 {
     defer gpa.free(source);
 
     const digital_source = std.mem.eql(u8, std.fs.path.extension(in_path), ".v");
-    // No --contract: this binary's own tools/contract.zig, written out with the
+    // `--sim=` names a language family, and the extension says which one the file is.
+    if (cli.sim == .verilog and !digital_source) {
+        try err.print("error: --sim=verilog compiles IEEE 1364 designs (.v); `{s}` is not one\n", .{in_path});
+        return 2;
+    }
+    if (cli.sim == .verilog_a and digital_source) {
+        try err.print("error: --sim=verilogA compiles Verilog-A models (.va); `{s}` is a digital design\n", .{in_path});
+        return 2;
+    }
+    // No --contract: this binary's own lib/contract.zig, written out with the
     // `sim` tree it embeds, so the contract always matches the compiler and the
     // mixed-signal runner finds `sim` beside it. The arena also holds what
     // `vera.compile` hands back.
@@ -142,6 +151,10 @@ pub fn main(init: std.process.Init) !u8 {
         try err.print("error: {s} builds a .v design's executable; it takes --emit-exe and a .v file\n", .{f});
         return 2;
     };
+    if (!digital_source and cli.emit_rtlil) {
+        try err.print("error: {s}: --emit-rtlil takes an IEEE 1364 design (.v)\n", .{in_path});
+        return 2;
+    }
     if (digital_source and cli.emit_verilog) {
         try err.print("error: {s}: --emit-verilog takes a Verilog-A model (.va)\n", .{in_path});
         return 2;
@@ -165,6 +178,7 @@ pub fn main(init: std.process.Init) !u8 {
             .include_dirs = cli.include_dirs.items,
             .std_defs = cli.std_defs,
             .language = cli.language,
+            .sim = cli.sim,
             .lint = cli.levels,
             .proof = .{ .unknown_bound = cli.unknown_bound },
             .discipline_resolution = cli.discipline_resolution,
@@ -242,7 +256,7 @@ fn simTree(io: Io, arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
         try af.file.writeStreamingAll(io, f[1]);
         try af.replace(io);
     }
-    return std.fs.path.join(arena, &.{ root, "tools", "contract.zig" });
+    return std.fs.path.join(arena, &.{ root, "lib", "contract.zig" });
 }
 
 /// Reports a failed compilation's diagnostics and returns exit code 1. The Zig
@@ -291,7 +305,7 @@ test simTree {
     // Twice: the second run replaces every file in place.
     for (0..2) |_| {
         const c = try simTree(std.testing.io, a, wd);
-        try std.testing.expectEqualStrings(try std.fs.path.join(a, &.{ wd, "vera-src", "tools", "contract.zig" }), c);
+        try std.testing.expectEqualStrings(try std.fs.path.join(a, &.{ wd, "vera-src", "lib", "contract.zig" }), c);
         const text = try Io.Dir.cwd().readFileAlloc(std.testing.io, c, a, .unlimited);
         try std.testing.expect(std.mem.find(u8, text, "vera_version") != null);
     }

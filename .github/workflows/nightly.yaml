@@ -5,7 +5,7 @@
 #             cannot see an error that size (L2b)
 #   certify   every Jacobian entry against a central difference (L4a)
 #   metric    each ledger row's evidence level, ratcheted against the
-#             committed tests/fixtures/LEVELS.tsv, and the table in the summary
+#             committed tests/fixtures/conformance/LEVELS.tsv, and the table in the summary
 name: nightly
 
 on:
@@ -19,20 +19,18 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
+      - uses: cachix/install-nix-action@v31
 
       - name: Strict suite, with verdicts
         continue-on-error: true
         run: |
-          zig build -Doptimize=ReleaseFast test-ams -- --verdicts=/tmp/verdicts.tsv 2>&1 | tail -5
+          nix develop -c zig build -Doptimize=ReleaseFast test-ams -- --verdicts=/tmp/verdicts.tsv 2>&1 | tail -5
           exit "${PIPESTATUS[0]}"
 
       - name: Perturbed run (L2b)
         continue-on-error: true
         run: |
-          zig build -Doptimize=ReleaseFast benchmark -- --perturb --verdicts=/tmp/perturbed.tsv 2> /tmp/perturb.txt | tail -3
+          nix develop -c zig build -Doptimize=ReleaseFast benchmark -- --perturb --verdicts=/tmp/perturbed.tsv 2> /tmp/perturb.txt | tail -3
           status="${PIPESTATUS[0]}"
           grep '^LOOSE ' /tmp/perturb.txt | sed 's|^LOOSE .*/tests/fixtures/|LOOSE |' | sort > /tmp/loose.txt || true
           exit "$status"
@@ -40,7 +38,7 @@ jobs:
       - name: Derivative certificate (L4a)
         continue-on-error: true
         run: |
-          zig build -Doptimize=ReleaseFast benchmark -- --certify --verdicts=/tmp/certified.tsv 2> /tmp/certify.txt | tail -3
+          nix develop -c zig build -Doptimize=ReleaseFast benchmark -- --certify --verdicts=/tmp/certified.tsv 2> /tmp/certify.txt | tail -3
           status="${PIPESTATUS[0]}"
           grep -E '^fd_check FAIL|^FAIL ' /tmp/certify.txt > /tmp/fd-failures.txt || true
           exit "$status"
@@ -48,18 +46,21 @@ jobs:
       - name: Digital transcripts, with verdicts
         continue-on-error: true
         run: |
-          zig build -Doptimize=ReleaseFast test-devices -- --verdicts=/tmp/digital.tsv 2>&1 | tail -3
+          nix develop -c zig build -Doptimize=ReleaseFast test-devices -- --verdicts=/tmp/digital.tsv 2>&1 | tail -3
           exit "${PIPESTATUS[0]}"
 
       - name: Coverage-guided fuzzing, bounded (L6)
         continue-on-error: true
         run: |
-          zig build fuzz --fuzz=200K 2>&1 | tail -20
+          nix develop -c zig build fuzz --fuzz=200K 2>&1 | tail -20
           exit "${PIPESTATUS[0]}"
+
+      - name: Execute VPI evidence
+        run: nix develop -c zig build test-vpi -Dtest-results=/tmp/vpi-results
 
       - name: Conformance metric and level ratchet (gate)
         run: |
-          python3 tools/conformance.py metric --verdicts=/tmp/verdicts.tsv --perturbed=/tmp/perturbed.tsv --digital=/tmp/digital.tsv --levels=/tmp/levels.tsv | tee /tmp/metric.txt
+          python3 tools/conformance.py metric --verdicts=/tmp/verdicts.tsv --perturbed=/tmp/perturbed.tsv --digital=/tmp/digital.tsv --specialized=/tmp/vpi-results --levels=/tmp/levels.tsv | tee /tmp/metric.txt
           python3 tools/conformance.py ratchet --verdicts=/tmp/verdicts.tsv --levels=/tmp/levels.tsv
 
       - name: Job summary

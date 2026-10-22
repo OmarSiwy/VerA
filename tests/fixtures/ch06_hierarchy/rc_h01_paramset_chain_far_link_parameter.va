@@ -5,7 +5,7 @@
 // right-hand side can be composed of numbers, parameters, and hierarchical
 // out-of-module references to local parameters of a different module."
 //
-// h01_02_paramset_chain.va with one change: the far link's statement reads the
+// paramset_chain.va with one change: the far link's statement reads the
 // far link's OWN parameter instead of a literal. Nothing in §6.4 suspends
 // §6.4.1's "parameters" on the right-hand side because the paramset is reached
 // through a chain, so `.j = jval` assigns the module's j the value of jval.

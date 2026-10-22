@@ -3,7 +3,7 @@
 // the analog time when the expression is evaluated."
 //
 // "Less than or equal" is a floor, and a floor does not stop being one when
-// the run is long. `m01_11_digital_primary_uses_the_last_tick.va` checks the
+// the run is long. `digital_primary_uses_the_last_tick.va` checks the
 // rule at tens of nanoseconds; this checks it at 0.6 s, where 6e8 ticks of
 // 1 ns make a tolerance scaled by the tick count wider than half a tick.
 //

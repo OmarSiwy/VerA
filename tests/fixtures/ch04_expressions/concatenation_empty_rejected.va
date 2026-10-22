@@ -5,14 +5,14 @@
 //     analog_concatenation ::= { analog_expression { , analog_expression } }
 //
 // One or more. `{}` below has none, so it has no width and no value. The legal
-// concatenations are 30_concatenation.va.
+// concatenations are concatenation.va.
 //
 //! lrm 4.2.13
 //! lrm A.8.1
 //! lrm 4.2.13:1
 //! lrm A.8.1:1000
 //! reject-only E0326
-//! neighbour 30_concatenation.va
+//! neighbour concatenation.va
 `include "disciplines.vams"
 module ch04_concatenation_empty(p, n);
   inout p, n; electrical p, n;

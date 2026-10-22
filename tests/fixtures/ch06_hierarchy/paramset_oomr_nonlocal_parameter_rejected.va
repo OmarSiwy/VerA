@@ -9,13 +9,13 @@
 // VerA reports E0907: "`ch6_psnl_lib.tox` is a parameter, and §6.4.1 allows a
 // paramset to reach out of module only to a LOCAL parameter".
 //
-// h01_03_paramset_oomr_localparam.va is the legal neighbour: the same
+// paramset_oomr_localparam.va is the legal neighbour: the same
 // out-of-module read over a `localparam`.
 //
 //! lrm 6.4.1
 //! lrm 6.4.1:1002
 //! reject-only E0907
-//! neighbour h01_03_paramset_oomr_localparam.va
+//! neighbour paramset_oomr_localparam.va
 module ch6_psnl_top(p);
   inout p; electrical p;
   ch6_psnl_ps u(p);

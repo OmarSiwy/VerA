@@ -1,7 +1,7 @@
 $ vera --help
 usage: vera [options] FILE.va
        vera --run|--emit-exe [options] FILE.v [MORE.v ...]
-       vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
+       vera --emit-zig|--check|--emit-so|--emit-osdi|--emit-rtlil [options] FILE.v [MORE.v ...]
        vera --explain CODE
        vera --version
        vera --lsp [options]
@@ -20,6 +20,9 @@ usage: vera [options] FILE.va
   --power-pins            --emit-verilog: supply pins only under
                           `ifdef USE_POWER_PINS
   --vdd=X                 --emit-verilog: logic-high potential in V (default 1.8)
+  --emit-rtlil            a .v design as Yosys RTLIL, for synthesis (-o PATH,
+                          else stdout); a construct outside the synthesizable
+                          subset is refused by name
   --check                 type-check the generated device with zig, running
                           the contract's conformance checks
   --emit-so               build lib<name>.<gen>.so via the orchestrator
@@ -87,6 +90,12 @@ usage: vera [options] FILE.va
                           (default; 1364-2005 under -Dlanguage=verilog).
                           A 1364 language frees every AMS keyword as an
                           identifier and refuses AMS constructs (E0242)
+  --sim=verilogAMS|verilogA|verilog
+                          the language family: all of Verilog-AMS (the
+                          default), annex C's Verilog-A subset (a digital
+                          or mixed-signal construct is E0250; no .v), or
+                          IEEE 1364-2005 alone (--std=1364-2005 unless
+                          --std names another 1364 set; no .va)
   --diagnostics=text|json how to report (default: text)
   --color=auto|always|never
   --allow/--warn/--deny/--forbid=CODE   per-code lint level

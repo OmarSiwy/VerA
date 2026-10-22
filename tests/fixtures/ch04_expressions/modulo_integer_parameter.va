@@ -2,7 +2,7 @@
 // override divisor=4, 11 % 4=3. §6.3.4 updates the dependent default too.
 // The other parameter's default would divide by zero at zero_divisor=0,
 // but the host supplies its value 5, so that default is not evaluated.
-// This is a legal neighbour to 111_modulus_by_zero_rejected.va; it also keeps
+// This is a legal neighbour to modulus_by_zero_rejected.va; it also keeps
 // a model-card default out of the procedural runtime-error effect chain.
 //! lrm 4.2.4
 //! lrm 6.3.4

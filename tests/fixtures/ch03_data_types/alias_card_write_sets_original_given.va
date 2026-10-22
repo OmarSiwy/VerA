@@ -4,7 +4,7 @@
 // So a write through the alias overrides the ORIGINAL, and:
 //   - §9.19: "$param_given ... returns 1 if the parameter was overridden by a
 //     defparam statement or by a module instance parameter value assignment";
-//     a card write is the host's override (06_local_parameter.va), so
+//     a card write is the host's override (local_parameter.va), so
 //     $param_given(dtemp) is 1;
 //   - §6.3.4: a default that names another parameter (`dtemp = a`) is the
 //     value only when the parameter was not overridden, so dtemp stays 5,

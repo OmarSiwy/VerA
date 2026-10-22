@@ -31,9 +31,10 @@
 // WHICH BIN WAS PICKED IS THE ASSERTION, and `w` is what makes it visible. The
 // instance overrides only `l`. The two bins give `w` DIFFERENT defaults — 1u in
 // the one whose range holds 180n, 2u in the other — so the width that reaches
-// the mosfet is 1e-6 if and only if §6.4.2 selected the first paramset. A tool
-// that took the last declaration, or the first, or the widest range, delivers
-// 2e-6 and fails. §6.7.1 is what reads it back: "access of parameters can be
+// the first mosfet is 1e-6 only when §6.4.2 selects the first paramset.
+// A second instance sets l=500n and must instead receive the second bin's
+// 2e-6 width. An always-first selector fails on m2; an always-last selector
+// fails on m1. §6.7.1 is what reads it back: "access of parameters can be
 // done hierarchically". The two candidate readings of `m1.w` — the paramset's
 // own parameter, or the mosfet parameter its `.w = w` assignment drives — agree
 // by construction, which is why the check does not have to choose between them.
@@ -56,6 +57,7 @@
 //! lrm 6.7.1:1
 //! lrm E.4.2:2
 //! bias V(d) = 1.0, V(g) = 0.75, V(s) = 0.25, V(b) = 0.125
+//! checks 5
 `include "check.vh"
 paramset annex_e_bin mosfet;
   parameter real l = 100n from [100n:250n);
@@ -76,6 +78,7 @@ module annex_e_bin_user(d, g, s, b);
   // l = 180n is in the first bin's range and outside the second's, so §6.4.2's
   // range rule alone determines the answer.
   annex_e_bin #(.l(180n)) m1(.d(d), .g(g), .s(s), .b(b));
+  annex_e_bin #(.l(500n)) m2(.d(d), .g(g), .s(s), .b(b));
   analog begin
     // The first bin's w default is 1u; the second's is 2u. This digit IS the
     // bin selection.
@@ -86,5 +89,8 @@ module annex_e_bin_user(d, g, s, b);
     `CHECKR("the l override survives the paramset's `.l = l`", m1.l, 1.8e-7, 1e-15);
     `CHECKX("the instance's ports reach the mosfet: 1.0 - 0.25",
             V(m1.d, m1.s), 0.75);
+    `CHECKX("6.4.2 picked the other bin for l=500n, so w is its 2u",
+            m2.w, 2.0e-6);
+    `CHECKR("the second instance keeps its own length override", m2.l, 5.0e-7, 1e-15);
   end
 endmodule

@@ -15,7 +15,7 @@
 //! lrm 2.8.4:1
 //! lrm 2.8.4:2
 //! reject-only E0115
-//! neighbour 10_compiler_directive_macro.va
+//! neighbour compiler_directive_macro.va
 `include "disciplines.vams"
 module ch2_macro_before_define(p, n);
   inout p, n;

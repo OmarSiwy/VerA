@@ -8,7 +8,7 @@
 // converged, the return value of the $limit() function is the value of the
 // access function reference, within appropriate tolerances."
 //
-// The circuit is 226_limit_pnjlim_internal_node_honoured.va's, so the root is
+// The circuit is limit_pnjlim_internal_node_honoured.va's, so the root is
 // its: the KCL at `a`, (0.7 - Va) / 100 = 1e-14 * (exp(Va / 0.025) - 1), one
 // root, Va = 0.625763159 by bisection over [0, 0.7]. A 0.1 V step bound only
 // changes the path Newton takes to it. The band is the solver's convergence

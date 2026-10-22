@@ -35,7 +35,7 @@
 // Sample values: y(10ns) = 1.0363832, y(20ns) = 5.4134113, y(60ns) = 40.0173512.
 //
 // THE TOLERANCE, DERIVED. Uniform grid dt = 0.5 ns = tau/20, as
-// a04_11_laplace_nd_ramp_response.va. VerA realises the filter with the
+// laplace_nd_ramp_response.va. VerA realises the filter with the
 // trapezoidal (bilinear) transform; replaying that recurrence by hand over
 // these 121 points (degree 2, history at rest) puts its worst deviation from
 // the closed form at 6.44e-4 (t = 26 ns). The asserted tolerance is 1e-3.

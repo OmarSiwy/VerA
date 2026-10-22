@@ -13,7 +13,7 @@ const std = @import("std");
 const ams = @import("build_options").ams;
 const vera = @import("vera");
 const digital = @import("sim").digital;
-/// The native emitter (lib/digital/): `--schedule=` and `--state=`.
+/// The native emitter (src/codegen/digital/): `--schedule=` and `--state=`.
 const native = @import("digital");
 /// The VerA release: what `--version` prints and every device it generates
 /// carries (`contract.vera_version`).
@@ -34,7 +34,7 @@ const optimize_names = std.StaticStringMap(std.lang.Optimize).initComptime(.{
 pub const usage_text =
     \\usage: vera [options] FILE.va
     \\       vera --run|--emit-exe [options] FILE.v [MORE.v ...]
-    \\       vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
+    \\       vera --emit-zig|--check|--emit-so|--emit-osdi|--emit-rtlil [options] FILE.v [MORE.v ...]
     \\       vera --explain CODE
     \\       vera --version
     \\       vera --lsp [options]
@@ -53,6 +53,9 @@ pub const usage_text =
     \\  --power-pins            --emit-verilog: supply pins only under
     \\                          `ifdef USE_POWER_PINS
     \\  --vdd=X                 --emit-verilog: logic-high potential in V (default 1.8)
+    \\  --emit-rtlil            a .v design as Yosys RTLIL, for synthesis (-o PATH,
+    \\                          else stdout); a construct outside the synthesizable
+    \\                          subset is refused by name
     \\  --check                 type-check the generated device with zig, running
     \\                          the contract's conformance checks
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
@@ -120,6 +123,12 @@ pub const usage_text =
     \\                          (default; 1364-2005 under -Dlanguage=verilog).
     \\                          A 1364 language frees every AMS keyword as an
     \\                          identifier and refuses AMS constructs (E0242)
+    \\  --sim=verilogAMS|verilogA|verilog
+    \\                          the language family: all of Verilog-AMS (the
+    \\                          default), annex C's Verilog-A subset (a digital
+    \\                          or mixed-signal construct is E0250; no .v), or
+    \\                          IEEE 1364-2005 alone (--std=1364-2005 unless
+    \\                          --std names another 1364 set; no .va)
     \\  --diagnostics=text|json how to report (default: text)
     \\  --color=auto|always|never
     \\  --allow/--warn/--deny/--forbid=CODE   per-code lint level
@@ -154,10 +163,18 @@ pub const Cli = struct {
     discipline_resolution: vera.DisciplineResolution = .basic,
     std_defs: bool = true,
     language: vera.KeywordSet = if (ams) .vams_2023 else .v1364_2005,
+    /// `--sim=`: the language family. `.verilog` is a `.v` design under a
+    /// 1364 keyword set; `.verilog_a` annex C's subset of a `.va` (E0250).
+    sim: vera.Sim = if (ams) .verilog_ams else .verilog,
+    /// `--sim=` and `--std=` as typed, for `resolve`'s conflict.
+    sim_flag: ?[]const u8 = null,
+    std_flag: ?[]const u8 = null,
     out_path: ?[]const u8 = null,
     expect_module: ?[]const u8 = null,
     /// `--emit-verilog`; `-o` then names the Verilog file.
     emit_verilog: bool = false,
+    /// `--emit-rtlil`: a `.v` design as Yosys RTLIL; `-o` then names the file.
+    emit_rtlil: bool = false,
     /// `--digital-pins`, unparsed: a list or a file (`main` reads it).
     digital_pins: ?[]const u8 = null,
     power_pins: bool = false,
@@ -253,6 +270,9 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
             cli.codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-verilog")) {
             cli.emit_verilog = true;
+            cli.codegen_flag = arg;
+        } else if (std.mem.eql(u8, arg, "--emit-rtlil")) {
+            cli.emit_rtlil = true;
             cli.codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--digital-pins")) {
             cli.digital_pins = args.next() orelse return try missing(err, "--digital-pins", "a list of ports or a file");
@@ -376,6 +396,13 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
                 return 2;
             }
             cli.language = set;
+            cli.std_flag = arg;
+        } else if (std.mem.startsWith(u8, arg, "--sim=")) {
+            cli.sim = vera.Sim.fromFlag(arg["--sim=".len..]) orelse {
+                try err.print("error: `{s}`: not verilogAMS|verilogA|verilog\n", .{arg});
+                return 2;
+            };
+            cli.sim_flag = arg;
         } else if (std.mem.eql(u8, arg, "--no-std-defs")) {
             cli.std_defs = false;
         } else if (std.mem.eql(u8, arg, "--diagnostics=json")) {
@@ -433,6 +460,17 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
 /// with the reason on `err`, or the usage when the line names no input.
 /// Runs once, after `parse` returned null.
 pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
+    // `--sim=verilog` is IEEE 1364 Verilog and the other two are Verilog-AMS
+    // keyword sets, so a `--std=` of the other family conflicts; without one,
+    // `--sim=verilog` reads as IEEE 1364-2005.
+    if (cli.sim_flag) |f| {
+        const is_1364 = @backingInt(cli.language) < @backingInt(vera.KeywordSet.vams_2_3);
+        if (cli.std_flag) |s| if (is_1364 != (cli.sim == .verilog)) {
+            try err.print("error: `{s}` and `{s}` conflict: {s}\n", .{ f, s, if (cli.sim == .verilog) "--sim=verilog compiles IEEE 1364 Verilog" else "Verilog-A is a Verilog-AMS keyword set" });
+            return 2;
+        };
+        if (cli.sim == .verilog and cli.std_flag == null) cli.language = .v1364_2005;
+    }
     if (cli.exe_flag) |f| if (cli.display_drop_flag) {
         try err.print(
             "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
@@ -474,6 +512,14 @@ pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
         try err.writeAll("error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n");
         return 2;
     };
+
+    if (cli.emit_rtlil) {
+        if (cli.check or cli.emit_so or cli.emit_zig_typed or cli.exe_flag != null or cli.emit_verilog) {
+            try err.writeAll("error: `--emit-rtlil` builds no device: it takes neither --check, --emit-zig, --emit-so, --emit-verilog, --emit-exe nor --run\n");
+            return 2;
+        }
+        cli.emit_zig = false; // `-o` names the RTLIL file
+    }
 
     if (cli.emit_osdi) {
         if (cli.dyn_path != null or cli.emit_zig_typed or cli.exe_flag != null) {
@@ -823,6 +869,26 @@ test "parse: the language, library and reporting flags" {
     try expectRefused(&.{"--discipline-resolution=full"}, "error: `--discipline-resolution=full`: not basic|detail\n");
 }
 
+test "parse/resolve: --sim picks the language family, and conflicts with a --std of the other one" {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, null), try l.settle(&.{ "--sim=verilog", "m.v" }));
+    try testing.expectEqual(vera.Sim.verilog, l.cli.sim);
+    try testing.expectEqual(vera.KeywordSet.v1364_2005, l.cli.language);
+    var a: Line = .init();
+    defer a.deinit();
+    try testing.expectEqual(@as(?u8, null), try a.settle(&.{ "--sim=verilogA", "--std=VAMS-2023", "m.va" }));
+    try testing.expectEqual(vera.Sim.verilog_a, a.cli.sim);
+    // A 1364 set of the user's choice stays.
+    var k: Line = .init();
+    defer k.deinit();
+    try testing.expectEqual(@as(?u8, null), try k.settle(&.{ "--sim=verilog", "--std=1364-2001", "m.v" }));
+    try testing.expectEqual(vera.KeywordSet.v1364_2001, k.cli.language);
+    try expectRefused(&.{"--sim=vhdl"}, "error: `--sim=vhdl`: not verilogAMS|verilogA|verilog\n");
+    try expectSettled(&.{ "--sim=verilog", "--std=VAMS-2023", "m.v" }, 2, "error: `--sim=verilog` and `--std=VAMS-2023` conflict: --sim=verilog compiles IEEE 1364 Verilog\n");
+    try expectSettled(&.{ "--std=1364-2005", "--sim=verilogA", "m.va" }, 2, "error: `--sim=verilogA` and `--std=1364-2005` conflict: Verilog-A is a Verilog-AMS keyword set\n");
+}
+
 test "parse: lint levels, and what may not be allowed or un-forbidden" {
     var l: Line = .init();
     defer l.deinit();
@@ -854,6 +920,7 @@ test "resolve: each conflict is refused by name, in either order" {
         // `--lint` names the codegen flag, whichever came last.
         .{ .a = "--lint", .b = "--check", .says = "error: `--lint` and `--check` conflict: --lint stops after the frontend and `--check` needs codegen\n" },
         .{ .a = "--emit-verilog", .b = "--emit-so", .says = "error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n" },
+        .{ .a = "--emit-rtlil", .b = "--run", .says = "error: `--emit-rtlil` builds no device: it takes neither --check, --emit-zig, --emit-so, --emit-verilog, --emit-exe nor --run\n" },
         .{ .a = "--emit-osdi", .b = "--emit-zig", .says = "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n" },
         .{ .a = "--lsp", .b = "--lint", .says = "error: `--lsp` and `--lint` conflict: the server lints each open document itself\n" },
         .{ .a = "--lsp", .b = "--check", .says = "error: `--lsp` and `--check` conflict: the server lints each open document itself\n" },
@@ -878,6 +945,14 @@ test "resolve: a testbench prints the device's records under --display=record, w
     }
     // --validate-contract is legal beside a testbench.
     try expectSettled(&.{ "--run", "--validate-contract", "m.va" }, null, "");
+}
+
+test "resolve: --emit-rtlil makes -o name the RTLIL file, not a device text" {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, null), try l.settle(&.{ "--emit-rtlil", "-o", "m.il", "m.v" }));
+    try testing.expect(l.cli.emit_rtlil and !l.cli.emit_zig);
+    try testing.expectEqualStrings("m.il", l.cli.out_path.?);
 }
 
 test "resolve: --emit-osdi makes -o name the library, not a device text" {

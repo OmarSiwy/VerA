@@ -2,7 +2,7 @@
 // value specified to the largest value specified", an `exclude` removes a
 // value from it, and "It shall be an error only if the value of the parameter
 // is out of range during simulation." A `#(...)` override is judged at
-// compile time (E0361, 45_parameter_range_excluded_interior.va); a value the HOST
+// compile time (E0361, parameter_range_excluded_interior.va); a value the HOST
 // writes on the model card was not judged at all before #80. The device's
 // `checkRange`, which the testbench calls after `derive`, now names it, and
 // the run stops with E0377 (exit 1).

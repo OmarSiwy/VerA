@@ -1,31 +1,27 @@
-// §5.10.1's own worked example, or-ing a global event with a monitored one.
-// Table 5-1 gives initial_step the value 1 in the DCOP column, so on the single
-// point of a dc analysis the global event fires and the body samples V(p).
-//
-// The cross() operand cannot be what does it: §5.10.3.1 says "the cross()
-// function will not generate events for non-transient analyses, such as ac, dc,
-// or noise analyses". So x = 2.0 here is attributable to initial_step alone,
-// and x = 0.0 — the value §3.2 gives an untouched real — means the global
-// event never fired.
-//
-// Codegen answers initial_step from `inst.is_initial_step`, and the testbench
-// generator assigns it (with `is_final_step`) per point — true on the first point
-// of an analysis, which on a single-point dc is this point. An earlier version of
-// this header recorded the opposite as a standing VerA defect; that is stale. The
-// field is set, the global event fires, and the fixture passes on its own terms.
+// §5.10.1: either operand of an OR event list triggers its statement.
+// initial_step samples -1 V at time zero; a later rising crossing samples
+// a nonnegative value. The counter must advance once for each operand,
+// so ignoring either event or requiring both to occur together fails.
 //
 //! lrm 5.10.1
 //! lrm 5.10.2
 //! lrm 5.10.3.1
 //! lrm 5.10.1:1
-//! analysis dc
-//! bias V(p) = 2.0
+//! analysis tran
+//! time 0, 1n, 2n
+//! wave V(p) = -1.0, -0.5, 1.0
 `include "check.vh"
 module ch5_initial_or_cross(p);
-  inout p; electrical p; real x;
+  inout p; electrical p; real x; integer events;
   analog begin
-    @(initial_step or cross(V(p), +1)) x = V(p);
-    `CHECK("initial_step fires on the first point of a dc analysis", x, 2.0, 0.0);
+    @(initial_step or cross(V(p), +1)) begin
+      x = V(p);
+      events = events + 1;
+    end
+    `CHECKI("initial_step and the later crossing each trigger the OR statement",
+            events, (V(p) > 0.0) ? 2 : 1);
+    `CHECKI("the first event samples -1 V and the later event samples the crossing",
+            (V(p) > 0.0) ? (x >= 0.0 && x <= 1.0) : (x == -1.0), 1);
     I(p) <+ x;
   end
 endmodule

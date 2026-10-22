@@ -4,7 +4,7 @@
 //
 // `out` is the two-element array formal `[0:1]`; the call passes a THREE-element
 // pattern, which is not of equivalent size. The legal call, `fill(V(p),
-// '{a, b})`, is 108_function_array_output_pattern.va.
+// '{a, b})`, is function_array_output_pattern.va.
 //
 // VerA used to crash on this (a debug-build panic in the copy-out loop over two
 // lists of different lengths) instead of diagnosing it.
@@ -12,7 +12,7 @@
 //! lrm 4.7.2.3
 //! lrm 4.7.2.3:2
 //! reject-only E0511
-//! neighbour 108_function_array_output_pattern.va
+//! neighbour function_array_output_pattern.va
 `include "disciplines.vams"
 module ch04_fn_array_out_size(p);
   inout p;

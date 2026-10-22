@@ -11,23 +11,23 @@ const module_specs = [_]struct {
     imports: []const []const u8 = &.{},
     c: ?[]const u8 = null,
 }{
-    .{ .name = "contract", .path = "tools/contract.zig" },
+    .{ .name = "contract", .path = "lib/contract.zig" },
     .{ .name = "base", .path = "lib/base/root.zig" },
     .{ .name = "kernels", .path = "lib/kernels/root.zig", .imports = &.{"contract"} },
-    .{ .name = "diag", .path = "lib/diag.zig" },
-    .{ .name = "dynlib", .path = "lib/dynlib.zig" },
+    .{ .name = "diag", .path = "lib/diag/root.zig" },
+    .{ .name = "dynlib", .path = "src/dynlib.zig" },
     .{ .name = "frontend", .path = "lib/frontend/root.zig", .imports = &.{ "base", "diag", "kernels" } },
-    .{ .name = "elab", .path = "lib/elab/root.zig", .imports = &.{ "base", "diag", "frontend", "kernels" } },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .imports = &.{ "base", "diag", "kernels" } },
-    .{ .name = "analog", .path = "lib/analog/root.zig", .imports = &.{ "diag", "frontend", "elab", "ir", "kernels" } },
-    .{ .name = "prove", .path = "lib/prove/root.zig", .imports = &.{ "diag", "frontend", "ir", "contract", "analog" } },
-    .{ .name = "zigbuild", .path = "lib/zigbuild/root.zig", .imports = &.{ "contract", "dynlib" } },
-    .{ .name = "device", .path = "lib/device/root.zig", .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
-    .{ .name = "verilog", .path = "lib/verilog/beh_verilog.zig", .imports = &.{ "ir", "prove" } },
-    .{ .name = "exe", .path = "lib/exe/tb.zig", .imports = &.{ "diag", "frontend", "ir", "zigbuild" } },
-    .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "device", "verilog", "exe", "kernels", "zigbuild" } },
-    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "contract", "base", "diag", "frontend", "kernels" } },
-    .{ .name = "digital", .path = "lib/digital/root.zig", .imports = &.{ "sim", "frontend", "diag", "contract", "kernels", "base" } },
+    .{ .name = "elab", .path = "src/elab/root.zig", .imports = &.{ "base", "diag", "frontend", "kernels" } },
+    .{ .name = "ir", .path = "src/ir/root.zig", .imports = &.{ "base", "diag", "kernels" } },
+    .{ .name = "analog", .path = "src/analog/root.zig", .imports = &.{ "diag", "frontend", "elab", "ir", "kernels" } },
+    .{ .name = "prove", .path = "src/prove/root.zig", .imports = &.{ "diag", "ir", "contract" } },
+    .{ .name = "zigbuild", .path = "src/zigbuild/root.zig", .imports = &.{ "contract", "dynlib" } },
+    .{ .name = "device", .path = "src/codegen/device/root.zig", .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
+    .{ .name = "verilog", .path = "src/codegen/verilog/root.zig", .imports = &.{ "ir", "prove" } },
+    .{ .name = "exe", .path = "src/codegen/exe/root.zig", .imports = &.{ "diag", "frontend", "ir", "zigbuild" } },
+    .{ .name = "vera", .path = "src/Compilation.zig", .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "device", "verilog", "exe", "kernels", "zigbuild" } },
+    .{ .name = "sim", .path = "lib/sim/root.zig", .imports = &.{ "contract", "base", "diag", "frontend", "kernels" } },
+    .{ .name = "digital", .path = "src/codegen/digital/root.zig", .imports = &.{ "sim", "frontend", "diag", "contract", "kernels", "base" } },
     .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
 };
 
@@ -46,6 +46,7 @@ pub fn build(b: *Build) void {
     // Not standardOptimizeOption: it returns Optimize on 0.17 and ?Optimize on 0.18.
     const optimize = b.option(std.lang.Optimize, "optimize", "Prioritize performance, safety, or binary size") orelse .debug;
     const m: M = .{ .b = b, .target = target, .optimize = optimize };
+    const results_dir = b.option([]const u8, "test-results", "Write executed unit, host and VPI test results to this directory");
     const mods = defineModules(b, target, true);
     const contract = byName(mods, "contract");
     const kernels = byName(mods, "kernels");
@@ -57,14 +58,14 @@ pub fn build(b: *Build) void {
     const language = b.option(Language, "language", "verilog: an IEEE 1364-2005 `vera` without the analog backend; ams (default): the Verilog-AMS compiler") orelse .ams;
     const exe = cliExe(b, target, optimize, mods, "vera", language == .ams);
     b.installArtifact(exe);
-    b.installFile("tools/contract.zig", "share/vera/contract.zig");
+    b.installFile("lib/contract.zig", "share/vera/contract.zig");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.addPassthruArgs();
     b.step("run", "Run the vera CLI").dependOn(&run_cmd.step);
 
-    const test_step = b.step("test", "Run every test suite");
+    const test_step = b.step("test", "Run unit, host, reference and harness tests (language fixtures: test-ams and test-devices)");
     const all_step = b.step("build-all", "Compile every artifact for -Dtarget without running one");
     all_step.dependOn(&exe.step);
     const gen_exe = if (target.query.isNative()) exe else cliExe(b, b.graph.host, optimize, defineModules(b, b.graph.host, false), "vera-gen", true);
@@ -77,37 +78,36 @@ pub fn build(b: *Build) void {
     const runner: Build.Step.Compile.TestRunner = .{ .path = b.path("tools/zrunner.zig"), .mode = .simple };
     const test_vpi = b.step("test-vpi", "Run the vpi module tests and the C VPI applications");
     for (mods) |mod| {
-        const r = testRun(b, mod.name, mod.module, runner);
+        const r = testRun(b, mod.name, mod.module, runner, results_dir);
         test_step.dependOn(&r.step);
         if (std.mem.eql(u8, mod.name, "vpi")) test_vpi.dependOn(&r.step) else b.step(b.fmt("test-{s}", .{mod.name}), b.fmt("Run the {s} module tests only", .{mod.name})).dependOn(&r.step);
     }
     test_step.dependOn(&exe.step);
-    const cli_run = testRun(b, "cli", exe.root_module, runner);
+    const cli_run = testRun(b, "cli", exe.root_module, runner, results_dir);
     // src/cli/lsp.zig's tests walk tests/fixtures; globFiles re-runs configure, so a new fixture counts.
     for (globFiles(b, "tests/fixtures", "")) |f| cli_run.addFileInput(b.path(f));
     test_step.dependOn(&cli_run.step);
     b.step("test-cli", "Run the CLI's tests (src/main.zig, src/cli/) only").dependOn(&cli_run.step);
 
-    const osdi_mod = m.make("tools/osdi_dyn.zig", &.{.{ .name = "contract", .module = contract }});
-    const osdi_run = testRun(b, "osdi_dyn", osdi_mod, runner);
+    const osdi_mod = m.make("lib/osdi_dyn.zig", &.{.{ .name = "contract", .module = contract }});
+    const osdi_run = testRun(b, "osdi_dyn", osdi_mod, runner, results_dir);
+    b.step("test-osdi-dyn", "Run lib/osdi_dyn.zig's tests only").dependOn(&osdi_run.step);
+    test_step.dependOn(&osdi_run.step);
     // zrunner cannot be its own runner's root: stock runner.
     const zrunner_test = b.addTest(.{ .name = "zrunner", .root_module = m.make("tools/zrunner.zig", &.{}) });
     all_step.dependOn(&zrunner_test.step);
     const zrunner_run = b.addRunArtifact(zrunner_test);
-    const test_tools = b.step("test-tools", "Run tools/osdi_dyn.zig's and tools/zrunner.zig's tests only");
-    for ([_]*Run{ osdi_run, zrunner_run }) |r| {
-        test_tools.dependOn(&r.step);
-        test_step.dependOn(&r.step);
-    }
+    b.step("test-tools", "Run tools/zrunner.zig's tests only").dependOn(&zrunner_run.step);
+    test_step.dependOn(&zrunner_run.step);
     const other_exe = cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams);
     test_step.dependOn(&other_exe.step);
     all_step.dependOn(&other_exe.step);
 
-    const all_mod = m.make("tests/test_all.zig", mods);
+    const all_mod = m.make("tests/unit.zig", mods);
     const repo = b.addOptions();
     repo.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
     all_mod.addOptions("repo_options", repo);
-    const all_run = testRun(b, "test_all", all_mod, runner);
+    const all_run = testRun(b, "test_all", all_mod, runner, results_dir);
     // Reads the tree at test time: every file it can reach is an input, so a
     // no-op build reuses the result (globFiles re-runs configure for new files).
     for ([_][]const u8{ "lib", "src", "tools", "tests", "specification" }) |dir| {
@@ -116,7 +116,7 @@ pub fn build(b: *Build) void {
     all_run.addFileInput(b.path("build.zig"));
     all_run.addFileInput(b.path("build.zig.zon"));
     test_step.dependOn(&all_run.step);
-    b.step("test-all", "Run tests/test_all.zig, the cross-module claims, only").dependOn(&all_run.step);
+    b.step("test-all", "Run tests/unit.zig, the cross-module claims, only").dependOn(&all_run.step);
 
     // LLVM: the self-hosted backend emits no coverage, so the fuzzer sees no PCs.
     const fuzz_test = b.addTest(.{ .name = "fuzz", .root_module = m.make("tests/fuzz.zig", &.{.{ .name = "vera", .module = vera }}), .use_llvm = true });
@@ -125,11 +125,11 @@ pub fn build(b: *Build) void {
     const rng_ref = m.make("tests/rng_reference.zig", &.{.{ .name = "kernels", .module = kernels }});
     rng_ref.link_libc = true;
     rng_ref.addCSourceFile(.{ .file = b.path("tests/rng_reference.c"), .flags = &.{"-ffp-contract=off"} });
-    const rng_run = testRun(b, "rng_reference", rng_ref, runner);
+    const rng_run = testRun(b, "rng_reference", rng_ref, runner, results_dir);
     const rng_step = b.step("test-rng-reference", "Compare rng_kernels with the IEEE 1364 §17.9.3 C listing, and run its domain refusals");
     rng_step.dependOn(&rng_run.step);
     test_step.dependOn(&rng_run.step);
-    const rng_domains = b.addExecutable(.{ .name = "rng-domains", .root_module = m.make("tests/rng_domains.zig", &.{.{ .name = "kernels", .module = kernels }}) });
+    const rng_domains = b.addExecutable(.{ .name = "rng-domains", .root_module = m.make("tests/rng_reference.zig", &.{.{ .name = "kernels", .module = kernels }}) });
     for (0..46) |case| {
         const r = b.addRunArtifact(rng_domains);
         r.addArg(b.fmt("{d}", .{case}));
@@ -152,7 +152,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
             .imports = &.{.{ .name = "kernels", .module = kernels }},
         });
-        const printf_run = testRun(b, "printf_reference", printf_ref, runner);
+        const printf_run = testRun(b, "printf_reference", printf_ref, runner, results_dir);
         printf_step.dependOn(&printf_run.step);
         test_step.dependOn(&printf_run.step);
     }
@@ -165,11 +165,11 @@ pub fn build(b: *Build) void {
     o.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
     o.addOption([]const u8, "docs_root", pathFromRoot(b, "specification"));
     o.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-suite"));
-    o.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
+    o.addOption([]const u8, "contract", pathFromRoot(b, "lib/contract.zig"));
     o.addOption([]const u8, "vpi_include", pathFromRoot(b, "src/vpi"));
     o.addOption([]const []const u8, "vpi_runs", vpi_run_paths);
     o.addOption([]const u8, "zig_exe", b.graph.zig_exe);
-    const suite_mod = m.make("tests/bench.zig", &.{
+    const suite_mod = m.make("tests/suite.zig", &.{
         .{ .name = "vera", .module = vera },
         .{ .name = "sim", .module = sim },
         .{ .name = "digital", .module = byName(mods, "digital") },
@@ -177,11 +177,11 @@ pub fn build(b: *Build) void {
     suite_mod.addOptions("suite_options", o);
     const suite_exe = b.addExecutable(.{ .name = "vera-suite", .root_module = suite_mod });
     all_step.dependOn(&suite_exe.step);
-    const suite_run = testRun(b, "suite", suite_mod, runner);
+    const suite_run = testRun(b, "suite", suite_mod, runner, results_dir);
     suite_run.has_side_effects = true; // reads tests/fixtures at test time
     test_step.dependOn(&suite_run.step);
     b.step("test-suite", "Run the suite runner's own unit tests only").dependOn(&suite_run.step);
-    b.step("suite-exe", "Build the suite runner (tests/bench.zig)").dependOn(&suite_exe.step);
+    b.step("suite-exe", "Build the suite runner (tests/suite.zig)").dependOn(&suite_exe.step);
 
     const check = b.step("check", "Type-check every root without emitting a binary (`--watch -fincremental`: the edit loop)");
     for ([_]*Module{ exe.root_module, other_exe.root_module, suite_mod }) |r| {
@@ -197,7 +197,7 @@ pub fn build(b: *Build) void {
         .{ "benchmark", null, "Run every fixture through VerA — compile, build, run, judge — and time it (use -Doptimize=ReleaseFast)" },
         .{ "test-devices", "devices", "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts" },
         .{ "test-1364", "ieee1364", "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory; `-- --native`: through `vera --emit-exe`)" },
-        .{ "test-ams", "--strict", "Run the Verilog-AMS fixture suite strictly (= `benchmark -- --strict`)" },
+        .{ "test-ams", "ams", "Run the Verilog-AMS fixture suite strictly, without the benchmark timing pass" },
         .{ "test-vpi-fixtures", "vpi", "Compile the .c VPI fixtures against src/vpi/vpi_user.h" },
         .{ "test-spice", "spice", "Run the .sp decks on sim.spice and grade each against its oracle" },
         .{ "golden", "golden", "Snapshot `vera --emit-zig`, the testbench runner, the `--emit-so` tree and the `.v` program text of every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)" },
@@ -209,19 +209,54 @@ pub fn build(b: *Build) void {
         b.step(s[0], s[2]).dependOn(&run.step);
     }
 
+    // These host assertions inspect diagnostics that an HDL model cannot
+    // observe about itself. Use the artifact from this build, never zig-out.
+    const observations = b.addSystemCommand(&.{"python3"});
+    observations.addFileArg(b.path("tests/host.py"));
+    observations.addArg("diagnostic_observations");
+    observations.addArg("--vera");
+    observations.addArtifactArg2(exe, .{});
+    if (results_dir) |dir| observations.addArgs(&.{ "--results", b.fmt("{s}/diagnostic_observations.tsv", .{dir}) });
+    observations.addPassthruArgs();
+    observations.has_side_effects = true;
+    b.step("test-observations", "Check analog diagnostic output, retaining expected conformance failures").dependOn(&observations.step);
+
+    const paired = b.addSystemCommand(&.{"python3"});
+    paired.addFileArg(b.path("tests/host.py"));
+    paired.addArg("paired_compiler_observations");
+    paired.addArg("--vera");
+    paired.addArtifactArg2(exe, .{});
+    if (results_dir) |dir| paired.addArgs(&.{ "--results", b.fmt("{s}/paired_compiler_observations.tsv", .{dir}) });
+    paired.has_side_effects = true;
+    b.step("test-paired-compiler", "Check exact compiler refusals and their behavioral controls").dependOn(&paired.step);
+    test_step.dependOn(&paired.step);
+
+    // Conditional host capabilities are explicit skips until bound through
+    // VERA_HOST_PROFILE_ADAPTER. Oracle self-tests never supply these results.
+    const profiles = b.step("test-host-profiles", "Check conditional host observations with an explicitly configured adapter");
+    for ([_][]const u8{ "report_observations", "indirect_equation_observations", "conditional_observations", "absdelta_rejection_observations", "scheduling_observations", "language_semantics_observations", "compact_modeling_observations", "directive_documentation" }) |name| {
+        const profile = b.addSystemCommand(&.{"python3"});
+        profile.addFileArg(b.path("tests/host.py"));
+        profile.addArg(name);
+        if (results_dir) |dir| profile.addArgs(&.{ "--results", b.fmt("{s}/{s}.tsv", .{ dir, name }) });
+        profile.has_side_effects = true;
+        profiles.dependOn(&profile.step);
+        test_step.dependOn(&profile.step);
+    }
+
     const canary = b.addRunArtifact(suite_exe);
     canary.addArtifactArg2(exe, .{});
     canary.addArg("canary");
     canary.expectExitCode(0);
     canary.has_side_effects = true;
-    b.step("test-canary", "Check the harness FAILs every wrong-on-purpose fixture in tests/canary/").dependOn(&canary.step);
+    b.step("test-canary", "Check the harness FAILs every wrong-on-purpose fixture in tests/fixtures/canary/").dependOn(&canary.step);
     test_step.dependOn(&canary.step);
 
     const host_opts = b.addOptions();
-    host_opts.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
+    host_opts.addOption([]const u8, "contract", pathFromRoot(b, "lib/contract.zig"));
     host_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
     host_opts.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-vpi"));
-    const vpi_host_mod = m.make("tests/vpi_host.zig", &.{
+    const vpi_host_mod = m.make("tests/fixtures/ch11_vpi/vpi_host.zig", &.{
         .{ .name = "vera", .module = vera },
         .{ .name = "vpi", .module = byName(mods, "vpi") },
         .{ .name = "sim", .module = sim },
@@ -229,6 +264,7 @@ pub fn build(b: *Build) void {
         .{ .name = "dynlib", .module = dynlib },
     });
     vpi_host_mod.link_libc = true;
+    vpi_host_mod.addAnonymousImport("vpi_design", .{ .root_source_file = b.path("tests/fixtures/ch11_vpi/vpi_design.va") });
     const vpi_host = b.addLibrary(.{ .name = "vera-vpi-host", .linkage = .static, .root_module = vpi_host_mod });
     all_step.dependOn(&vpi_host.step);
     const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/fixtures/ch11_vpi/vpi_app.c");
@@ -236,6 +272,26 @@ pub fn build(b: *Build) void {
     vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
     test_step.dependOn(&vpi_app.step);
     test_vpi.dependOn(&vpi_app.step);
+    if (results_dir) |dir| {
+        // This acceptance application contains named expected failures as
+        // well as ordinary checks. Its XPASS guards make a resolved gap fail
+        // until the expectation is updated. Record each named check.
+        var rows: std.ArrayList(u8) = .empty;
+        var lines = std.mem.splitScalar(u8, configText(b, "tests/fixtures/ch11_vpi/vpi_app.c"), '\n');
+        while (lines.next()) |raw| {
+            const rest = std.mem.cutPrefix(u8, std.mem.trim(u8, raw, " \t\r"), "// evidence: ") orelse continue;
+            const status, const name = std.mem.cutScalar(u8, rest, ' ') orelse @panic("bad C evidence declaration");
+            if (!std.mem.eql(u8, status, "pass") and !std.mem.eql(u8, status, "xfail")) @panic("bad C evidence status");
+            vpi_app.expectStdErrMatch(b.fmt("{s} {s}:", .{
+                if (std.mem.eql(u8, status, "xfail")) "XFAIL" else "PASS",
+                name,
+            }));
+            rows.print(b.allocator, "{s}\tvpi_app.test.{s}\n", .{ status, name }) catch @panic("OOM");
+        }
+        const record = recordResults(b, vpi_app, dir, "vpi_acceptance.tsv", rows.items);
+        test_step.dependOn(record);
+        test_vpi.dependOn(record);
+    }
     for (vpi_runs) |f| {
         const r = vpiApp(b, target, optimize, vpi_host, f.c);
         r.addFileArg(b.path(f.design));
@@ -252,6 +308,19 @@ pub fn build(b: *Build) void {
         }
         test_step.dependOn(&r.step);
         test_vpi.dependOn(&r.step);
+        if (results_dir) |dir| {
+            // A marker can only be written after the application's exit,
+            // stdout and stderr checks succeed. Missing markers earn no credit.
+            const slug = b.allocator.dupe(u8, f.c["tests/fixtures/".len .. f.c.len - 2]) catch @panic("OOM");
+            std.mem.replaceScalar(u8, slug, '/', '_');
+            const name = b.fmt("vpi--{s}.tsv", .{slug});
+            const record = recordResults(b, r, dir, name, b.fmt("{s}\t{s}\n", .{
+                if (f.xfail != null) "xfail" else "pass",
+                f.c["tests/fixtures/".len..],
+            }));
+            test_step.dependOn(record);
+            test_vpi.dependOn(record);
+        }
     }
 
     if (language != .ams) return;
@@ -271,10 +340,10 @@ pub fn build(b: *Build) void {
         });
         const ptx_opts: ?*Build.Step.Options = if (std.mem.find(u8, configText(b, h.host), "@import(\"ptx\")") != null) b.addOptions() else null;
         if (ptx_opts) |po| host.addOptions("ptx", po);
-        const run_host = testRun(b, std.fs.path.stem(h.host), host, runner);
+        const run_host = testRun(b, b.fmt("{s}--{s}", .{ std.fs.path.stem(h.host), std.fs.path.stem(h.va) }), host, runner, results_dir);
         test_step.dependOn(&run_host.step);
-        if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(&run_host.step);
-        if (std.mem.eql(u8, h.host, "tests/paramset_host.zig")) test_paramsets.dependOn(&run_host.step);
+        if (std.mem.eql(u8, h.host, "tests/fixtures/ch05_analog_behavior/timer_host.zig")) test_timers.dependOn(&run_host.step);
+        if (std.mem.eql(u8, h.host, "tests/fixtures/ch06_hierarchy/paramset_host.zig")) test_paramsets.dependOn(&run_host.step);
 
         // `<x>_gpu.zig` must export `<x>_ops_kernel`. NVPTX goes to LLVM IR, since the
         // backend refuses an @export alias of a kernel; `wide` and ptx hosts check its PTX.
@@ -284,7 +353,7 @@ pub fn build(b: *Build) void {
         const wide_gpu = std.mem.eql(u8, std.fs.path.basename(stem), "wide");
         for ([_][2][]const u8{ .{ "nvptx64-cuda", "sm_70" }, .{ "amdgcn-amdhsa", "gfx906" } }) |gpu| {
             const gt = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = gpu[0], .cpu_features = gpu[1] }) catch unreachable);
-            const gc: Import = .{ .name = "contract", .module = b.createModule(.{ .root_source_file = b.path("tools/contract.zig"), .target = gt, .optimize = .fast }) };
+            const gc: Import = .{ .name = "contract", .module = b.createModule(.{ .root_source_file = b.path("lib/contract.zig"), .target = gt, .optimize = .fast }) };
             const obj = b.addObject(.{ .name = std.fs.path.stem(gpu_src), .root_module = b.createModule(.{
                 .root_source_file = b.path(gpu_src),
                 .target = gt,
@@ -299,10 +368,10 @@ pub fn build(b: *Build) void {
         }
     }
 
-    const vdev_host = m.make("tests/vdev_host.zig", &.{.{ .name = "contract", .module = contract }});
+    const vdev_host = m.make("tests/fixtures/ch07_mixed_signal/vdev_host.zig", &.{.{ .name = "contract", .module = contract }});
     const so_opts = b.addOptions();
-    const vdev_so_host = m.make("tests/vdev_so_host.zig", &.{
-        .{ .name = "vdev_dyn", .module = b.createModule(.{ .root_source_file = b.path("tests/vdev_dyn.zig"), .imports = &.{.{ .name = "contract", .module = contract }} }) },
+    const vdev_so_host = m.make("tests/fixtures/ch07_mixed_signal/vdev_so_host.zig", &.{
+        .{ .name = "vdev_dyn", .module = b.createModule(.{ .root_source_file = b.path("tests/fixtures/ch07_mixed_signal/vdev_dyn.zig"), .imports = &.{.{ .name = "contract", .module = contract }} }) },
         .{ .name = "vdev_so_options", .module = so_opts.createModule() },
         .{ .name = "dynlib", .module = dynlib },
     });
@@ -325,17 +394,17 @@ pub fn build(b: *Build) void {
         vdev_so_host.addImport(name, dev_mod);
         const so = genRun(b, va_gen, src_path);
         so.addArgs(&.{ "--emit-so", "--contract" });
-        so.addFileArg(b.path("tools/contract.zig"));
+        so.addFileArg(b.path("lib/contract.zig"));
         so.addArg("--dyn");
-        so.addFileArg(b.path("tests/vdev_dyn.zig"));
+        so.addFileArg(b.path("tests/fixtures/ch07_mixed_signal/vdev_dyn.zig"));
         so.addArg("--work-dir");
         const wd = so.addOutputDirectoryArg2(name, .{});
         so.addFileArg(src);
         const host = &b.graph.host.result;
         so_opts.addOptionPath(name, wd.path(b, b.fmt("{s}{s}.1{s}", .{ host.libPrefix(), name, host.dynamicLibSuffix() })));
     }
-    test_step.dependOn(&testRun(b, "vdev_host", vdev_host, runner).step);
-    test_step.dependOn(&testRun(b, "vdev_so_host", vdev_so_host, runner).step);
+    test_step.dependOn(&testRun(b, "vdev_host", vdev_host, runner, results_dir).step);
+    test_step.dependOn(&testRun(b, "vdev_so_host", vdev_so_host, runner, results_dir).step);
 
     for ([_]struct { []const []const u8, []const u8, u8, []const u8 }{
         .{ &.{"--emit-zig"}, "ch07_mixed_signal/v_inout.v", 1, "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
@@ -356,7 +425,7 @@ pub fn build(b: *Build) void {
 
     for ([_]struct { []const u8, u8, []const u8 }{
         .{ "ch05_analog_behavior/vera_reject_step_retry.va", 1, "error[E1099]" },
-        .{ "ch04_expressions/a06_noise_anticorrelated_coefficient.va", 0, "warning[W1098]" },
+        .{ "ch04_expressions/noise_anticorrelated_coefficient.va", 0, "warning[W1098]" },
         .{ "ch07_mixed_signal/v_seconds.v", 0, "warning[W1155]" },
         .{ "ch03_data_types/module_without_parameters.va", 0, "" },
     }) |r| {
@@ -408,7 +477,7 @@ pub fn build(b: *Build) void {
         .{ .va = "tq_chain", .args = &.{ "--digital-pins", "in,tap1,tap2,tap3,tap4" }, .says = "parameter real vera_rise_m1 = 7.100000; // ns" },
         .{ .va = "attrs", .args = &.{}, .says = "parameter real vera_rise_z = 3.000000; // ns", .supplies = "`ifdef USE_POWER_PINS\n    , pwr\n    , gnd0\n`endif\n);" },
     }) |f| {
-        const va = b.path(b.fmt("tests/beh_verilog/{s}.va", .{f.va}));
+        const va = b.path(b.fmt("tests/fixtures/beh_verilog/{s}.va", .{f.va}));
         const gen = b.addRunArtifact(exe);
         gen.addArgs(&.{ "--emit-verilog", "--power-pins", "--allow=W0650" });
         gen.addArgs(f.args);
@@ -435,7 +504,7 @@ pub fn build(b: *Build) void {
             comp.addArg("-o");
             const vvp = comp.addOutputFileArg(b.fmt("tb_{s}.vvp", .{f.va}));
             comp.addFileArg(v);
-            comp.addFileArg(b.path(b.fmt("tests/beh_verilog/tb_{s}.v", .{f.va})));
+            comp.addFileArg(b.path(b.fmt("tests/fixtures/beh_verilog/tb_{s}.v", .{f.va})));
             comp.expectExitCode(0);
             const sim_run = b.addSystemCommand(&.{ "vvp", "-n" });
             sim_run.addFileArg(vvp);
@@ -444,7 +513,7 @@ pub fn build(b: *Build) void {
         }
     }
     {
-        const va = b.path("tests/beh_verilog/rc_charge.va");
+        const va = b.path("tests/fixtures/beh_verilog/rc_charge.va");
         const bad = b.addRunArtifact(exe);
         bad.addArgs(&.{ "--emit-verilog", "--allow=W0650", "--digital-pins", "a,y", "--param", "c=inf" });
         bad.addFileArg(va);
@@ -459,6 +528,22 @@ pub fn build(b: *Build) void {
         ok.addCheck(.{ .expect_stdout_match = "parameter real vera_rise_y = 0.693147; // ns" });
         ok.addCheck(.{ .expect_stdout_match = "parameter real vera_fall_y = 0.693147; // ns" });
         test_step.dependOn(&ok.step);
+    }
+
+    // `--emit-rtlil` read back by Yosys itself: `proc` lowers the processes
+    // and `check -assert` finds a wire with no driver or two of them.
+    const rtlil_step = b.step("test-rtlil", "Emit tests/fixtures/rtlil/*.v as RTLIL and have yosys read, proc and check it");
+    for (globFiles(b, "tests/fixtures/rtlil", ".v")) |v| {
+        const gen = b.addRunArtifact(exe);
+        gen.addArg("--emit-rtlil");
+        gen.addFileArg(b.path(v));
+        gen.addArg("-o");
+        const il = gen.addOutputFileArg(b.fmt("{s}.il", .{std.fs.path.stem(v)}));
+        // Yosys reads the positional `.il` first, then runs the script.
+        const yosys = b.addSystemCommand(&.{ "yosys", "-q", "-p", "hierarchy -check -top top; proc; opt_clean; check -assert; stat" });
+        yosys.addFileArg(il);
+        yosys.expectExitCode(0);
+        rtlil_step.dependOn(&yosys.step);
     }
 
     const vampyre = b.addSystemCommand(&.{ "python3", "tools/external_vampyre.py", "--vera" });
@@ -497,7 +582,7 @@ pub fn build(b: *Build) void {
             run.addArg("--lint");
             if (netlist) run.addArg("--spice");
             run.addFileArg(big);
-            if (netlist) run.addArg("tests/fixtures/ch02_lexical/28_identifier_1024_chars.va");
+            if (netlist) run.addArg("tests/fixtures/ch02_lexical/identifier_1024_chars.va");
             run.expectExitCode(2);
             run.addCheck(.{ .expect_stderr_match = "big.va` is larger than 4294967295 bytes" });
             test_step.dependOn(&run.step);
@@ -525,7 +610,7 @@ fn genRun(b: *Build, gen: Gen, src: []const u8) *Run {
     addIncludes(b, run, src);
     // The device embeds contract.zig's `vera_version` and targets its
     // contract: a release bump or a contract edit regenerates it.
-    run.addFileInput(b.path("tools/contract.zig"));
+    run.addFileInput(b.path("lib/contract.zig"));
     return run;
 }
 
@@ -581,33 +666,15 @@ fn cliExe(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, 
     return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
-/// `files`: every source in `sim`'s @import/@embedFile closure, for `vera --emit-exe`.
+/// `files`: every source under `lib/`, the tree `vera --emit-exe` and
+/// `--emit-so` build against: the runtime (`sim`), the contract, the OSDI dyn
+/// and the modules they import. `src/main.zig`'s `simTree` writes it out.
 fn simSources(b: *Build) *Module {
-    const io = b.graph.io;
     const wf = b.addWriteFiles();
     var root: std.Io.Writer.Allocating = .init(b.allocator);
     root.writer.writeAll("pub const files = [_][2][]const u8{\n") catch @panic("OOM");
-    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
-    for (module_specs) |spec| if (std.mem.eql(u8, spec.name, "sim")) {
-        seen.put(b.allocator, spec.path, {}) catch @panic("OOM");
-        for (spec.imports) |dep| for (module_specs) |d| if (std.mem.eql(u8, d.name, dep)) seen.put(b.allocator, d.path, {}) catch @panic("OOM");
-    };
-    seen.put(b.allocator, "tools/osdi_dyn.zig", {}) catch @panic("OOM");
-    var i: usize = 0;
-    while (i < seen.count()) : (i += 1) {
-        const path = seen.keys()[i];
+    for (globFiles(b, "lib", ".zig")) |path| {
         b.dependOnFileContents(b.path(path));
-        var it = std.mem.tokenizeAny(u8, configText(b, path), "\"");
-        var before: []const u8 = "";
-        while (it.next()) |tok| : (before = tok) {
-            if (!(std.mem.endsWith(u8, before, "@import(") or std.mem.endsWith(u8, before, "@embedFile("))) continue;
-            if (std.mem.findScalar(u8, tok, '.') == null) continue;
-            // Posix joins: resolveAllocPosix collapses `..` only across `/`.
-            const dep = b.fmt("{s}/{s}", .{ std.fs.path.dirnamePosix(path) orelse ".", tok });
-            const norm = std.fs.path.resolveAllocPosix(b.allocator, &.{dep}) catch @panic("OOM");
-            b.root.root_dir.handle.access(io, norm, .{}) catch continue;
-            seen.put(b.allocator, norm, {}) catch @panic("OOM");
-        }
         // By contents: addCopyFile hashes the absolute source path, so every worktree missed the cache.
         _ = wf.add(path, configText(b, path));
         root.writer.print("    .{{ \"{s}\", @embedFile(\"{s}\") }},\n", .{ path, path }) catch @panic("OOM");
@@ -706,6 +773,10 @@ fn defineModules(b: *Build, target: Build.ResolvedTarget, exported: bool) []cons
         for (deps, spec.imports) |*d, name| d.* = .{ .name = name, .module = byName(created.items, name) };
         const opts: Module.CreateOptions = .{ .root_source_file = b.path(spec.path), .target = target, .imports = deps };
         const mod = if (exported) b.addModule(spec.name, opts) else b.createModule(opts);
+        if (std.mem.eql(u8, spec.name, "elab")) {
+            mod.addAnonymousImport("resolution_unknown_fixture", .{ .root_source_file = b.path("tests/fixtures/annex_f_resolution/detail_resolution_unknown_after_bottom_up.va") });
+            mod.addAnonymousImport("resolution_digital_parent_fixture", .{ .root_source_file = b.path("tests/fixtures/annex_f_resolution/detail_resolution_digital_parent.va") });
+        }
         if (spec.c) |c| {
             mod.addCSourceFile(.{ .file = b.path(c), .flags = &.{ "-std=c99", "-Wall", "-Werror" } });
             mod.addIncludePath(b.path(std.fs.path.dirname(c).?));
@@ -724,8 +795,18 @@ fn byName(mods: []const Import, name: []const u8) *Module {
     std.debug.panic("no module {s} above its importer in module_specs", .{name});
 }
 
+/// Publish C application results only after its checked execution succeeds.
+fn recordResults(b: *Build, run: *Run, dir: []const u8, name: []const u8, contents: []const u8) *Build.Step {
+    run.has_side_effects = true;
+    const files = b.addWriteFiles();
+    files.mode = .{ .mutate = .{ .cwd_relative = pathFromRoot(b, dir) } };
+    _ = files.add(name, contents);
+    files.step.dependOn(&run.step);
+    return &files.step;
+}
+
 /// CLICOLOR_FORCE keeps zrunner's report colored under the build's capture.
-fn testRun(b: *Build, name: []const u8, mod: *Module, runner: Build.Step.Compile.TestRunner) *Run {
+fn testRun(b: *Build, name: []const u8, mod: *Module, runner: Build.Step.Compile.TestRunner, results_dir: ?[]const u8) *Run {
     const t = b.addTest(.{ .name = name, .root_module = mod, .test_runner = runner });
     b.top_level_steps.get("build-all").?.step.dependOn(&t.step);
     const r = b.addRunArtifact(t);
@@ -734,5 +815,9 @@ fn testRun(b: *Build, name: []const u8, mod: *Module, runner: Build.Step.Compile
     // every build. The exit code makes it cacheable on the binary and args;
     // a test that reads files at run time sets has_side_effects instead.
     r.expectExitCode(0);
+    if (results_dir) |dir| {
+        r.addArg(b.fmt("--results={s}/{s}.tsv", .{ pathFromRoot(b, dir), name }));
+        r.has_side_effects = true;
+    }
     return r;
 }

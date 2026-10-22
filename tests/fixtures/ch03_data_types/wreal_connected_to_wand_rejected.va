@@ -11,7 +11,7 @@
 // single net will be assigned as wreal" would delete that function, and the
 // last sentence makes the connection an error instead.
 //
-// This is the analog-route twin of digital/m04_21_reject_wreal_connected_to_wand.v
+// This is the analog-route twin of digital/reject_wreal_connected_to_wand.v
 // (the digital runner's transcript, which --coverage does not read). With
 // `wire n;` instead the same design is the wire/tri case §3.7 promotes to
 // wreal, covered by wreal_wire_port_merge.va. That positive twin currently

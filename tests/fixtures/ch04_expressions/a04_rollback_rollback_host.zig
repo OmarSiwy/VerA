@@ -11,7 +11,7 @@
 //! rejected attempt") and tests/table_snapshot_host.zig for §9.21's snapshot;
 //! this is their §4.5 operator-history counterpart.
 //!
-//! The subject is `slew` (a04_rollback_a04_rollback_ops.va), an operator that
+//! The subject is `slew` (rollback_a04_rollback_ops.va), an operator that
 //! keeps its history in the device. idt and ddt keep none: they are host
 //! unknowns (§4.5.2), whose history the host's integrator owns and reverts.
 //!
@@ -50,10 +50,10 @@
 //!
 //! `stateCtl` commits and reverts every field `updateState` advances,
 //! `State.t_prev` included: a revert that left t_prev at the discarded 2ns
-//! would make the retry's dt negative. tests/revert_host.zig asserts the same
+//! would make the retry's dt negative. tests/fixtures/ch04_expressions/revert_host.zig asserts the same
 //! for every other device-held history. `zig build test` emits the device from
-//! a04_rollback_a04_rollback_ops.va and runs this file.
-//! device ch04_expressions/a04_rollback_a04_rollback_ops.va
+//! rollback_a04_rollback_ops.va and runs this file.
+//! device ch04_expressions/rollback_a04_rollback_ops.va
 
 const std = @import("std");
 const contract = @import("contract");

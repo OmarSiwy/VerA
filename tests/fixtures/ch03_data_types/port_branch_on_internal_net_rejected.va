@@ -10,12 +10,12 @@
 // there is no "upper and lower connections of the port" for the branch to lie
 // between, and `mid` is not a port_identifier. With `branch (<p>) probe;` — p
 // IS a port — the same module compiles (checked by hand when this fixture was
-// written); 22_port_branch.va is that legal form, run and asserted.
+// written); port_branch.va is that legal form, run and asserted.
 //
 //! lrm 3.12.1
 //! lrm 3.12.1:1000
 //! reject-only E0372
-//! neighbour 22_port_branch.va
+//! neighbour port_branch.va
 module ch3_port_branch_on_internal_net(p);
     inout p;
     electrical p;

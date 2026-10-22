@@ -14,7 +14,7 @@
 //! lrm 2.4:3
 //! lrm A.9.2:1000
 //! reject-only E0209
-//! neighbour 08_attributes_comments_identifiers.va
+//! neighbour attributes_comments_identifiers.va
 `include "disciplines.vams"
 module annex_a_nested_comment(p, n);
   inout p, n;

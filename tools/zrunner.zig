@@ -80,10 +80,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer arena.deinit();
 
     const process_name = args.next() orelse unreachable;
+    var results_path: ?[]const u8 = null;
+    while (args.next()) |arg| {
+        if (std.mem.cutPrefix(u8, arg, "--results=")) |path| results_path = path else return error.UnknownArgument;
+    }
 
     var io_buffer: [2048]u8 = undefined;
     var reporter: FileReporter = try .init(&threaded, std.Io.File.stdout(), &io_buffer);
-    try run(&arena, threaded.io(), init.environ, process_name, &reporter);
+    try run(&arena, threaded.io(), init.environ, process_name, &reporter, results_path);
 }
 
 /// Runs every test of `builtin.test_functions` in order and writes the report
@@ -96,6 +100,7 @@ pub fn run(
     environ: std.process.Environ,
     process_name: []const u8,
     reporter: *FileReporter,
+    results_path: ?[]const u8,
 ) !void {
     const tests: []const TestFn = builtin.test_functions;
 
@@ -106,6 +111,24 @@ pub fn run(
 
     try reporter.writeTitle(report.process_name, tests.len);
     try runTests(arena, io, environ, tests, &report);
+    // Write before the failure exit, preserving skips and expected failures.
+    // Each artifact has its own file; parallel runs never share a writer.
+    if (results_path) |path| {
+        if (std.fs.path.dirname(path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
+        var out: std.Io.Writer.Allocating = .init(arena.allocator());
+        for (report.test_results) |result| {
+            const name = result.@"test"().test_fn.name;
+            if (std.mem.findAny(u8, name, "\t\r\n") != null) return error.InvalidTestName;
+            const status: []const u8 = if (result.isMemoryLeak()) "fail" else switch (result) {
+                .passed => "pass",
+                .failed => "fail",
+                .skipped => "skip",
+                .xfailed => "xfail",
+            };
+            try out.writer.print("{s}\t{s}\n", .{ status, name });
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.written() });
+    }
     try writeTestResults(arena, reporter, report);
     try reporter.writeSummary(
         report.passed_count,

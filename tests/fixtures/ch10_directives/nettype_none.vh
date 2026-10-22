@@ -6,5 +6,5 @@
 // suite can put a file boundary in the middle of one compilation, so this file
 // exists to be on the far side of one.
 //
-// Not a fixture: tests/harness.zig walks `.va` only.
+// Not a fixture: tests/suite.zig walks `.va` only.
 `default_nettype none

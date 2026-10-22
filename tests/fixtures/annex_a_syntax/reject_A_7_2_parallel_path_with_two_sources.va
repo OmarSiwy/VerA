@@ -18,7 +18,7 @@
 //! lrm A.7.2:1000
 //! reject-only parallel
 //! reject endspecify
-//! neighbour b8_specify_paths_design_runs.va
+//! neighbour specify_paths_design_runs.va
 module annex_a_parallel_two_sources(o, a, b);
   output o;
   input a, b;

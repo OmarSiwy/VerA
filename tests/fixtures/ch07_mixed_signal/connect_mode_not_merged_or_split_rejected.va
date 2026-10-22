@@ -20,8 +20,8 @@
 // and the refusal names the rule: a connect_mode is `merged` or `split`.
 //
 // The positive twin is `connect_mode_accepted.va` (both keywords, accepted),
-// and `m03_01_merged_is_the_default_one_instance.va` /
-// `m03_02_split_one_instance_per_port.va` run each value and assert the
+// and `merged_is_the_default_one_instance.va` /
+// `split_one_instance_per_port.va` run each value and assert the
 // instance counts §7.8.3.1/§7.8.3.2 require.
 //
 //! lrm 7.8.3
@@ -29,8 +29,8 @@
 //! lrm 7.7.4:1000
 //! reject-only a connect_mode is `merged` or `split`
 //! neighbour connect_mode_accepted.va
-//! neighbour m03_01_merged_is_the_default_one_instance.va
-//! neighbour m03_02_split_one_instance_per_port.va
+//! neighbour merged_is_the_default_one_instance.va
+//! neighbour split_one_instance_per_port.va
 `include "disciplines.vams"
 connectmodule ch7_cm_a2d(el, dg);
   input el;

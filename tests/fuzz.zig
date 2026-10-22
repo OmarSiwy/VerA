@@ -109,10 +109,10 @@ fn directivesOne(_: void, s: *Smith) anyerror!void {
 /// Real fixtures, so the replay starts from inputs that reach every stage.
 const corpus = [_][]const u8{
     @embedFile("fixtures/ch05_analog_behavior/resistor.va"),
-    @embedFile("fixtures/ch05_analog_behavior/a10_12_timer_negative_time_tol_rejected.va"),
-    @embedFile("fixtures/ch04_expressions/01_arithmetic_operators.va"),
-    @embedFile("fixtures/ch10_directives/d10_10_compact_modeling_macro_implies_its_extensions.va"),
-    @embedFile("fixtures/ieee1364/09_behavioral_modeling/audit_assignment_force_release.v"),
+    @embedFile("fixtures/ch05_analog_behavior/timer_negative_time_tol_rejected.va"),
+    @embedFile("fixtures/ch04_expressions/arithmetic_operators.va"),
+    @embedFile("fixtures/ch10_directives/compact_modeling_macro_implies_its_extensions.va"),
+    @embedFile("fixtures/ieee1364/09_behavioral_modeling/assignment_force_release.v"),
     // #48: an attribute instance as the last token, inside an unclosed generate block.
     @embedFile("fixtures/ch06_hierarchy/generate_block_attribute_then_end_of_file_rejected.va"),
 };

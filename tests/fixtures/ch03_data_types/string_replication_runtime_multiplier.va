@@ -4,7 +4,7 @@
 // specified by multiplier." The row is about the string TYPE, not a context:
 // nothing in §3.3 confines it to digital or to analog blocks.
 //
-// 28_string_replication.va writes the clause's own `integer i = 1`, whose value
+// string_replication.va writes the clause's own `integer i = 1`, whose value
 // lowering can still see; this file makes the multiplier depend on a probe, so
 // no compile-time value exists and the device must build the string while it
 // runs:
@@ -15,7 +15,7 @@
 //   {(i - 2){"Hi"}} = ""        (N = 0: zero copies, the empty string)
 //
 // "HiHiHi" (i = 3, the other arm) is checked unequal, so a device that took the
-// wrong arm or a fixed count cannot pass. 52_nonconstant_replication_to_integral.va
+// wrong arm or a fixed count cannot pass. nonconstant_replication_to_integral.va
 // is the illegal neighbour: the same replication into an integral target, E0354;
 // replication_nonconstant_real_multiplier_rejected.va is the other: a
 // nonconstant multiplier that is not "of integral type".

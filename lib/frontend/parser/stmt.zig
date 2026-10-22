@@ -138,8 +138,11 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
         // §5.8.3 / A.6.7. `casex`/`casez` share the production; §7.3.2
         // lists all three among the analog context's four-state features.
         .kw_case => return parseCase(self, .normal, null),
-        .kw_casex => return parseCase(self, .casex, null),
-        .kw_casez => return parseCase(self, .casez, null),
+        .kw_casex, .kw_casez => {
+            // Annex C.7: "casex and casez are not supported in Verilog-A".
+            if (self.verilog_a) try self.refuseDigital(self.pos, self.tokenText(self.pos));
+            return parseCase(self, if (self.peek() == .kw_casex) .casex else .casez, null);
+        },
         .kw_for => return parse_generate.parseFor(self, null, tok), // §5.9.2 / A.6.8
         .kw_while => { // §5.9.1
             self.pos += 1;

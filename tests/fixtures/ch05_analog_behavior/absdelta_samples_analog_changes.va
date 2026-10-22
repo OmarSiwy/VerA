@@ -26,8 +26,6 @@
 //! lrm 5.10.3.4:1
 //! lrm 5.10.3.4:1001
 //! lrm 5.10.3.4:1003
-//! lrm 5.10.3.4:1005
-//! lrm 5.10.3.4:1009
 `timescale 1ns/100ps
 `include "check.vh"
 module ch5_absdelta_samples(e_in, p);

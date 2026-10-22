@@ -116,6 +116,7 @@ module f72_twoblks(NetB);
   inout NetB;
   f72_leaf4 b4(NetB);
   f72_leaf3 b3(NetB);
+  analog `CHECKX("the child segment resolves before its parent", NetB.potential.abstol, 1e-7);
 endmodule
 
 module f72_top;

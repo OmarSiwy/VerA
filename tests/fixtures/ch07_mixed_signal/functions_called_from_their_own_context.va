@@ -2,7 +2,7 @@
 // context. Analog functions cannot be called from within the digital context."
 //
 // The clause is written as two prohibitions, and both are pinned elsewhere
-// (`m01_90_digital_function_from_analog_rejected.va`, E0436;
+// (`digital_function_from_analog_rejected.va`, E0436;
 // `analog_function_from_digital_rejected.va`, E0430;
 // `digital_function_in_cross_arguments_rejected.va`, the continuous context
 // §7.3.5 puts inside a digital event control). What they leave standing is the

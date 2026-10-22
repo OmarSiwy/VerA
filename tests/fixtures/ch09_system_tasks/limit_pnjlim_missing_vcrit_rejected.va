@@ -7,7 +7,7 @@
 // a $limit missing an argument its algorithm requires. annex_e_spice/
 // limit_pnjlim_missing_args.va has the same 3-argument form (vte present,
 // vcrit missing); this file carries the §9.17.3:1002 exact cite, and
-// 226_limit_pnjlim_internal_node_honoured.va is the neighbour that supplies
+// limit_pnjlim_internal_node_honoured.va is the neighbour that supplies
 // both.
 //
 // The probe is an internal net so no port-limiting refusal can mask the arity
@@ -16,7 +16,7 @@
 //! lrm 9.17.3
 //! lrm 9.17.3:1002
 //! reject-only E0809
-//! neighbour 226_limit_pnjlim_internal_node_honoured.va
+//! neighbour limit_pnjlim_internal_node_honoured.va
 module ch09_limit_pnjlim_missing_vcrit(p);
   inout p; electrical p; electrical mid; real limited;
   analog begin

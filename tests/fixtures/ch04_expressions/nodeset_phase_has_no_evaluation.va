@@ -5,7 +5,7 @@
 // solver applies a nodeset is not stated (§3.6.3.2 gives it to "the analog
 // solver"), so whether that phase holds any evaluation is VerA's choice:
 // specification/Vague_Decisions.md VD-117 (#67). VerA starts Newton at the
-// nodeset (a08_nodeset_01_nodeset_is_the_dc_initial_guess.va) and clamps
+// nodeset (nodeset_01_nodeset_is_the_dc_initial_guess.va) and clamps
 // nothing, so no evaluation is in the phase: analysis("nodeset") is 0 at
 // every evaluation, and initial_step("nodeset") never fires (§5.10.2: its list
 // matches the name of the analysis being run, and none is "nodeset").

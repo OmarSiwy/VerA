@@ -8,7 +8,7 @@
 //
 // THE FORMATS ARE STRING VARIABLES, so `checkScanFormat` cannot fold them
 // (§9.5.4.2: "$sscanf reads from the string str", and a string variable is a
-// legal format; b6_sformat_variable_format_mismatch_continues.va uses the same
+// legal format; sformat_variable_format_mismatch_continues.va uses the same
 // device for $sformat). VerA's choice is in str_kernels.zScan's `else => return`:
 // the scan STOPS at the invalid character and reports the items assigned before
 // it. Nothing after the bad conversion is consumed or assigned, and the return

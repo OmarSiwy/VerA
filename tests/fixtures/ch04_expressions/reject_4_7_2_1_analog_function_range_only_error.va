@@ -13,13 +13,13 @@
 // fixture keeps the full function body for readability; this sibling is what
 // pins that E0208 is the refusal, alone.
 //
-// The legal neighbour is 28_user_function.va, the same scalar function
+// The legal neighbour is user_function.va, the same scalar function
 // declared without a range.
 //
 //! lrm 4.7.2.1
 //! lrm 4.7.2.1:1
 //! reject-only E0208
-//! neighbour 28_user_function.va
+//! neighbour user_function.va
 `include "disciplines.vams"
 module ch4_analog_function_range_only_error(p, n);
   inout p, n;

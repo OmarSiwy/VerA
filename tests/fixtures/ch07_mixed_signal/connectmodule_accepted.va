@@ -21,7 +21,7 @@
 // reserves `endconnectrules` and no `endconnectmodule`).
 //
 // There was also a second, decisive reason to move: the old expectation
-// CONTRADICTED ch09_system_tasks/38_driver_update_connectmodule.va, which needs
+// CONTRADICTED ch09_system_tasks/driver_update_connectmodule.va, which needs
 // the same keyword ACCEPTED so that §9.22.4's `always @(driver_update d)` has
 // the one context §9.22 paragraph 3 permits it in. No implementation could
 // satisfy both files at once, so one of them was wrong about the LRM — and the

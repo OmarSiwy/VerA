@@ -2,7 +2,7 @@
 // an offending character unread. An unknown format returns EOF. The format
 // here is a register, and the outputs are an array element, a real and a
 // 96-bit string. These are legal destinations; the shared variable-only
-// output rule is pinned by b_17_2_4_3_sscanf_to_net_rejected.v (E1100).
+// output rule is pinned by sscanf_to_net_rejected.v (E1100).
 //
 // The bytes are "10 2.5 abcdefghijkl\nq 1234!". An unknown format consumes
 // nothing and preserves the initialized target. The three conversions then

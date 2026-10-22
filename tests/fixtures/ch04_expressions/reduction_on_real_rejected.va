@@ -9,7 +9,7 @@
 // `&x` below is a reduction of a REAL inside the analog block, so both apply.
 // VerA reports the operand rule (E0319) first, because a real has no bits to
 // fold whatever the context. The context rule alone, on an integer operand, is
-// 06_reduction_rejected.va (E0348).
+// reduction_rejected.va (E0348).
 //
 //! lrm 4.2.1
 //! lrm 4.2.1:1

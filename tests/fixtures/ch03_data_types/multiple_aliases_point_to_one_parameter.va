@@ -12,7 +12,7 @@
 // The reads are §6.3 hierarchical parameter references to the original names,
 // which §3.4.7 requires the equations to use: "the equations in the module
 // shall reference the parameter by its original name, not the alias."
-// 07_parameter_alias.va is the one-alias case; this file is what makes
+// parameter_alias.va is the one-alias case; this file is what makes
 // "multiple" observable.
 //
 //! lrm 3.4.7

@@ -13,3 +13,4 @@ create-missing = false
 [output.html]
 git-repository-url = "https://github.com/OmarSiwy/VerA"
 edit-url-template = "https://github.com/OmarSiwy/VerA/edit/main/docs/{path}"
+additional-js = ["verilog-ams.js"]

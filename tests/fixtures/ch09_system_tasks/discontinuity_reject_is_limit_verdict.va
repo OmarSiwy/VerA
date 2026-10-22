@@ -20,7 +20,7 @@
 // At the bias, "This task does not directly specify the behavior of the
 // module" (§9.17.1): V(p,n) is 0.9 exactly. 3 x 2 limit verdicts + 1 CHECK.
 //
-// The invalid neighbour is 185_discontinuity_negative_degree_rejected.va
+// The invalid neighbour is discontinuity_negative_degree_rejected.va
 // (-2, E0820): -1 is the one negative degree the clause admits.
 //! lrm 9.17.1
 //! bias V(p) = 0.9, V(n) = 0

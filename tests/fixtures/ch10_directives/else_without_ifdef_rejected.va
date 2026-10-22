@@ -9,12 +9,12 @@
 // an `ifdef or `ifndef directive."
 //
 // Here no conditional is open, so the `else has nothing to be the alternative
-// of. The legal shape is 09_ifdef_else.va.
+// of. The legal shape is ifdef_else.va.
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
 //! reject-only E0105
-//! neighbour 09_ifdef_else.va
+//! neighbour ifdef_else.va
 `else
 module ch10_else_without_ifdef(p, n);
   inout p, n; electrical p, n;

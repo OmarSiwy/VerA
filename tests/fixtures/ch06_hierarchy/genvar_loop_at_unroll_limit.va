@@ -9,7 +9,7 @@
 //
 // Until 2026-10-08 this was refused as E0420 "did not terminate" because the
 // cap was reached without re-testing the condition
-// (tests/fixtures/ADVERSARIAL.tsv).
+// (tests/fixtures/conformance/ADVERSARIAL.tsv).
 //
 //! lrm 6.6.1
 //! checks 1

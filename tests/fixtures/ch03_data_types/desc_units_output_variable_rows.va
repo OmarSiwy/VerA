@@ -5,8 +5,10 @@
 // descriptions specified for block-level variables shall be ignored by the
 // simulator, but can be used for documentation purposes."
 //
-// What an operating-point report prints beside a value is the host's, so the
-// evidence is the device's `decl_meta` table (`contract.DeclMeta`): one row
+// This fixture checks the declaration metadata and locally assigned values.
+// Actual external access and block-variable exclusion are checked by
+// tests/host.py with a real host report. Metadata alone
+// cannot establish either host reporting requirement. Here there is one row
 // per output variable, in declaration order, carrying exactly the attributes
 // the declaration wrote. By hand, from the clause's own example:
 //
@@ -23,10 +25,9 @@
 // the other half of the clause (their values reach the module's own output):
 // cgs = 4.21e-15 and cdb = 3.0e-15 as assigned, ids = 7 as assigned.
 //
-//! lrm 3.2.1
+//! lrm 2.9.2
 //! lrm 3.2.1:1
 //! lrm 3.2.1:2
-//! lrm 2.9.2
 //! meta variable cgs desc="gate-source capacitance" units="F"
 //! meta variable cdb units="F"
 //! meta variable ids desc="drain current"

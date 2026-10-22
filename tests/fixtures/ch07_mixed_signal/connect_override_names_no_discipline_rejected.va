@@ -7,13 +7,13 @@
 // to a later "no connect statement bridges them".
 //
 // The legal neighbour overrides with two declared disciplines of the two
-// domains: m03_07_discipline_and_direction_overrides.va.
+// domains: discipline_and_direction_overrides.va.
 //
 //! lrm 7.8
 //! lrm 7.8:2
 //! lrm 7.7.1
 //! reject-only E0923
-//! neighbour m03_07_discipline_and_direction_overrides.va
+//! neighbour discipline_and_direction_overrides.va
 
 connectmodule ch7_nd_cm(el, cm);
   input el;

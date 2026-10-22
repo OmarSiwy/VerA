@@ -1,7 +1,7 @@
 // §4.3.2: "Input values outside of the valid range for the operator shall
 // report an error." Table 4-14: `sqrt(x)`, "Square root", domain "x >= 0"
 // (#59). The constant form, sqrt(-1.0), is E0604 at compile time
-// (114_standard_math_domain_rejected.va).
+// (standard_math_domain_rejected.va).
 //
 //   point 0, V(p) = 4:  sqrt(4) = 2, exact in IEEE 754 (sqrt is correctly
 //                       rounded), so CHECKX 2.

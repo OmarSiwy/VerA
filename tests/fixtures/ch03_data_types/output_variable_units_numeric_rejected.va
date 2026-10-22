@@ -9,14 +9,14 @@
 // `cgs` is a module-scope variable — the would-be output variable of §3.2.1's
 // own example — whose units attribute is the real constant 1.0e-15 rather
 // than a string. That is the only defect: with `units = "F"` the declaration is
-// lrm_3_2_1.va's, and compiles (checked by hand when this fixture was written).
+// output_variable_description_and_units.va's, and compiles (checked by hand when this fixture was written).
 //
 //! lrm 3.2.1
 //! lrm 2.9.2
 //! lrm 2.9.2:1
 //! lrm 2.9.2:2
 //! reject-only E0358
-//! neighbour lrm_3_2_1.va
+//! neighbour output_variable_description_and_units.va
 module ch3_output_variable_units_numeric(p, n);
     inout p, n;
     electrical p, n;

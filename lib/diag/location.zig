@@ -2,7 +2,7 @@
 //! preprocessor's segment map and the comment-stripping marks (LRM §2.4).
 
 const std = @import("std");
-const diag = @import("../diag.zig");
+const diag = @import("root.zig");
 const Allocator = std.mem.Allocator;
 
 // ---------------------------------------------------------------------------

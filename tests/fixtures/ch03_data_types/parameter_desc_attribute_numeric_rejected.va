@@ -7,7 +7,7 @@
 //
 // So the parameter description §3.4.3 permits is a STRING. `desc = 42` is an
 // integer constant on a parameter declaration and nothing else is wrong: with
-// `desc = "gain"` the same file is ch02_lexical/11_attributes.va's legal form
+// `desc = "gain"` the same file is ch02_lexical/attributes.va's legal form
 // (checked by hand when this fixture was written). ch02_lexical/69 and 70 pin
 // the same §2.9.2 rule without the §3.4.3 citation; this row is the parameter
 // half of §3.4.3 specifically.
@@ -17,7 +17,7 @@
 //! lrm 2.9.2:1
 //! lrm 2.9.2:2
 //! reject-only E0358
-//! neighbour ../ch02_lexical/11_attributes.va
+//! neighbour ../ch02_lexical/attributes.va
 module ch3_parameter_desc_attribute_numeric(p, n);
     inout p, n;
     electrical p, n;

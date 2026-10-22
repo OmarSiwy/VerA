@@ -9,7 +9,7 @@
 // Everything else in the module is legal, so the only defect is the one under
 // test. VerA refuses it with E0376, "port has no direction declaration" (#73;
 // the digital engine refuses the same omission in a `.v` design with E1100,
-// ieee1364/12_hierarchy/b_12_3_3_listed_port_undeclared_rejected.v).
+// ieee1364/12_hierarchy/listed_port_undeclared_rejected.v).
 //
 // The legal neighbour, port_directions.va, declares every listed port's
 // direction and runs.

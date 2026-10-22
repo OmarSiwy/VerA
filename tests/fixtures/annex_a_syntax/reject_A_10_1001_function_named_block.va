@@ -6,16 +6,16 @@
 // The reason is 4.7.2.1's return variable: the function's own name denotes
 // the value it returns, and a named block (5.3.2) may carry declarations,
 // one of which could shadow that variable. The legal form is the unnamed
-// `begin ... end` of 04_analog_function.va.
+// `begin ... end` of analog_function.va.
 //
-// ch04_expressions/99_function_named_block_ban.va pins the same bullet on
+// ch04_expressions/function_named_block_ban.va pins the same bullet on
 // 4.7.1 itself; this file ties it to Annex A.10's limitation on function
 // statements.
 //! lrm 4.7.1
 //! lrm A.10:1001
 //! reject-only E0226
 //! reject named block
-//! neighbour 04_analog_function.va
+//! neighbour analog_function.va
 module annex_a_fn_named_block(p);
   inout p;
   electrical p;

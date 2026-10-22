@@ -2,7 +2,7 @@
 //! construction), the §11.6.10/§11.6.11 array rows, IEEE 1364-2005 §26.6.10
 //! range rows, §6.2.2 instance-array rows, and `freeze`, which turns a
 //! builder's growable lists into the fixed `Design` tables. The builders are
-//! model/analog.zig (over `Lowered`) and model/digital.zig (over a
+//! model_analog.zig (over `Lowered`) and model_digital.zig (over a
 //! `sim.digital.Run`); both append rows to one `Rows`.
 //!
 //! Every builder keeps the `Scope` invariant (root.zig): the module rows come

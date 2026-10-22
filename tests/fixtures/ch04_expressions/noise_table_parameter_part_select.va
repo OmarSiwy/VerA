@@ -23,7 +23,7 @@
 // the filter's output is 2.0 exactly.
 //
 // Invalid neighbour: noise_table_part_select_out_of_range_rejected.va (E0310).
-// Whole-array neighbour: a06_noise_table_array_parameter.va.
+// Whole-array neighbour: noise_table_array_parameter.va.
 //! lrm 4.6.4.3
 //! lrm 4.5.11
 //! noise table(p,n)#0 name=tbl interp=linear points=1.0:1e-18,1000.0:1e-21,1000000.0:1e-24

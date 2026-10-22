@@ -134,7 +134,7 @@ values, LRM §9.17.3), `//! abstol` (the tolerance of an unknown, LRM
 `acstim`, `qsite`, `seed` and `meta` also take `none`: the device publishes
 no such row, which is a claim, where an absent directive claims nothing.
 Their exact syntax is in the header of
-[`lib/exe/tb/directive.zig`](https://github.com/OmarSiwy/VerA/blob/main/lib/exe/tb/directive.zig).
+[`src/codegen/exe/tb/directive.zig`](https://github.com/OmarSiwy/VerA/blob/main/src/codegen/exe/tb/directive.zig).
 
 ## Directives the fixture suite grades
 
@@ -154,7 +154,7 @@ under `tests/fixtures/` through the same testbench and grades it by these.
 | `//! exit N` | the testbench's expected exit status |
 | `//! xfail REASON` | a known gap: the fixture states the LRM correctly and VerA does not meet it yet. The suite fails if it unexpectedly passes |
 | `//! lrm 5.6.1` | the LRM clause the fixture tests, counted by `--coverage` |
-| `//! lrm 5.6.1:2` | one normative sentence of the clause (the second), a row of the requirement ledger `tests/fixtures/OBLIGATIONS.tsv` |
+| `//! lrm 5.6.1:2` | one normative sentence of the clause (the second), a row of the requirement ledger `tests/fixtures/conformance/OBLIGATIONS.tsv` |
 | `//! inherited IEEE 1364-2005 9.2` | the same, for a clause the LRM inherits from IEEE 1364 |
 | `//! fd-exempt REASON` | the derivative and finiteness certificates (`benchmark -- --certify`) do not apply, for the stated reason |
 

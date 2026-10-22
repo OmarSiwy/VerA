@@ -4,7 +4,7 @@
 // block-level variables shall be ignored by the simulator, but can be used for
 // documentation purposes."
 //
-// lrm_3_2_1.va reads each output variable back inside the module that
+// output_variable_description_and_units.va reads each output variable back inside the module that
 // assigned it, which any variable would pass. This file checks the "provide
 // access" half from OUTSIDE the declaring instance, through the one in-language
 // channel the LRM gives for it: §9.16 `$simprobe`, which "queries the simulator

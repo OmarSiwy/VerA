@@ -30,6 +30,7 @@
 //! lrm 5.7:7
 //! lrm 5.7:8
 //! reject-only E0429
+//! neighbour array_assignment_compatible.va
 module ch5_assignment_array_mismatch(p);
   inout p; electrical p;
   integer A[10:1];             // 10 elements

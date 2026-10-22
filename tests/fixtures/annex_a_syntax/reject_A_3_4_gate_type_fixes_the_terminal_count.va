@@ -24,9 +24,9 @@
 //
 // The positive side of the same classification is 56_gate_instantiation_
 // unsupported.va (`and`, an n_input_gatetype, with two inputs) and
-// 57_primitive_strengths_unsupported.va (the pull gates); the three classes
+// primitive_strengths_unsupported.va (the pull gates); the three classes
 // used here run under the discrete engine in `tests/fixtures/digital/`
-// (d08_gates_enable.v, d08_switch_cmos.v, d08_bidirectional.v).
+// (gates_enable.v, switch_cmos.v, bidirectional.v).
 //
 // VerA refuses each instance at its own terminal list with E0209, and each
 // message names the class: the enable-gate one from `parseGates`, the two
@@ -44,7 +44,7 @@
 //! reject an enable gate takes an output, a data input and an enable
 //! reject cmos_switchtype
 //! reject pass_en_switchtype
-//! neighbour 57_primitive_strengths_unsupported.va
+//! neighbour primitive_strengths_unsupported.va
 module annex_a_gate_type_fixes_terminal_count(p, n);
     inout p, n;
     electrical p, n;

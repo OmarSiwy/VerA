@@ -4,12 +4,12 @@
 //
 // The file name is the directive's only operand and it is not optional. The
 // first line below has none. The legal form, on the next line, is
-// 18_include_constants.va's.
+// include_constants.va's.
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
 //! reject-only E0121
-//! neighbour 18_include_constants.va
+//! neighbour include_constants.va
 `include
 `include "disciplines.vams"
 module ch10_include_requires_a_file_name(p, n);

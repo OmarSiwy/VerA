@@ -1,5 +1,6 @@
-// LRM Annex F.2.1 step 4.b, third bullet (printed verbatim in F.2.2 4.b and
-// F.2.2 5.b, so both are cited): "If there is more than one discipline in the
+// LRM Annex F.2.1 step 4.b, third bullet (also printed in F.2.2 4.b and
+// F.2.2 5.b, though this input exercises basic-mode bottom-up resolution):
+// "If there is more than one discipline in the
 // list and the contents of the list match the discipline list of a resolution
 // connect statement, the net is of the resolved discipline given by the
 // statement." The statement is §7.7.2's `connect d1, d2 resolveto d3;`, and
@@ -43,7 +44,6 @@
 //
 //! lrm F.2.1
 //! lrm F.2.2
-//! lrm F.2.2:14
 //! lrm 7.7.2
 //! lrm 7.4.1
 //! lrm 7.4.1:1000

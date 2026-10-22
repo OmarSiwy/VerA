@@ -1,4 +1,4 @@
-// A device's transcript (tests/vdev_host.zig): "born" at time 0, and
+// A device's transcript (tests/fixtures/ch07_mixed_signal/vdev_host.zig): "born" at time 0, and
 // "edge" from the step that runs each rising clk edge, printed only when
 // the host accepts that step.
 `timescale 1ns/1ps

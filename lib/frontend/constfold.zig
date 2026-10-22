@@ -550,7 +550,7 @@ const TestExpr = struct { file: Ast.SourceFile, e: Ast.ExprId, vars: []const Ast
 /// lexer and parser, and returns `p`'s default.
 fn testParse(arena: std.mem.Allocator, decls: []const u8, src: []const u8) !TestExpr {
     const text = try arena.print("module m; {s} parameter p = {s}; endmodule\n", .{ decls, src });
-    const r = try @import("parser/test.zig").parseForTest(arena, text);
+    const r = try @import("parser.zig").parseForTest(arena, text);
     try testing.expectEqual(@as(u32, 0), r.bag.err_count);
     const m = r.file.modules[0];
     return .{ .file = r.file, .e = m.params[0].default, .vars = m.vars };

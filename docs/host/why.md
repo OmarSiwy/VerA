@@ -11,12 +11,12 @@ exports one descriptor per model: tables of nodes, parameters and Jacobian
 entries, and function pointers (`setup_model`, `setup_instance`, `eval`,
 `load_residual_resist`, `load_jacobian_resist`, ...) the simulator calls
 through an opaque instance pointer. VerA can produce that too ([OSDI
-interoperability](osdi.md)); `tools/osdi_dyn.zig` declares the whole 0.4
+interoperability](osdi.md)); `lib/osdi_dyn.zig` declares the whole 0.4
 descriptor as a Zig `extern struct` (`Descriptor`), so you can read it there.
 
 VerA's native form is different: the generated device is **Zig source** that
 your simulator compiles into itself, against a contract that is one Zig file,
-`tools/contract.zig`. This page says what that buys and what it costs, so you
+`lib/contract.zig`. This page says what that buys and what it costs, so you
 can choose.
 
 ## What the contract gives a host
@@ -41,7 +41,7 @@ inlined at compile time. There is no descriptor to walk and no function
 pointer per instance per iterate, and the compiler optimises the model
 together with your stamping code. Under OSDI the same device evaluates into
 a buffer inside the instance, and the simulator copies it out with a second
-round of `load_*` calls (`tools/osdi_dyn.zig`'s header: "The residuals and
+round of `load_*` calls (`lib/osdi_dyn.zig`'s header: "The residuals and
 Jacobian are kept in the instance; the `load_*` calls stamp them").
 
 **Plain data.** `Model` and `Instance` are structs of value fields with
@@ -65,7 +65,7 @@ binding, it adds frequency-dependent partials back), when you opt in.
 
 ## What the contract carries that OSDI 0.4 cannot
 
-`tools/osdi_dyn.zig` maps the contract onto OSDI 0.4, and its header lists
+`lib/osdi_dyn.zig` maps the contract onto OSDI 0.4, and its header lists
 what does not map, "each because OSDI 0.4 has no slot for it":
 
 - **Correlated noise.** A contract device says which noise rows share one

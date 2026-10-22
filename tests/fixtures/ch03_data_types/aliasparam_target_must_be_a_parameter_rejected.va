@@ -10,11 +10,11 @@
 // (the parameter is `r`). An alias of nothing has no type, no range and no
 // value, so an override through `res` could not mean anything.
 //
-// The legal alias is 07_parameter_alias.va.
+// The legal alias is parameter_alias.va.
 //
 //! lrm 3.4.7
 //! reject-only E0303
-//! neighbour 07_parameter_alias.va
+//! neighbour parameter_alias.va
 `include "disciplines.vams"
 module ch3_aliasparam_target_must_be_a_parameter(p, n);
   inout p, n; electrical p, n;

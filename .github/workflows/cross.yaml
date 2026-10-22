@@ -1,5 +1,5 @@
 # Cross-platform builds hold because VerA calls no OS but through `std`
-# (tests/exhaustive.zig's portability guard; lib/dynlib.zig is the one
+# (tests/unit.zig's exhaustive_tests, the portability guard; src/dynlib.zig is the one
 # allowlisted file). `build-all` compiles every artifact `test` builds, the
 # emitted test devices and the VPI host and applications included, for the
 # target, and runs none: a foreign binary cannot run on this runner.

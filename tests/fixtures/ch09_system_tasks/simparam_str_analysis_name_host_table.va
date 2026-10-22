@@ -34,7 +34,7 @@
 // analysis_type for analysis_name reads "ac".
 //
 // No invalid form beside it: an analysis name that is not a string literal is
-// E0521 (a06_ac_stim_name_not_literal_rejected.va).
+// E0521 (ac_stim_name_not_literal_rejected.va).
 //
 //! lrm 9.15
 //! lrm 9.15:4

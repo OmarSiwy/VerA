@@ -7,7 +7,7 @@
 // operand, so `1'bx` there is an x value reaching an analog expression and
 // is an error (specification/Vague_Decisions.md VD-017). IEEE 1364-2005 17.1.1.4's x
 // formatting still governs the digital context
-// (ieee1364/17_system_tasks/d09_02_display_unknown_radix.v).
+// (ieee1364/17_system_tasks/display_unknown_radix.v).
 //
 // VerA refuses it with E0130. Legal neighbour:
 // display_binary_operand_analog.va, the same call with `1'b1`.
@@ -15,7 +15,7 @@
 //! lrm 7.3.2:2
 //! reject-only E0130
 //! neighbour display_binary_operand_analog.va
-//! neighbour ../ieee1364/17_system_tasks/d09_02_display_unknown_radix.v
+//! neighbour ../ieee1364/17_system_tasks/display_unknown_radix.v
 module reject_display_x_operand_analog(p);
   inout p; electrical p;
   analog begin

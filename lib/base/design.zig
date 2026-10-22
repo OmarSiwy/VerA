@@ -9,7 +9,7 @@
 
 const std = @import("std");
 
-/// One port §7.8.4 re-pointed at a connect module (`elaborate/insert.zig`), by
+/// One port §7.8.4 re-pointed at a connect module (`elab/insert.zig`), by
 /// name. In the module instance at `path` (instance prefix, separator
 /// included, empty at the top), port `port` of child `inst` is connected to
 /// the bridge `name`'s `lower_port` instead of its upper connection, and the

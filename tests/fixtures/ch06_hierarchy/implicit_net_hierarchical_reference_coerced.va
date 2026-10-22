@@ -25,7 +25,8 @@ module ch6_implicit_probe_top(n);
   inout n; electrical n;
   ch6_implicit_probe_kid u(implicit_link, n);
   analog begin
-    `CHECKX("the hierarchical name reaches the parent's coerced implicit net", V(u.a, n), 1.25);
+    `CHECKX("the hierarchical name reaches the parent's coerced implicit net",
+            V(ch6_implicit_probe_top.implicit_link, n), 1.25);
   end
 endmodule
 

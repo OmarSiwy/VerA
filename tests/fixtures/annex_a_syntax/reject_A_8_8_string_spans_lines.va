@@ -10,14 +10,14 @@
 // would include the line break, which §2.7 excludes, and the `"` that
 // eventually appears on the next line opens a second, equally unterminated
 // literal rather than closing the first. Table 2-2's `\n` is how a string
-// SPELLS a newline; 67_string_literal.va runs that and asserts its value, 10.
+// SPELLS a newline; string_literal.va runs that and asserts its value, 10.
 //
 // VerA's lexer stops the literal at the end of the line and reports E0138 "a
 // string literal may not span lines" there. Anything the parser reports while
 // recovering from the broken statement is not the rule and is not pinned.
 //
 // The `A.8` header is cited with it: A.8 is the parent of A.8.1–A.8.9, and
-// this file is where its reject side is measured (07_expressions.va is the
+// this file is where its reject side is measured (expressions.va is the
 // positive side).
 //
 //! lrm A.8
@@ -26,8 +26,8 @@
 //! lrm A.8.8:1000
 //! reject-only E0138
 //! reject may not span lines
-//! neighbour 07_expressions.va
-//! neighbour 67_string_literal.va
+//! neighbour expressions.va
+//! neighbour string_literal.va
 module annex_a_string_spans_lines(p, n);
     inout p, n;
     electrical p, n;

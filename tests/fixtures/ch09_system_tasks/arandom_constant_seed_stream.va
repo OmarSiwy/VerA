@@ -14,7 +14,7 @@
 //
 // The model-card seed override distinguishes initialization from a compiled
 // default. A stream update has no invalid-input form; the argument/scope
-// refusal neighbour is 132_arandom_type_string_outside_paramset_rejected.va.
+// refusal neighbour is arandom_type_string_outside_paramset_rejected.va.
 //! lrm 9.13.1
 //! lrm 9.13.3
 //! lrm 9.13.3:1000

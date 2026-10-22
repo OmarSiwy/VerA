@@ -12,7 +12,7 @@ The hashes are the release's own SHA256SUMS, so a tarball that does not match
 what publish.yaml uploaded fails the Nix fetch. `zig` is the tag's
 build.zig.zon `minimum_zig_version`: the Zig that `vera` spawns to build a
 device must be the one its generated code was written for. `contract` is the
-tag's tools/contract.zig, which the tarball (the binary alone) does not carry:
+tag's lib/contract.zig, which the tarball (the binary alone) does not carry:
 the package installs it as share/vera/contract.zig, as `zig build install` does.
 
 Usage: tools/update-sources.py [OUT]   (default: sources.json beside tools/)
@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 
 REPO = "OmarSiwy/VerA"
@@ -34,7 +35,7 @@ SYSTEMS = {
     "x86_64-darwin": "x86_64-macos",
     "aarch64-darwin": "aarch64-macos",
 }
-# v0.0.1's `vera` reads tools/contract.zig from a checkout; from v0.9.0 the
+# v0.0.1's `vera` reads lib/contract.zig from a checkout; from v0.9.0 the
 # binary embeds the sources it compiles devices against, so it runs alone.
 FIRST = (0, 9, 0)
 
@@ -64,11 +65,16 @@ def main():
             continue
         sums = dict(reversed(line.split()) for line in get(assets["SHA256SUMS"]).splitlines() if line.strip())
         zon = get(raw(tag, "build.zig.zon"))
-        contract = raw(tag, "tools/contract.zig")
+        contract = raw(tag, "lib/contract.zig")
+        try:
+            contract_text = get(contract)
+        except urllib.error.HTTPError:  # releases before the lib/ layout (v0.11 and earlier)
+            contract = raw(tag, "tools/contract.zig")
+            contract_text = get(contract)
         entry = {
             "date": rel["published_at"][:10],
             "zig": re.search(r'minimum_zig_version\s*=\s*"([^"]+)"', zon).group(1),
-            "contract": {"url": contract, "sha256": hashlib.sha256(get(contract).encode()).hexdigest()},
+            "contract": {"url": contract, "sha256": hashlib.sha256(contract_text.encode()).hexdigest()},
         }
         for system, target in SYSTEMS.items():
             name = f"vera-{tag}-{target}.tar.gz"
