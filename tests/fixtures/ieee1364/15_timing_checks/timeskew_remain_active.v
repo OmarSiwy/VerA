@@ -1,6 +1,5 @@
 // With event_based and remain_active both set, late data at t=14 and t=16 each toggle the notifier.
 //! inherited IEEE 1364-2005 15.3.2
-//! xfail The digital engine refuses this required timing-check behavior with E1149.
 `timescale 1ns/1ns
 module timeskew_active_cell(input clk,input d);
   reg note=0;

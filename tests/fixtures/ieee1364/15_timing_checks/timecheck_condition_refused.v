@@ -10,8 +10,7 @@
 // What VerA's digital engine does not evaluate is §15.5.2's timecheck
 // condition, the seventh argument, so it refuses the design by name (E1149)
 // at that argument rather than run a check that ignores it. The timestamp
-// condition (argument 6) is condition_refused.v, a negative limit
-// negative_limit_refused.v.
+// condition (argument 6) is condition_refused.v.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 15.5.1 15.5.2
 //! reject-only E1149

@@ -72,6 +72,10 @@ pub const Pending = union(enum) {
     /// (`Run.analogPoint`): it brings digital time there and does nothing
     /// else, so a monitor that probes the solution is re-checked.
     analog_point,
+    /// IEEE 1364-2005 §15.3.2 a timer-based skew check's limit elapsed
+    /// (`tchk.expired`), unless its `Tchk.gen` moved on since; or a
+    /// §15.3.6 $nochange data event judged after the active events.
+    tchk_expiry: struct { check: u32, gen: u32 },
 };
 
 /// One payload row. Rows are recycled: a row is live exactly while the
@@ -289,7 +293,7 @@ fn claim(self: *Run, item: Pending) Error!u32 {
             @memcpy(planes, w.value.planes);
             row.item.write.value.planes = planes;
         },
-        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point => {},
+        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point, .tchk_expiry => {},
     }
     return at;
 }
@@ -329,7 +333,7 @@ pub fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
             try cancel(self, row.handle);
             hit = true;
         },
-        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point => {},
+        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point, .tchk_expiry => {},
     };
     return hit;
 }

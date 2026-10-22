@@ -687,21 +687,16 @@ ieee1364/15_timing_checks/recovery.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/recovery_negative_limit_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/recrem.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/recrem_signal_limit_rejected.v	reject	accepts	0	no	accepts and exits 0
-ieee1364/15_timing_checks/skew_refused.v	reject	accepts	0	no	accepts and exits 0
-ieee1364/15_timing_checks/timeskew_refused.v	reject	accepts	0	no	accepts and exits 0
-ieee1364/15_timing_checks/fullskew_refused.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/width.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/width_null_threshold_rejected.v	reject	refuses	-	yes	tests/fixtures/ieee1364/15_timing_checks/width_null_threshold_rejected.v:19: syntax error
 ieee1364/15_timing_checks/period.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/period_without_edge_rejected.v	reject	accepts	0	no	accepts and exits 0
-ieee1364/15_timing_checks/nochange_refused.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/edge_descriptor_rejected.v	reject	refuses	-	yes	tests/fixtures/ieee1364/15_timing_checks/edge_descriptor_rejected.v:21: syntax error
 ieee1364/15_timing_checks/timecheck_condition_refused.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/notifier.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/notifier_net_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/15_timing_checks/conditions.v	transcript	accepts	0	no	stdout differs
 ieee1364/15_timing_checks/vector.v	transcript	accepts	0	no	stdout differs
-ieee1364/15_timing_checks/negative_limit_refused.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/17_system_tasks/display_decimal_states.v	transcript	accepts	0	yes	
 ieee1364/17_system_tasks/display_missing_argument_rejected.v	reject	accepts	0	no	accepts and exits 0
 ieee1364/17_system_tasks/display_named_scope.v	transcript	accepts	0	yes	

@@ -913,6 +913,7 @@ pub const Run = struct {
                 // `analogPoint`: only its time, at whose arrival above the
                 // probing monitor was asked for.
                 .analog_point => {},
+                .tchk_expiry => |t| try tchk.expired(r, t.check, t.gen),
                 .tran_switch => |at| {
                     const t = &r.trans[at];
                     t.pending = null;

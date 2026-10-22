@@ -2535,7 +2535,7 @@ fn infoOf(c: Code) Info {
             \\inertial, with the reject and error limits equal to the path delay.
             \\A block without pulse controls raises none. The same engine runs
             \\the digital half of a mixed-signal design and evaluates its timing
-            \\checks too, passing over the forms E1149 lists; the analog compile
+            \\checks too, refusing the forms E1149 lists; the analog compile
             \\still names every check, since the analog solver evaluates none.
             \\
             \\  --deny=W0251    refuse the module instead, for a design whose
@@ -7270,30 +7270,27 @@ fn infoOf(c: Code) Info {
             \\$width's threshold, as a "Non-negative constant expression".
             \\A limit that reads a signal, or one of those six below zero, is
             \\refused. $setuphold and $recrem take negative limits (15.8),
-            \\which VerA does not evaluate (E1149).
+            \\which VerA, without a negative timing check option, takes as 0
+            \\(15.5.4).
             ,
         },
         .E1149 => .{
             .title = "a timing check VerA's digital engine does not evaluate",
             .lrm = "IEEE 1364-2005 15",
             .explain =
-            \\`vera --run` evaluates $setup, $hold, $setuphold, $removal,
-            \\$recovery, $recrem, $width and $period (IEEE 1364-2005 15.2,
-            \\15.3.4, 15.3.5), their notifiers (15.5), conditioned events (15.6)
-            \\and vector signals (15.7). It does not evaluate, and so refuses
-            \\rather than run a design whose checks would silently never fire:
+            \\`vera --run` evaluates all twelve commands (IEEE 1364-2005 15.2,
+            \\15.3), their notifiers (15.5), conditioned events (15.6) and
+            \\vector signals (15.7), a negative $setuphold or $recrem limit as
+            \\0 (15.5.4: VerA has no negative timing check option). It does not
+            \\evaluate, and so refuses rather than run a design whose checks
+            \\would silently misjudge:
             \\
-            \\  - $skew, $timeskew, $fullskew and $nochange (15.3.1-15.3.3,
-            \\    15.3.6): the skew checks' timer-based windows and $nochange's
-            \\    three-event window;
-            \\  - a negative $setuphold or $recrem limit (15.8 negative timing
-            \\    checks), and their stamptime and checktime conditions and
-            \\    delayed reference and data signals (15.5.1, 15.5.2), which
-            \\    exist for negative checks.
+            \\  - a $setuphold or $recrem stamptime or checktime condition
+            \\    (15.5.2), which exists for negative checks;
+            \\  - a negative end edge offset of $nochange (15.3.6), a window
+            \\    ending before its trailing reference edge.
             \\
-            \\The analog solver never evaluates a timing check (W0251). The digital
-            \\half of a mixed-signal design evaluates the rest and passes over
-            \\these forms, which that warning names.
+            \\The analog solver never evaluates a timing check (W0251).
             ,
         },
         .E1101 => .{

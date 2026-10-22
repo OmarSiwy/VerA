@@ -1,6 +1,5 @@
 // No data after t=10 expires the timer. Data at t=22 satisfies the rearmed timer; later data cannot retrigger a dormant check.
 //! inherited IEEE 1364-2005 15.3.2
-//! xfail The digital engine refuses this required timing-check behavior with E1149.
 `timescale 1ns/1ns
 module timeskew_cell(input clk,input d);
   reg note=0;

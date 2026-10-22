@@ -1,6 +1,5 @@
 // The reference-first timer uses limit 3; the data-first timer uses limit 5. Sample after each expiration.
 //! inherited IEEE 1364-2005 15.3.3
-//! xfail The digital engine refuses this required timing-check behavior with E1149.
 `timescale 1ns/1ns
 module fullskew_cell(input r,input d);
   reg note=0;

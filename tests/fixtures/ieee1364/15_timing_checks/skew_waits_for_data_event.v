@@ -1,6 +1,5 @@
 // An event-based skew check cannot fire while no data event occurs; a late data event then toggles it.
 //! inherited IEEE 1364-2005 15.3.1
-//! xfail The digital engine refuses this required timing-check behavior with E1149.
 `timescale 1ns/1ns
 module skew_wait_cell(input clk,input d);
   reg note=0;

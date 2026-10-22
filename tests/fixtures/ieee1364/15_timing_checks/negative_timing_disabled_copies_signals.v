@@ -1,6 +1,5 @@
 // Without an option enabling negative timing checks, the delayed arguments must still copy the original signals.
 //! inherited IEEE 1364-2005 15.5.4
-//! xfail The digital engine refuses this required timing-check behavior with E1149.
 `timescale 1ns/1ns
 module negative_copy_cell(input clk,input d,output delayed_clk,output delayed_d);
   reg note=0;

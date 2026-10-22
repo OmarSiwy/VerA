@@ -1,6 +1,5 @@
 // A change strictly inside the high window violates; a change after it or exactly on its trailing endpoint does not.
 //! inherited IEEE 1364-2005 15.3.6
-//! xfail The digital engine refuses this required timing-check behavior with E1149.
 `timescale 1ns/1ns
 module nochange_cell(input clk,input d);
   reg note=0;

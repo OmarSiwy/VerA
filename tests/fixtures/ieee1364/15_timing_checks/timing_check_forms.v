@@ -14,10 +14,10 @@
 // equivalent to the following: edge[01, 0x, x1] clr" ... "negedge clr is the
 // same as the following: edge[10, x0, 1x] clr".
 //
-// The cell's specify block holds the eight commands VerA's digital engine
-// evaluates ($setup, $hold, $setuphold, $recovery, $removal, $recrem,
-// $period, $width; it refuses the other four by name, E1149,
-// b_15_3_*_refused.v), each with a notifier, the limits written as numbers
+// The cell's specify block holds eight of the twelve commands ($setup,
+// $hold, $setuphold, $recovery, $removal, $recrem, $period, $width; the
+// skew checks and $nochange have fixtures of their own), each with a
+// notifier, the limits written as numbers
 // and as specparams, a &&& condition, and three edge-control specifiers:
 // posedge's spelling, negedge's spelling, and a list with z transitions.
 //
