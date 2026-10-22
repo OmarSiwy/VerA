@@ -3,6 +3,18 @@
 // connect rule can bridge that connection. The primitive's two logic states
 // become distinct loaded analog voltages; an unrelated biased probe cannot
 // satisfy these checks.
+//
+// WHY THE INPUTS ARE WRITTEN AFTER #0. The bridge's `always @(d)` only sees a
+// change of `d` it is already waiting for. Written as `assign a = 1'b1;`, the
+// gate output's time-zero change and the always block's first arrival at
+// `@(d)` are both region-1 events of time 0, which §8.5.1 says "can be
+// processed in any order" ("an essential source of nondeterminism"), so a
+// conforming kernel that updates the net first leaves `level` at its 1'b0
+// seed. §8.5.1: "An explicit zero delay (#0) requires that the process be
+// suspended and added as an inactive event", so every process is waiting at
+// its first event control when `sa`/`sb`, and through the assignments and
+// the gates, `d` change. ch07_mixed_signal/both_halves_of_the_bridge_execute
+// fixes its own selects the same way.
 //! lrm 3.8:1000
 //! solve
 //! checks 2
@@ -19,8 +31,10 @@ endmodule
 module default_discipline_primitive_bridge;
   electrical high, low;
   wire a, b;
-  assign a = 1'b1;
-  assign b = 1'b0;
+  reg sa, sb;
+  assign a = sa;
+  assign b = sb;
+  initial begin #0; sa = 1'b1; sb = 1'b0; end
   and high_gate(high, a, a);
   and low_gate(low, a, b);
   analog begin

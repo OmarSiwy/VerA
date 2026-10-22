@@ -300,9 +300,12 @@ pub fn resolveDisciplines(self: *Lower, module: *const Ast.ModuleDecl) Oom!void 
     //
     // A vector is scalarised by now, so the default is applied to the
     // elements: `p` itself is not a node.
-    for (module.ports) |p| try applyDefaultToAll(self, self.file.str(p.name), p.main_tok);
+    //
+    // §10.2 picks the default by the signal's net type, which the parser
+    // folds into a port from its body declaration (`inout q; tri q;`).
+    for (module.ports) |p| try applyDefaultToAll(self, self.file.str(p.name), p.main_tok, qualifierOf(p.kind));
     for (module.nets) |n| if (!self.out.discrete_inputs.contains(self.file.str(n.name)))
-        try applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
+        try applyDefaultToAll(self, self.file.str(n.name), n.main_tok, qualifierOf(n.kind));
     // §3.9 a digital primitive on a continuous net needs the default the loops
     // above just applied — after them, so a net it made discrete is not mixed.
     try checkPrimitiveDisciplines(self, module);
@@ -448,38 +451,42 @@ pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
     return d.has_potential != d.has_flow;
 }
 
-/// Applies the `default_discipline in force at `main_tok` to net `name`, or to each
-/// scalarised element when it is a §3.6.3 vector (LRM §10.2).
-fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+/// Applies the `default_discipline in force at `main_tok` for a `q` signal to
+/// net `name`, or to each scalarised element when it is a §3.6.3 vector (LRM §10.2).
+fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32, q: ?Preprocessor.Qualifier) Oom!void {
     const r = self.out.vectors.get(name) orelse
-        return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok);
+        return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok, q);
     var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
-        try applyDefaultDiscipline(self, try lower_shape.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
+        try applyDefaultDiscipline(self, try lower_shape.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok, q);
+}
+
+/// §10.2 the Syntax 10-1 `qualifier` a net of type `kind` answers to. Null for
+/// `uwire`, which the list lacks, so only an unqualified default applies.
+fn qualifierOf(kind: Ast.NetKind) ?Preprocessor.Qualifier {
+    return std.meta.stringToEnum(Preprocessor.Qualifier, @tagName(kind));
 }
 
 /// §10.2: "The default discipline is applied ... to all discrete signals without a
 /// discipline declaration that appear in the text stream following the use of the
 /// `default_discipline directive." So only a net that still has none, and only a
-/// directive preceding its declaration. Every net here is a plain `wire` (IEEE 1364
-/// §3.5), so `wire` and the unqualified form are the only qualifiers that can match.
-/// ponytail: widen the key to the net's declared data type when those land.
-fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+/// directive preceding its declaration, qualified for its type `q` or unqualified.
+fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32, q: ?Preprocessor.Qualifier) Oom!void {
     if (self.directives.disciplines.len == 0) return;
     const idx = self.node_voltages.get(name) orelse return;
     if (idx == ground) return;
     if (self.out.nodes.items(.disc)[idx].len != 0) return;
-    const dname = defaultDisciplineAt(self, main_tok) orelse return;
+    const dname = defaultDisciplineAt(self, main_tok, q) orelse return;
     // A default naming a discipline that was never declared supplies no
     // nature, so the net stays bare and E0337 reports it.
     if (!self.out.disciplines.contains(dname)) return;
     self.out.nodes.items(.disc)[idx] = dname;
 }
 
-/// §10.2 the `default_discipline in force for a wire at token `main_tok`, or null.
-fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
+/// §10.2 the `default_discipline in force for a `q` signal at token `main_tok`, or null.
+fn defaultDisciplineAt(self: *const Lower, main_tok: u32, q: ?Preprocessor.Qualifier) ?[]const u8 {
     if (main_tok >= self.tok_starts.len) return null;
-    return Preprocessor.DefaultDiscipline.inForce(self.directives.disciplines, self.tok_starts[main_tok]);
+    return Preprocessor.DefaultDiscipline.inForce(self.directives.disciplines, self.tok_starts[main_tok], q);
 }
 
 /// §3.9 "For digital primitives the domain is discrete and thus the discipline
@@ -506,7 +513,7 @@ fn checkPrimitiveTerminal(self: *Lower, term: Ast.ExprId, prim_tok: u32, what: [
     const ex = &self.file.exprs;
     const base = self.file.lvalueBase(term);
     if (base == .none or ex.tag(base) != .ident) return;
-    if (defaultDisciplineAt(self, prim_tok) != null) return;
+    if (defaultDisciplineAt(self, prim_tok, .wire) != null) return;
     const name = self.file.str(ex.strOf(base));
     // A vector is scalarised by now and its elements share one discipline
     // (§3.6.3), so the first element answers for the whole net.

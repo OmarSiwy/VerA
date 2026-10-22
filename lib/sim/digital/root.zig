@@ -156,8 +156,9 @@ pub const Mixed = struct {
     /// The module the analog compile lowered: the design's root.
     top: []const u8,
     /// `source` is the analog compile's own PREPROCESSED text, so it is not
-    /// preprocessed again and the `timescale it consumed comes in here.
-    timescale: ?Front.Preprocessor.Timescale,
+    /// preprocessed again and the `timescale events it consumed come in
+    /// here, at their offsets into `source`.
+    timescales: []const Front.Preprocessor.TimescaleEvent,
     /// VAMS §7.8.4 the connect modules the analog compile inserted: they are
     /// in its flattened design and not in `source`'s hierarchy.
     inserts: []const Insert = &.{},
@@ -1505,6 +1506,16 @@ fn runDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     try @import("evcd.zig").close(&r);
 }
 
+/// `Mixed.timescales` with the first event moved to offset 0. The analog
+/// compile's text opens with VerA's own Annex D/E prelude, ahead of every
+/// directive the source wrote, and §19.8's "some modules have a `timescale
+/// specified and others do not" is about the source's modules, not those.
+fn mixedTimescales(arena: std.mem.Allocator, events: []const Front.Preprocessor.TimescaleEvent) Error![]const Front.Preprocessor.TimescaleEvent {
+    const out = try arena.dupe(Front.Preprocessor.TimescaleEvent, events);
+    if (out.len != 0) out[0].at = 0;
+    return out;
+}
+
 /// Everything `run` does before the first event dispatches: preprocess,
 /// parse, §6.2.2 elaboration, and every driver and process compiled and
 /// enqueued at time 0. The returned `Run` owns nothing outside `arena`, so a
@@ -1517,7 +1528,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
 fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
     const pp: Front.Preprocessor.Output = if (opts.mixed) |mx| .{
         .text = source,
-        .directives = .{ .timescales = if (mx.timescale) |t| try arena.dupe(Front.Preprocessor.TimescaleEvent, &.{.{ .at = 0, .value = t }}) else &.{} },
+        .directives = .{ .timescales = try mixedTimescales(arena, mx.timescales) },
     } else Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .more = more: {
         const more = try arena.alloc(Front.Preprocessor.File, opts.more.len);
         for (opts.more, more) |u, *f| f.* = .{ .name = u.name, .text = u.text };
@@ -1565,8 +1576,8 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // definition takes the last directive before it. A null value is §19.6's
     // `resetall, which returns to "none specified", the simulator-specific
     // default. The preprocessor refuses a malformed directive where it is
-    // written (E0142). A mixed design's one timescale
-    // arrives at offset 0, before every module of its text.
+    // written (E0142). A mixed design's first timescale is moved to offset 0
+    // (`mixedTimescales`).
     const Local = struct { unit: Time.Quantum = default_quantum, precision: Time.Quantum = default_quantum, set: bool = false };
     var finest: Time.Quantum = default_quantum;
     var set: usize = 0;
@@ -1660,8 +1671,7 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.nets = e.nets.items;
     r.net_cold = e.net_cold;
     r.signals = e.signals.items;
-    // As `compileChecks` below, not in an analog compile's digital half.
-    if (!r.mixed) try tchk.delayedDrivers(&r, &e);
+    try tchk.delayedDrivers(&r, &e);
     // Pass two: drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.
@@ -1803,10 +1813,9 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         }
         try processes(&r, inst.module.discrete);
         // IEEE 1364-2005 §15: the instance's timing checks, bound to the
-        // slots their events name. Not in the digital half of a
-        // mixed-signal design: that is an analog compile, whose parse has
-        // already named each check as never evaluated (W0251).
-        if (!r.mixed) try tchk.compileChecks(&r, inst.module.timing_checks);
+        // slots their events name, in a `.v` run and in the digital half of
+        // a mixed-signal design alike.
+        try tchk.compileChecks(&r, inst.module.timing_checks);
     }
     for (e.procs.items) |p| {
         r.scope = p.scope;
@@ -2279,7 +2288,7 @@ test "VAMS §7.3.6.4 an analog variable a continuous assign reads is declared an
     defer arena.deinit();
     var bag = diag.Bag.init(arena.allocator());
     var out = std.Io.Writer.Allocating.init(arena.allocator());
-    var r = try elaborate(arena.allocator(), "module m; real level; wire hi; assign hi = level > 0.5; endmodule\n", .{ .mixed = .{ .top = "m", .timescale = null, .reads = &.{"level"} } }, &bag, &out.writer);
+    var r = try elaborate(arena.allocator(), "module m; real level; wire hi; assign hi = level > 0.5; endmodule\n", .{ .mixed = .{ .top = "m", .timescales = &.{}, .reads = &.{"level"} } }, &bag, &out.writer);
     _ = try r.runUntil(0);
     try r.a2dWrite(r.slotOf("level").?, 0.75, false);
     _ = try r.runUntil(0);

@@ -80,12 +80,10 @@ pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u32 {
 /// slices borrow from `lowered` and `mir`.
 pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
     if (!lowered.mixed_signal) return null;
-    const ts = lowered.timescale;
     return .{
         .source = lowered.src,
         .top = mir.name,
-        .unit = if (ts) |t| t.unit else null,
-        .precision = if (ts) |t| t.precision else null,
+        .timescales = lowered.timescales,
         .inputs = lowered.discrete_inputs.keys(),
         .snaps = lowered.discrete_snaps.keys(),
         .xz = lowered.discrete_xz.keys(),
@@ -94,6 +92,8 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .events = lowered.discrete_events.values(),
         .inserts = lowered.inserts,
         .reads = lowered.discrete_reads.keys(),
+        .probe_names = lowered.discrete_probes.keys(),
+        .probe_nodes = lowered.discrete_probes.values(),
         .held = lowered.held_vars.items,
         .params = lowered.params.items,
         .param_reads = lowered.discrete_params.keys(),
@@ -313,6 +313,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         // the steps of one dc sweep are one analysis and keep them.
         try pointUnknowns(&out, arena, d, pt, mdl, per_block or n == 0);
         for (d.times, 0..) |t, k| {
+            // `locate` draws a wave between the last accepted point and this.
+            if (d.waves.len != 0) try out.appendSlice(arena, "        forced_prev = forced;\n");
             for (d.waves) |wv| {
                 assert(wv.values.len != 0); // `parseNumbers` refuses an empty list.
                 // A short `wave` holds its last value.
@@ -333,7 +335,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // every block, unlike `initial_step` (visible under `//! psweep`).
             try out.print(arena, "        sim_state.analog_initial = {};\n", .{k == 0});
             // §5.6 the model prints at a solution: solve first, then `point`.
-            try out.print(arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
+            try out.print(arena, "        var solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
+            // §5.10.3.1 a crossing found outside its tolerance box gets its
+            // own point first (`locate`), and this one is solved again.
+            try out.print(arena, "        if (crossRetry(&{1s}, &inst, &x, &state)) |r| solved{0d} = locate(r, {0d}, &x, &forced, &{1s}, &inst, &state, 0);\n", .{ n, mdl });
             try out.print(arena, "        point({d}, &x, &{s}, &inst);\n", .{ n, mdl });
             // §4.6.4.1/.2 the PSD depends on bias; fixtures state it at the
             // first point, the one every fixture has.
@@ -368,9 +373,6 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 /// Device-table directives (noise, acstim, qsite, seed, limit) are a compile
 /// error in the emitted runner.
 fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
-    // A `timescale gives both or neither (`mixedPlan`).
-    if (mx.unit != null) assert(mx.precision != null);
-    if (mx.unit == null) assert(mx.precision == null);
     var out: std.ArrayList(u8) = .empty;
     try head(&out, arena, title, d);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
@@ -379,10 +381,12 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
 
     try out.print(arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
     try out.print(arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
-    try out.print(arena, "const mixed_timescale: ?Timescale = {s};\n", .{if (mx.unit) |u|
-        try arena.print(".{{ .unit = {f}, .precision = {f} }}", .{ fmtF64(u), fmtF64(mx.precision.?) })
+    try out.appendSlice(arena, "const mixed_timescales = [_]TimescaleEvent{");
+    for (mx.timescales) |ev| if (ev.value) |t|
+        try out.print(arena, " .{{ .at = {d}, .value = .{{ .unit = {f}, .precision = {f} }} }},", .{ ev.at, fmtF64(t.unit), fmtF64(t.precision) })
     else
-        "null"});
+        try out.print(arena, " .{{ .at = {d}, .value = null }},", .{ev.at});
+    try out.appendSlice(arena, " };\n");
     try timeArrays(&out, arena, d);
 
     // The adapter: `sim.mixed.run`'s `A`.
@@ -608,7 +612,16 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         if (!read) continue;
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(p.name), try naming.sanitizeAlloc(arena, p.name) });
     }
-    try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
+    try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n");
+    // §7.3.3 / §6.7.1 each digital probe terminal's node pair (`terminal`),
+    // as the `D.U` fields spell the nodes.
+    try out.appendSlice(arena, "const probe_terminals = std.StaticStringMap([2][]const u8).initComptime(.{");
+    for (mx.probe_names, mx.probe_nodes) |name, pair| try out.print(arena, " .{{ \"{f}\", .{{ \"{s}\", \"{s}\" }} }},", .{
+        std.zig.fmtString(name),
+        try naming.sanitizeAlloc(arena, pair[0]),
+        try naming.sanitizeAlloc(arena, pair[1]),
+    });
+    try out.appendSlice(arena, " });\n\n");
 
     // --- main ---------------------------------------------------------------
     try out.appendSlice(arena, tb_runner_text.big_stack_text);

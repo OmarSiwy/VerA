@@ -404,7 +404,13 @@ pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
 
     const dname = if (self.attribute_disciplines.get(e)) |disc| self.file.str(disc) else blk: {
         const net = self.file.str(parts[0]);
-        const idx = self.node_voltages.get(net) orelse return null;
+        // §5.5.3 "the attributes for a net or a branch": a §3.12 branch reads
+        // the discipline of its terminals, which §3.11 makes compatible; the
+        // lo terminal when hi is ground.
+        const idx = self.node_voltages.get(net) orelse if (self.branches.get(net)) |b|
+            (if (b.hi == ground) b.lo else b.hi)
+        else
+            self.port_branches.get(net) orelse return null;
         if (idx == ground) return null;
         break :blk self.out.nodes.items(.disc)[idx];
     };

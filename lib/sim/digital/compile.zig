@@ -952,9 +952,9 @@ fn infer(self: *Run, e: Ast.ExprId) Error!Type {
         // VAMS §7.3.3 / §7.3.6.3 a potential probe of a continuous net, read
         // from the analog solution through the mixed-signal kernel's hook.
         .branch_access => blk: {
-            if (!self.mixed or !std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or ex.tag(ex.lhs(e)) != .ident or
-                (ex.rhs(e) != .none and ex.tag(ex.rhs(e)) != .ident))
-                return self.exprFail(e, "only a V(net) or V(net, net) probe of the analog solution is implemented in a digital expression");
+            if (!self.mixed or !std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or !probeTerminal(ex, ex.lhs(e)) or
+                (ex.rhs(e) != .none and !probeTerminal(ex, ex.rhs(e))))
+                return self.exprFail(e, "only a V(net), V(net, net) or V(branch) probe of the analog solution is implemented in a digital expression");
             self.has_probes = true;
             break :blk real_type;
         },
@@ -1771,6 +1771,23 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
     // ponytail: an array element operand watches every element of its array;
     // a per-array wake list if a big memory ever feeds one.
     return sensitivityProbes(self, e, out, null);
+}
+
+/// Whether `e` is a VAMS §7.3.3 probe terminal the mixed-signal kernel reads:
+/// a simple or a §6.7.1 hierarchical name of a net or a named branch.
+fn probeTerminal(ex: *const Ast.ExprStore, e: Ast.ExprId) bool {
+    return ex.tag(e) == .ident or ex.tag(e) == .hier_ident;
+}
+
+/// Probe terminal `e` as the analog solution names it: a hierarchical
+/// name's parts joined by `.` (`Lowered.discrete_probes`' keys), in `a`.
+pub fn probeName(self: *const Run, a: std.mem.Allocator, e: Ast.ExprId) Error![]const u8 {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .ident) return self.file.str(ex.strOf(e));
+    const ids = ex.nameParts(e);
+    const parts = try a.alloc([]const u8, ids.len);
+    for (ids, parts) |id, *p| p.* = self.file.str(id);
+    return std.mem.join(a, ".", parts);
 }
 
 /// `sensitivity`, where each VAMS §7.3.6.3 analog probe is appended to

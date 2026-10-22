@@ -2533,7 +2533,10 @@ fn infoOf(c: Code) Info {
             \\the 14.6 pulse controls (pulsestyle, showcancelled, PATHPULSE$),
             \\which are ignored: 14.6's default pulse handling applies instead,
             \\inertial, with the reject and error limits equal to the path delay.
-            \\A block without pulse controls raises none.
+            \\A block without pulse controls raises none. The same engine runs
+            \\the digital half of a mixed-signal design and evaluates its timing
+            \\checks too, passing over the forms E1149 lists; the analog compile
+            \\still names every check, since the analog solver evaluates none.
             \\
             \\  --deny=W0251    refuse the module instead, for a design whose
             \\                  answer depends on the timing being honoured
@@ -2802,9 +2805,10 @@ fn infoOf(c: Code) Info {
             .title = "concatenation operand has no bit width",
             .lrm = "4.2.13",
             .explain =
-            \\LRM 4.2.13 accepts only sized constants (LRM 2.6.1) and strings
-            \\(LRM 3.3) as concatenation operands, because the result width is
-            \\the sum of the operand widths.
+            \\LRM 4.2.13 accepts only sized constants (LRM 2.6.1), strings
+            \\(LRM 3.3) and integer function calls (LRM 4.7.1, 32 bits) as
+            \\concatenation operands, because the result width is the sum of
+            \\the operand widths.
             \\
             \\A replication constant must additionally be "a non-negative,
             \\non-x and non-z constant expression".
@@ -7287,7 +7291,9 @@ fn infoOf(c: Code) Info {
             \\    delayed reference and data signals (15.5.1, 15.5.2), which
             \\    exist for negative checks.
             \\
-            \\An analog compile never evaluates a timing check (W0251).
+            \\The analog solver never evaluates a timing check (W0251). The digital
+            \\half of a mixed-signal design evaluates the rest and passes over
+            \\these forms, which that warning names.
             ,
         },
         .E1101 => .{

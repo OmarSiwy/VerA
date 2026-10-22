@@ -1132,6 +1132,15 @@ pub fn natureAttrExpr(self: *const SourceFile, name: StrId, attr: []const u8) ?E
                 .flow => d.flow,
             };
             if (bound == .none) return null;
+            // §3.6.2.6 the parent is the nature as the discipline binds it,
+            // so a §3.6.2.3 override there (`flow.abstol = 10u;`) is what
+            // the derived nature inherits. The last override wins, as in
+            // `collectDisciplines`.
+            var over: ?ExprId = null;
+            for (d.overrides) |o| {
+                if (o.which == half and std.mem.eql(u8, self.str(o.attr.name), attr)) over = o.attr.value;
+            }
+            if (over) |v| return v;
             want = bound;
             continue;
         }

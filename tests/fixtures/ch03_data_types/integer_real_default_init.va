@@ -21,11 +21,16 @@ module ch03_integer_real_default_init(p, n);
     electrical p, n;
     integer count;
     integer digital_count;
+    integer digital_was_x;
     real gain;
 
     initial begin
+        // CHECKI is a $strobe, which reports at the end of the time step
+        // (IEEE 1364-2005 §17.1.2), after `digital_count = 4`: bind the
+        // default before it is overwritten.
+        digital_was_x = digital_count === 32'bx;
         `CHECKI("a digital-context integer without initialization starts unknown",
-            digital_count === 32'bx, 1);
+            digital_was_x, 1);
         digital_count = 4;
         `CHECKI("the digital integer can subsequently be assigned", digital_count, 4);
     end

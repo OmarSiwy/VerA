@@ -719,6 +719,8 @@ pub const host_simparams = simparam.host_simparams;
 pub const DefaultTransition = base.Region(?f64);
 /// A `timescale's two operands, in seconds (`Preprocessor.Timescale`).
 pub const Timescale = base.Timescale;
+/// IEEE 1364 §19.8 one `timescale event (`Preprocessor.TimescaleEvent`).
+pub const TimescaleEvent = base.Region(?Timescale);
 
 // Row budgets on a 64-bit host. Every table here is per module and short
 // (psp103: 847 params, 12 nodes, 18 contributions), so these pin today's
@@ -752,8 +754,12 @@ token_span: *const fn (src: []const u8, starts: []const u32, tok: u32) diag.Span
 default_transitions: []const DefaultTransition = &.{},
 /// IEEE 1364 §19.8 the `timescale in force at the end of the stream
 /// (`Preprocessor.Directives.timescale`), or null: §9.15's `timeUnit` and
-/// `timePrecision`, and the testbench's mixed-signal time unit.
+/// `timePrecision`.
 timescale: ?Timescale = null,
+/// IEEE 1364 §19.8 every `timescale event (`Preprocessor.Directives.timescales`),
+/// at offsets into `src`: each module runs in the one written before it, so
+/// the mixed-signal testbench hands the digital half all of them.
+timescales: []const TimescaleEvent = &.{},
 /// §2.9 every attribute_spec on a declaration, in source order (instance,
 /// then spec), over the whole file. `--emit-verilog` reads `vera_pin` and
 /// `vera_delay` from them.
@@ -922,6 +928,12 @@ discrete_words: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// block's), name → first reading token. The mixed runner copies each one's
 /// §5.10 held value into the digital engine after every accepted solution.
 discrete_reads: std.StringArrayHashMapUnmanaged(u32) = .empty,
+/// §7.3.3 / §6.7.1 each terminal a digital `V(...)` probe names, spelled as
+/// the digital half spells it (a hierarchical name's parts joined by `.`),
+/// → the node pair whose potential difference it reads, `""` for ground: a
+/// named branch's terminals, or the net and ground. The mixed runner reads a
+/// probe through it (`probe_terminals`).
+discrete_probes: std.StringArrayHashMapUnmanaged([2][]const u8) = .empty,
 /// §6.3.4 scalar parameters read by the discrete source, including defaults
 /// they depend on. The mixed host transports selected real values from the
 /// derived model card; unrelated analog parameters need no digital storage.

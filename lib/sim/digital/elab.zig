@@ -2277,7 +2277,7 @@ test "VAMS §7.2.2 the digital half of a mixed-signal module elaborates beside i
         \\  initial begin code = 4'd3; #5 code = 4'd7; end
         \\  analog begin x = gain * code; V(out) <+ x; end
         \\endmodule
-    , .{ .mixed = .{ .top = "dac", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &output.writer);
+    , .{ .mixed = .{ .top = "dac", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }} } }, &bag, &output.writer);
     const at = r.slotOf("code").?;
     // The continuous half is not the digital engine's to hold.
     try std.testing.expectEqual(@as(?u32, null), r.slotOf("x"));
@@ -2468,7 +2468,7 @@ test "VAMS §6.3 a mixed root reads the card's value and an instance its overrid
         \\  initial seen = n;
         \\  analog V(p) <+ g;
         \\endmodule
-    , .{ .mixed = .{ .top = "top", .timescale = .{ .unit = 1e-9, .precision = 1e-9 }, .params = &.{.{ .name = "n", .value = 4 }} } }, &bag, &output.writer);
+    , .{ .mixed = .{ .top = "top", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }}, .params = &.{.{ .name = "n", .value = 4 }} } }, &bag, &output.writer);
     _ = try r.runUntil(0);
     try std.testing.expectEqual(@as(?i64, 4), r.values[r.slotOf("seen").?].asInt());
     try std.testing.expectEqual(@as(?i64, 3), r.values[r.slotOf("u.got").?].asInt());
@@ -2492,7 +2492,7 @@ test "VAMS §6.3.4 selected real parameters arrive from the derived host model" 
         \\endmodule
     , .{ .mixed = .{
         .top = "m",
-        .timescale = .{ .unit = 1e-9, .precision = 1e-9 },
+        .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }},
         .real_params = &.{
             .{ .name = "selected", .value = 0.25 },
             .{ .name = "inferred", .value = 4.0 },

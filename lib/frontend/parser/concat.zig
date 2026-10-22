@@ -94,8 +94,10 @@ pub fn parseAssignPattern(self: *Parser, tok: u32) Error!Ast.ExprId {
 /// there opens a replication's inner concatenation (`{2+1{a}}` versus
 /// `{2+1}`). In analog mode, literal counts are unrolled for §4.2.13 because
 /// `foldBitConcat` needs every sized operand: `{4{2'b10}}` arrives as four
-/// operands and `{{0{a}}, b}` as `{b}`. A nonconstant count stays a
-/// `.multi_concat` (§3.3 Table 3-3 allows one for a string, `{i{"Hi"}}`).
+/// operands and `{{0{1'b1}}, b}` as `{b}`. A nonconstant count, or a group
+/// over anything but literals (`{4{f(w)}}`, whose call §4.2.13 evaluates
+/// once), stays a `.multi_concat` (§3.3 Table 3-3 allows a nonconstant one
+/// for a string, `{i{"Hi"}}`).
 /// Digital mode keeps every group and count unflattened.
 fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
     // An analog `{{{...` recurses here through `braceGroup` without passing
@@ -125,9 +127,10 @@ fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.Ex
             // §4.2.13 "When a replication expression is evaluated, the
             // operands shall be evaluated exactly once, even if the
             // replication constant is zero." A literal has nothing to
-            // evaluate, so only a zero group over something else is kept, as
-            // a `.multi_concat` that `foldBitConcat` gives no width.
-            if (n == 0) for (inner.items) |it| switch (self.file.exprs.tag(it)) {
+            // evaluate, so only a group over something else is kept, as a
+            // `.multi_concat`: `foldBitConcat` gives a zero one no width, and
+            // `Lower.lowerConcat` evaluates any other's operands once.
+            for (inner.items) |it| switch (self.file.exprs.tag(it)) {
                 .int_literal, .real_literal, .str_literal, .logic_literal => {},
                 else => { // else: anything but a literal may have an effect to evaluate
                     try items.appendSlice(self.arena, inner.items);

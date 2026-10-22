@@ -105,6 +105,11 @@ pub const Design = struct {
     /// Empty for a tree of one: with nothing renamed there is no path but the
     /// module's own names, and those resolve without it.
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// §4.4 the `names` rows' own declarations: a connected child port's path
+    /// → the discipline the child declares for it, when it declares one. The
+    /// joined net's discipline may be another (§3.6.2.3's domainless net), and
+    /// `V(u.a)` names the port.
+    port_disciplines: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// §3.6.5's STRUCTURAL implicit nets: "Nets can be used in structural
     /// descriptions without being declared." One entry per instance port actual
     /// naming a net the instantiating module never declared.
@@ -572,6 +577,8 @@ pub const Flatten = struct {
 
     /// §6.7 path → flat name. See `Design.names`.
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// See `Design.port_disciplines`.
+    port_disciplines: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// See `Design.inserts`.
     inserts: std.ArrayList(Inserted) = .empty,
     /// Ports `insert.plan` bridged with nothing, judged once every net's
@@ -877,6 +884,7 @@ pub const Flatten = struct {
         return .{
             .top = out,
             .names = self.names,
+            .port_disciplines = self.port_disciplines,
             .implicit_nets = self.implicit_nets.items,
             .unconnected_inputs = self.unconnected_inputs.items,
             .units = self.unit_paths.items,

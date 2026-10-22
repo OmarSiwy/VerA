@@ -847,11 +847,8 @@ fn inlineInstance(
             // §6.7.1 the port still has a hierarchical name that may be
             // probed, so the path resolves to the net it was joined to.
             // These are the only rows `Design.names` holds.
-            try self.names.put(
-                self.ctx.arena,
-                try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(p.name) }),
-                self.ctx.file.str(bound),
-            );
+            const port_path = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(p.name) });
+            try self.names.put(self.ctx.arena, port_path, self.ctx.file.str(bound));
             // E.3.2: a primitive's attribute was bound by `walkInstances`,
             // and its declared `electrical` is the default, bound last.
             // §4.4 otherwise the child's own declaration names its accesses.
@@ -861,7 +858,10 @@ fn inlineInstance(
                 widths.appendAssumeCapacity(.{ .port = p, .net = bound, .tok = conn.?.main_tok });
                 try elab_resolve.resolveDiscipline(self, path, p, bound, conn.?.main_tok);
                 const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
-                if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
+                if (local != .none) {
+                    try unit.port_disc.put(self.ctx.arena, p.name, local);
+                    try self.port_disciplines.put(self.ctx.arena, port_path, self.ctx.file.str(local));
+                }
             }
         } else {
             // §6.2.2 "a blank port connection shall represent the situation

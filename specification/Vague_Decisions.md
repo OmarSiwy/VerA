@@ -812,7 +812,7 @@ summary and has a **Status** line naming what landed.
 - **Why vague**: the tolerances, when absent, are the tool's, and a fixed-grid harness cannot insert a point.
 - **Options**: insert points (a variable-step solver); fire at the next grid point with a warning; refuse such fixtures.
 - **Decision**: `DECIDED:` the pure analog testbench is a harness, not a host. It fires at the first `//! time` point past the event and says so with W0750. A grid with no `//! analysis` line is `tran`. The device still publishes the event and its breakpoint correctly, and a fixture whose reasoning needs an inserted point runs on the mixed path (AGENTS.md §7).
-- **VerA today**: `src/codegen/exe/tb/runner.zig:83` (`warnGridEvents`). Fixture `ch05_analog_behavior/event_cross_fires_on_a_time_grid.va`. No change.
+- **VerA today**: `src/codegen/exe/tb/runner.zig:83` (`warnGridEvents`). Fixture `ch05_analog_behavior/event_cross_fires_on_a_time_grid.va`. A `cross` that writes its own nonzero card-valued tolerances is not vague: its device publishes where a late event should have fired (`Instance.vera_cross_retry__`), and the testbench solves a point there before the late one (`locate`, `ch05_analog_behavior/cross_tolerances_are_not_the_enable.va`).
 - **Measure impact**: none.
 
 ### VD-067: `absdelta` default tolerances

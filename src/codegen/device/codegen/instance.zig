@@ -94,6 +94,18 @@ pub fn emitInstance(self: *Gen) Error!void {
     // `State` twins would be dead copies.
     if (writesSchedule(self, .bound_step)) try self.hist.append(self.arena, "bound_step");
     if (writesSchedule(self, .discontinuity)) try self.hist.append(self.arena, "discontinuity_order");
+    if (try gen_call.anyCrossLocated(self)) {
+        try self.w(
+            \\    /// §5.10.3.1 the earliest time inside its own tolerance box at
+            \\    /// which a `cross` the accepted step found late should have
+            \\    /// fired (`zCrossRetry`); `inf` = every event was in its box.
+            \\    /// Written by `updateState`. The fixed-grid testbench solves a
+            \\    /// point there first (VD-066); another host may ignore it.
+            \\    vera_cross_retry__: f64 = std.math.inf(f64),
+            \\
+        , .{});
+        try self.hist.append(self.arena, "vera_cross_retry__");
+    }
     // §9.12 / IEEE 1364 §17.10: only a model that searches the plusargs has
     // somewhere for the host to write them.
     if (self.lowered.uses.contains(.plusargs)) try self.w(

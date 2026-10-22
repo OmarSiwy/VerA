@@ -2,7 +2,6 @@
 // named branch. The source fixes both potentials at 2 V; the digital sample
 // is after the initial analog solution, away from a changing input.
 //! lrm 6.7.1:1005
-//! xfail Hierarchical net and branch probes in a digital initial block are refused with E0437.
 //! solve
 //! time 0, 1n, 2n
 `include "check.vh"

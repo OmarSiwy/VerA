@@ -184,11 +184,14 @@ pub const DefaultDiscipline = struct {
     /// declared after this directive is encountered in the text stream."
     discipline: []const u8,
 
-    /// The default in force at offset `at` of `events`, or null. The most
-    /// recent directive wins, and a wire-qualified one wins over an
-    /// unqualified one however old it is ("the more specific directives have
-    /// higher precedence").
-    pub fn inForce(events: []const DefaultDiscipline, at: u32) ?[]const u8 {
+    /// The default in force at offset `at` of `events` for a signal of type
+    /// `qualifier`, or null. The most recent directive wins, and one naming
+    /// `qualifier` wins over an unqualified one however old it is ("the more
+    /// specific directives have higher precedence"). A directive naming
+    /// another qualifier does not apply: "more than one `default_discipline
+    /// directive can be in force simultaneously, provided each differs in
+    /// qualifier".
+    pub fn inForce(events: []const DefaultDiscipline, at: u32, qualifier: ?Qualifier) ?[]const u8 {
         var fallback: ?[]const u8 = null;
         var i = events.len;
         return while (i > 0) {
@@ -198,7 +201,7 @@ pub const DefaultDiscipline = struct {
             // §10.2: the bare form and `resetall withdraw the default outright,
             // so nothing older than one of those is still in force.
             if (e.discipline.len == 0) break fallback;
-            if (e.qualifier == .wire) break e.discipline;
+            if (e.qualifier != null and e.qualifier == qualifier) break e.discipline;
             if (e.qualifier == null and fallback == null) fallback = e.discipline;
         } else fallback;
     }

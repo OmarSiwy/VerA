@@ -883,7 +883,7 @@ test "§8.4.3.3 A2D crossings at 5.2 ns and 7.6 ns reach ticks 5 and 8; §7.3.6.
         \\  always @(cross(V(vi) - 0.52, +1, 1p)) begin lo = $time; at = V(vi); end
         \\  always @(cross(V(vi) - 0.76, +1, 1p)) hi = $time;
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }} } }, &bag, &out.writer);
     // V(vi) = 0.1 V/ns, so the crossings are at 5.2 ns and 7.6 ns.
     var f: Fake = .{ .slot = dig.slotOf("lo").?, .gpa = arena, .slope = 1e8 };
     dig.watchAnalog(f.slot);
@@ -914,7 +914,7 @@ test "§8.4 / IEEE 1364-2005 §17.1.3 a probing $monitor reports at each analog 
         \\  inout vi; electrical vi; integer u;
         \\  initial begin u = 0; $monitor("%0d %0d", $time, V(vi) > 1.5); end
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }} } }, &bag, &out.writer);
     // V(vi) = 1 V/ns. Nothing digital happens after time 0, so each report
     // past it comes from an analog solution's own tick. V(vi) is the operand:
     // it moves at 1 ns and 3 ns too, where `V(vi) > 1.5` does not.
@@ -936,7 +936,7 @@ test "§5.10.3.1 a crossing the secant only creeps toward is still cut to within
         \\  integer lo; initial lo = 0;
         \\  always @(cross(V(vi) - 0.5, +1, 1f)) lo = $time;
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }} } }, &bag, &out.writer);
     // V(vi) = (t / 1 s)^(1/8): steep at 0, flat by the crossing, where
     // (t)^(1/8) = 0.5 puts it at 2^-8 s. From a base at 0 every secant lands
     // after it and closes in far slower than 64 cuts can.
@@ -963,7 +963,7 @@ test "§5.10.3.1 a step crossing with a time_tol below one ulp of time is cut to
         \\  integer n; initial n = 0;
         \\  always @(cross(V(vi), +1, 1e-30)) n = n + 1;
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }} } }, &bag, &out.writer);
     // V(vi) steps from -1 V to 3 V at 1/3 s. No two times 1e-30 s apart
     // exist near it (one ulp of 0.33 s is 5.6e-17 s), so the tightest cut
     // is the pair of adjacent floats around the step, and the crossing is
@@ -988,7 +988,7 @@ test "§5.10.3.4 absdelta interpolates digital events without forcing analog poi
         \\  initial n = 0;
         \\  always @(absdelta(V(p), 0.25, 1p, 1u)) n = n + 1;
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-12 } }} } }, &bag, &out.writer);
     // The fake's 0.1 V/ns ramp has delta crossings at 2.5, 5 and 7.5 ns;
     // at 10 ns the remaining change equals delta, rather than exceeding it.
     // No watchAnalog: none of these A2D events causes a D2A. The only analog
@@ -1021,7 +1021,7 @@ test "ams_zero_delta_ignores_tolerances_without_interpolation" {
         \\    $display("%0d %g", $time, V(p));
         \\  end
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-12 } }} } }, &bag, &out.writer);
     var f: Fake = .{ .slot = dig.slotOf("n").?, .gpa = arena, .slope = 1e8 };
     try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9 }, .tick = 1e-12 });
     try testing.expectEqual(@as(?i64, 2), dig.values[f.slot].asInt());
@@ -1057,7 +1057,7 @@ test "§5.10.3.4 invalid absdelta controls assigned at runtime report E0517" {
             \\endmodule
         , .{ c.name, c.value });
         var dig = try digital.elaborate(arena, source, .{
-            .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } },
+            .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-12 } }} },
         }, &bag, &out.writer);
         try testing.expect(!bag.failed());
         var f: Fake = .{ .slot = dig.slotOf("n").?, .gpa = arena, .slope = 1e8 };
@@ -1086,7 +1086,7 @@ test "§7.8.4 an inserted bridge's digital half runs, and the analog reads it by
         \\module m; electrical y; src u(y); endmodule
     , .{ .mixed = .{
         .top = "m",
-        .timescale = .{ .unit = 1e-9, .precision = 1e-9 },
+        .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }},
         .inserts = &.{.{ .path = "", .inst = "u", .port = "q", .module = "d2a", .name = "y__d2a__ddiscrete", .upper_port = "el", .lower_port = "cm" }},
     } }, &bag, &out.writer);
     var f: Fake = .{ .slot = dig.slotOf("y__d2a__ddiscrete.lvl").?, .gpa = arena };
@@ -1111,7 +1111,7 @@ test "§5.10.4 / §7.3.6.1 an analog timer's `-> ev` reaches `always @(ev)` at e
         \\  always @(ev) hits = hits + 1;
         \\  analog begin @(timer(5n, 10n)) -> ev; I(p) <+ 1m * hits; end
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-9 } }} } }, &bag, &out.writer);
     var f: Fake = .{ .slot = dig.slotOf("hits").?, .gpa = arena };
     dig.watchAnalog(f.slot);
     try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9, 20e-9 }, .tick = 1e-9 });
@@ -1132,7 +1132,7 @@ test "§5.10.3.3 a monitored timer agrees with the host grid without duplicate a
         \\  always @(ev) hits = hits + 1;
         \\  analog @(timer(2u, 1m)) -> ev;
         \\endmodule
-    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-3, .precision = 1e-9 } } }, &bag, &out.writer);
+    , .{ .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-3, .precision = 1e-9 } }} } }, &bag, &out.writer);
     var f: Fake = .{ .slot = dig.slotOf("hits").?, .gpa = arena, .timer_grid = .{ .start = 2e-6, .period = 1e-3 } };
     dig.watchAnalog(f.slot);
     try run(Fake, &f, &dig, .{ .times = &.{ 0, 4.096 }, .tick = 1e-9 });
@@ -1166,7 +1166,7 @@ test "§5.10.3.3 runtime-invalid timer controls report E0517" {
             \\endmodule
         , .{ c.name, c.value });
         var dig = try digital.elaborate(arena, source, .{
-            .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } },
+            .mixed = .{ .top = "m", .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-12 } }} },
         }, &bag, &out.writer);
         try testing.expect(!bag.failed());
         var f: Fake = .{ .slot = dig.slotOf("hits").?, .gpa = arena };

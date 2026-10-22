@@ -396,6 +396,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         \\    inst.discontinuity_order = -1; // §9.17.1
         \\
     , .{});
+    if (try gen_call.anyCrossLocated(self)) try self.w("    inst.vera_cross_retry__ = std.math.inf(f64); // §5.10.3.1\n", .{});
     // §9.13.1 the internal seed advances only here, once per accepted point,
     // so the residual it feeds is fixed across the Newton loop.
     if (self.lowered.rng_auto_seeds.items.len != 0) try self.w(
@@ -503,7 +504,23 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // so nothing is observed one timepoint late. `enable` gates the
             // event, not the record, so a re-enabled operator never compares
             // against a stale sample.
-            .cross, .above => try self.w("        inst.{s}__prev = in;\n", .{n}),
+            // §5.10.3.1 a `cross` with its own tolerance box also says where
+            // an event this point found outside the box should have fired,
+            // read against `__prev` before it moves.
+            .cross, .above => {
+                if (k == .cross and try gen_call.crossLocated(self, args)) try self.w(
+                    \\        if (sim.kind == .tran and sim.dt > 0.0 and ({1s})) if (zCrossRetry(inst.{0s}__prev, in, sim.t, sim.dt, {2s}, {3s})) |r| {{
+                    \\            inst.vera_cross_retry__ = @min(inst.vera_cross_retry__, r);
+                    \\        }};
+                    \\
+                , .{
+                    n,
+                    try gen_call.crossTest(self, n, args, "in"),
+                    try gen_call.ctrlStep(self, args, 2, "0.0"),
+                    try gen_call.ctrlStep(self, args, 3, "0.0"),
+                });
+                try self.w("        inst.{s}__prev = in;\n", .{n});
+            },
             // §5.10.3.3 the latest start and period define the absolute grid,
             // including changes BETWEEN fires. Count rather than accumulate,
             // advancing even while enable suppresses delivery.

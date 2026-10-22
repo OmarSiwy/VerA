@@ -2575,13 +2575,13 @@ pub const parser_tests = struct {
         const mask = edge.file.modules[0].timing_checks[0].masks[0];
         try std.testing.expectEqual(Ast.TimingCheck.transition('0', '1') | Ast.TimingCheck.transition('1', 'x'), mask);
 
-        // An analog compile evaluates no timing check and names each (W0251).
+        // The analog solver evaluates no timing check, so an analog compile names each (W0251).
         const named = try parseForTest(arena, tc ++ "$setup(d, posedge clk, 1); $hold(posedge clk, d, 1); endspecify endmodule");
         var w0251: ?[]const u8 = null;
         for (0..named.count()) |i| if (named.code(i) == .W0251) {
             w0251 = named.msg(i);
         };
-        try std.testing.expectEqualStrings("$setup, $hold never evaluated", w0251.?);
+        try std.testing.expectEqualStrings("$setup, $hold never evaluated by the analog solver", w0251.?);
 
         // A.2.1.1 specparams become local constants; A.2.4's PATHPULSE$ declares none.
         const sp = try parseForTest(arena, "module m; specparam [3:0] s = 2, PATHPULSE$ = (1, 2); endmodule");
@@ -16649,8 +16649,7 @@ pub const exe_tests = struct {
     const sample_mixed: tb.Mixed = .{
         .source = "module m(a); \"quoted\" \\ endmodule\n",
         .top = "m",
-        .unit = 1e-9,
-        .precision = 1e-12,
+        .timescales = &.{.{ .at = 0, .value = .{ .unit = 1e-9, .precision = 1e-12 } }},
         .inputs = &.{ "clk", "bus", "Zq" },
         .xz = &.{"clk"},
         .wide = &.{"bus"},
@@ -17315,8 +17314,8 @@ pub const exe_tests = struct {
         const swept = try tb.renderRunner(arena, "062_sweep", try tb.parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
         try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.initial_step = true;"));
         try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.final_step = true;"));
-        try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
-        try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
+        try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        var solved0 = solve(&x, &forced, &model, &inst);\n        if (crossRetry(&model, &inst, &x, &state)) |r| solved0 = locate(r, 0, &x, &forced, &model, &inst, &state, 0);\n        point(0,") != null);
+        try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        var solved2 = solve(&x, &forced, &model, &inst);\n        if (crossRetry(&model, &inst, &x, &state)) |r| solved2 = locate(r, 2, &x, &forced, &model, &inst, &state, 0);\n        point(2,") != null);
         // §5.2.1 `analog initial` re-runs per sub-task: all three points, while
         // the global event fires at one.
         try testing.expectEqual(@as(usize, 3), std.mem.count(u8, swept, "sim_state.analog_initial = true;"));
@@ -17601,7 +17600,7 @@ pub const exe_tests = struct {
         // A sweep point is an analysis; the time grid is `sim.mixed.run`'s.
         try testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "        runMixed(&model, &inst, &x, &forced, &state, &n);\n"));
         try testing.expect(std.mem.find(u8, src, "are not read by the mixed-signal runner") != null);
-        try testing.expect(std.mem.find(u8, src, "const mixed_timescale: ?Timescale = .{ .unit = 0.000000001, .precision = 0.000000000001 };\n") != null);
+        try testing.expect(std.mem.find(u8, src, "const mixed_timescales = [_]TimescaleEvent{ .{ .at = 0, .value = .{ .unit = 0.000000001, .precision = 0.000000000001 } }, };\n") != null);
         try testing.expect(std.mem.find(u8, src, "        set(a.x, a.forced, \"in\", pwl(&wave_0, t));\n") != null);
         // §7.3.1 a three-word `reg` is three ports, words 0 to 2.
         try testing.expect(std.mem.find(u8, src, ".word = 2 }") != null);

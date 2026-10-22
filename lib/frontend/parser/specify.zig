@@ -59,7 +59,7 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     // A timing check is the one item whose loss a design notices by name (a
     // violation it expected to be told about), so each is listed.
     const checks = b.timing_checks.items[first..];
-    const tail = " never evaluated";
+    const tail = " never evaluated by the analog solver";
     var n: usize = if (checks.len == 0) 0 else tail.len + 2 * (checks.len - 1);
     for (checks) |t| n += self.tokenText(t.main_tok).len;
     var names: std.ArrayList(u8) = try .initCapacity(self.arena, n);

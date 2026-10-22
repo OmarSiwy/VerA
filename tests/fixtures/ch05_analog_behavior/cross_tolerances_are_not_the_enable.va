@@ -52,14 +52,13 @@
 //
 // THE WAVEFORM. V(p) walks 0 -> 0.5 -> 1.5, so `V(p) - 1.0` crosses zero upward
 // exactly once, between t = 1n and t = 2n, and never downward. Each counter is
-// therefore 0 on the two rows before the crossing and 1 on every row after it,
-// and the sample each event captured lies in [1.0, 1.5]: the clause's box, whose
+// therefore 0 on the rows before the crossing and 1 on every row after it, and
+// the sample (a)'s event captured lies in [1.0, 1.1]: the clause's box, whose
 // lower edge is the crossing value (the event "shall occur after the threshold
-// crossing") and whose upper edge is the last declared point, since the
-// generated testbench only evaluates the `//! time` rows. A conforming host that
-// resolves the crossing to time_tol lands a point just past it and samples
-// approximately 1.0, which is inside the same box — so this bound holds for both
-// and no tighter literal would.
+// crossing") and whose upper edge is expr_tol past it ("both tolerances shall
+// be satisfied at the crossing"). The 2n row is within time_tol of the 1.5n
+// crossing but 0.5 V past it, outside the box, so the event cannot wait for it:
+// the host has to place a point between 1.5n and 1.6n.
 //
 // The `1n` and `0.1` in (a) are not arbitrary: 1 ns is one declared step of this
 // run and 0.1 V is a fifth of the swing between the last two points, so they are

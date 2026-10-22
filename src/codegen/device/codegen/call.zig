@@ -176,6 +176,31 @@ pub fn lastCrossTime(self: *Gen, n: []const u8, in: []const u8) Error![]const u8
     return self.arena.print("(sim.t - sim.dt) + inst.{0s}__prev / (inst.{0s}__prev - {1s}) * sim.dt", .{ n, in });
 }
 
+/// Returns whether a §5.10.3.1 `cross` gives its own tolerance box, so
+/// `updateState` publishes where a late event should have fired
+/// (`Instance.vera_cross_retry__`, `zCrossRetry`): time_tol is written and
+/// both tolerances fold to card values. A dynamic tolerance, or an enable
+/// that is not a nonzero literal, keeps the grid's answer (VD-066).
+// ponytail: a solve-time tolerance would need its own core slot; add one
+// when a model writes it.
+pub fn crossLocated(self: *Gen, args: []const Mir.Value) Error!bool {
+    if (args.len < 3) return false;
+    for (args[2..@min(args.len, 4)]) |a| if (try gen_host.ctrlIsDynamic(self, a)) return false;
+    if (args.len < 5) return true;
+    const en = self.an.foldConst(args[4], false) orelse return false;
+    return en.f != 0.0;
+}
+
+/// Returns whether any `cross` in the module is `crossLocated`.
+pub fn anyCrossLocated(self: *Gen) Error!bool {
+    for (self.names.units, 0..) |u, i| {
+        if (u.role != .analog_op or u.op != .cross) continue;
+        const inst = self.names.opInstOf(@intCast(i)) orelse continue;
+        if (try crossLocated(self, self.mir.instData(inst).call.args)) return true;
+    }
+    return false;
+}
+
 /// Returns the §5.10.3 enable test for `cross`, `above` or `timer` ("If
 /// enable argument is specified and it is zero, then <op>() is inactive"), or
 /// `true` when absent. The enable is a live expression; `UnitPlan` gives it

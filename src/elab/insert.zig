@@ -174,7 +174,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
     };
     for (try Ast.primTerms(self.ctx.arena, file, module)) |pt| {
         if (pt.main_tok >= self.ctx.tok_starts.len) continue;
-        const dname = Preprocessor.DefaultDiscipline.inForce(self.ctx.default_disciplines, self.ctx.tok_starts[pt.main_tok]) orelse continue;
+        const dname = Preprocessor.DefaultDiscipline.inForce(self.ctx.default_disciplines, self.ctx.tok_starts[pt.main_tok], .wire) orelse continue;
         const bottom = file.strings.find(dname) orelse continue;
         if (domain(file, bottom) != .discrete) continue;
         const base = file.lvalueBase(pt.expr);

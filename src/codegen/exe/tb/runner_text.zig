@@ -693,6 +693,60 @@ pub const runner_body =
     \\    if (stepPost(model, inst, x, state, solved_t)) |r3| retry(r3, n, x, forced, model, inst, state, depth + 1);
     \\}
     \\
+    \\/// The forced unknowns at the last accepted point, which `locate` draws
+    \\/// a `//! wave` from linearly, as the mixed runner's `pwl` does.
+    \\var forced_prev: [n_u]?f64 = @splat(null);
+    \\
+    \\/// §5.10.3.1 where a `cross` with its own tolerances should have fired,
+    \\/// when the point just solved found it outside the box they draw
+    \\/// (`Instance.vera_cross_retry__`), else null. Read off `updateState` on
+    \\/// copies, before the point prints, so the late attempt leaves neither
+    \\/// transcript nor history: a host does not strobe a step it rejects.
+    \\fn crossRetry(model: *const D.Model, inst: *const D.Instance, x: *const [n_u]f64, state: *const State) ?f64 {
+    \\    if (comptime State == void or !@hasField(D.Instance, "vera_cross_retry__")) return null;
+    \\    var ic = inst.*;
+    \\    var sc = state.*;
+    \\    _ = D.updateState(Val, model, &ic, x.*, &sc, sim_state);
+    \\    return if (std.math.isFinite(ic.vera_cross_retry__)) ic.vera_cross_retry__ else null;
+    \\}
+    \\
+    \\/// The point `crossRetry` asked for: solved and accepted at `r`, with each
+    \\/// forced unknown on the line between the last accepted point and `t`,
+    \\/// then `t` solved again from it. Returns whether that solve iterated, as
+    \\/// `solve` does. 16 deep at most, as `retry`.
+    \\fn locate(r: f64, n: usize, x: *[n_u]f64, forced: *const [n_u]?f64, model: *const D.Model, inst: *D.Instance, state: *State, depth: u32) bool {
+    \\    const t = sim_state.t;
+    \\    const t_prev = t - sim_state.dt;
+    \\    const last = sim_state.final_step;
+    \\    if (!(r > t_prev and r < t) or depth == 16) {
+    \\        std.debug.print("cross FAIL: located at {e}, not inside ({e}, {e})\n", .{ r, t_prev, t });
+    \\        std.process.exit(1);
+    \\    }
+    \\    std.debug.print("--- point {d}: crossing located at {e} ---\n", .{ n, r });
+    \\    var fr = forced.*;
+    \\    for (&fr, forced_prev, x) |*f, p, *xi| if (f.*) |v| if (p) |v0| {
+    \\        f.* = v0 + (v - v0) * (r - t_prev) / (t - t_prev);
+    \\        xi.* = f.*.?;
+    \\    };
+    \\    atPoint(r, r - t_prev);
+    \\    sim_state.initial_step = false;
+    \\    sim_state.final_step = false;
+    \\    sim_state.analog_initial = false;
+    \\    var solved_r = solve(x, &fr, model, inst);
+    \\    if (crossRetry(model, inst, x, state)) |r2| solved_r = locate(r2, n, x, &fr, model, inst, state, depth + 1);
+    \\    point(n, x, model, inst);
+    \\    if (stepPost(model, inst, x, state, solved_r)) |r2| retry(r2, n, x, &fr, model, inst, state, depth + 1);
+    \\    forced_prev = fr;
+    \\    for (forced, x) |f, *xi| if (f) |v| {
+    \\        xi.* = v;
+    \\    };
+    \\    atPoint(t, t - r);
+    \\    sim_state.final_step = last;
+    \\    const solved_t = solve(x, forced, model, inst);
+    \\    if (crossRetry(model, inst, x, state)) |r3| return locate(r3, n, x, forced, model, inst, state, depth + 1);
+    \\    return solved_t;
+    \\}
+    \\
     \\/// §9.4 the model's display tasks at this accepted point: a printing
     \\/// device's own `display`, or what a device built `--display=record`
     \\/// records (`say`), rendered by `contract.formatSay`. Its `$debug` and
@@ -1454,7 +1508,7 @@ pub const mixed_body = mixed_head ++ pwl_text ++ mixed_tail;
 const mixed_head =
     \\const sim = @import("sim");
     \\const diag = @import("diag");
-    \\const Timescale = @typeInfo(@FieldType(sim.digital.Mixed, "timescale")).optional.child;
+    \\const TimescaleEvent = @typeInfo(@FieldType(sim.digital.Mixed, "timescales")).pointer.child;
     \\
     \\/// VAMS §7.3.1 Table 7-1: a bit grouping, a net and an `integer` all reach
     \\/// the continuous context as an integer. §7.3.2: "It is an error if these
@@ -1483,10 +1537,16 @@ const mixed_head =
     \\    return @floatFromInt(v);
     \\}
     \\
-    \\/// The potential of node `n1` (minus `n2`) in `x`; a name that is no
-    \\/// unknown of the device is ground.
+    \\/// The potential of terminal `n1` (minus `n2`) in `x`.
     \\fn potential(x: *const [n_u]f64, n1: []const u8, n2: ?[]const u8) !f64 {
-    \\    return nodeValue(x, n1) - if (n2) |b| nodeValue(x, b) else 0.0;
+    \\    return terminal(x, n1) - if (n2) |b| terminal(x, b) else 0.0;
+    \\}
+    \\/// A probe terminal: the node pair lowering resolved it to (a named
+    \\/// branch, a hierarchical net), else a node by name; a name that is no
+    \\/// unknown of the device is ground.
+    \\fn terminal(x: *const [n_u]f64, name: []const u8) f64 {
+    \\    const pair = probe_terminals.get(name) orelse return nodeValue(x, name);
+    \\    return nodeValue(x, pair[0]) - nodeValue(x, pair[1]);
     \\}
     \\fn nodeValue(x: *const [n_u]f64, name: []const u8) f64 {
     \\    return x[u_index.get(name) orelse return 0.0];
@@ -1556,7 +1616,7 @@ const mixed_tail =
     \\    var real_params: [mixed_real_ports.len]sim.digital.Param = undefined;
     \\    inline for (mixed_real_ports, &real_params) |p, *value|
     \\        value.* = .{ .name = p.name, .value = @field(model, p.field) };
-    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale, .inserts = &mixed_inserts, .reads = &mixed_reads, .params = &mixed_params, .real_params = &real_params } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
+    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescales = &mixed_timescales, .inserts = &mixed_inserts, .reads = &mixed_reads, .params = &mixed_params, .real_params = &real_params } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
     \\    // VAMS §9.5.1.2 one descriptor table for both contexts: the device's,
     \\    // when it has one, so a descriptor either opens names one file.
     \\    if (comptime contract.fileIo(D)) |f| dig.file_io = f;
@@ -1572,8 +1632,8 @@ const mixed_tail =
     \\    }
     \\    inline for (snap_ports, 0..) |p, i| a.snap_slots[i] = mixedSlot(&dig, p.name);
     \\    inline for (event_ports, 0..) |p, k| dig.watchEvent(mixedSlot(&dig, p.name), p.edge, k) catch |e| mixedFail(&bag, e);
-    \\    const tick = if (mixed_timescale) |ts| ts.precision else 1.0;
-    \\    sim.mixed.run(Analog, &a, &dig, .{ .times = &times, .tick = tick }) catch |e| mixedFail(&bag, e);
+    \\    // IEEE 1364 §19.8 the digital half's tick: the finest precision of all.
+    \\    sim.mixed.run(Analog, &a, &dig, .{ .times = &times, .tick = sim.time.secondsAt(1, dig.finest) }) catch |e| mixedFail(&bag, e);
     \\    a.flush();
     \\}
     \\

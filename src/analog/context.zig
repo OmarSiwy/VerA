@@ -21,6 +21,7 @@ const lower_sysfunc = @import("sysfunc.zig");
 const lower_systask = @import("systask.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_shape = @import("shape.zig");
+const lower_expr = @import("expr.zig");
 const Ast = @import("frontend").Ast;
 const diag = @import("diag");
 const Mir = @import("ir").Mir;
@@ -1109,9 +1110,12 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
                 if (!std.mem.eql(u8, name, "cross") and !std.mem.eql(u8, name, "above") and !std.mem.eql(u8, name, "absdelta"))
                     try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross(), above() and absdelta()", .{ name, ctx.where });
             },
-            .branch_access => if (!std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or ex.tag(ex.lhs(e)) != .ident or
-                (ex.rhs(e) != .none and ex.tag(ex.rhs(e)) != .ident))
-                try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),
+            .branch_access => if (!std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or !probeTerminal(ex, ex.lhs(e)) or
+                (ex.rhs(e) != .none and !probeTerminal(ex, ex.rhs(e))))
+                try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net), V(net, net) and V(branch)", .{ctx.where})
+            else for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |t| {
+                if (t != .none) try recordProbeTerminal(self, t, ex.rhs(e) == .none);
+            },
             .port_access => try self.err(ex.mainTok(e), .E0437, "a port flow probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),
             else => {}, // else: every other tag is executable or judged elsewhere
         };
@@ -1162,6 +1166,38 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
     }
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| try scanContextExpr(self, c, discrete, is_initial, ctx);
+}
+
+/// Whether `e` is a terminal the mixed-signal kernel's digital `V(...)` probe
+/// reads: a simple or a §6.7.1 hierarchical name of a net or a named branch.
+fn probeTerminal(ex: *const Ast.ExprStore, e: Ast.ExprId) bool {
+    return ex.tag(e) == .ident or ex.tag(e) == .hier_ident;
+}
+
+/// Records digital probe terminal `t` in `Lowered.discrete_probes`, under the
+/// name the digital half spells it (its parts joined by `.`): the node pair
+/// of the named branch it names when it is a probe's `only` argument, else
+/// its net and ground. §6.7.1 a hierarchical name that names neither is
+/// E0901, as in the analog block; a simple one the digital half resolves.
+fn recordProbeTerminal(self: *Lower, t: Ast.ExprId, only: bool) Oom!void {
+    const ex = &self.file.exprs;
+    const key = if (ex.tag(t) == .ident) self.file.str(ex.strOf(t)) else blk: {
+        var parts: std.ArrayList([]const u8) = .empty;
+        for (ex.nameParts(t)) |p| try parts.append(self.arena, self.file.str(p));
+        break :blk try std.mem.join(self.arena, ".", parts.items);
+    };
+    if (self.out.discrete_probes.contains(key)) return;
+    const name = if (ex.tag(t) == .ident) key else try lower_expr.flatName(self, t);
+    const pair: [2]u32 = if (only and self.branches.contains(name)) blk: {
+        const b = self.branches.get(name).?;
+        break :blk .{ b.hi, b.lo };
+    } else if (self.node_voltages.get(name)) |n| .{ n, Lower.ground } else {
+        if (ex.tag(t) == .hier_ident) try self.err(ex.mainTok(t), .E0901, "`{s}` names no net or branch in the elaborated design", .{name});
+        return;
+    };
+    var nodes: [2][]const u8 = undefined;
+    for (pair, &nodes) |n, *out| out.* = if (n == Lower.ground) "" else self.out.nodeName(n);
+    try self.out.discrete_probes.put(self.arena, key, nodes);
 }
 
 /// §7.3.7 "Digital functions cannot be called from within the analog

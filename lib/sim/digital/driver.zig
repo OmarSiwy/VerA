@@ -376,7 +376,7 @@ test "§9.22.3 a driver's state is one bit: a vector signal_name is refused, not
         \\connectmodule c(d); input [3:0] d; initial $display("%b", $driver_state(d, 0)); endmodule
         \\module top; wire [3:0] w; assign w = 4'b1010; c cm(.d(w)); endmodule
         \\
-    , .{ .mixed = .{ .top = "top", .timescale = null } }, &bag, &out.writer));
+    , .{ .mixed = .{ .top = "top", .timescales = &.{} } }, &bag, &out.writer));
     var messages = std.Io.Writer.Allocating.init(arena.allocator());
     try diag.render(&bag, &messages.writer, .{});
     try std.testing.expect(std.mem.find(u8, messages.written(), "signal_name is a scalar net") != null);
@@ -431,6 +431,6 @@ test "§9.22 a driver access function outside a connect module is E0818" {
     try std.testing.expectError(error.DigitalFailed, root.elaborate(arena.allocator(),
         \\module top; wire w; assign w = 1'b1; initial $display("%0d", $driver_count(w)); endmodule
         \\
-    , .{ .mixed = .{ .top = "top", .timescale = null } }, &bag, &out.writer));
+    , .{ .mixed = .{ .top = "top", .timescales = &.{} } }, &bag, &out.writer));
     try std.testing.expectEqual(diag.Code.E0818, bag.records.items[0].code);
 }

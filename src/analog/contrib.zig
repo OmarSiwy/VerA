@@ -977,7 +977,7 @@ pub const generic_flow = "flow";
 ///  - E0501 with a suggestion: the §3.6.1.2 name mismatch.
 pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u32) Oom!void {
     if (node == ground or self.local_accesses.contains(e)) return;
-    const dname = self.out.nodes.items(.disc)[node];
+    const dname = (try portDiscipline(self, e)) orelse self.out.nodes.items(.disc)[node];
     if (dname.len == 0) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0337);
         b.msg("`{s}` has no discipline, so `{s}` names nothing on it", .{ lower_node.nodeName(self, node), name });
@@ -1016,6 +1016,20 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
         want,
     });
     try b.emit();
+}
+
+/// §4.4 "the discipline declaration for the nets, ports, or branch given in
+/// the argument expression list": a hierarchical terminal naming a connected
+/// child port (`V(u.b)`) names that port, so the child's declaration judges
+/// the access, not the joined node's discipline (§3.6.2.3's domainless net
+/// takes its domain from the ports connected to it). Null for any other access.
+///
+/// ponytail: the path is read without `flatName`'s generate-scope search, so
+/// a `u.b` written inside a generate block keeps the node's discipline.
+fn portDiscipline(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) != .branch_access or ex.tag(ex.lhs(e)) != .hier_ident) return null;
+    return self.port_disciplines.get(try Elaborate.flatReference(self.file, self.arena, self.module, ex.lhs(e)));
 }
 
 /// Returns the contribution index for a target, creating its entry and

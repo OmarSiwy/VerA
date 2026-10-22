@@ -2,6 +2,8 @@
 // initial_step samples -1 V at time zero; a later rising crossing samples
 // a nonnegative value. The counter must advance once for each operand,
 // so ignoring either event or requiring both to occur together fails.
+// V(p) is positive only at the 2n point, past the one rising crossing
+// (between 1n and 2n), so the wants are written per declared time.
 //
 //! lrm 5.10.1
 //! lrm 5.10.2
@@ -19,9 +21,9 @@ module ch5_initial_or_cross(p);
       events = events + 1;
     end
     `CHECKI("initial_step and the later crossing each trigger the OR statement",
-            events, (V(p) > 0.0) ? 2 : 1);
+            events, ($abstime > 1.5n) ? 2 : 1);
     `CHECKI("the first event samples -1 V and the later event samples the crossing",
-            (V(p) > 0.0) ? (x >= 0.0 && x <= 1.0) : (x == -1.0), 1);
+            ($abstime > 1.5n) ? (x >= 0.0 && x <= 1.0) : (x == -1.0), 1);
     I(p) <+ x;
   end
 endmodule

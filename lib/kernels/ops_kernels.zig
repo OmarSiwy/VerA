@@ -48,6 +48,21 @@ fn zCrossDir(dir: f64, prev: f64, in: f64) bool {
     if (dir != 0.0) return false; // §5.10.3.1 any other dir disables cross()
     return (prev <= 0.0 and in > 0.0) or (prev >= 0.0 and in < 0.0);
 }
+/// §5.10.3.1 "The event shall occur after the threshold crossing, and while
+/// the signal remains in the box defined by actual crossing and expr_tol and
+/// time_tol": for a crossing found in the step ending at `t`, null when `t`
+/// is inside that box, else a time inside it just past the crossing, the
+/// zero of the line through (`t - dt`, `v0`) and (`t`, `v1`) as
+/// `Gen.lastCrossTime` has it. A zero tolerance is the tool's (VD-066: the
+/// grid), so it does not bound the box.
+fn zCrossRetry(v0: f64, v1: f64, t: f64, dt: f64, ttol: f64, etol: f64) ?f64 {
+    const tc = (t - dt) + v0 / (v0 - v1) * dt;
+    const late = (ttol > 0.0 and t - tc > ttol) or (etol > 0.0 and @abs(v1) > etol);
+    if (!late) return null;
+    var d = if (ttol > 0.0) ttol else t - tc;
+    if (etol > 0.0) d = @min(d, etol * dt / @abs(v1 - v0));
+    return tc + d / 2.0;
+}
 /// §4.5.8 the fraction of the current excursion the ramp has traversed.
 /// "transition() forces all positive transitions of expr to occur over
 /// rise_time and all negative transitions to occur in fall_time", and the

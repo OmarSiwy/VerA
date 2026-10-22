@@ -6,7 +6,8 @@
 //! §15.3.5's period. A violation is reported (W1199), toggles the notifier
 //! (§15.5, Table 15-13) and calls `Run.tchk_hook` (VAMS 12.31.4
 //! cbTchkViolation). A form this file does not evaluate is refused by name
-//! (E1149), never accepted and ignored.
+//! (E1149), never accepted and ignored; in a mixed-signal design's digital
+//! half it is passed over, which the analog compile's W0251 already names.
 //!
 //! When a check is judged (specification/Vague_Decisions.md VD-104): at the event, in
 //! the order the time step's events arrive. A reference and a data event
@@ -146,6 +147,9 @@ fn arg(t: *const Ast.TimingCheck, k: usize) Ast.ExprId {
 fn compileOne(r: *Run, t: *const Ast.TimingCheck) Error!void {
     const name = r.file.str(t.name);
     const kind = kinds.get(name) orelse {
+        // The digital half of a mixed-signal design is an analog compile,
+        // whose parse already named every check of the block (W0251).
+        if (r.mixed) return;
         const clause = refused.get(name).?; // the parser admits A.7.5.1's twelve commands only
         return r.failWith(.E1149, t.main_tok, "`{s}` (IEEE 1364-2005 §{s}) is not evaluated by VerA's digital engine", .{ name, clause });
     };

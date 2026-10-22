@@ -205,8 +205,9 @@ fn lowerExprInner(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: 
 
         // §4.2.13 / §3.3 Table 3-3. A `.multi_concat` reaches lowering only
         // when its multiplier is not a literal, which Table 3-3 allows for a
-        // string result; every other replication was unrolled in the parser,
-        // where the operand widths still exist.
+        // string result, or its operands are not all literals, which §4.2.13
+        // evaluates once; every other replication was unrolled in the
+        // parser, where the operand widths still exist.
         .concat, .multi_concat => return lowerConcat(self, e),
         .assign_pattern, .pattern_repl => {
             try self.err(self.file.exprs.mainTok(e), .E0509, "", .{});
@@ -425,7 +426,8 @@ pub fn outsideRange(self: *Lower, sub: Ast.ExprId, name: []const u8, k: i64, w: 
 
 /// `{a, b, ...}` in a value position. The INTEGER form (§4.2.13) needs each
 /// operand's bit width, which only the token text carries, so `parser.zig`
-/// folds it and lowering never sees one; what is left here is §3.3 Table 3-3
+/// folds it and lowering never sees one, but for integer function calls
+/// (`intCallConcat`); what is left here is §3.3 Table 3-3
 /// `{Str1,...,Strn}`, "concatenation of Str1,…,Strn" — the LRM's own example is
 /// `{ "hello", " ", "world" }` == `"hello world"`.
 ///
@@ -435,13 +437,14 @@ pub fn outsideRange(self: *Lower, sub: Ast.ExprId, name: []const u8, k: i64, w: 
 /// synthetic `$str$cat`, which builds the string in its call site's scratch
 /// (`str_kernels.zStrCat`) exactly as `$sformat` does.
 ///
-/// A `.multi_concat` arrives here for one reason: §3.3 Table 3-3's Replication
-/// row says the "multiplier must be of integral type and can be nonconstant.
-/// If multiplier is nonconstant or Str is of type string, the result is a
-/// string containing N concatenated copies", and the parser unrolls only a
-/// literal count (see `replCount`). So every replication left standing is a
-/// string one. A multiplier the folder can make a number of is unrolled
-/// here; one it cannot is the row's nonconstant case, and `$str$repeat`
+/// A `.multi_concat` arrives here for two reasons: §4.2.13 evaluates a
+/// non-literal operand once, so the parser does not unroll one; and §3.3
+/// Table 3-3's Replication row says the "multiplier must be of integral type
+/// and can be nonconstant. If multiplier is nonconstant or Str is of type
+/// string, the result is a string containing N concatenated copies", and the
+/// parser unrolls only a literal count (see `replCount`). A multiplier the
+/// folder can make a number of is unrolled here; one it cannot is the row's
+/// nonconstant case, and `$str$repeat`
 /// makes the N copies while the device runs (`str_kernels.zStrRepeat`).
 fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
@@ -510,8 +513,9 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // run-time operands and the folded runs between them, in source order.
     var out: std.ArrayList(u8) = .empty;
     var parts: std.ArrayList(Mir.Value) = .empty;
-    for (elems) |el| {
+    for (elems, 0..) |el, i| {
         const tv = try lowerExpr(self, el);
+        if (i == 0 and tv.ty == .integer and runtime_count == null) return intCallConcat(self, e, elems, copies, tv);
         if (tv.ty != .string) {
             try self.err(self.file.exprs.mainTok(e), .E0327, "only sized constants and strings can be concatenated", .{});
             return poison;
@@ -554,6 +558,34 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     // The interner borrows: the bytes live in the arena, which outlives the Mir.
     return .{ .v = try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena)), .ty = .string };
+}
+
+/// §4.2.13's integer form over integer function calls, the operands the
+/// parser cannot fold but whose width the declaration fixes: an
+/// `analog_function_type` `integer` (§4.7.1) is 32 bits (§3.2). `first` is
+/// `elems[0]` already lowered. §4.2.13 `result = {4{func(w)}}` "would be
+/// computed as: y = func(w); result = {y, y, y, y}", so each operand is
+/// evaluated once however many `copies` there are. Every operand is 32 bits
+/// wide, so the integer the result is held in is its low 32: the last one.
+fn intCallConcat(self: *Lower, e: Ast.ExprId, elems: []const Ast.ExprId, copies: i64, first: TypedValue) Oom!TypedValue {
+    const ex = &self.file.exprs;
+    var last = first;
+    for (elems, 0..) |el, i| {
+        const tv = if (i == 0) first else try lowerExpr(self, el);
+        if (tv.ty != .integer or ex.tag(el) != .call) {
+            try self.err(ex.mainTok(e), .E0327, "only sized constants, strings and integer function calls can be concatenated", .{});
+            return poison;
+        }
+        last = tv;
+    }
+    // §4.2.13: a zero replication "shall appear only within a concatenation
+    // in which at least one of the operands of the concatenation has a
+    // positive size"; alone it has no width and no value.
+    if (copies == 0) {
+        try self.err(ex.mainTok(e), .E0326, "", .{});
+        return poison;
+    }
+    return last;
 }
 
 /// The Value of one scalarized element — a variable array (§3.2.2) or a

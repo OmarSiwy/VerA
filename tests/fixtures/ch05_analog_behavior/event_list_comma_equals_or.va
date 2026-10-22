@@ -2,6 +2,8 @@
 // A one-shot timer triggers at 1 ns while V(c) remains negative; the rising
 // crossing triggers later while the timer is inactive. Each spelling must
 // count both independent events. A retained nonzero sample checks the body.
+// V(c) rises through zero only between 1n and 2n, so the wants are written
+// per declared time: 0 events at 0, the timer's at 1n, both at 2n.
 //
 //! lrm 5.10.1
 //! lrm 5.10.1:1001
@@ -23,9 +25,9 @@ module ch5_event_comma(p, c);
     `CHECK("the timer half of a comma event list fires on its own",
            held - (($abstime >= 1n) ? 0.7 : 0.0), 0.0, 1e-15);
     `CHECKI("the comma list triggers from each event independently", comma_events,
-            (V(c) > 0.0) ? 2 : (($abstime >= 1n) ? 1 : 0));
+            ($abstime > 1.5n) ? 2 : (($abstime >= 1n) ? 1 : 0));
     `CHECKI("the keyword or has the same two independent triggers", or_events,
-            (V(c) > 0.0) ? 2 : (($abstime >= 1n) ? 1 : 0));
+            ($abstime > 1.5n) ? 2 : (($abstime >= 1n) ? 1 : 0));
     I(p) <+ held;
   end
 endmodule

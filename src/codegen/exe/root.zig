@@ -249,11 +249,9 @@ pub const Mixed = struct {
     source: []const u8,
     /// The root module the device was lowered from.
     top: []const u8,
-    /// The `timescale unit and precision in force, in seconds; null when the
-    /// source gave none.
-    unit: ?f64,
-    /// Set exactly when `unit` is.
-    precision: ?f64,
+    /// IEEE 1364 §19.8 the `timescale events at offsets into `source`
+    /// (`Lowered.timescales`); empty when the source gave none.
+    timescales: []const Lowered.TimescaleEvent,
     /// Digital-owned names the analog block reads, each a `Model` field.
     inputs: []const []const u8,
     /// §8.5.3.6 digital names read under an explicit D2A event, each a
@@ -273,6 +271,10 @@ pub const Mixed = struct {
     /// §7.3.6.4 analog variables a digital expression reads
     /// (`Lowered.discrete_reads`).
     reads: []const []const u8 = &.{},
+    /// §7.3.3 digital probe terminals and their node pairs
+    /// (`Lowered.discrete_probes`).
+    probe_names: []const []const u8 = &.{},
+    probe_nodes: []const [2][]const u8 = &.{},
     /// The device's §5.10 held variables: the `Instance` fields a read
     /// variable's value can be copied from.
     held: []const Lowered.HeldVar = &.{},

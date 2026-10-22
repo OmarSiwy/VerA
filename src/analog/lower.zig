@@ -252,6 +252,8 @@ port_widths: []const Elaborate.PortWidth = &.{},
 attribute_disciplines: std.AutoHashMapUnmanaged(Ast.ExprId, Ast.StrId) = .empty,
 /// `Elaborate.Design.local_accesses`: accesses `checkAccessMatch` leaves alone.
 local_accesses: std.AutoHashMapUnmanaged(Ast.ExprId, void) = .empty,
+/// `Elaborate.Design.port_disciplines`, for `checkAccessMatch`.
+port_disciplines: std.StringHashMapUnmanaged([]const u8) = .empty,
 /// Where every diagnostic of this compilation goes. Shared with the other
 /// stages, so the cap, the dedupe and the source order are global.
 bag: *diag.Bag = undefined,
@@ -623,6 +625,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     self.port_widths = design.port_widths;
     self.attribute_disciplines = design.attribute_disciplines;
     self.local_accesses = design.local_accesses;
+    self.port_disciplines = design.port_disciplines;
     try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
     try lower_node.collectSignalAbstols(self, design.signal_disciplines);
@@ -637,6 +640,7 @@ fn lowered(self: *Lower) Oom!Lowered {
     self.out.token_span = &Lexer.tokenSpan;
     self.out.default_transitions = self.directives.transitions; // §10.3
     self.out.timescale = self.directives.timescale(); // IEEE 1364 §19.8
+    self.out.timescales = self.directives.timescales;
     self.out.decl_attrs = try declAttrs(self);
     self.out.consts = self.consts;
     return self.out;

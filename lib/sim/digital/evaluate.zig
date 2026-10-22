@@ -479,7 +479,7 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
         .branch_access => blk: {
             const probe = self.probe orelse return self.exprFail(e, "an analog probe needs the mixed-signal kernel");
             const b = ex.rhs(e);
-            break :blk try probe(self.probe_ctx, self.file.str(ex.strOf(ex.lhs(e))), if (b == .none) null else self.file.str(ex.strOf(b)));
+            break :blk try probe(self.probe_ctx, try compile.probeName(self, a, ex.lhs(e)), if (b == .none) null else try compile.probeName(self, a, b));
         },
         else => unreachable, // else: infer types no other form real
     };
