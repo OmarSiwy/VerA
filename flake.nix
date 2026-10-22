@@ -124,7 +124,11 @@
             pkgs.callPackage fromRelease {
               inherit version;
               inherit (s) contract;
-              zig = zigs.${s.zig};
+              # A dev Zig is keyed by date in zig-overlay; find it by version.
+              zig =
+                zigs.${s.zig} or (lib.findFirst (z: lib.isDerivation z && z.version == s.zig) (throw "zig-overlay has no Zig ${s.zig}") (
+                  lib.attrValues zigs
+                ));
               source = s.${system};
             }
           ) (lib.filterAttrs (_: s: s ? ${system}) sources);

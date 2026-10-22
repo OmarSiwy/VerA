@@ -191,7 +191,7 @@ class DiagnosticObservations(unittest.TestCase):
         # These are host-only inputs, so the ordinary AMS fixture collector
         # must not award them assertion credit. Activate their runner settings
         # only in this private copy; keep the basename for source locations.
-        text = source.read_text().replace("// observation: ", "//! ")
+        text = source.read_text(encoding="utf-8").replace("// observation: ", "//! ")
         local = work / source.name
         local.write_text(text)
         result = subprocess.run(
@@ -769,7 +769,7 @@ class ConditionalObservations(HostProfileCase):
         self.assertTrue(capability["documentation"].strip())
         diagnostic = capability["diagnostic_code"]
         self.assertRegex(diagnostic, r"^E[0-9]{4}$")
-        template = IDENTIFIER.read_text()
+        template = IDENTIFIER.read_text(encoding="utf-8")
         self.assertEqual(template.count("@IDENTIFIER@"), 2)
         with tempfile.TemporaryDirectory(prefix="vera-identifier-boundary-") as directory:
             for length, accepted in ((limit, True), (limit + 1, False)):
@@ -843,7 +843,7 @@ class ConditionalObservations(HostProfileCase):
 def language_manual_pages(docs):
     pages = []
     user_section = True
-    for line in (docs / "SUMMARY.md").read_text().splitlines():
+    for line in (docs / "SUMMARY.md").read_text(encoding="utf-8").splitlines():
         if line.startswith("# "):
             user_section = not re.search(r"developer|development|test catalog", line, re.I)
         if not user_section:
@@ -885,7 +885,7 @@ class DirectiveDocumentationObservations(unittest.TestCase):
         pages = language_manual_pages(ROOT / "docs")
         self.assertTrue(pages, "no language or usage manual chapters were found")
         self.assertTrue(
-            any(documents_tool_macro(path.read_text()) for path in pages),
+            any(documents_tool_macro(path.read_text(encoding="utf-8")) for path in pages),
             "AMS 10.5:4 requires the Verilog-AMS user manual to document the "
             "tool-specific predefined __VERA__ macro; source/fixture comments "
             "and conditional-compilation success are not documentation.",
@@ -1696,7 +1696,7 @@ class ConditionalOracleTests(unittest.TestCase):
         def observe(scenario, source, setup):
             if setup["operation"] == "describe":
                 return {"limit": 1024, "documentation": "test host's declared limit", "diagnostic_code": "E0199"}
-            text = Path(source).read_text()
+            text = Path(source).read_text(encoding="utf-8")
             name = text.split("parameter real ", 1)[1].split(" =", 1)[0]
             lengths.append(len(name))
             self.assertEqual(text.count(name), 2)

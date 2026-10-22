@@ -100,7 +100,7 @@ Be clear about these before choosing the contract:
   that speaks that OSDI version. A VerA device is regenerated with each VerA
   release (the generated file carries the release as `vera_version`, which
   [the device page](device.md) shows, and a contract from another release
-  refuses it), and is compiled by the Zig release VerA targets (0.17.0).
+  refuses it), and is compiled by the Zig release VerA targets (0.18.0-dev.349+d924f83bf).
 - **Simulators that already support it.** ngspice loads OSDI libraries with
   its `pre_osdi` command. A simulator that speaks OSDI gets VerA's models
   through `vera --emit-osdi` without code changes ([OSDI
