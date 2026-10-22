@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## v0.12.0 — 2026-10-22
+
+| Measure | Number | Remaining to v1.0.0 | Command |
+|---|---|---|---|
+| **A** — fixtures behaving as stated | **2759 / 2759 — 100.0%** | 0 rows | `zig build benchmark -- --strict` |
+| &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | 0 · 0 · 0 | all three to 0 | same run |
+| **C** — clauses with both citation polarities (static) | **489 / 612 — 79.9%** | 1 clauses | `zig build benchmark -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | 0 · 1 · 0 | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under `CLAUSE-AUDIT.md` §5 (`CLAUSES.tsv`) | 122 | reviewed claims, not evidence | same run |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **397 / 808 — 49.1%** | 9 clauses | `zig build test-1364 -- --coverage` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | 8 · 1 · 0 · 402 | §§17–18 obligation detail: `specification/CLAUSE-AUDIT.md` §7.1 | same run |
+| `zig build test` | **pass** | pass | `zig build test` |
+| `zig build test-devices` | **pass** | pass | `zig build test-devices` |
+
+`--strict` exit code **0** — 0 only when FAIL, unasserted and XFAIL are all 0.
+A, B and C are measured by this script and nothing else may write them.
+
+B and C count citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See `specification/CLAUSE-AUDIT.md`.
+
 - **Layout**: the tree is laid out like the Zig compiler. `src/` is the
   compiler (`Compilation.zig`, `elab/`, `ir/`, `analog/`, `prove/`, one
   backend per directory under `codegen/`, `zigbuild/`, `vpi/`, `cli/`); `lib/`
@@ -37,6 +58,23 @@
   defaults; a construct outside the synthesizable subset is refused by name
   with its line. `zig build test-rtlil` has Yosys read, `proc` and
   `check -assert` `tests/fixtures/rtlil/*.v`.
+
+- **Timing checks** (IEEE 1364-2005 §15.3): `$skew`, `$timeskew`, `$fullskew`
+  and `$nochange` are evaluated, with timer- and event-based skew and
+  `remain_active`; they were E1149. A negative `$setuphold`/`$recrem` limit is
+  0 with the delayed signals as copies (§15.5.4), as without the negative
+  timing check option.
+- **VPI**: an instance's `vpiLineNo` is its instantiation line, a valid
+  `vpi_handle_by_index` on a net returns its one-bit `vpiNetBit`, and
+  `vpi_iterate(vpiPort, net)` of an internal net is an empty set without an error.
+- **`$finish`/`$info` context** (§9.7): the time, or in a dc sweep the swept
+  variable and value, or initialization; `$finish(2)` adds memory and CPU use.
+- Fixes: integer/real default initialization, size truncation, zero
+  replication, derived natures and domainless disciplines, `default_discipline`
+  qualifiers and primitive bridges, runtime `case` items, `cross` tolerances
+  and event lists (a crossing outside its box gets its own point), timing checks
+  in a mixed-signal design's digital half, and hierarchical analog probes read
+  from digital.
 
 - Organized fixtures and unified execution reports, including specialized host tests.
 - Added **49 conformance checks: 42 expected failures and 7 passes**, grouped into

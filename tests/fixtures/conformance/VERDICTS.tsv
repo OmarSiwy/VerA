@@ -387,6 +387,7 @@ pass	annex_f_resolution/in_context_declaration.va
 pass	annex_f_resolution/in_context_declaration_reaches_all_instances.va
 pass	annex_f_resolution/net_read_by_digital_code_resolves_digital.va
 pass	annex_f_resolution/out_of_context_declaration.va
+pass	annex_f_resolution/out_of_context_declaration_detail.va
 pass	annex_f_resolution/out_of_context_internal_net.va
 pass	annex_f_resolution/out_of_context_long_path.va
 pass	annex_f_resolution/resolveto_resolution.va
@@ -664,6 +665,7 @@ pass	ch03_data_types/ground_reference_solution.va
 pass	ch03_data_types/idt_nature_not_a_nature.va
 pass	ch03_data_types/idt_nature_related_overrides.va
 pass	ch03_data_types/idt_nature_self_reference.va
+pass	ch03_data_types/idt_nature_string_rejected.va
 pass	ch03_data_types/idt_nature_unrelated_override.va
 pass	ch03_data_types/idt_nature_unrelated_to_default_rejected.va
 pass	ch03_data_types/idt_nature_unrelated_to_explicit_rejected.va
@@ -934,6 +936,7 @@ pass	ch04_expressions/filter_parameter_arrays.va
 pass	ch04_expressions/filter_scalar_coefficient_rejected.va
 pass	ch04_expressions/flicker_noise_missing_exponent_rejected.va
 pass	ch04_expressions/flicker_noise_topology.va
+pass	ch04_expressions/flicker_psd_frequency.va
 pass	ch04_expressions/floor.va
 pass	ch04_expressions/function_access_ban.va
 pass	ch04_expressions/function_array_inout_pattern.va
@@ -1611,6 +1614,7 @@ pass	ch06_hierarchy/geometry_parameters_do_not_affect_the_simulation.va
 pass	ch06_hierarchy/header_body_parameter_dependency.va
 pass	ch06_hierarchy/header_body_parameter_override_rejected.va
 pass	ch06_hierarchy/header_parameter_list_is_ordered.va
+pass	ch06_hierarchy/hierarchical_analog_probes_from_digital.va
 pass	ch06_hierarchy/hierarchical_contributions_to_named_and_unnamed_branches.va
 pass	ch06_hierarchy/hierarchical_vector_element_access.va
 pass	ch06_hierarchy/hierarchy_defparam_source_order.va
@@ -1625,6 +1629,7 @@ pass	ch06_hierarchy/hierarchy_zero_generate_collision.va
 pass	ch06_hierarchy/hierarchy_zero_generate_control.va
 pass	ch06_hierarchy/if_generate_values_drive_paramset_selection.va
 pass	ch06_hierarchy/implicit_net_hierarchical_reference_coerced.va
+pass	ch06_hierarchy/inherited_flow_tolerance_minimum.va
 pass	ch06_hierarchy/inout_port.va
 pass	ch06_hierarchy/input_port.va
 pass	ch06_hierarchy/instance_array_constant_expression_range.va
@@ -1995,6 +2000,7 @@ pass	ch07_mixed_signal/probe_in_procedural_read.va
 pass	ch07_mixed_signal/probe_of_a_discrete_net_in_digital_rejected.va
 pass	ch07_mixed_signal/receiver_count_reports_ordinary_receivers.va
 pass	ch07_mixed_signal/receiver_default_bypass.va
+pass	ch07_mixed_signal/receiver_reads_loaded_analog_state.va
 pass	ch07_mixed_signal/receiver_value_set_by_connectmodule.va
 pass	ch07_mixed_signal/reject_ambiguous_connect_statements.va
 pass	ch07_mixed_signal/reject_display_x_operand_analog.va
@@ -2053,6 +2059,7 @@ pass	ch08_scheduling/continuous_assignment_to_a_variable_rejected.va
 pass	ch08_scheduling/coupled_nodal_solution.va
 pass	ch08_scheduling/cross_wakeup.va
 pass	ch08_scheduling/declaration_assignment_order.va
+pass	ch08_scheduling/default_discipline_primitive_bridge.va
 pass	ch08_scheduling/delayed_blocking_assignment_target_at_resume.va
 pass	ch08_scheduling/digital_assignment_unsupported.va
 pass	ch08_scheduling/dynamic_nodal.va
@@ -2514,9 +2521,11 @@ pass	ch10_directives/begin_keywords_region_survives_the_include_that_opened_it.v
 pass	ch10_directives/begin_keywords_unterminated.va
 pass	ch10_directives/begin_keywords_vams.va
 pass	ch10_directives/begin_keywords_vams_2_3.va
+pass	ch10_directives/begin_keywords_vams_2_3_accepted.va
 pass	ch10_directives/begin_keywords_verilog.va
 pass	ch10_directives/compact_modeling_extension_set.va
 pass	ch10_directives/compact_modeling_macro_implies_its_extensions.va
+pass	ch10_directives/compact_modeling_nonlin_res_example.va
 pass	ch10_directives/default_discipline.va
 pass	ch10_directives/default_discipline_crosses_a_file_boundary.va
 pass	ch10_directives/default_discipline_empty_reset.va
