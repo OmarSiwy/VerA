@@ -4921,6 +4921,8 @@ const MockAll = struct {
         return .{ .{ 0.25 * g, 0.0 }, .{ 0.75 * g, 0.0 } };
     }
     pub const lane_masks = [_]LaneUse{.{ .mask = 0b11, .uses = 1 }};
+    /// A resistor reads no time.
+    pub const sim_reads: SimReads = .{ .t = false, .dt = false, .iteration = false };
 };
 
 test "validate: minimal resistor" {
