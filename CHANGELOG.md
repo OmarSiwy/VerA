@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **`zig build test-spice`** runs the `.sp` decks on ESPice and grades its
+  CSV against each deck's oracle. ESPice is `build.zig.zon`'s lazy `espice`
+  dependency, built with `--fork .` so that its devices are compiled by this
+  tree's compiler, or an installed espice with `-Despice=PATH`, CPU or GPU.
+  Unknown `--` arguments reach espice (`-- --backend=cuda`).
+- `lib/sim/spice/` (the one-device copy of ESPice's CPU solver) and the
+  `//! tran` / `//! onoise` testbench directives are gone: a testbench drives
+  one device, and a circuit is a deck ESPice runs.
+  `ch09_system_tasks/bound_step_below_minimum_step.va` went with them
+  (§9.17.2's minimum-step floor is the simulator's).
+
 ## v0.12.1 — 2026-10-22
 
 | Measure | Number | Remaining to v1.0.0 | Command |
